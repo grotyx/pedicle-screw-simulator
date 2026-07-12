@@ -213,3 +213,13 @@ tail -100 logs/app.log
 ```
 
 문제를 보고할 때 운영체제, Python 버전, 재현 과정 및 비식별화한 로그를 포함하십시오. 임상 데이터를 첨부하지 마십시오.
+
+## 11. 버전, 제작자 및 학술 인용
+
+**Help → About Pedicle Screw Simulator**에서 설치된 버전, 제작자, 소속, 이메일, 홈페이지, 소스 저장소, MIT License와 연구용 안내를 확인할 수 있습니다.
+
+- 제작자: Sang-Min Park, MD, Ph.D.
+- 조직: 분당서울대학교병원
+- 학술 소속: 서울대학교 의과대학
+- 홈페이지: [https://sangmin.me](https://sangmin.me)
+- 학술 인용: [`CITATION.cff`](../CITATION.cff) 참고

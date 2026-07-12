@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite it using these metadata."
+title: "Pedicle Screw Simulator"
+type: software
+version: "0.1.0"
+date-released: 2026-07-12
+license: "MIT"
+authors:
+  - family-names: "Park"
+    given-names: "Sang-Min"
+    affiliation: "Spine Center and Department of Orthopaedic Surgery, Seoul National University Bundang Hospital; Seoul National University College of Medicine"
+    email: "psmini@snu.ac.kr"
+    website: "https://sangmin.me"
+repository-code: "https://github.com/grotyx/pedicle-screw-simulator"
+url: "https://sangmin.me"
+abstract: "Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review."
+keywords:
+  - "medical imaging"
+  - "DICOM"
+  - "spine surgery"
+  - "pedicle screw"
+  - "multiplanar reconstruction"
+  - "segmentation"

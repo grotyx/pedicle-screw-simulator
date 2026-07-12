@@ -14,7 +14,18 @@ from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from typing import List, Optional
 
-from .. import __version__
+from .. import (
+    __academic_affiliation__,
+    __author__,
+    __department__,
+    __email__,
+    __license__,
+    __organization__,
+    __repository__,
+    __title__,
+    __version__,
+    __website__,
+)
 from ..core.volume_manager import VolumeManager
 from .collapsible_group import CollapsibleGroupBox
 from .mpr_viewer import MPRViewer
@@ -47,6 +58,32 @@ from src.controllers.screw_edit_controller import ScrewEditController
 logger = logging.getLogger(__name__)
 
 
+def build_about_html() -> str:
+    """Return stable creator, version, license, and safety information."""
+    return f"""
+    <h2>{__title__}</h2>
+    <p><b>Version:</b> {__version__}</p>
+    <p>
+      <b>Created by</b><br>
+      {__author__}<br>
+      Professor<br>
+      {__department__}<br>
+      {__organization__}<br>
+      {__academic_affiliation__}
+    </p>
+    <p>
+      <b>Email:</b> <a href="mailto:{__email__}">{__email__}</a><br>
+      <b>Website:</b> <a href="{__website__}">{__website__}</a><br>
+      <b>Source:</b> <a href="{__repository__}">{__repository__}</a>
+    </p>
+    <p><b>License:</b> {__license__} License</p>
+    <hr>
+    <p><b>Research and education use only.</b><br>
+    This software is not a certified medical device and must not be used as
+    the sole basis for diagnosis, surgery, navigation, or patient care.</p>
+    """.strip()
+
+
 class MainWindow(QMainWindow):
     """
     Main application window with quad-view layout.
@@ -62,9 +99,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle(
-            f"Pedicle Screw Fixation Simulator {__version__}"
-        )
+        self.setWindowTitle(f"{__title__} {__version__}")
         self.setMinimumSize(1280, 760)
         self._apply_initial_window_size()
         self._settings = QSettings("ScrewFixation", "PedicleScrewPlanner")
@@ -1054,6 +1089,15 @@ class MainWindow(QMainWindow):
         )
         self._layout_action_group.addAction(self._mpr_focus_layout_action)
         view_menu.addAction(self._mpr_focus_layout_action)
+
+        help_menu = menubar.addMenu("Help")
+        self._about_action = QAction(f"About {__title__}", self)
+        self._about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(self._about_action)
+
+    def show_about_dialog(self) -> None:
+        """Display version, creator credit, contact, license, and safety scope."""
+        QMessageBox.about(self, f"About {__title__}", build_about_html())
 
     def _cancel_screw_interaction(self) -> None:
         """Exit any locked MPR/3D screw movement and preserve its last state."""

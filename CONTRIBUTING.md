@@ -9,7 +9,7 @@ Thank you for considering a contribution to Pedicle Screw Fixation Simulator.
 - Do not submit clinical DICOM, segmentation files, screenshots, logs, plans, or meshes containing identifiable information.
 - Do not describe automatic results as clinically validated unless the repository contains evidence supporting that exact claim.
 
-The project license is still a release blocker. External contributions should not be accepted until the owner has added a repository license and clarified contribution terms.
+Contributions are accepted under the project's MIT License. By submitting a contribution, you agree that it may be distributed under that license. Third-party code must retain compatible license and attribution information.
 
 ## Development workflow
 

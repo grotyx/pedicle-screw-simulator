@@ -8,7 +8,11 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 
 **Primary tested environment:** macOS, Python 3.12
 
-**Author:** Dr. Sang-Min Park
+**Creator:** [Sang-Min Park, MD, Ph.D.](https://sangmin.me)
+
+**Affiliation:** Spine Center and Department of Orthopaedic Surgery, Seoul National University Bundang Hospital; Seoul National University College of Medicine
+
+**Contact:** [psmini@snu.ac.kr](mailto:psmini@snu.ac.kr)
 
 > **Research and education use only.** This software is not a certified medical device and must not be used as the sole basis for diagnosis, surgery, navigation, or patient care. Every segmentation, screw proposal, dimension, breach grade, and warning requires independent review by a qualified clinician.
 
@@ -61,7 +65,15 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-The current automated suite contains **454 tests**.
+The current automated suite contains **460 tests**.
+
+For exact reproduction of the validated macOS/Python 3.12 environment:
+
+```bash
+python -m pip install -r requirements-lock.txt
+```
+
+`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact runtime and test environment used for v0.1.0 verification. Optional TotalSegmentator packages and model weights are intentionally excluded.
 
 ## Typical Workflow
 
@@ -114,6 +126,8 @@ The current automated suite contains **454 tests**.
 - [Contributing](CONTRIBUTING.md)
 - [Security and medical-data privacy](SECURITY.md)
 - [Local DICOM data policy](data/README.md)
+- [Authors and credits](AUTHORS.md)
+- [Citation metadata](CITATION.cff)
 
 ## Data Privacy
 
@@ -141,6 +155,16 @@ data/README.md   local-data privacy instructions; no clinical data
 - TotalSegmentator is optional and may require model downloads and substantial memory.
 - Clinical accuracy, inter-observer agreement, and prospective outcomes have not been established.
 
-## License Status
+## Citation
 
-An open-source license has not yet been selected. Until a license is added, default copyright restrictions apply. PyQt6 licensing and the intended distribution model must be reviewed before accepting external redistribution or contributions.
+If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
+
+> Park S-M. Pedicle Screw Simulator (Version 0.1.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+
+A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
+
+## License
+
+Project source code is released under the [MIT License](LICENSE). Use, modification, and redistribution are permitted provided that the copyright and permission notice are retained.
+
+Third-party components retain their own licenses. Distributors must separately comply with the PyQt6 GPL/commercial licensing terms and the licenses of VTK, SimpleITK, TotalSegmentator, and other dependencies.

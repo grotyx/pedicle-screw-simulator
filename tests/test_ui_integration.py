@@ -319,6 +319,17 @@ def test_workspace_and_theme_selectors_are_compact(ui_main_window):
     assert window.theme_combo.maximumHeight() <= 26
 
 
+def test_help_menu_exposes_about_credit(ui_main_window):
+    help_action = next(
+        action
+        for action in ui_main_window.menuBar().actions()
+        if action.text() == "Help"
+    )
+    about_actions = [action.text() for action in help_action.menu().actions()]
+
+    assert "About Pedicle Screw Simulator" in about_actions
+
+
 def test_default_control_panel_expands_only_main_workflow(ui_main_window):
     window = ui_main_window
 

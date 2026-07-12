@@ -8,7 +8,11 @@ DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR
 
 **주요 검증 환경:** macOS, Python 3.12
 
-**개발자:** Dr. Sang-Min Park
+**제작자:** [Sang-Min Park, MD, Ph.D.](https://sangmin.me)
+
+**소속:** 분당서울대학교병원 척추센터·정형외과, 서울대학교 의과대학
+
+**연락처:** [psmini@snu.ac.kr](mailto:psmini@snu.ac.kr)
 
 > **연구 및 교육 목적으로만 사용하십시오.** 이 프로그램은 인증된 의료기기가 아니며 진단, 수술, 내비게이션 또는 환자 진료의 단독 근거로 사용할 수 없습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
@@ -61,7 +65,15 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-현재 자동 테스트는 **454개**입니다.
+현재 자동 테스트는 **460개**입니다.
+
+검증된 macOS/Python 3.12 환경을 동일하게 재현하려면 다음 파일을 사용합니다.
+
+```bash
+python -m pip install -r requirements-lock.txt
+```
+
+`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.1.0 검증에 사용한 실행·테스트 환경을 정확히 기록합니다. 선택 기능인 TotalSegmentator 패키지와 모델 가중치는 포함하지 않습니다.
 
 ## 기본 사용 순서
 
@@ -114,6 +126,8 @@ python main.py
 - [기여 안내](CONTRIBUTING.md)
 - [보안 및 의료데이터 보호](SECURITY.md)
 - [로컬 DICOM 데이터 정책](data/README.md)
+- [제작자와 크레딧](AUTHORS.md)
+- [학술 인용 정보](CITATION.cff)
 
 ## 의료데이터 보호
 
@@ -141,6 +155,16 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - TotalSegmentator는 선택 기능이며 모델 다운로드와 많은 메모리가 필요할 수 있습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.
 
-## 라이선스 상태
+## 학술 인용
 
-오픈소스 라이선스는 아직 선택하지 않았습니다. 라이선스가 추가되기 전에는 기본 저작권 제한이 적용됩니다. 외부 재배포나 기여를 허용하기 전에 PyQt6 라이선스와 배포 방식을 검토해야 합니다.
+연구에 이 프로그램을 사용했다면 GitHub의 **Cite this repository** 기능이나 [`CITATION.cff`](CITATION.cff)를 사용하십시오.
+
+> Park S-M. Pedicle Screw Simulator (Version 0.1.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+
+소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
+
+## 라이선스
+
+프로젝트 소스 코드는 [MIT License](LICENSE)로 공개합니다. 저작권 및 허가문을 유지하면 사용, 수정 및 재배포할 수 있습니다.
+
+외부 구성요소에는 각각의 라이선스가 적용됩니다. 재배포자는 PyQt6의 GPL/상용 라이선스와 VTK, SimpleITK, TotalSegmentator 등 각 의존성의 조건을 별도로 준수해야 합니다.

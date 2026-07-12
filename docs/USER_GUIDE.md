@@ -213,3 +213,13 @@ tail -100 logs/app.log
 ```
 
 When reporting a problem, include the platform, Python version, steps to reproduce, and a redacted log excerpt. Do not attach clinical data.
+
+## 11. Version, Credits, and Citation
+
+Open **Help → About Pedicle Screw Simulator** to view the installed version, creator, affiliation, email, website, source repository, MIT License, and research-use notice.
+
+- Creator: Sang-Min Park, MD, Ph.D.
+- Organization: Seoul National University Bundang Hospital
+- Academic affiliation: Seoul National University College of Medicine
+- Website: [https://sangmin.me](https://sangmin.me)
+- Citation: see [`CITATION.cff`](../CITATION.cff)
