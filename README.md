@@ -65,7 +65,7 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-The current automated suite contains **460 tests**.
+The current automated suite contains **465 tests**.
 
 For exact reproduction of the validated macOS/Python 3.12 environment:
 
@@ -74,6 +74,18 @@ python -m pip install -r requirements-lock.txt
 ```
 
 `requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact runtime and test environment used for v0.1.0 verification. Optional TotalSegmentator packages and model weights are intentionally excluded.
+
+## Standalone Desktop Packages
+
+The GitHub **Build desktop packages** workflow creates separate archives for:
+
+- macOS Apple Silicon (`.app`)
+- macOS Intel (`.app`)
+- Windows x64 (`.exe` with its support folder)
+
+See [Desktop Build Guide](docs/BUILDING_DESKTOP.md). The macOS package is not Apple-notarized yet, so Gatekeeper may require right-clicking the app and selecting **Open**.
+
+Standalone packages intentionally exclude TotalSegmentator and PyTorch. Use the source installation with `--with-totalseg` when AI segmentation is required.
 
 ## Typical Workflow
 
@@ -128,6 +140,7 @@ python -m pip install -r requirements-lock.txt
 - [Local DICOM data policy](data/README.md)
 - [Authors and credits](AUTHORS.md)
 - [Citation metadata](CITATION.cff)
+- [macOS and Windows build guide](docs/BUILDING_DESKTOP.md)
 
 ## Data Privacy
 

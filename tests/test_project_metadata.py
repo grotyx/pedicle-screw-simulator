@@ -65,6 +65,7 @@ def test_reproducibility_lock_pins_validated_environment():
         "numpy==2.4.6",
         "scipy==1.18.0",
         "pytest==9.1.1",
+        "pyinstaller==6.21.0",
     ):
         assert expected in lock_text
     assert ">=" not in lock_text

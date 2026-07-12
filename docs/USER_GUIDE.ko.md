@@ -44,6 +44,12 @@ TotalSegmentator 선택 설치:
 ./scripts/run_app.sh --setup-only
 ```
 
+### macOS·Windows 단독 실행 패키지
+
+Standalone 패키지는 Python을 별도로 설치하지 않아도 됩니다. GitHub의 **Build desktop packages** workflow에서 생성된 압축파일을 내려받아 전체 폴더를 해제한 후 `.app` 또는 `.exe`를 실행합니다. Windows에서는 실행 파일 옆의 `_internal` 폴더를 함께 보관해야 합니다.
+
+Standalone 패키지에는 TotalSegmentator와 PyTorch가 포함되지 않습니다. AI segmentation이 필요하면 소스 설치에서 `--with-totalseg`를 사용하십시오. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
+
 ## 4. 화면 구성
 
 Planning 작업화면은 다음 영역으로 구성됩니다.

@@ -65,7 +65,7 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-현재 자동 테스트는 **460개**입니다.
+현재 자동 테스트는 **465개**입니다.
 
 검증된 macOS/Python 3.12 환경을 동일하게 재현하려면 다음 파일을 사용합니다.
 
@@ -74,6 +74,18 @@ python -m pip install -r requirements-lock.txt
 ```
 
 `requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.1.0 검증에 사용한 실행·테스트 환경을 정확히 기록합니다. 선택 기능인 TotalSegmentator 패키지와 모델 가중치는 포함하지 않습니다.
+
+## 단독 실행 패키지
+
+GitHub의 **Build desktop packages** workflow에서 다음 파일을 각각 생성합니다.
+
+- macOS Apple Silicon용 `.app`
+- macOS Intel용 `.app`
+- Windows x64용 `.exe`와 지원 폴더
+
+[데스크톱 빌드 안내](docs/BUILDING_DESKTOP.ko.md)를 참고하십시오. 현재 macOS 앱은 Apple 공증을 받지 않았으므로 최초 실행 시 앱을 우클릭하고 **Open**을 선택해야 할 수 있습니다.
+
+Standalone 패키지에는 TotalSegmentator와 PyTorch가 포함되지 않습니다. AI segmentation이 필요하면 소스 버전에서 `--with-totalseg`를 사용하십시오.
 
 ## 기본 사용 순서
 
@@ -128,6 +140,7 @@ python -m pip install -r requirements-lock.txt
 - [로컬 DICOM 데이터 정책](data/README.md)
 - [제작자와 크레딧](AUTHORS.md)
 - [학술 인용 정보](CITATION.cff)
+- [macOS·Windows 빌드 안내](docs/BUILDING_DESKTOP.ko.md)
 
 ## 의료데이터 보호
 

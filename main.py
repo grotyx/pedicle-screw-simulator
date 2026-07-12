@@ -20,6 +20,8 @@ Requirements:
 import sys
 import os
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 # Get the directory containing this script
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,24 +32,60 @@ sys.path.insert(0, script_dir)
 from src.ui.main_window import main
 
 
-def setup_logging():
-    """Configure logging to file (append) + console."""
-    log_dir = os.path.join(script_dir, "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "app.log")
+def resolve_log_dir(
+    *,
+    frozen=None,
+    platform=None,
+    environ=None,
+    home=None,
+) -> Path:
+    """Return a writable log directory for source and packaged builds."""
+    is_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    current_platform = sys.platform if platform is None else platform
+    current_environ = os.environ if environ is None else environ
+    home_dir = Path.home() if home is None else Path(home)
 
-    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-    stream_handler = logging.StreamHandler(sys.stderr)
+    if not is_frozen:
+        return Path(script_dir) / "logs"
+    if current_platform == "darwin":
+        return home_dir / "Library" / "Logs" / "PedicleScrewSimulator"
+    if current_platform.startswith("win"):
+        local_app_data = current_environ.get("LOCALAPPDATA")
+        base_dir = Path(local_app_data) if local_app_data else home_dir
+        return base_dir / "PedicleScrewSimulator" / "logs"
+    state_home = current_environ.get("XDG_STATE_HOME")
+    base_dir = Path(state_home) if state_home else home_dir / ".local" / "state"
+    return base_dir / "PedicleScrewSimulator" / "logs"
+
+
+def setup_logging():
+    """Configure rotating file logging and an optional console handler."""
+    log_dir = resolve_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "app.log"
+
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handlers = [file_handler]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    level_name = os.environ.get("PEDICLE_SCREW_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, level_name, logging.INFO)
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=log_level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[file_handler, stream_handler],
+        handlers=handlers,
         force=True,
     )
     logging.getLogger().info("=" * 60)
     logging.getLogger().info("Session started — Log file: %s", log_path)
+    return log_path
 
 
 if __name__ == "__main__":

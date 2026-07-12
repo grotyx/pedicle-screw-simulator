@@ -44,6 +44,12 @@ Maintenance commands:
 ./scripts/run_app.sh --setup-only
 ```
 
+### Standalone macOS and Windows packages
+
+Standalone packages do not require a separate Python installation. Download the archive produced by the GitHub **Build desktop packages** workflow, extract the complete folder, and run the `.app` or `.exe`. Keep the Windows `_internal` folder beside the executable.
+
+The standalone package does not include TotalSegmentator or PyTorch. Use the source installation with `--with-totalseg` for AI segmentation. See [Desktop Build Guide](BUILDING_DESKTOP.md).
+
 ## 4. Workspace
 
 The Planning workspace contains:
