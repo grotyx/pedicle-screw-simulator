@@ -1,0 +1,17 @@
+# Pedicle Screw Simulator - runtime dependencies
+
+# Core Medical Imaging
+vtk>=9.5.0
+SimpleITK>=2.4.0
+pydicom>=3.0.1
+
+# GUI Framework
+PyQt6>=6.7.0
+
+# Scientific Computing
+numpy>=1.26.0
+scipy>=1.14.0
+
+# Performance and utilities
+numba>=0.60.0
+tqdm>=4.66.0

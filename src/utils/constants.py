@@ -1,0 +1,211 @@
+"""
+Constants and configuration for the Screw Fixation Simulator
+"""
+
+import numpy as np
+
+# Coordinate System Transform: DICOM LPS to VTK RAS
+# DICOM uses LPS (Left, Posterior, Superior)
+# VTK uses RAS (Right, Anterior, Superior)
+LPS_TO_RAS_MATRIX = np.array([
+    [-1,  0,  0,  0],
+    [ 0, -1,  0,  0],
+    [ 0,  0,  1,  0],
+    [ 0,  0,  0,  1]
+], dtype=np.float64)
+
+# CT Hounsfield Unit thresholds
+HU_BONE_MIN = 300      # Minimum HU for bone
+HU_BONE_OPTIMAL = 400  # Optimal threshold for cortical bone
+HU_BONE_MAX = 3000     # Maximum HU for bone
+
+# Default Window/Level for spine CT
+DEFAULT_WINDOW_CENTER = 400
+DEFAULT_WINDOW_WIDTH = 1500
+
+# Screw parameters (mm)
+DEFAULT_SCREW_LENGTH = 45.0
+DEFAULT_SCREW_DIAMETER = 6.5
+MIN_SCREW_LENGTH = 20.0
+MAX_SCREW_LENGTH = 70.0
+MIN_SCREW_DIAMETER = 4.0
+MAX_SCREW_DIAMETER = 7.5
+
+# Gertzbein-Robbins Grading
+GRADE_A_DESCRIPTION = "Completely intrapedicular (optimal)"
+GRADE_B_DESCRIPTION = "Breach <2mm (acceptable)"
+GRADE_C_DESCRIPTION = "Breach 2-4mm (unsafe)"
+GRADE_D_DESCRIPTION = "Breach 4-6mm (unsafe)"
+GRADE_E_DESCRIPTION = "Breach >6mm (dangerous)"
+
+# MPR Plane Direction Cosines
+# Axial: Standard XY plane (looking down from head)
+AXIAL_DIRECTION_COSINES = [
+    1, 0, 0,   # X axis (left-right)
+    0, 1, 0,   # Y axis (anterior-posterior)
+    0, 0, 1    # Z axis (head-feet, slice direction)
+]
+
+# Coronal: XZ plane (looking from front)
+# Columns: horizontal=X(L-R), vertical=Z(superior-up), normal=-Y(A-P)
+CORONAL_DIRECTION_COSINES = [
+    1, 0,  0,   # Row 0
+    0, 0, -1,   # Row 1
+    0, 1,  0    # Row 2
+]
+
+# Sagittal: YZ plane (looking from side)
+# Columns: horizontal=Y(A-P), vertical=Z(superior-up), normal=X(L-R)
+SAGITTAL_DIRECTION_COSINES = [
+    0, 0, 1,   # Row 0
+    1, 0, 0,   # Row 1
+    0, 1, 0    # Row 2
+]
+
+# UI Colors (RGB, 0-255)
+COLOR_AXIAL = (255, 255, 0)      # Yellow
+COLOR_SAGITTAL = (0, 255, 255)   # Cyan
+COLOR_CORONAL = (255, 0, 255)    # Magenta
+COLOR_SCREW = (30, 190, 235)     # Surgical cyan contrasts warm anatomy
+COLOR_SCREW_BREACH = (255, 0, 0) # Red
+
+# Viewport IDs
+VIEWPORT_AXIAL = "axial"
+VIEWPORT_SAGITTAL = "sagittal"
+VIEWPORT_CORONAL = "coronal"
+VIEWPORT_3D = "3d"
+
+
+# ============================================================
+# Transfer Function Presets for CPU Volume Rendering
+# ============================================================
+# Each preset defines:
+#   color_points: list of (HU, R, G, B) — RGB in 0.0–1.0
+#   opacity_points: list of (HU, opacity) — opacity in 0.0–1.0
+#   gradient_opacity_points: list of (gradient_mag, opacity)
+#   shade: bool — enable/disable Phong shading
+#   ambient / diffuse / specular / specular_power: Phong params
+#   blend_mode: "composite" or "maximum_intensity"
+
+TRANSFER_FUNCTION_PRESETS = {
+    "Bone": {
+        "color_points": [
+            (-1000, 0.0, 0.0, 0.0),       # Air: black
+            (-100, 0.55, 0.25, 0.15),      # Soft tissue: brown
+            (200, 0.88, 0.70, 0.55),       # Muscle/cartilage: tan
+            (400, 0.95, 0.92, 0.82),       # Trabecular bone: ivory
+            (1500, 1.0, 1.0, 0.95),        # Cortical bone: white
+            (3000, 1.0, 1.0, 1.0),         # Dense bone/metal: bright white
+        ],
+        "opacity_points": [
+            (-1000, 0.0),
+            (100, 0.0),
+            (200, 0.02),
+            (350, 0.08),
+            (500, 0.45),
+            (1000, 0.70),
+            (3000, 0.85),
+        ],
+        "gradient_opacity_points": [
+            (0, 0.0),
+            (30, 0.1),
+            (80, 0.6),
+            (200, 1.0),
+        ],
+        "shade": True,
+        "ambient": 0.2,
+        "diffuse": 0.7,
+        "specular": 0.3,
+        "specular_power": 16.0,
+        "blend_mode": "composite",
+    },
+    "Soft Tissue": {
+        "color_points": [
+            (-1000, 0.0, 0.0, 0.0),
+            (-500, 0.15, 0.05, 0.05),
+            (-100, 0.55, 0.25, 0.20),
+            (0, 0.75, 0.45, 0.35),
+            (100, 0.85, 0.60, 0.50),
+            (300, 0.92, 0.80, 0.70),
+            (1000, 1.0, 1.0, 0.95),
+        ],
+        "opacity_points": [
+            (-1000, 0.0),
+            (-200, 0.0),
+            (-100, 0.05),
+            (0, 0.20),
+            (100, 0.35),
+            (300, 0.50),
+            (1000, 0.60),
+        ],
+        "gradient_opacity_points": [
+            (0, 0.0),
+            (20, 0.2),
+            (60, 0.7),
+            (150, 1.0),
+        ],
+        "shade": True,
+        "ambient": 0.3,
+        "diffuse": 0.6,
+        "specular": 0.2,
+        "specular_power": 10.0,
+        "blend_mode": "composite",
+    },
+    "CT Angiography": {
+        "color_points": [
+            (-1000, 0.0, 0.0, 0.0),
+            (100, 0.55, 0.25, 0.20),
+            (200, 0.85, 0.15, 0.10),
+            (300, 1.0, 0.2, 0.15),
+            (500, 1.0, 0.85, 0.70),
+            (1500, 1.0, 1.0, 0.95),
+        ],
+        "opacity_points": [
+            (-1000, 0.0),
+            (100, 0.0),
+            (200, 0.30),
+            (300, 0.55),
+            (500, 0.45),
+            (1500, 0.65),
+        ],
+        "gradient_opacity_points": [
+            (0, 0.0),
+            (40, 0.3),
+            (100, 0.8),
+            (200, 1.0),
+        ],
+        "shade": True,
+        "ambient": 0.2,
+        "diffuse": 0.7,
+        "specular": 0.4,
+        "specular_power": 20.0,
+        "blend_mode": "composite",
+    },
+    "MIP (Maximum Intensity)": {
+        "color_points": [
+            (-1000, 0.0, 0.0, 0.0),
+            (0, 0.3, 0.3, 0.3),
+            (500, 0.7, 0.7, 0.7),
+            (1500, 1.0, 1.0, 1.0),
+            (3000, 1.0, 1.0, 1.0),
+        ],
+        "opacity_points": [
+            (-1000, 0.0),
+            (-200, 0.0),
+            (0, 0.1),
+            (500, 0.5),
+            (1500, 0.8),
+            (3000, 1.0),
+        ],
+        "gradient_opacity_points": [
+            (0, 1.0),
+            (255, 1.0),
+        ],
+        "shade": False,
+        "ambient": 1.0,
+        "diffuse": 0.0,
+        "specular": 0.0,
+        "specular_power": 1.0,
+        "blend_mode": "maximum_intensity",
+    },
+}

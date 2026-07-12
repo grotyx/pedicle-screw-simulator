@@ -1,0 +1,630 @@
+"""
+Tests for vertebral body mesh extraction (src/core/vertebral_mesh.py).
+
+Verifies:
+- Color generation for all vertebra labels (HSV warm gradient)
+- Label detection in vtkImageData masks
+- Mesh extraction from synthetic masks
+- Edge cases (empty masks, no vertebral labels, None input)
+- Viewer3D API presence for vertebral mesh methods
+"""
+
+import pytest
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+import vtk
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _create_labeled_mask(
+    dims=(10, 10, 10),
+    spacing=(1.0, 1.0, 1.0),
+    origin=(0.0, 0.0, 0.0),
+    label_slabs=None,
+):
+    """Create a vtkImageData with integer labels for testing.
+
+    Args:
+        dims: Volume dimensions (x, y, z).
+        spacing: Voxel spacing.
+        origin: Volume origin.
+        label_slabs: List of (label_value, z_start, z_end) tuples.
+            Voxels in the z-range [z_start, z_end) get that label.
+            Default: empty volume (all zeros).
+
+    Returns:
+        vtkImageData with unsigned short scalars.
+    """
+    image = vtk.vtkImageData()
+    image.SetDimensions(*dims)
+    image.SetSpacing(*spacing)
+    image.SetOrigin(*origin)
+    image.AllocateScalars(vtk.VTK_UNSIGNED_SHORT, 1)
+
+    # Zero out
+    scalars = image.GetPointData().GetScalars()
+    n = scalars.GetNumberOfTuples()
+    for i in range(n):
+        scalars.SetTuple1(i, 0)
+
+    if label_slabs:
+        nx, ny, nz = dims
+        for label_val, z_start, z_end in label_slabs:
+            for z in range(z_start, min(z_end, nz)):
+                for y in range(ny):
+                    for x in range(nx):
+                        idx = z * ny * nx + y * nx + x
+                        scalars.SetTuple1(idx, label_val)
+
+    image.Modified()
+    return image
+
+
+# ---------------------------------------------------------------------------
+# Tests: Color generation
+# ---------------------------------------------------------------------------
+
+class TestVertebralColors:
+    """Verify the low-saturation warm ivory anatomy palette."""
+
+    def test_all_labels_produce_valid_rgb(self):
+        from src.core.vertebral_mesh import generate_vertebra_color, VERTEBRA_LABELS
+
+        for label in VERTEBRA_LABELS:
+            r, g, b = generate_vertebra_color(label)
+            assert 0.0 <= r <= 1.0, f"label {label}: r={r}"
+            assert 0.0 <= g <= 1.0, f"label {label}: g={g}"
+            assert 0.0 <= b <= 1.0, f"label {label}: b={b}"
+
+    def test_sacrum_is_warm_ivory_instead_of_red(self):
+        from src.core.vertebral_mesh import generate_vertebra_color
+
+        r, g, b = generate_vertebra_color(25)
+        assert r > g > b
+        assert g > 0.68
+        assert b > 0.58
+        assert r - b < 0.25
+
+    def test_t1_remains_light_warm_bone(self):
+        from src.core.vertebral_mesh import generate_vertebra_color
+
+        r, g, b = generate_vertebra_color(43)
+        assert r > g > b
+        assert min(r, g, b) > 0.65
+
+    def test_colors_are_distinct(self):
+        """Adjacent vertebrae should have different colors."""
+        from src.core.vertebral_mesh import generate_vertebra_color
+
+        colors = [generate_vertebra_color(label) for label in range(25, 44)]
+        for i in range(len(colors) - 1):
+            assert colors[i] != colors[i + 1], (
+                f"Labels {25 + i} and {26 + i} have identical colors"
+            )
+
+    def test_unknown_label_returns_gray(self):
+        from src.core.vertebral_mesh import generate_vertebra_color
+
+        r, g, b = generate_vertebra_color(999)
+        assert r == g == b, "Unknown label should return neutral gray"
+
+    def test_get_vertebra_colors_returns_all(self):
+        from src.core.vertebral_mesh import get_vertebra_colors, VERTEBRA_LABELS
+
+        color_map = get_vertebra_colors()
+        assert set(color_map.keys()) == set(VERTEBRA_LABELS.keys())
+
+
+# ---------------------------------------------------------------------------
+# Tests: Label detection
+# ---------------------------------------------------------------------------
+
+class TestLabelDetection:
+    """Verify voxel presence checks."""
+
+    def test_detect_present_label(self):
+        from src.core.vertebral_mesh import _label_has_voxels_numpy
+
+        mask = _create_labeled_mask(label_slabs=[(27, 0, 3)])
+        assert _label_has_voxels_numpy(mask, 27) is True
+
+    def test_detect_absent_label(self):
+        from src.core.vertebral_mesh import _label_has_voxels_numpy
+
+        mask = _create_labeled_mask(label_slabs=[(27, 0, 3)])
+        assert _label_has_voxels_numpy(mask, 30) is False
+
+    def test_empty_mask_has_no_labels(self):
+        from src.core.vertebral_mesh import _label_has_voxels_numpy
+
+        mask = _create_labeled_mask()
+        for label in range(25, 44):
+            assert _label_has_voxels_numpy(mask, label) is False
+
+    def test_out_of_range_label_rejected_fast(self):
+        """Labels outside scalar range should be rejected without scanning."""
+        from src.core.vertebral_mesh import _label_has_voxels_numpy
+
+        mask = _create_labeled_mask(label_slabs=[(27, 0, 3)])
+        # scalar range is [0, 27], label 100 is out of range
+        assert _label_has_voxels_numpy(mask, 100) is False
+
+    def test_vtk_fallback_detection(self):
+        """Verify the pure-VTK fallback path works."""
+        from src.core.vertebral_mesh import _label_has_voxels
+
+        mask = _create_labeled_mask(label_slabs=[(32, 2, 5)])
+        assert _label_has_voxels(mask, 32) is True
+        assert _label_has_voxels(mask, 33) is False
+
+    def test_detect_vertebral_labels_returns_sorted(self):
+        """detect_vertebral_labels should return sorted list of present labels."""
+        from src.core.vertebral_mesh import detect_vertebral_labels
+
+        mask = _create_labeled_mask(
+            dims=(10, 10, 20),
+            label_slabs=[(27, 0, 5), (32, 5, 10), (28, 10, 15)],
+        )
+        detected = detect_vertebral_labels(mask)
+        assert detected == [27, 28, 32]
+
+    def test_detect_vertebral_labels_empty_mask(self):
+        """Empty mask should return empty list."""
+        from src.core.vertebral_mesh import detect_vertebral_labels
+
+        mask = _create_labeled_mask()
+        assert detect_vertebral_labels(mask) == []
+
+    def test_detect_vertebral_labels_none_input(self):
+        """None input should return empty list."""
+        from src.core.vertebral_mesh import detect_vertebral_labels
+
+        assert detect_vertebral_labels(None) == []
+
+    def test_detect_vertebral_labels_ignores_non_vertebral(self):
+        """Non-vertebral labels (outside 25-43) should be ignored."""
+        from src.core.vertebral_mesh import detect_vertebral_labels
+
+        mask = _create_labeled_mask(label_slabs=[(5, 0, 5), (27, 5, 10)])
+        detected = detect_vertebral_labels(mask)
+        assert detected == [27]
+
+
+# ---------------------------------------------------------------------------
+# Tests: Mesh extraction
+# ---------------------------------------------------------------------------
+
+class TestMeshExtraction:
+    """Verify end-to-end mesh extraction from synthetic masks."""
+
+    def test_single_vertebra_mesh(self):
+        """Extracting a single vertebra should produce non-empty polydata."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 20),
+            label_slabs=[(27, 5, 15)],  # L5
+        )
+        result = extract_vertebral_mesh(mask)
+        assert result is not None
+        assert result.GetNumberOfCells() > 0
+        assert result.GetNumberOfPoints() > 0
+
+    def test_multiple_vertebrae_mesh(self):
+        """Multiple vertebrae should produce more cells than a single one."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 30),
+            label_slabs=[
+                (27, 0, 10),   # L5
+                (28, 10, 20),  # L4
+                (29, 20, 30),  # L3
+            ],
+        )
+        result = extract_vertebral_mesh(mask)
+        assert result is not None
+        assert result.GetNumberOfCells() > 0
+
+    def test_mesh_has_color_array(self):
+        """Resulting polydata should have VertebraColors cell data."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 20),
+            label_slabs=[(27, 5, 15)],
+        )
+        result = extract_vertebral_mesh(mask)
+        assert result is not None
+
+        colors = result.GetCellData().GetArray("VertebraColors")
+        assert colors is not None
+        assert colors.GetNumberOfComponents() == 3
+        assert colors.GetNumberOfTuples() == result.GetNumberOfCells()
+
+    def test_none_input_returns_none(self):
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        result = extract_vertebral_mesh(None)
+        assert result is None
+
+    def test_empty_mask_returns_none(self):
+        """All-zero mask should return None (no vertebral labels)."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(dims=(10, 10, 10))
+        result = extract_vertebral_mesh(mask)
+        assert result is None
+
+    def test_non_vertebral_labels_ignored(self):
+        """Labels outside 25-43 should be ignored."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        # Label 5 is not a vertebra label
+        mask = _create_labeled_mask(
+            dims=(20, 20, 20),
+            label_slabs=[(5, 0, 20)],
+        )
+        result = extract_vertebral_mesh(mask)
+        assert result is None
+
+    def test_smoothing_parameters_respected(self):
+        """Custom smoothing parameters should not cause errors."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 20),
+            label_slabs=[(25, 5, 15)],
+        )
+        result = extract_vertebral_mesh(
+            mask, smoothing_iterations=5, smoothing_passband=0.05
+        )
+        assert result is not None
+        assert result.GetNumberOfCells() > 0
+
+    def test_default_pipeline_does_not_increase_polygon_count(self):
+        """Interactive mesh generation must not amplify surface complexity."""
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(30, 30, 30),
+            label_slabs=[(27, 5, 25)],
+        )
+        raw = vtk.vtkDiscreteMarchingCubes()
+        raw.SetInputData(mask)
+        raw.SetValue(0, 27)
+        raw.Update()
+
+        result = extract_vertebral_mesh(mask)
+
+        assert result is not None
+        assert result.GetNumberOfCells() <= raw.GetOutput().GetNumberOfCells()
+
+    def test_coarse_anisotropic_mask_produces_faired_dense_surface(self):
+        """Surface fairing should retain shape and avoid excessive decimation."""
+        import numpy as np
+        from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        dims = (32, 32, 20)
+        spacing = np.array((2.0, 2.0, 4.0))
+        z_index, y_index, x_index = np.indices(
+            (dims[2], dims[1], dims[0])
+        )
+        world = np.stack(
+            (
+                x_index * spacing[0],
+                y_index * spacing[1],
+                z_index * spacing[2],
+            ),
+            axis=-1,
+        )
+        center = (np.array(dims) - 1) * spacing / 2.0
+        labels = np.where(
+            np.linalg.norm(world - center, axis=-1) <= 15.0,
+            27,
+            0,
+        ).astype(np.uint16)
+
+        mask = vtk.vtkImageData()
+        mask.SetDimensions(*dims)
+        mask.SetSpacing(*spacing)
+        mask.GetPointData().SetScalars(
+            numpy_to_vtk(labels.ravel(), deep=True)
+        )
+
+        raw = vtk.vtkDiscreteMarchingCubes()
+        raw.SetInputData(mask)
+        raw.SetValue(0, 27)
+        raw.Update()
+        result = extract_vertebral_mesh(mask, labels=[27])
+
+        assert result is not None
+        points = vtk_to_numpy(result.GetPoints().GetData())
+        radial_distance = np.linalg.norm(points - center, axis=1)
+        assert radial_distance.std() < 0.48
+        assert result.GetNumberOfCells() >= raw.GetOutput().GetNumberOfCells() * 0.5
+
+    def test_mesh_uses_spacing_aware_gaussian_before_flying_edges(self):
+        """Gaussian sigma must be physical-mm based, not a fixed voxel value."""
+        import inspect
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        source = inspect.getsource(extract_vertebral_mesh)
+
+        assert "vtkImageGaussianSmooth()" in source
+        assert "vtkFlyingEdges3D()" in source
+        assert "smoothing_mm / spacing" in source
+
+    def test_upsampled_15mm_label_terraces_are_smoothed_in_physical_space(self):
+        """Model TotalSegmentator's coarse labels resampled onto a fine CT grid."""
+        import numpy as np
+        from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        coarse_dims = (24, 24, 24)
+        coarse_spacing = 1.5
+        upsample_factor = 3
+        z_index, y_index, x_index = np.indices(
+            (coarse_dims[2], coarse_dims[1], coarse_dims[0])
+        )
+        coarse_center = (
+            (np.array(coarse_dims) - 1) * coarse_spacing / 2.0
+        )
+        coarse_world = np.stack(
+            (
+                x_index * coarse_spacing,
+                y_index * coarse_spacing,
+                z_index * coarse_spacing,
+            ),
+            axis=-1,
+        )
+        coarse = np.where(
+            np.linalg.norm(coarse_world - coarse_center, axis=-1) <= 12.0,
+            27,
+            0,
+        ).astype(np.uint16)
+        labels = np.repeat(
+            np.repeat(
+                np.repeat(coarse, upsample_factor, axis=0),
+                upsample_factor,
+                axis=1,
+            ),
+            upsample_factor,
+            axis=2,
+        )
+
+        mask = vtk.vtkImageData()
+        mask.SetDimensions(labels.shape[2], labels.shape[1], labels.shape[0])
+        mask.SetSpacing(0.5, 0.5, 0.5)
+        mask.GetPointData().SetScalars(
+            numpy_to_vtk(labels.ravel(), deep=True)
+        )
+        result = extract_vertebral_mesh(mask, labels=[27])
+
+        points = vtk_to_numpy(result.GetPoints().GetData())
+        fine_center = (np.array(mask.GetDimensions()) - 1) * 0.5 / 2.0
+        radial_distance = np.linalg.norm(points - fine_center, axis=1)
+        assert radial_distance.std() < 0.18
+
+
+# ---------------------------------------------------------------------------
+# Tests: Constants and module structure
+# ---------------------------------------------------------------------------
+
+class TestModuleConstants:
+    """Verify module-level constants."""
+
+    def test_label_range(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_MIN, VERTEBRA_LABEL_MAX
+
+        assert VERTEBRA_LABEL_MIN == 25
+        assert VERTEBRA_LABEL_MAX == 43
+
+    def test_all_19_labels_defined(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABELS
+
+        assert len(VERTEBRA_LABELS) == 19
+
+    def test_label_keys_contiguous(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABELS
+
+        expected = set(range(25, 44))
+        assert set(VERTEBRA_LABELS.keys()) == expected
+
+    def test_label_names_contain_vertebrae(self):
+        """All labels except sacrum should contain 'vertebrae'."""
+        from src.core.vertebral_mesh import VERTEBRA_LABELS
+
+        for label, name in VERTEBRA_LABELS.items():
+            if label == 25:
+                assert name == "sacrum"
+            else:
+                assert "vertebrae" in name, f"Label {label} name missing 'vertebrae': {name}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: HSV conversion
+# ---------------------------------------------------------------------------
+
+class TestHSVConversion:
+    """Verify internal HSV to RGB conversion."""
+
+    def test_red(self):
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(0.0, 1.0, 1.0)
+        assert abs(r - 1.0) < 0.01
+        assert abs(g - 0.0) < 0.01
+        assert abs(b - 0.0) < 0.01
+
+    def test_green(self):
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(1 / 3, 1.0, 1.0)
+        assert abs(r - 0.0) < 0.01
+        assert abs(g - 1.0) < 0.01
+        assert abs(b - 0.0) < 0.01
+
+    def test_blue(self):
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(2 / 3, 1.0, 1.0)
+        assert abs(r - 0.0) < 0.01
+        assert abs(g - 0.0) < 0.01
+        assert abs(b - 1.0) < 0.01
+
+    def test_white(self):
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(0.0, 0.0, 1.0)
+        assert abs(r - 1.0) < 0.01
+        assert abs(g - 1.0) < 0.01
+        assert abs(b - 1.0) < 0.01
+
+    def test_black(self):
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(0.0, 0.0, 0.0)
+        assert abs(r) < 0.01
+        assert abs(g) < 0.01
+        assert abs(b) < 0.01
+
+    def test_yellow(self):
+        """H=60deg (1/6) should produce yellow."""
+        from src.core.vertebral_mesh import _hsv_to_rgb
+
+        r, g, b = _hsv_to_rgb(1 / 6, 1.0, 1.0)
+        assert abs(r - 1.0) < 0.01
+        assert abs(g - 1.0) < 0.01
+        assert abs(b - 0.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Tests: create_vertebral_only_volume
+# ---------------------------------------------------------------------------
+
+class TestCreateVertebralOnlyVolume:
+    """Verify masked volume creation for vertebral body isolation."""
+
+    def _make_ct_and_mask(self):
+        """Create a simple CT volume and a matching mask."""
+        import numpy as np
+        from vtk.util.numpy_support import numpy_to_vtk
+
+        dims = (10, 10, 10)
+        ct = vtk.vtkImageData()
+        ct.SetDimensions(*dims)
+        ct.SetSpacing(1.0, 1.0, 1.0)
+        ct.SetOrigin(0.0, 0.0, 0.0)
+        ct.AllocateScalars(vtk.VTK_SHORT, 1)
+
+        # Fill CT with HU=500 everywhere
+        n = dims[0] * dims[1] * dims[2]
+        ct_arr = np.full(n, 500, dtype=np.int16)
+        vtk_ct = numpy_to_vtk(ct_arr, deep=True)
+        vtk_ct.SetName("ImageScalars")
+        ct.GetPointData().SetScalars(vtk_ct)
+
+        # Create mask: label 27 (L5) in z=0..4, label 0 elsewhere
+        mask = vtk.vtkImageData()
+        mask.SetDimensions(*dims)
+        mask.SetSpacing(1.0, 1.0, 1.0)
+        mask.SetOrigin(0.0, 0.0, 0.0)
+        mask.AllocateScalars(vtk.VTK_UNSIGNED_SHORT, 1)
+
+        mask_arr = np.zeros(n, dtype=np.uint16)
+        nx, ny = dims[0], dims[1]
+        for z in range(5):
+            for y in range(ny):
+                for x in range(nx):
+                    mask_arr[z * ny * nx + y * nx + x] = 27
+        vtk_mask = numpy_to_vtk(mask_arr, deep=True)
+        vtk_mask.SetName("ImageScalars")
+        mask.GetPointData().SetScalars(vtk_mask)
+
+        return ct, mask
+
+    def test_vertebral_voxels_preserved(self):
+        from src.core.vertebral_mesh import create_vertebral_only_volume
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        ct, mask = self._make_ct_and_mask()
+        result = create_vertebral_only_volume(ct, mask, smooth_sigma=0)
+        result_arr = vtk_to_numpy(result.GetPointData().GetScalars())
+
+        # First 500 voxels (z=0..4) should still be 500
+        assert (result_arr[:500] == 500).all()
+
+    def test_non_vertebral_voxels_set_to_air(self):
+        from src.core.vertebral_mesh import create_vertebral_only_volume
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        ct, mask = self._make_ct_and_mask()
+        result = create_vertebral_only_volume(ct, mask, smooth_sigma=0)
+        result_arr = vtk_to_numpy(result.GetPointData().GetScalars())
+
+        # Last 500 voxels (z=5..9) should be -1000
+        assert (result_arr[500:] == -1000).all()
+
+    def test_result_geometry_matches_original(self):
+        from src.core.vertebral_mesh import create_vertebral_only_volume
+
+        ct, mask = self._make_ct_and_mask()
+        result = create_vertebral_only_volume(ct, mask)
+
+        assert result.GetDimensions() == ct.GetDimensions()
+        assert result.GetSpacing() == ct.GetSpacing()
+        assert result.GetOrigin() == ct.GetOrigin()
+
+    def test_smoothing_blurs_boundary(self):
+        """Gaussian smoothing should produce intermediate values at boundary."""
+        from src.core.vertebral_mesh import create_vertebral_only_volume
+        from vtk.util.numpy_support import vtk_to_numpy
+        import numpy as np
+
+        ct, mask = self._make_ct_and_mask()
+        result = create_vertebral_only_volume(ct, mask, smooth_sigma=0.7)
+        result_arr = vtk_to_numpy(result.GetPointData().GetScalars())
+
+        # Interior bone voxels (z=0..2) should still be close to 500
+        dims = ct.GetDimensions()
+        n_per_slice = dims[0] * dims[1]  # 100
+        interior_bone = result_arr[:2 * n_per_slice]
+        assert np.mean(interior_bone) > 400
+
+        # Interior air voxels (z=7..9) should still be close to -1000
+        interior_air = result_arr[7 * n_per_slice:]
+        assert np.mean(interior_air) < -900
+
+        # Boundary region (z=4,5) should have blurred intermediate values
+        boundary = result_arr[4 * n_per_slice:6 * n_per_slice]
+        assert np.min(boundary) < 400  # Some blurring occurred
+
+
+# ---------------------------------------------------------------------------
+# Tests: Viewer3D API presence
+# ---------------------------------------------------------------------------
+
+class TestViewer3DVertebralAPI:
+    """Verify Viewer3D has vertebral mesh methods."""
+
+    def test_has_set_vertebral_mesh(self):
+        from src.ui.viewer_3d import Viewer3D
+
+        assert hasattr(Viewer3D, "set_vertebral_mesh")
+
+    def test_has_clear_vertebral_mesh(self):
+        from src.ui.viewer_3d import Viewer3D
+
+        assert hasattr(Viewer3D, "clear_vertebral_mesh")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

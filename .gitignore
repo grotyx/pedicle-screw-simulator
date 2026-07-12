@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Logs
+logs/
+*.log
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# DICOM test data (large binary files and possible PHI)
+data/*
+!data/README.md
+
+# Claude Code local settings
+.claude/
+.claude/settings.local.json
+
+# Local visual brainstorming sessions
+.superpowers/
+
+# Local agent design and execution plans
+docs/superpowers/
+
+# Exported files
+*.stl
+*.nii
+*.nii.gz

@@ -1,0 +1,1169 @@
+"""
+UI integration tests for MainWindow workflow.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+pytest.importorskip("pytestqt")
+sitk = pytest.importorskip("SimpleITK")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
+
+from src.core.totalseg_integration import SegmentationRunResult
+from src.models.screw import Screw
+import src.ui.main_window as main_window_module
+import src.controllers.plan_controller as plan_controller_module
+import src.controllers.segmentation_controller as seg_controller_module
+
+
+class DummyMPRViewer(QWidget):
+    """Lightweight MPR test double for UI workflow tests."""
+
+    slice_changed = pyqtSignal(str, float)
+    crosshair_moved = pyqtSignal(str, float, float, float)
+
+    def __init__(self, plane, volume_manager, parent=None):
+        super().__init__(parent)
+        self.plane = plane
+        self.volume_manager = volume_manager
+        self.visible = True
+        self.seg_label_value = 0
+        self.seg_mask = None
+        self.measurements = {}
+        self.custom_axes = None
+        self.custom_title = None
+        self.review_screw_id = None
+        self.screw_overlays = {}
+        self.fit_count = 0
+        self.screw_interaction_callbacks = {}
+        self.measurement_interaction_callbacks = {}
+        self.selected_measurement_id = None
+        self.screw_interaction_cancelled = 0
+        self.last_slice_position = None
+
+    def set_window_level(self, _window, _level):
+        return
+
+    def set_segmentation_mask(self, mask_image, label_value=0, **_kwargs):
+        self.seg_mask = mask_image
+        self.seg_label_value = int(label_value)
+
+    def set_segmentation_label(self, label_value):
+        self.seg_label_value = int(label_value)
+
+    def set_segmentation_visible(self, visible):
+        self.visible = bool(visible)
+
+    def clear_segmentation_mask(self):
+        self.seg_mask = None
+        self.seg_label_value = 0
+
+    def add_measurement(self, measurement_id, points, label):
+        self.measurements[measurement_id] = {"points": points, "label": label}
+
+    def remove_measurement(self, measurement_id):
+        self.measurements.pop(measurement_id, None)
+
+    def clear_measurements(self):
+        self.measurements = {}
+
+    def set_slice_position(self, position):
+        self.last_slice_position = float(position)
+        self.volume_manager.set_slice_position(self.plane, float(position))
+
+    def cleanup(self):
+        return
+
+    # Stubs for reslice input swap (vertebral isolation)
+    def set_reslice_input(self, vtk_image):
+        return
+
+    def restore_original_input(self):
+        return
+
+    # Stubs for screw projection overlays
+    def add_screw_overlay(self, screw_id, entry, target, color=(0.2, 0.8, 0.2), diameter=6.0):
+        self.screw_overlays[screw_id] = {
+            "entry": tuple(entry),
+            "target": tuple(target),
+            "diameter": float(diameter),
+        }
+
+    def remove_screw_overlay(self, screw_id):
+        self.screw_overlays.pop(screw_id, None)
+
+    def clear_screw_overlays(self):
+        self.screw_overlays = {}
+
+    def set_custom_reslice_axes(self, axes, title):
+        self.custom_axes = axes
+        self.custom_title = title
+
+    def clear_custom_reslice_axes(self):
+        self.custom_axes = None
+        self.custom_title = None
+
+    def set_review_screw(self, screw_id):
+        self.review_screw_id = screw_id
+
+    def set_screw_interaction_callbacks(self, **callbacks):
+        self.screw_interaction_callbacks = callbacks
+
+    def set_measurement_interaction_callbacks(self, **callbacks):
+        self.measurement_interaction_callbacks = callbacks
+
+    def set_selected_measurement(self, measurement_id):
+        self.selected_measurement_id = measurement_id
+
+    def cancel_screw_interaction(self):
+        self.screw_interaction_cancelled += 1
+
+    def fit_to_view(self):
+        self.fit_count += 1
+
+    # Stubs for _coordinated_initial_render
+    _render_guard_active = False
+    _settled = False
+    _extra_render_count = 0
+
+    def _deferred_initial_render(self):
+        return
+
+
+class DummyViewer3D(QWidget):
+    """Lightweight 3D viewer test double for UI workflow tests."""
+
+    def __init__(self, volume_manager, parent=None):
+        super().__init__(parent)
+        self.visible = True
+        self.seg_label_value = 0
+        self.seg_mask = None
+        self.screws = []
+        self.measurements = {}
+        self.zoom_factors = []
+        self.fit_count = 0
+        self.vertebral_mesh_labels = None
+        self.volume_visible = True
+        self.screw_interaction_cancelled = 0
+
+    def add_screw(
+        self, entry_point, target_point, radius=3.0, color=None, screw_id=None
+    ):
+        class _Property:
+            def SetOpacity(self, v): pass
+            def GetOpacity(self): return 1.0
+        class _Actor:
+            def __init__(self, e, t, r, c, sid):
+                self.entry_point = e
+                self.target_point = t
+                self.radius = r
+                self.color = c
+                self.screw_id = sid
+                self._prop = _Property()
+            def GetProperty(self):
+                return self._prop
+        actor = _Actor(
+            tuple(entry_point), tuple(target_point), float(radius), color, screw_id
+        )
+        self.screws.append(actor)
+        return actor
+
+    def set_screw_interaction_callbacks(self, **callbacks):
+        self.screw_interaction_callbacks = callbacks
+
+    def set_selected_screw(self, screw_id):
+        self.selected_screw_id = screw_id
+
+    def cancel_screw_interaction(self):
+        self.screw_interaction_cancelled += 1
+
+    def remove_screw(self, actor):
+        if actor in self.screws:
+            self.screws.remove(actor)
+
+    def clear_screws(self):
+        self.screws = []
+
+    def add_measurement(self, measurement_id, points, label):
+        self.measurements[measurement_id] = {"points": points, "label": label}
+
+    def remove_measurement(self, measurement_id):
+        self.measurements.pop(measurement_id, None)
+
+    def clear_measurements(self):
+        self.measurements = {}
+
+    def set_segmentation_mask(self, mask_image, label_value=0, **_kwargs):
+        self.seg_mask = mask_image
+        self.seg_label_value = int(label_value)
+
+    def set_segmentation_label(self, label_value):
+        self.seg_label_value = int(label_value)
+
+    def set_segmentation_visible(self, visible):
+        self.visible = bool(visible)
+
+    # Stubs for _coordinated_initial_render
+    _render_guard_active = False
+    _extra_render_count = 0
+
+    def _deferred_render_phase1(self):
+        return
+
+    def clear_segmentation_mask(self):
+        self.seg_mask = None
+        self.seg_label_value = 0
+
+    def set_vertebral_mesh(self, _mask_image, labels=None):
+        self.vertebral_mesh_labels = list(labels) if labels is not None else None
+
+    def clear_vertebral_mesh(self):
+        return
+
+    def set_volume_visible(self, visible):
+        self.volume_visible = bool(visible)
+
+    def set_bone_opacity(self, _opacity):
+        return
+
+    def _update_plane_positions(self):
+        return
+
+    def zoom_camera(self, factor):
+        self.zoom_factors.append(float(factor))
+
+    def fit_to_view(self):
+        self.fit_count += 1
+
+    def cleanup(self):
+        return
+
+
+class _ProgressStub:
+    """Simple close-only progress stub for private load callback tests."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _create_test_image():
+    image = sitk.Image([16, 16, 12], sitk.sitkInt16)
+    image = image + 250
+    image.SetSpacing((1.0, 1.0, 1.2))
+    image.SetOrigin((0.5, 1.0, 2.0))
+    return image
+
+
+def _write_mask(image, path):
+    mask = sitk.Cast(image > 0, sitk.sitkUInt8)
+    mask.CopyInformation(image)
+    sitk.WriteImage(mask, str(path))
+
+
+@pytest.fixture
+def ui_main_window(monkeypatch, qtbot):
+    """Build MainWindow with lightweight viewer stubs."""
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "soft_light")
+
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+    return window
+
+
+def _view_grid_position(window, widget):
+    index = window._view_layout.indexOf(widget)
+    assert index >= 0
+    return window._view_layout.getItemPosition(index)
+
+
+def test_vworks_planning_layout_is_default(ui_main_window):
+    window = ui_main_window
+
+    assert window._view_layout_mode == "planning"
+    assert _view_grid_position(window, window.axial_viewer) == (0, 0, 1, 1)
+    assert _view_grid_position(window, window.sagittal_viewer) == (1, 0, 1, 1)
+    assert _view_grid_position(window, window.coronal_viewer) == (2, 0, 1, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+
+
+def test_default_window_size_is_screen_aware_and_compact(ui_main_window):
+    window = ui_main_window
+
+    assert window.minimumWidth() == 1280
+    assert window.minimumHeight() == 760
+    assert window._calculate_initial_window_size(1920, 1080) == (1680, 1050)
+    assert window._calculate_initial_window_size(1440, 900) == (1353, 900)
+
+
+def test_workspace_and_theme_selectors_are_compact(ui_main_window):
+    window = ui_main_window
+
+    assert window.workspace_mode_combo.maximumWidth() <= 105
+    assert window.theme_combo.maximumWidth() <= 115
+    assert window.workspace_mode_combo.maximumHeight() <= 26
+    assert window.theme_combo.maximumHeight() <= 26
+
+
+def test_default_control_panel_expands_only_main_workflow(ui_main_window):
+    window = ui_main_window
+
+    assert window.segmentation_group.is_collapsed is False
+    assert window.planning_group.is_collapsed is False
+    assert window.selected_screw_group.is_collapsed is False
+    assert all(
+        group.is_collapsed
+        for group in window.secondary_control_groups
+    )
+    assert not hasattr(window, "auto_accept_all_btn")
+    assert not hasattr(window, "auto_accept_sel_btn")
+    assert not hasattr(window, "auto_reject_btn")
+    assert window.screw_list_widget.minimumHeight() >= 110
+    assert window.screw_list_widget.maximumHeight() >= 110
+    assert window.remove_screw_btn.text() == "Delete Screw"
+
+
+def test_layout_can_switch_to_mpr_focus_and_back(ui_main_window):
+    window = ui_main_window
+
+    window.set_view_layout("mpr_focus")
+
+    assert window._view_layout_mode == "mpr_focus"
+    assert _view_grid_position(window, window.axial_viewer) == (0, 0, 1, 1)
+    assert _view_grid_position(window, window.sagittal_viewer) == (0, 1, 1, 1)
+    assert _view_grid_position(window, window.coronal_viewer) == (1, 0, 1, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (1, 1, 1, 1)
+
+    window.set_view_layout("planning")
+
+    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+    assert window.layout_combo.currentData() == "planning"
+
+
+def test_toolbar_exposes_mpr_fit_and_3d_zoom_controls(ui_main_window):
+    window = ui_main_window
+
+    window._fit_mpr_action.trigger()
+    window._zoom_in_3d_action.trigger()
+    window._zoom_out_3d_action.trigger()
+    window._fit_3d_action.trigger()
+
+    assert all(viewer.fit_count >= 1 for viewer in window._get_mpr_viewers())
+    assert window.viewer_3d.zoom_factors == [1.2, 1.0 / 1.2]
+    assert window.viewer_3d.fit_count == 1
+
+
+def test_toolbar_uses_one_icon_tool_palette_without_legacy_modes(ui_main_window):
+    window = ui_main_window
+
+    actions = window._tool_group.actions()
+    assert [action.text() for action in actions] == [
+        "Select",
+        "Add Screw",
+        "Distance",
+        "Angle",
+    ]
+    assert all(not action.icon().isNull() for action in actions)
+    assert window._select_tool_action.isChecked()
+    assert not {"Navigate", "Screw Tool", "Measure"}.intersection(
+        action.text() for action in actions
+    )
+
+
+def test_add_screw_palette_tool_places_and_selects_screw_from_two_mpr_clicks(
+    ui_main_window,
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ADD-SCREW", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+
+    window._add_screw_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 2.0, 3.0, 4.0)
+    assert "tip" in window.statusbar.currentMessage().lower()
+    window.axial_viewer.crosshair_moved.emit("axial", 2.0, 3.0, 34.0)
+
+    assert window._tool_ctrl.active_tool == "screw"
+    assert len(window.screw_tool.get_screws()) == 1
+    assert window.screw_list_widget.currentRow() == 0
+    assert window.viewer_3d.screws[0].radius == pytest.approx(3.25)
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == (2.0, 3.0, 4.0)
+        assert viewer.screw_overlays[0]["target"] == (2.0, 3.0, 34.0)
+
+
+def test_distance_and_angle_palette_tools_complete_measurements(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-MEASURE", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+
+    window._distance_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 3.0, 4.0, 0.0)
+
+    assert window.measurement_list_widget.count() == 1
+    assert "5.00 mm" in window.measurement_list_widget.item(0).text()
+
+    window._angle_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 1.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 1.0, 0.0)
+
+    assert window.measurement_list_widget.count() == 2
+    assert "90.0°" in window.measurement_list_widget.item(1).text()
+
+
+def test_measurement_can_jump_to_cut_be_remeasured_and_deleted(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-MEASURE-EDIT", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+
+    window._distance_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 3.0, 4.0, 0.0)
+    window.measurement_list_widget.setCurrentRow(0)
+
+    assert window.show_measurement_btn.text() == "Show Cut"
+    assert window.edit_measurement_btn.text() == "Edit"
+    assert window.remove_measurement_btn.text() == "Delete"
+
+    window.axial_viewer.set_slice_position(5.0)
+    window.show_measurement_btn.click()
+
+    assert window.axial_viewer.last_slice_position == pytest.approx(0.0)
+
+    window.edit_measurement_btn.click()
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 10.0, 0.0)
+
+    assert window.measurement_list_widget.count() == 1
+    assert "10.0 mm" in window.measurement_list_widget.item(0).text()
+    assert len(window.measurement_tool.get_measurements()) == 1
+    assert window.axial_viewer.measurements[1]["label"] == "10.0 mm"
+
+    window.measurement_list_widget.setCurrentRow(0)
+    window.remove_measurement_btn.click()
+
+    assert window.measurement_list_widget.count() == 0
+    assert window.axial_viewer.measurements == {}
+    assert window.viewer_3d.measurements == {}
+
+
+def test_measurement_point_drag_updates_value_without_opening_edit_mode(
+    ui_main_window,
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-MEASURE-DRAG", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    window._distance_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 3.0, 4.0, 0.0)
+
+    window._tool_ctrl.update_measurement_point(
+        measurement_id=1,
+        point_index=1,
+        world_point=(0.0, 10.0, 0.0),
+    )
+
+    assert window.measurement_list_widget.count() == 1
+    assert "10.0 mm" in window.measurement_list_widget.item(0).text()
+    assert window.measurement_tool.get_measurements()[0].distance == pytest.approx(10.0)
+    assert window.axial_viewer.measurements[1]["label"] == "10.0 mm"
+    assert window.viewer_3d.measurements[1]["label"] == "10.0 mm"
+
+
+def test_delete_key_removes_the_active_mpr_measurement(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-MEASURE-DELETE", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    window._distance_tool_action.trigger()
+    window.axial_viewer.crosshair_moved.emit("axial", 0.0, 0.0, 0.0)
+    window.axial_viewer.crosshair_moved.emit("axial", 3.0, 4.0, 0.0)
+    window._tool_ctrl.select_measurement_from_view(1)
+
+    window._delete_screw_action.trigger()
+
+    assert window.measurement_list_widget.count() == 0
+    assert window.measurement_tool.get_measurements() == []
+
+
+def test_selected_vertebrae_can_be_shown_alone_in_3d(ui_main_window):
+    window = ui_main_window
+    window._seg_ctrl._last_vtk_mask = object()
+    window._seg_ctrl._last_segmentation_mask_path = "mask.nii.gz"
+    window.update_vertebra_level_checks([28, 29, 30])
+
+    window._vertebra_level_checks[29].setChecked(False)
+
+    assert window.viewer_3d.vertebral_mesh_labels == [28, 30]
+    assert window.viewer_3d.volume_visible is False
+
+    window._toggle_vertebra_level_checks(True)
+
+    assert window.viewer_3d.vertebral_mesh_labels == [28, 29, 30]
+
+
+def test_segmented_vertebrae_use_shared_live_checkboxes(ui_main_window):
+    window = ui_main_window
+    window._seg_ctrl._last_vtk_mask = object()
+    window._seg_ctrl._last_segmentation_mask_path = "mask.nii.gz"
+
+    window.update_vertebra_level_checks([28, 29, 30])
+
+    assert sorted(window._vertebra_level_checks) == [28, 29, 30]
+    assert all(
+        checkbox.isChecked()
+        for checkbox in window._vertebra_level_checks.values()
+    )
+    assert window.auto_screw_plan_btn.isEnabled() is True
+
+    window._vertebra_level_checks[29].setChecked(False)
+
+    assert window.viewer_3d.vertebral_mesh_labels == [28, 30]
+    assert window._auto_placement_ctrl._get_selected_labels() == [28, 30]
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.vertebra_isolate_btn.text() == "Isolate Vertebrae"
+
+
+@pytest.mark.parametrize(
+    ("control_name", "initial", "typed", "expected"),
+    [
+        ("selected_screw_diameter", 5.5, "65", 6.5),
+        ("diameter_spin", 6.5, "55", 5.5),
+        ("selected_screw_diameter", 6.5, "7", 7.0),
+    ],
+)
+def test_diameter_typing_replaces_and_interprets_shorthand(
+    ui_main_window,
+    qtbot,
+    control_name,
+    initial,
+    typed,
+    expected,
+):
+    spinbox = getattr(ui_main_window, control_name)
+    spinbox.setEnabled(True)
+    spinbox.setValue(initial)
+    ui_main_window.show()
+
+    qtbot.mouseClick(spinbox, Qt.MouseButton.LeftButton)
+    qtbot.keyClicks(spinbox, typed)
+
+    assert spinbox.value() == pytest.approx(expected)
+
+
+def test_segmentation_card_shows_only_auto_and_isolate_controls(ui_main_window):
+    window = ui_main_window
+
+    assert window.seg_run_btn.isHidden() is False
+    assert window.vertebra_isolate_btn.isHidden() is False
+    assert window.seg_advanced_panel.isHidden() is True
+    assert window.vertebra_restore_btn.isHidden() is True
+
+
+def test_smooth_vertebral_mesh_does_not_overlap_raw_3d_segmentation(
+    ui_main_window,
+):
+    assert ui_main_window.seg_show_2d_check.isChecked() is True
+    assert ui_main_window.seg_show_3d_check.isChecked() is False
+
+
+def test_planning_uses_visible_vertebra_checkboxes_without_dropdown(
+    ui_main_window,
+):
+    window = ui_main_window
+    window._seg_ctrl._last_segmentation_mask_path = "mask.nii.gz"
+
+    window.update_vertebra_level_checks([27, 28, 29, 30])
+
+    assert not hasattr(window, "vertebra_selector_button")
+    assert not hasattr(window, "_auto_vertebra_menu")
+
+    window._vertebra_level_checks[27].setChecked(False)
+
+    assert window._auto_placement_ctrl._get_selected_labels() == [28, 29, 30]
+
+
+def test_clearing_vertebra_levels_disables_planning(ui_main_window):
+    window = ui_main_window
+    window._seg_ctrl._last_segmentation_mask_path = "mask.nii.gz"
+    window.update_vertebra_level_checks([28, 29, 30])
+
+    window.clear_vertebra_display_options()
+
+    assert window._vertebra_level_checks == {}
+    assert window.auto_screw_plan_btn.isEnabled() is False
+
+
+def test_segmentation_result_hides_method_and_mask_details(
+    ui_main_window, tmp_path
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-SIMPLE-SEG", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "simple_mask.nii.gz"
+    _write_mask(image, mask_path)
+
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+
+    status = window.seg_status_label.text()
+    assert status.startswith("Segmentation ready")
+    assert "Method:" not in status
+    assert "Mask:" not in status
+    assert window.vertebra_isolate_btn.isEnabled() is True
+
+
+def test_selected_screw_enters_and_exits_screw_axis_mpr(ui_main_window):
+    window = ui_main_window
+    assert window.screw_axis_mpr_btn.text() == "Screw MPR"
+    assert window.standard_mpr_btn.text() == "Std MPR"
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-SCREW-MPR", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(8.0, 9.0, 24.0),
+        diameter=6.0,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.screw_axis_mpr_btn.isEnabled() is True
+
+    window.screw_axis_mpr_btn.click()
+
+    assert window._screw_mpr_ctrl.is_active is True
+    assert window.axial_viewer.custom_title == "Oblique Axial · Screw #1"
+    assert window.sagittal_viewer.custom_title == "Oblique Sagittal · Screw #1"
+    assert window.coronal_viewer.custom_title == "Cross-section · 50%"
+    assert window.screw_axis_position_slider.isEnabled() is True
+    assert all(
+        viewer.review_screw_id == 0
+        for viewer in window._get_mpr_viewers()
+    )
+
+    window.standard_mpr_btn.click()
+
+    assert window._screw_mpr_ctrl.is_active is False
+    assert window.axial_viewer.custom_title is None
+    assert all(
+        viewer.review_screw_id is None
+        for viewer in window._get_mpr_viewers()
+    )
+
+
+def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
+    window = ui_main_window
+
+    assert window.workspace_mode_combo.currentData() == "planning"
+    guided_index = window.workspace_mode_combo.findData("guided")
+    assert guided_index >= 0
+    assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
+    assert window.control_section_order == [
+        "Study",
+        "Screw Review",
+        "Segmentation",
+        "Planning",
+        "Validation",
+    ]
+
+
+def test_selected_screw_inspector_updates_from_list_selection(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.5,
+        vertebra_level="L3",
+        side="left",
+        grade="B",
+        breach_distance=1.4,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_title.text() == "L3 Left"
+    assert window.selected_screw_diameter.value() == pytest.approx(6.5)
+    assert window.selected_screw_diameter.maximum() == pytest.approx(7.5)
+    assert window.selected_screw_length.text() == f"{screw.length:.1f} mm"
+    assert window.selected_screw_grade.text() == "Grade B"
+    assert "1.4 mm" in window.selected_screw_warning.text()
+
+
+def test_selected_screw_diameter_control_updates_model_and_linked_views(
+    ui_main_window,
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-DIAMETER", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(2.0, 3.0, 30.0),
+        diameter=6.5,
+        vertebra_level="L3",
+        side="left",
+    )
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+
+    window.selected_screw_diameter.setValue(7.5)
+
+    updated = window.screw_tool.get_screws()[0]
+    assert updated.diameter == pytest.approx(7.5)
+    assert window.viewer_3d.screws[0].radius == pytest.approx(3.75)
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["diameter"] == pytest.approx(7.5)
+    assert "Ø 7.5 mm" in window.screw_list_widget.item(0).text()
+
+
+def test_manual_screw_diameter_defaults_to_common_size_and_caps_at_7_5(
+    ui_main_window,
+):
+    window = ui_main_window
+
+    assert window.diameter_spin.value() == pytest.approx(6.5)
+    assert window.diameter_spin.maximum() == pytest.approx(7.5)
+    assert window.diameter_spin.singleStep() == pytest.approx(0.5)
+
+
+def test_screw_review_card_exposes_direct_multi_screw_navigation(ui_main_window):
+    window = ui_main_window
+    screws = [
+        Screw(
+            entry_point=(0.0, 0.0, float(index)),
+            target_point=(0.0, -40.0, float(index + 5)),
+            diameter=6.0 + index,
+            vertebra_level=f"L{index + 3}",
+            side="left" if index == 0 else "right",
+        )
+        for index in range(2)
+    ]
+    for screw in screws:
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_group.property("role") == "review"
+    assert window.selected_screw_counter.text() == "Screw 1 of 2"
+    assert window.screw_previous_btn.isEnabled() is False
+    assert window.screw_next_btn.isEnabled() is True
+    assert (
+        window.screw_list_widget.verticalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+    )
+
+    window.screw_next_btn.click()
+
+    assert window.screw_list_widget.currentRow() == 1
+    assert window.selected_screw_counter.text() == "Screw 2 of 2"
+    assert window.selected_screw_title.text() == "L4 Right"
+    assert window.screw_previous_btn.isEnabled() is True
+    assert window.screw_next_btn.isEnabled() is False
+
+
+def test_cockpit_actions_have_semantic_roles(ui_main_window):
+    window = ui_main_window
+
+    assert window.seg_run_btn.property("role") == "primary"
+    assert window.auto_screw_plan_btn.property("role") == "primary"
+    assert window.screw_axis_mpr_btn.property("role") == "primary"
+    assert window.standard_mpr_btn.property("role") == "secondary"
+    assert window.remove_screw_btn.property("role") == "danger"
+    assert window._btn_clear_screws.property("role") == "danger"
+
+
+def test_theme_selector_exposes_c_default_and_dark_alternatives(ui_main_window):
+    window = ui_main_window
+
+    assert window.theme_combo.currentData() == "soft_light"
+    assert [
+        window.theme_combo.itemData(index)
+        for index in range(window.theme_combo.count())
+    ] == ["soft_light", "graphite_blue", "graphite_mint"]
+
+
+def test_theme_selection_applies_immediately_and_persists(ui_main_window):
+    window = ui_main_window
+
+    class _Settings:
+        def __init__(self):
+            self.values = {}
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+        def sync(self):
+            return
+
+    settings = _Settings()
+    window._settings = settings
+
+    window.theme_combo.setCurrentIndex(
+        window.theme_combo.findData("graphite_mint")
+    )
+
+    assert window._theme_name == "graphite_mint"
+    assert "#10110F" in QApplication.instance().styleSheet()
+    assert settings.values["appearance/theme"] == "graphite_mint"
+
+
+def test_loaded_plan_rebuilds_screw_overlays_in_all_mpr_views(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(8.0, 9.0, 24.0),
+        diameter=6.0,
+    )
+
+    window._plan_ctrl._apply_loaded_plan([screw], [], [])
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == screw.entry_point
+        assert viewer.screw_overlays[0]["target"] == screw.target_point
+
+
+def test_refresh_screw_replaces_same_overlay_id_and_list_row(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-EDIT-SYNC", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(2.0, 3.0, 10.0),
+        diameter=6.0,
+    )
+    window.screw_tool.add_screw(screw)
+    actor = window.viewer_3d.add_screw(
+        screw.entry_point,
+        screw.target_point,
+        radius=screw.diameter / 2.0,
+    )
+    window._tool_ctrl._screw_actors.append(actor)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window._tool_ctrl._add_screw_to_mpr(0, screw)
+
+    updated = window.screw_tool.replace_screw(
+        0,
+        entry_point=(4.0, 5.0, 6.0),
+        target_point=(7.0, 8.0, 12.0),
+    )
+    window._tool_ctrl.refresh_screw(0, updated)
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == (4.0, 5.0, 6.0)
+        assert viewer.screw_overlays[0]["target"] == (7.0, 8.0, 12.0)
+    assert "Len 7.3 mm" in window.screw_list_widget.item(0).text()
+    assert window.viewer_3d.screws[0].entry_point == (4.0, 5.0, 6.0)
+
+
+def test_screw_list_row_shows_level_side_and_geometry(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(1.0, 2.0, 3.0),
+        target_point=(1.0, 2.0, 43.0),
+        diameter=6.5,
+        vertebra_level="L4",
+        side="left",
+        grade="A",
+    )
+
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+
+    text = window.screw_list_widget.item(0).text()
+    assert "L4" in text
+    assert "Left" in text
+    assert "6.5" in text
+    assert "40.0" in text
+    assert window.screw_list_widget.currentRow() == 0
+
+
+def test_delete_shortcut_removes_selected_screw(ui_main_window):
+    window = ui_main_window
+    screw = Screw((1.0, 2.0, 3.0), (1.0, 2.0, 33.0))
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+
+    window._delete_screw_action.trigger()
+
+    assert window.screw_tool.get_screws() == []
+    assert window.screw_list_widget.count() == 0
+
+
+def test_deleting_first_screw_reindexes_remaining_visual_and_selects_it(
+    ui_main_window,
+):
+    window = ui_main_window
+    window._tool_ctrl.add_existing_screw(
+        Screw((1.0, 2.0, 3.0), (1.0, 2.0, 33.0)), select=True
+    )
+    remaining = Screw(
+        (4.0, 5.0, 6.0),
+        (4.0, 5.0, 36.0),
+        vertebra_level="L3",
+        side="right",
+    )
+    window._tool_ctrl.add_existing_screw(remaining)
+    window.screw_list_widget.setCurrentRow(0)
+
+    window._tool_ctrl.remove_selected_screw()
+
+    assert window.screw_tool.get_screws() == [remaining]
+    assert window.viewer_3d.screws[0].screw_id == 0
+    assert window.screw_list_widget.currentRow() == 0
+
+
+def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-3D-DRAG", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw((2.0, 3.0, 4.0), (2.0, 3.0, 10.0))
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+    callbacks = window.viewer_3d.screw_interaction_callbacks
+
+    assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
+    assert callbacks["on_drag"]((4.0, 5.0, 6.0), "3D") is True
+    callbacks["on_end"]()
+
+    updated = window.screw_tool.get_screws()[0]
+    assert updated.entry_point == (4.0, 5.0, 6.0)
+    assert updated.target_point == (2.0, 3.0, 10.0)
+    assert window.screw_list_widget.currentRow() == 0
+
+
+def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
+    ui_main_window,
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-EDIT-MPR", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(8.0, 9.0, 12.0),
+        diameter=6.0,
+    )
+    window.screw_tool.add_screw(screw)
+    actor = window.viewer_3d.add_screw(
+        screw.entry_point,
+        screw.target_point,
+        radius=screw.diameter / 2.0,
+    )
+    window._tool_ctrl._screw_actors.append(actor)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window._tool_ctrl._add_screw_to_mpr(0, screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.screw_edit_entry_btn.isEnabled() is True
+    window.screw_axis_mpr_btn.click()
+    previous_axes = window.axial_viewer.custom_axes
+    callbacks = window.axial_viewer.screw_interaction_callbacks
+    assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
+
+    callbacks["on_drag"]((4.0, 5.0, 6.0), "Axial MPR")
+
+    updated = window.screw_tool.get_screws()[0]
+    assert updated.entry_point == (4.0, 5.0, 6.0)
+    assert updated.target_point == (8.0, 9.0, 12.0)
+    assert window._screw_edit_ctrl.mode == "entry"
+    assert window.axial_viewer.custom_axes is previous_axes
+
+    callbacks["on_end"]()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.axial_viewer.custom_axes is not previous_axes
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == (4.0, 5.0, 6.0)
+    assert window.viewer_3d.screws[0].entry_point == (4.0, 5.0, 6.0)
+    assert window.screw_axis_position_slider.value() == 50
+
+
+def test_escape_action_cancels_pending_screw_edit(ui_main_window):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-EDIT-ESC", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw((2.0, 3.0, 4.0), (8.0, 9.0, 12.0))
+    window.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+    window.screw_edit_move_btn.click()
+
+    window._cancel_screw_edit_action.trigger()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.screw_edit_move_btn.isChecked() is False
+    assert all(
+        viewer.screw_interaction_cancelled == 1
+        for viewer in window._get_mpr_viewers()
+    )
+    assert window.viewer_3d.screw_interaction_cancelled == 1
+
+
+def test_ui_workflow_load_segmentation_toggle_and_save_plan(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    image = _create_test_image()
+    progress = _ProgressStub()
+
+    window._on_dicom_loaded(
+        image=image,
+        metadata={
+            "series_id": "SERIES-TEST-001",
+            "patient_name": "UnitTest",
+            "study_date": "20260207",
+            "modality": "CT",
+            "size": str(image.GetSize()),
+            "spacing": str(image.GetSpacing()),
+            "num_slices": image.GetSize()[2],
+        },
+        progress=progress,
+    )
+
+    assert progress.closed is True
+    assert window.volume_manager.get_vtk_image() is not None
+    assert "UnitTest" in window.info_label.text()
+
+    mask_path = tmp_path / "mask.nii.gz"
+    _write_mask(image, mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+
+    assert window._last_segmentation_mask_path == str(mask_path)
+
+    window.seg_show_2d_check.setChecked(False)
+    window.seg_show_3d_check.setChecked(False)
+    window._update_segmentation_visibility()
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.visible is False
+    assert window.viewer_3d.visible is False
+
+    window.screw_tool.add_screw(
+        Screw(
+            entry_point=(1.0, 2.0, 3.0),
+            target_point=(1.0, 2.0, 25.0),
+            diameter=6.0,
+        )
+    )
+
+    output_path = tmp_path / "plan.json"
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_args, **_kwargs: (str(output_path), "JSON Files (*.json)")),
+    )
+    window._save_plan_dialog()
+
+    assert output_path.exists()
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["series_id"] == "SERIES-TEST-001"
+    assert len(payload["screws"]) == 1
+
+
+def test_ui_shows_geometry_warning_dialog(ui_main_window, monkeypatch, tmp_path):
+    window = ui_main_window
+    image = _create_test_image()
+    progress = _ProgressStub()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-TEST-002", "num_slices": image.GetSize()[2]},
+        progress=progress,
+    )
+
+    mask_path = tmp_path / "mask_warn.nii.gz"
+    _write_mask(image, mask_path)
+
+    warning_calls = []
+
+    def _capture_warning(_parent, title, text):
+        warning_calls.append((title, text))
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(seg_controller_module.QMessageBox, "warning", _capture_warning)
+
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=["spacing mismatch at axis 1: ref=1.0, mask=1.2"],
+        )
+    )
+
+    assert any(title == "Geometry Warning" for title, _ in warning_calls)
