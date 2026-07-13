@@ -24,6 +24,7 @@ def _copy_metadata(destination: Path) -> None:
         "LICENSE",
         "AUTHORS.md",
         "CITATION.cff",
+        "THIRD_PARTY_NOTICES.md",
         "README.md",
         "README.ko.md",
         "docs/USER_GUIDE.md",
@@ -91,14 +92,11 @@ def _archive_windows() -> Path:
         raise FileNotFoundError(f"Windows application folder not found: {source}")
 
     package_name = f"{PRODUCT}-{VERSION}-Windows-x64"
-    staging = RELEASE / package_name
-    shutil.copytree(source, staging)
-    _copy_metadata(staging)
+    _copy_metadata(source)
     archive_base = RELEASE / package_name
     archive = Path(
-        shutil.make_archive(str(archive_base), "zip", RELEASE, package_name)
+        shutil.make_archive(str(archive_base), "zip", DIST, PRODUCT)
     )
-    shutil.rmtree(staging)
     return archive
 
 

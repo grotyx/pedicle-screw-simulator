@@ -20,7 +20,7 @@ Pedicle Screw Simulator는 CT 확인, 척추 자동 분할, 척추경 나사못 
 - CT 용량에 맞는 충분한 RAM
 - TotalSegmentator 가속을 위한 CUDA 지원 NVIDIA GPU(선택)
 
-네이티브 실행은 주로 macOS에서 검증했습니다. Windows 설치 패키지는 아직 제공하지 않습니다.
+Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공합니다. Intel macOS는 지원하지 않습니다.
 
 ## 3. 설치와 실행
 
@@ -48,7 +48,7 @@ TotalSegmentator 선택 설치:
 
 Standalone 패키지는 Python을 별도로 설치하지 않아도 됩니다. GitHub의 **Build desktop packages** workflow에서 생성된 압축파일을 내려받아 전체 폴더를 해제한 후 `.app` 또는 `.exe`를 실행합니다. Windows에서는 실행 파일 옆의 `_internal` 폴더를 함께 보관해야 합니다.
 
-Standalone 패키지에는 TotalSegmentator와 PyTorch가 포함되지 않습니다. AI segmentation이 필요하면 소스 설치에서 `--with-totalseg`를 사용하십시오. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
+Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니다. 첫 자동 분할 시 공개 `total` task 모델을 내려받고 이후에는 로컬 캐시를 재사용합니다. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
 
 ## 4. 화면 구성
 
@@ -77,7 +77,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 3. 척추 라벨과 3D 메시가 나타날 때까지 기다립니다.
 4. 스크류 계획 전에 segmentation 경계를 확인합니다.
 
-TotalSegmentator를 사용할 수 없다면 `--with-totalseg`로 설치하십시오. 대체 결과를 임상적으로 정확하다고 가정하면 안 됩니다.
+Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 모델 다운로드나 추론에 실패하면 프로그램이 이유를 표시하고 threshold fallback을 생성합니다. 대체 결과를 임상적으로 정확하다고 가정하면 안 됩니다. 소스 설치에서는 `--with-totalseg`로 AI 실행환경을 추가할 수 있습니다.
 
 ### 5.3 척추 레벨 선택
 
@@ -205,6 +205,7 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 - 가능한 경우 CUDA GPU를 사용합니다.
 - 메모리를 많이 사용하는 다른 프로그램을 종료합니다.
+- 최초 모델 다운로드가 끝날 때까지 기다립니다. 이후에는 캐시된 모델을 재사용합니다.
 - 저해상도 segmentation은 경계 정확도를 낮출 수 있습니다.
 
 ### 특정 스크류가 생성되지 않음

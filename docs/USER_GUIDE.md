@@ -20,7 +20,7 @@ Do not publish clinical DICOM files or identifying screenshots. See [Local DICOM
 - Sufficient RAM for the CT volume
 - Optional CUDA-capable NVIDIA GPU for faster TotalSegmentator inference
 
-The native workflow is primarily tested on macOS. A packaged Windows release is not yet provided.
+Standalone builds are provided for Apple Silicon macOS and Windows x64. Intel macOS is not supported.
 
 ## 3. Install and Launch
 
@@ -48,7 +48,7 @@ Maintenance commands:
 
 Standalone packages do not require a separate Python installation. Download the archive produced by the GitHub **Build desktop packages** workflow, extract the complete folder, and run the `.app` or `.exe`. Keep the Windows `_internal` folder beside the executable.
 
-The standalone package does not include TotalSegmentator or PyTorch. Use the source installation with `--with-totalseg` for AI segmentation. See [Desktop Build Guide](BUILDING_DESKTOP.md).
+The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The first automatic segmentation downloads the open `total` task model weights and later runs reuse the local cache. See [Desktop Build Guide](BUILDING_DESKTOP.md).
 
 ## 4. Workspace
 
@@ -77,7 +77,7 @@ Use **Planning** for a large 3D view and compact MPR panels. Use **MPR Focus** f
 3. Wait for vertebral labels and meshes to appear.
 4. Review segmentation boundaries before planning.
 
-If TotalSegmentator is unavailable, install it with `--with-totalseg`. Never assume fallback output is clinically accurate.
+In standalone builds TotalSegmentator is already included. If its first model download or inference fails, the application produces a threshold fallback and reports the reason. Never assume fallback output is clinically accurate. Source installations can add the AI runtime with `--with-totalseg`.
 
 ### 5.3 Select Vertebral Levels
 
@@ -205,6 +205,7 @@ Use `+`, enable `Pan` and drag, or select `Fit`. Use **Fit MPR** to reset all MP
 
 - Use a CUDA GPU when available.
 - Close memory-intensive applications.
+- Allow the first run to finish downloading model weights; subsequent runs reuse them.
 - Remember that lower-resolution segmentation may reduce boundary accuracy.
 
 ### A Planned Screw Is Missing

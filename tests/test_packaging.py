@@ -44,7 +44,37 @@ def test_pyinstaller_spec_contains_platform_metadata():
     assert "windows_version_info.txt" in spec
 
 
-def test_desktop_build_workflow_covers_mac_and_windows():
+def test_pyinstaller_spec_bundles_totalsegmentator_runtime():
+    spec = (
+        Path(__file__).resolve().parents[1]
+        / "packaging"
+        / "PedicleScrewSimulator.spec"
+    ).read_text(encoding="utf-8")
+    for package_name in (
+        "totalsegmentator",
+        "torch",
+        "nnunetv2",
+        "dynamic_network_architectures",
+    ):
+        assert package_name in spec
+    assert 'excludes=["totalsegmentator", "torch"]' not in spec
+
+
+def test_desktop_requirements_pin_totalsegmentator():
+    requirements = (
+        Path(__file__).resolve().parents[1] / "requirements-desktop.txt"
+    ).read_text(encoding="utf-8")
+    assert "-r requirements-dev.txt" in requirements
+    for dependency in (
+        "TotalSegmentator==2.12.0",
+        "torch==2.10.0",
+        "nnunetv2==2.6.4",
+        "dynamic-network-architectures==0.4.3",
+    ):
+        assert dependency in requirements
+
+
+def test_desktop_build_workflow_covers_apple_silicon_and_windows():
     workflow = (
         Path(__file__).resolve().parents[1]
         / ".github"
@@ -54,13 +84,43 @@ def test_desktop_build_workflow_covers_mac_and_windows():
     for expected in (
         "windows-2025",
         "macos-15",
-        "macos-15-intel",
+        "requirements-desktop.txt",
+        "--self-check",
         "actions/upload-artifact",
     ):
         assert expected in workflow
+    assert "macos-15-intel" not in workflow
 
     build_script = (
         Path(__file__).resolve().parents[1] / "scripts" / "build_desktop.py"
     ).read_text(encoding="utf-8")
     assert "README.ko.md" in build_script
     assert "docs/USER_GUIDE.ko.md" in build_script
+
+
+def test_dependency_self_check_imports_ai_runtime(monkeypatch):
+    imported = []
+    setup_calls = []
+
+    def fake_import_module(module_name):
+        imported.append(module_name)
+        if module_name == "totalsegmentator.config":
+            return type(
+                "FakeConfig",
+                (),
+                {"setup_nnunet": lambda self: setup_calls.append(True)},
+            )()
+        return object()
+
+    monkeypatch.setattr(main.importlib, "import_module", fake_import_module)
+
+    main.run_dependency_self_check()
+
+    assert imported == [
+        "totalsegmentator.config",
+        "torch",
+        "nnunetv2",
+        "totalsegmentator.python_api",
+        "totalsegmentator.nnunet",
+    ]
+    assert setup_calls == [True]

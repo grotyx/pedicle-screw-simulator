@@ -17,6 +17,8 @@ Requirements:
     - numpy, scipy
 """
 
+import importlib
+import multiprocessing
 import sys
 import os
 import logging
@@ -28,9 +30,6 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Add the project root to path for imports
 sys.path.insert(0, script_dir)
-
-from src.ui.main_window import main
-
 
 def resolve_log_dir(
     *,
@@ -88,6 +87,30 @@ def setup_logging():
     return log_path
 
 
+def run_dependency_self_check() -> None:
+    """Raise immediately when a required packaged AI module is missing."""
+    totalseg_config = importlib.import_module("totalsegmentator.config")
+    totalseg_config.setup_nnunet()
+    for module_name in (
+        "torch",
+        "nnunetv2",
+        "totalsegmentator.python_api",
+        "totalsegmentator.nnunet",
+    ):
+        importlib.import_module(module_name)
+
+
+def run_application() -> None:
+    """Import and launch the GUI after frozen-process setup is complete."""
+    from src.ui.main_window import main as launch_main_window
+
+    launch_main_window()
+
+
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    if "--self-check" in sys.argv:
+        run_dependency_self_check()
+        raise SystemExit(0)
     setup_logging()
-    main()
+    run_application()

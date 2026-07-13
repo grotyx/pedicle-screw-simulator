@@ -65,7 +65,7 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-The current automated suite contains **465 tests**.
+The current automated suite contains **469 tests**.
 
 For exact reproduction of the validated macOS/Python 3.12 environment:
 
@@ -73,19 +73,18 @@ For exact reproduction of the validated macOS/Python 3.12 environment:
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact runtime and test environment used for v0.1.0 verification. Optional TotalSegmentator packages and model weights are intentionally excluded.
+`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.1.0 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
 
 ## Standalone Desktop Packages
 
 The GitHub **Build desktop packages** workflow creates separate archives for:
 
 - macOS Apple Silicon (`.app`)
-- macOS Intel (`.app`)
 - Windows x64 (`.exe` with its support folder)
 
 See [Desktop Build Guide](docs/BUILDING_DESKTOP.md). The macOS package is not Apple-notarized yet, so Gatekeeper may require right-clicking the app and selecting **Open**.
 
-Standalone packages intentionally exclude TotalSegmentator and PyTorch. Use the source installation with `--with-totalseg` when AI segmentation is required.
+Standalone packages include TotalSegmentator 2.12.0, PyTorch, and nnU-Net. No separate Python installation is required. The first automatic segmentation downloads the open `total` task model weights to the user's TotalSegmentator cache, so an internet connection and additional disk space are required once. Later runs reuse the cached models.
 
 ## Typical Workflow
 
@@ -164,8 +163,8 @@ data/README.md   local-data privacy instructions; no clinical data
 - Automatic planning is geometric research software, not clinically validated navigation.
 - Results depend on DICOM geometry and segmentation quality.
 - Deformity, fracture, implants, artifacts, transitional anatomy, and poor segmentation may invalidate proposals.
-- The native workflow is primarily tested on macOS; packaged Windows/Linux releases are not yet provided.
-- TotalSegmentator is optional and may require model downloads and substantial memory.
+- Standalone builds are provided for Apple Silicon macOS and Windows x64; Intel macOS and Linux packages are not provided.
+- TotalSegmentator is bundled in standalone builds, but its model weights are downloaded on first use and require substantial memory and disk space.
 - Clinical accuracy, inter-observer agreement, and prospective outcomes have not been established.
 
 ## Citation
@@ -180,4 +179,4 @@ A peer-reviewed software-paper DOI can be added as the preferred citation after 
 
 Project source code is released under the [MIT License](LICENSE). Use, modification, and redistribution are permitted provided that the copyright and permission notice are retained.
 
-Third-party components retain their own licenses. Distributors must separately comply with the PyQt6 GPL/commercial licensing terms and the licenses of VTK, SimpleITK, TotalSegmentator, and other dependencies.
+Third-party components retain their own licenses. See [Third-Party Notices](THIRD_PARTY_NOTICES.md). Distributors must separately comply with the PyQt6 GPL/commercial licensing terms and the licenses of VTK, SimpleITK, TotalSegmentator, PyTorch, nnU-Net, and other dependencies.

@@ -65,7 +65,7 @@ python main.py
 ./scripts/run_app.sh --test
 ```
 
-현재 자동 테스트는 **465개**입니다.
+현재 자동 테스트는 **469개**입니다.
 
 검증된 macOS/Python 3.12 환경을 동일하게 재현하려면 다음 파일을 사용합니다.
 
@@ -73,19 +73,18 @@ python main.py
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.1.0 검증에 사용한 실행·테스트 환경을 정확히 기록합니다. 선택 기능인 TotalSegmentator 패키지와 모델 가중치는 포함하지 않습니다.
+`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.1.0 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
 
 ## 단독 실행 패키지
 
 GitHub의 **Build desktop packages** workflow에서 다음 파일을 각각 생성합니다.
 
 - macOS Apple Silicon용 `.app`
-- macOS Intel용 `.app`
 - Windows x64용 `.exe`와 지원 폴더
 
 [데스크톱 빌드 안내](docs/BUILDING_DESKTOP.ko.md)를 참고하십시오. 현재 macOS 앱은 Apple 공증을 받지 않았으므로 최초 실행 시 앱을 우클릭하고 **Open**을 선택해야 할 수 있습니다.
 
-Standalone 패키지에는 TotalSegmentator와 PyTorch가 포함되지 않습니다. AI segmentation이 필요하면 소스 버전에서 `--with-totalseg`를 사용하십시오.
+Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함되므로 Python을 별도로 설치할 필요가 없습니다. 첫 자동 분할 시 공개 `total` task 모델을 사용자 TotalSegmentator 캐시에 내려받기 때문에 최초 한 번은 인터넷 연결과 추가 저장공간이 필요합니다. 이후에는 캐시된 모델을 재사용합니다.
 
 ## 기본 사용 순서
 
@@ -164,8 +163,8 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - 자동 계획은 기하학 기반 연구 기능이며 임상적으로 검증된 내비게이션이 아닙니다.
 - 결과는 DICOM geometry와 segmentation 정확도에 영향을 받습니다.
 - 변형, 골절, 삽입물, artifact, 이행성 척추 및 부정확한 segmentation은 제안을 무효화할 수 있습니다.
-- 현재 네이티브 실행은 주로 macOS에서 검증했으며 Windows/Linux 설치 패키지는 아직 제공하지 않습니다.
-- TotalSegmentator는 선택 기능이며 모델 다운로드와 많은 메모리가 필요할 수 있습니다.
+- Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공하며 Intel macOS와 Linux 패키지는 제공하지 않습니다.
+- Standalone에 TotalSegmentator가 포함되지만 모델은 최초 사용 시 내려받으며 많은 메모리와 저장공간이 필요할 수 있습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.
 
 ## 학술 인용
@@ -180,4 +179,4 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 프로젝트 소스 코드는 [MIT License](LICENSE)로 공개합니다. 저작권 및 허가문을 유지하면 사용, 수정 및 재배포할 수 있습니다.
 
-외부 구성요소에는 각각의 라이선스가 적용됩니다. 재배포자는 PyQt6의 GPL/상용 라이선스와 VTK, SimpleITK, TotalSegmentator 등 각 의존성의 조건을 별도로 준수해야 합니다.
+외부 구성요소에는 각각의 라이선스가 적용됩니다. [외부 구성요소 고지](THIRD_PARTY_NOTICES.md)를 확인하십시오. 재배포자는 PyQt6의 GPL/상용 라이선스와 VTK, SimpleITK, TotalSegmentator, PyTorch, nnU-Net 등 각 의존성의 조건을 별도로 준수해야 합니다.

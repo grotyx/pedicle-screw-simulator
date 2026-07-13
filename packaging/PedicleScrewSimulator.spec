@@ -3,7 +3,7 @@
 from pathlib import Path
 import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 
 project_root = Path(SPECPATH).resolve().parent
@@ -13,6 +13,7 @@ datas = [
     (str(project_root / "LICENSE"), "."),
     (str(project_root / "AUTHORS.md"), "."),
     (str(project_root / "CITATION.cff"), "."),
+    (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
     (str(project_root / "VERSION"), "."),
     (str(project_root / "README.md"), "."),
 ]
@@ -21,15 +22,30 @@ hiddenimports = [
     "vtkmodules.qt.QVTKRenderWindowInteractor",
     "vtkmodules.util.numpy_support",
     "scipy.ndimage",
+    "torch",
+    "totalsegmentator.python_api",
+    "totalsegmentator.nnunet",
 ]
 
-for package_name in ("vtkmodules", "SimpleITK"):
+for package_name in (
+    "vtkmodules",
+    "SimpleITK",
+    "totalsegmentator",
+    "nnunetv2",
+    "dynamic_network_architectures",
+    "batchgenerators",
+    "batchgeneratorsv2",
+    "acvl_utils",
+):
     package_datas, package_binaries, package_hiddenimports = collect_all(
         package_name
     )
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+for distribution_name in ("TotalSegmentator", "nnunetv2", "torch"):
+    datas += copy_metadata(distribution_name)
 
 a = Analysis(
     [str(project_root / "main.py")],
@@ -40,7 +56,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["totalsegmentator", "torch"],
+    excludes=[],
     noarchive=False,
     optimize=0,
 )

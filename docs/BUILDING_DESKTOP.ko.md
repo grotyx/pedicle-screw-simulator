@@ -7,7 +7,6 @@
 | 플랫폼 | 결과물 | 빌드 환경 |
 |---|---|---|
 | macOS Apple Silicon | ZIP 안의 `.app` | macOS arm64 |
-| macOS Intel | ZIP 안의 `.app` | macOS Intel |
 | Windows x64 | ZIP 안의 `.exe`와 지원 폴더 | Windows x64 |
 
 PyInstaller는 교차 컴파일러가 아니므로 각 운영체제용 패키지는 해당 운영체제에서 별도로 만들어야 합니다.
@@ -17,7 +16,7 @@ PyInstaller는 교차 컴파일러가 아니므로 각 운영체제용 패키지
 ```bash
 ./scripts/run_app.sh --setup-only
 source venv/bin/activate
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements-desktop.txt
 python scripts/build_desktop.py
 ```
 
@@ -29,7 +28,8 @@ Python 3.12가 설치된 PowerShell에서 실행합니다.
 
 ```powershell
 py -3.12 -m venv venv
-.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\venv\Scripts\python.exe -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+.\venv\Scripts\python.exe -m pip install -r requirements-desktop.txt
 .\venv\Scripts\python.exe scripts\build_desktop.py
 ```
 
@@ -41,19 +41,28 @@ py -3.12 -m venv venv
 
 - `windows-2025`: Windows x64
 - `macos-15`: macOS Apple Silicon
-- `macos-15-intel`: macOS Intel
 
 GitHub Actions 탭에서 수동으로 실행하거나 `v0.1.0` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
 
 ## Standalone 기능 범위
 
-Standalone 패키지에는 DICOM 로딩, 기본 및 screw 방향 MPR, 3D 렌더링, 수동 도구, 스크류 계획, 측정과 threshold fallback segmentation이 포함됩니다.
+Standalone 패키지에는 DICOM 로딩, 기본 및 screw 방향 MPR, 3D 렌더링, 수동 도구, 스크류 계획, 측정, TotalSegmentator 2.12.0, PyTorch, nnU-Net과 threshold fallback segmentation이 포함됩니다.
 
-TotalSegmentator와 PyTorch는 매우 큰 실행환경, 외부 모델 가중치 및 별도 task별 라이선스가 필요하므로 포함하지 않습니다. AI segmentation이 필요하면 소스 버전에서 `./scripts/run_app.sh --with-totalseg`를 사용하십시오.
+모델 가중치는 ZIP 안에 넣지 않습니다. 첫 자동 분할 시 TotalSegmentator가 공개 `total` task 모델을 `~/.totalsegmentator/nnunet/results`에 내려받고 이후 실행에서 재사용합니다. 따라서 최초 실행에는 인터넷 연결, 추가 저장공간과 다운로드 시간이 필요합니다. Windows 패키지에는 PyTorch CUDA 12.8 실행환경이 포함되며 지원되는 NVIDIA GPU가 없으면 CPU로 자동 전환합니다.
+
+GUI를 열지 않고 번들 상태를 검사할 수 있습니다.
+
+```bash
+dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
+```
+
+```powershell
+.\dist\PedicleScrewSimulator\PedicleScrewSimulator.exe --self-check
+```
 
 ## 로그 위치
 
 - macOS: `~/Library/Logs/PedicleScrewSimulator/app.log`
 - Windows: `%LOCALAPPDATA%\PedicleScrewSimulator\logs\app.log`
 
-배포 압축파일에는 MIT License, 제작자 정보, 학술 인용 정보와 README가 함께 포함됩니다.
+배포 압축파일에는 MIT License, 제작자 정보, 학술 인용 정보, README와 `THIRD_PARTY_NOTICES.md`가 함께 포함됩니다. TotalSegmentator 기본 `total` task는 Apache 2.0으로 공개되어 있습니다. 별도 라이선스가 필요한 TotalSegmentator task는 프로그램 기본 workflow에서 제공하지 않습니다.

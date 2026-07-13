@@ -104,7 +104,30 @@ def run_totalsegmentator(
     _emit_progress(progress_callback, "Preparing NIfTI input for TotalSegmentator...")
     sitk.WriteImage(image, str(input_path))
 
-    _emit_progress(progress_callback, f"Running TotalSegmentator task '{task}'...")
+    _emit_progress(
+        progress_callback,
+        (
+            f"Running TotalSegmentator task '{task}'. "
+            "The first run may download model weights..."
+        ),
+    )
+
+    if getattr(sys, "frozen", False):
+        _run_frozen_totalsegmentator(
+            input_path=input_path,
+            output_path=output_path,
+            task=task,
+            device=device,
+            roi_subset=roi_subset,
+            fast=fast,
+            force_split=force_split,
+        )
+        if not output_path.exists():
+            raise RuntimeError(
+                "TotalSegmentator finished but no output mask was created."
+            )
+        return str(output_path)
+
     module_spec = importlib.util.find_spec(
         "totalsegmentator.bin.TotalSegmentator"
     )
@@ -149,6 +172,38 @@ def run_totalsegmentator(
         raise RuntimeError("TotalSegmentator finished but no output mask was created.")
 
     return str(output_path)
+
+
+def _run_frozen_totalsegmentator(
+    *,
+    input_path: Path,
+    output_path: Path,
+    task: str,
+    device: str,
+    roi_subset: Optional[List[str]],
+    fast: bool,
+    force_split: bool,
+) -> None:
+    """Run the bundled Python API because frozen apps cannot spawn `-m`."""
+    try:
+        from totalsegmentator.python_api import totalsegmentator
+    except ImportError as exc:
+        raise RuntimeError(
+            "The packaged TotalSegmentator runtime could not be loaded."
+        ) from exc
+
+    totalsegmentator(
+        str(input_path),
+        str(output_path),
+        task=task,
+        ml=True,
+        device=device,
+        roi_subset=roi_subset,
+        fast=fast,
+        force_split=force_split,
+        quiet=True,
+        nr_thr_saving=1,
+    )
 
 
 def _ensure_torch_shm_executable() -> None:

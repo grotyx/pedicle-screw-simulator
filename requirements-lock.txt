@@ -1,6 +1,6 @@
 # Exact environment validated on macOS arm64 with Python 3.12 on 2026-07-12.
 # Includes runtime and test tooling for reproducible v0.1.0 verification.
-# TotalSegmentator and its model weights are optional and intentionally excluded.
+# Desktop AI dependencies are pinned separately in requirements-desktop.txt.
 
 ast_serialize==0.6.0
 altgraph==0.17.5

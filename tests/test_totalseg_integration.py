@@ -26,6 +26,54 @@ def _create_test_image(value: int = 300):
 class TestTotalSegIntegration:
     """Coverage for fallback segmentation flow."""
 
+    def test_frozen_app_uses_in_process_python_api(self, tmp_path, monkeypatch):
+        calls = []
+        fake_package = types.ModuleType("totalsegmentator")
+        fake_package.__path__ = []
+        fake_api = types.ModuleType("totalsegmentator.python_api")
+
+        def fake_totalsegmentator(input_path, output_path, **kwargs):
+            calls.append((input_path, output_path, kwargs))
+            sitk.WriteImage(
+                sitk.Image([2, 2, 2], sitk.sitkUInt8),
+                str(output_path),
+            )
+
+        fake_api.totalsegmentator = fake_totalsegmentator
+        monkeypatch.setitem(sys.modules, "totalsegmentator", fake_package)
+        monkeypatch.setitem(
+            sys.modules,
+            "totalsegmentator.python_api",
+            fake_api,
+        )
+        monkeypatch.setattr(totalseg.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+        output = totalseg.run_totalsegmentator(
+            sitk.Image([2, 2, 2], sitk.sitkInt16),
+            str(tmp_path),
+            device="cpu",
+            roi_subset=["vertebrae_L4"],
+            fast=True,
+            force_split=True,
+        )
+
+        assert Path(output).exists()
+        assert len(calls) == 1
+        input_path, output_path, kwargs = calls[0]
+        assert Path(input_path).name == "input_volume.nii.gz"
+        assert Path(output_path).name == "totalseg_multilabel.nii.gz"
+        assert kwargs == {
+            "task": "total",
+            "ml": True,
+            "device": "cpu",
+            "roi_subset": ["vertebrae_L4"],
+            "fast": True,
+            "force_split": True,
+            "quiet": True,
+            "nr_thr_saving": 1,
+        }
+
     def test_threshold_fallback_creates_binary_mask(self, tmp_path):
         image = _create_test_image(300)
 
