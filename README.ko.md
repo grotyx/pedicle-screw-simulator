@@ -41,10 +41,24 @@ cd pedicle-screw-simulator
 
 실행 스크립트가 프로젝트 내부에 `venv`를 만들고 필요한 패키지를 설치한 후 프로그램을 시작합니다.
 
+### Windows
+
+```powershell
+git clone https://github.com/grotyx/pedicle-screw-simulator.git
+cd pedicle-screw-simulator
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1
+```
+
+PowerShell 실행 스크립트도 동일하게 `venv`를 만들고 필요한 패키지를 설치한 후 프로그램을 시작합니다.
+
 ### TotalSegmentator 선택 설치
 
 ```bash
 ./scripts/run_app.sh --with-totalseg
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --with-totalseg
 ```
 
 TotalSegmentator 최초 실행 시 모델 파일을 내려받을 수 있으며 많은 RAM 또는 GPU 메모리가 필요할 수 있습니다.
@@ -63,6 +77,11 @@ python main.py
 ```bash
 ./scripts/run_app.sh --check
 ./scripts/run_app.sh --test
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
 현재 자동 테스트는 **469개**입니다.

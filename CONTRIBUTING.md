@@ -26,6 +26,21 @@ venv/bin/python -m compileall -q src tests
 git diff --check
 ```
 
+On Windows, use `powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check` and `--test` in place of the `run_app.sh` commands above.
+
+6. Lint with [ruff](https://docs.astral.sh/ruff/) before committing:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m ruff check src tests scripts main.py
+```
+
+Ruff is configured in `pyproject.toml` (`[tool.ruff]`) and runs automatically
+in CI (`.github/workflows/test.yml`) on every push and pull request, alongside
+`pytest`. Fix reported issues rather than disabling rules; if a finding is a
+false positive, silence it narrowly with an inline `# noqa: <code>` comment
+and a short explanation, not a blanket rule change.
+
 ## Pull-request checklist
 
 - [ ] The change has a clear research or usability purpose.

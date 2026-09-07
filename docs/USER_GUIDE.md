@@ -15,7 +15,7 @@ Do not publish clinical DICOM files or identifying screenshots. See [Local DICOM
 ## 2. Requirements
 
 - Python 3.12
-- macOS or Linux for the provided shell launcher
+- macOS, Linux, or Windows for the provided launcher scripts
 - Display area of at least 1280×760
 - Sufficient RAM for the CT volume
 - Optional CUDA-capable NVIDIA GPU for faster TotalSegmentator inference
@@ -30,10 +30,22 @@ cd pedicle-screw-simulator
 ./scripts/run_app.sh
 ```
 
+On Windows, use the PowerShell launcher instead:
+
+```powershell
+git clone https://github.com/grotyx/pedicle-screw-simulator.git
+cd pedicle-screw-simulator
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1
+```
+
 Optional TotalSegmentator installation:
 
 ```bash
 ./scripts/run_app.sh --with-totalseg
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --with-totalseg
 ```
 
 Maintenance commands:
@@ -42,6 +54,11 @@ Maintenance commands:
 ./scripts/run_app.sh --check
 ./scripts/run_app.sh --test
 ./scripts/run_app.sh --setup-only
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
 ### Standalone macOS and Windows packages

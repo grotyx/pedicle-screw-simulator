@@ -15,7 +15,7 @@ Pedicle Screw Simulator는 CT 확인, 척추 자동 분할, 척추경 나사못 
 ## 2. 시스템 요구사항
 
 - Python 3.12
-- 제공된 실행 스크립트 사용 시 macOS 또는 Linux
+- 제공된 실행 스크립트 사용 시 macOS, Linux 또는 Windows
 - 최소 1280×760 이상의 화면 영역
 - CT 용량에 맞는 충분한 RAM
 - TotalSegmentator 가속을 위한 CUDA 지원 NVIDIA GPU(선택)
@@ -30,10 +30,22 @@ cd pedicle-screw-simulator
 ./scripts/run_app.sh
 ```
 
+Windows에서는 PowerShell 실행 스크립트를 대신 사용합니다.
+
+```powershell
+git clone https://github.com/grotyx/pedicle-screw-simulator.git
+cd pedicle-screw-simulator
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1
+```
+
 TotalSegmentator 선택 설치:
 
 ```bash
 ./scripts/run_app.sh --with-totalseg
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --with-totalseg
 ```
 
 점검 명령:
@@ -42,6 +54,11 @@ TotalSegmentator 선택 설치:
 ./scripts/run_app.sh --check
 ./scripts/run_app.sh --test
 ./scripts/run_app.sh --setup-only
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
 ### macOS·Windows 단독 실행 패키지

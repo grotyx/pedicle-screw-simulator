@@ -40,8 +40,9 @@ def test_pyinstaller_spec_contains_platform_metadata():
     )
     assert 'name="PedicleScrewSimulator"' in spec
     assert 'bundle_identifier="me.sangmin.pedicle-screw-simulator"' in spec
-    assert 'version="0.1.0"' in spec
-    assert "windows_version_info.txt" in spec
+    assert '"VERSION"' in spec
+    assert "PSS_VERSION_FILE" in spec
+    assert "0.1.0" not in spec
 
 
 def test_pyinstaller_spec_bundles_totalsegmentator_runtime():
@@ -124,3 +125,12 @@ def test_dependency_self_check_imports_ai_runtime(monkeypatch):
         "totalsegmentator.nnunet",
     ]
     assert setup_calls == [True]
+
+
+def test_windows_launcher_supports_same_flags_as_bash():
+    from pathlib import Path
+
+    text = Path("scripts/run_app.ps1").read_text(encoding="utf-8")
+    for flag in ("--check", "--test", "--with-totalseg"):
+        assert flag in text
+    assert "python -m venv" in text or "py -3.12 -m venv" in text

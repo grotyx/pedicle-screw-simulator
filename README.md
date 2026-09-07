@@ -41,10 +41,24 @@ cd pedicle-screw-simulator
 
 The launcher creates a local `venv`, installs required packages, and starts the application.
 
+### Windows
+
+```powershell
+git clone https://github.com/grotyx/pedicle-screw-simulator.git
+cd pedicle-screw-simulator
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1
+```
+
+The PowerShell launcher creates the same local `venv` and installs the same required packages before starting the application.
+
 ### Optional TotalSegmentator
 
 ```bash
 ./scripts/run_app.sh --with-totalseg
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --with-totalseg
 ```
 
 The first TotalSegmentator run may download model weights and can require substantial RAM or GPU memory.
@@ -63,6 +77,11 @@ python main.py
 ```bash
 ./scripts/run_app.sh --check
 ./scripts/run_app.sh --test
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
+powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
 The current automated suite contains **469 tests**.
