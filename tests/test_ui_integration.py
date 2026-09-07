@@ -1940,3 +1940,74 @@ def test_subregion_settings_persist_into_a_new_window(ui_main_window, tmp_path):
     finally:
         reopened.close()
         reopened.deleteLater()
+
+
+def test_unresolved_subregion_model_shows_in_status(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """Asking for the pedicle model but not finding one must be visible."""
+    window = ui_main_window
+    monkeypatch.delenv("PSS_SUBREGION_MODEL_DIR", raising=False)
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+
+    missing_dir = tmp_path / "no_such_model"
+    missing_dir.mkdir()
+    window.seg_use_subregion_check.setChecked(True)
+    window.seg_subregion_dir_edit.setText(str(missing_dir))
+
+    ctrl.run()
+    assert ctrl._pending_subregion_message != ""
+
+    image = sitk.Image([4, 4, 4], sitk.sitkInt16)
+    mask_path = tmp_path / "unresolved_mask.nii.gz"
+    _write_mask(image, mask_path)
+    ctrl._on_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+    status = window.seg_status_label.text()
+    assert "pedicle model unavailable" in status
+    assert str(missing_dir) in status
+
+
+def test_empty_pedicle_mask_is_reported_as_no_voxels(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+
+    image = sitk.Image([4, 4, 4], sitk.sitkInt16)
+    mask_path = tmp_path / "empty_pedicle_mask.nii.gz"
+    _write_mask(image, mask_path)
+    subregion_path = tmp_path / "empty_subregion.nii.gz"
+    subregion = sitk.Cast(image * 0, sitk.sitkUInt8)
+    subregion.CopyInformation(image)
+    sitk.WriteImage(subregion, str(subregion_path))
+
+    ctrl._on_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            subregion_mask_path=str(subregion_path),
+            subregion_labels={"pedicle": 2},
+        )
+    )
+
+    assert ctrl._last_pedicle_mask is not None
+    assert not ctrl._last_pedicle_mask.any()
+    assert "pedicle model ran but found no pedicle voxels" in (
+        window.seg_status_label.text()
+    )

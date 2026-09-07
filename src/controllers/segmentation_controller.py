@@ -7,6 +7,7 @@ and visibility toggling.
 """
 
 import logging
+import os
 import sys
 import traceback
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
@@ -113,6 +114,10 @@ class SegmentationController:
         # (z, y, x) boolean pedicle mask from the optional subregion model,
         # already resampled onto the vertebra mask grid.
         self._last_pedicle_mask: Optional[np.ndarray] = None
+        # Why the requested subregion model could not be resolved. Set before
+        # the run starts, so the runner never sees the model and cannot report
+        # the reason itself.
+        self._pending_subregion_message: str = ""
 
     @property
     def is_running(self) -> bool:
@@ -190,6 +195,7 @@ class SegmentationController:
         self._window.seg_status_label.setText("Running segmentation...")
         self._window.statusbar.showMessage("Auto segmentation started")
 
+        self._pending_subregion_message = ""
         work_dir = self.workspace.create()
         self._active_work_dir = work_dir
         self._segmentation_thread = AutoSegmentationThread(
@@ -212,18 +218,35 @@ class SegmentationController:
         """Locate the optional pedicle subregion model requested in the UI.
 
         Returns ``None`` when the feature is switched off or no usable model
-        is found; the run then proceeds as a plain TotalSegmentator pass.
+        is found; the run then proceeds as a plain TotalSegmentator pass. When
+        the user did ask for the model, the reason it could not be resolved is
+        recorded in ``_pending_subregion_message`` so the finished run can say
+        so instead of silently behaving like a plain TotalSegmentator pass.
         """
         if not self._window.seg_use_subregion_check.isChecked():
             return None
         explicit_dir = self._window.seg_subregion_dir_edit.text().strip() or None
         try:
-            return find_subregion_model(explicit_dir)
-        except Exception:
+            model = find_subregion_model(explicit_dir)
+        except Exception as exc:
             logger.warning(
                 "Could not resolve the pedicle subregion model", exc_info=True
             )
+            self._pending_subregion_message = (
+                f"{self.PEDICLE_FAILURE_PREFIX}{exc}"
+            )
             return None
+        if model is None:
+            searched = (
+                explicit_dir
+                or os.environ.get("PSS_SUBREGION_MODEL_DIR")
+                or "PSS_SUBREGION_MODEL_DIR (unset)"
+            )
+            self._pending_subregion_message = (
+                f"{self.PEDICLE_FAILURE_PREFIX}"
+                f"no dataset.json found in {searched}"
+            )
+        return model
 
     def _close_progress_dialog(self):
         """Close the progress dialog without re-entering the cancel path.
@@ -414,8 +437,13 @@ class SegmentationController:
     def _pedicle_status_suffix(self, result) -> str:
         """Status-label tail describing the optional pedicle model's outcome."""
         if self._last_pedicle_mask is not None:
-            return " · pedicle model used"
+            if self._last_pedicle_mask.any():
+                return " · pedicle model used"
+            return " · pedicle model ran but found no pedicle voxels"
         message = getattr(result, "subregion_message", "") or ""
+        if not message and not getattr(result, "subregion_mask_path", None):
+            # The stage never ran because the model itself was unresolvable.
+            message = self._pending_subregion_message
         if message:
             reason = message
             if reason.startswith(self.PEDICLE_FAILURE_PREFIX):
