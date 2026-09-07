@@ -29,6 +29,10 @@ class GradeResult:
     label: int
     mean_hu: Optional[float]
     min_hu: Optional[float]
+    #: The cylinder sample that breached furthest, and the centreline point it
+    #: belongs to (LPS mm). Both ``None`` when the screw is contained.
+    breach_point_lps: Optional[Tuple[float, float, float]] = None
+    breach_centre_lps: Optional[Tuple[float, float, float]] = None
 
 
 class _DistanceMaps:
@@ -155,6 +159,25 @@ class ScrewGrader:
         values[inside] = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]]
         return values
 
+    def distances_at_points(self, points: np.ndarray, label: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Distances (mm) from each ``(N, 3)`` LPS point to ``label``.
+
+        Returns ``(d_out, d_in)``: distance to the nearest voxel of the label
+        (0 inside it) and, for points inside, the distance to the nearest voxel
+        outside it (0 elsewhere). Points beyond the label's cropped
+        neighbourhood — and every point when the label is absent from the mask —
+        score ``crop_margin_mm`` outside and 0 mm inside.
+        """
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        maps = self._maps_for(int(label))
+        if maps is None:
+            return (
+                np.full(pts.shape[0], self._crop_margin, dtype=np.float64),
+                np.zeros(pts.shape[0], dtype=np.float64),
+            )
+        idx_zyx, inside = self._indices(pts)
+        return self._lookup(maps, idx_zyx, inside)
+
     # ------------------------------------------------------------------ grading
     def grade(
         self,
@@ -179,6 +202,17 @@ class ScrewGrader:
         d_out, d_in = self._lookup(maps, idx_zyx, inside)
 
         breach = float(d_out.max()) if d_out.size else 0.0
+        breach_point: Optional[Tuple[float, float, float]] = None
+        breach_centre: Optional[Tuple[float, float, float]] = None
+        if breach > 0.0:
+            # ``cylinder_points`` emits a fixed-size block per centreline step,
+            # so integer division recovers the step the worst sample came from.
+            centres = np.asarray(self._centreline(entry, target), dtype=np.float64)
+            per_step = max(1, points.shape[0] // centres.shape[0])
+            worst = int(np.argmax(d_out))
+            breach_point = tuple(float(v) for v in points[worst])
+            breach_centre = tuple(float(v) for v in centres[worst // per_step])
+
         on_surface = d_out == 0.0
         min_wall = float(d_in[on_surface].min()) if on_surface.any() else math.inf
 
@@ -199,6 +233,8 @@ class ScrewGrader:
             label=int(label),
             mean_hu=float(np.mean(hu_samples)) if hu_samples.size else None,
             min_hu=float(np.min(hu_samples)) if hu_samples.size else None,
+            breach_point_lps=breach_point,
+            breach_centre_lps=breach_centre,
         )
 
     @staticmethod

@@ -141,6 +141,76 @@ class TestScrewGrader:
         assert grader.crop_margin_mm == 8.0
 
 
+class TestBreachPoint:
+    def test_contained_screw_has_no_breach_point(self):
+        grader = ScrewGrader(_cube_mask())
+        result = grader.grade(entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0), diameter_mm=6.0)
+        assert result.breach_mm == 0.0
+        assert result.breach_point_lps is None
+        assert result.breach_centre_lps is None
+
+    def test_breach_point_is_the_worst_sample_and_its_centreline_point(self):
+        grader = ScrewGrader(_cube_mask())  # label occupies x in [20, 40)
+        entry, target = (39.0, 35.0, 30.0), (39.0, 25.0, 30.0)
+        result = grader.grade(entry=entry, target=target, diameter_mm=6.0, label=28)
+        assert result.breach_mm > 0.0
+        point = np.asarray(result.breach_point_lps)
+        centre = np.asarray(result.breach_centre_lps)
+        # The deepest sample sits one radius beyond the +x wall of the label.
+        assert point[0] == pytest.approx(42.0)
+        assert centre[0] == pytest.approx(39.0)
+        assert centre[2] == pytest.approx(30.0)
+        # The centreline point belongs to the trajectory and matches the sample.
+        assert np.linalg.norm(point - centre) == pytest.approx(3.0)
+        assert 25.0 <= centre[1] <= 35.0
+        assert isinstance(result.breach_point_lps, tuple)
+        assert isinstance(result.breach_centre_lps, tuple)
+
+    def test_breach_point_is_one_of_the_cylinder_samples(self):
+        grader = ScrewGrader(_asymmetric_mask())
+        entry, target = (6.0, 26.0, 78.0), (16.0, 26.0, 78.0)
+        result = grader.grade(entry=entry, target=target, diameter_mm=8.0, label=28)
+        points = grader.cylinder_points(entry, target, 8.0)
+        assert np.isclose(points, np.asarray(result.breach_point_lps)).all(axis=1).any()
+        centres = grader.cylinder_points(entry, target, 0.0)
+        assert np.isclose(centres, np.asarray(result.breach_centre_lps)).all(axis=1).any()
+
+    def test_breach_point_without_radial_samples_is_the_centreline_point(self):
+        grader = ScrewGrader(_cube_mask(), radial_samples=0)
+        result = grader.grade(entry=(5.0, 30.0, 30.0), target=(15.0, 30.0, 30.0), diameter_mm=6.0, label=28)
+        assert result.breach_mm > 0.0
+        assert result.breach_point_lps == result.breach_centre_lps
+
+
+class TestDistancesAtPoints:
+    def test_distances_match_the_label_geometry(self):
+        grader = ScrewGrader(_cube_mask())  # label occupies index 20..39 on every axis
+        points = np.array([[30.0, 30.0, 30.0], [42.0, 30.0, 30.0], [39.0, 30.0, 30.0]])
+        d_out, d_in = grader.distances_at_points(points, 28)
+        assert d_out == pytest.approx([0.0, 3.0, 0.0])
+        assert d_in[0] == pytest.approx(10.0)
+        assert d_in[1] == 0.0
+        assert d_in[2] == pytest.approx(1.0)
+
+    def test_distances_for_an_absent_label_are_the_crop_margin(self):
+        grader = ScrewGrader(_cube_mask(), crop_margin_mm=7.0)
+        d_out, d_in = grader.distances_at_points(np.array([[30.0, 30.0, 30.0]]), 29)
+        assert d_out == pytest.approx([7.0])
+        assert d_in == pytest.approx([0.0])
+
+    def test_distances_accept_an_empty_array(self):
+        grader = ScrewGrader(_cube_mask())
+        d_out, d_in = grader.distances_at_points(np.empty((0, 3)), 28)
+        assert d_out.shape == (0,) and d_in.shape == (0,)
+
+    def test_distances_agree_with_the_grade_breach(self):
+        grader = ScrewGrader(_cube_mask())
+        entry, target = (39.0, 35.0, 30.0), (39.0, 25.0, 30.0)
+        result = grader.grade(entry=entry, target=target, diameter_mm=6.0, label=28)
+        d_out, _ = grader.distances_at_points(grader.cylinder_points(entry, target, 6.0), 28)
+        assert float(d_out.max()) == pytest.approx(result.breach_mm)
+
+
 class TestSamplingHelpers:
     def test_cylinder_points_shape_and_ordering(self):
         grader = ScrewGrader(_cube_mask(), sample_step_mm=1.0, radial_samples=8)
