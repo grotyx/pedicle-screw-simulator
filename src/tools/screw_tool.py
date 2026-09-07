@@ -9,7 +9,7 @@ Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
 import math
-from typing import Optional, Tuple, List, Callable, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
 
 from src.models.screw import Screw
 from ..utils.constants import (
@@ -27,7 +27,7 @@ _DERIVED_WARNING_PREFIXES = ("Not graded", "Breach distance", "Cortical clearanc
 
 if TYPE_CHECKING:
     from ..core.volume_manager import VolumeManager
-    from ..core.screw_grading import ScrewGrader
+    from ..core.screw_grading import GradeResult, ScrewGrader
 
 
 class ScrewTool:
@@ -296,7 +296,7 @@ class ScrewTool:
         screw.min_hu = None
         screw.metrics = {}
 
-    def _compute_metrics(self, screw: Screw, result) -> dict:
+    def _compute_metrics(self, screw: Screw, result: "GradeResult") -> Dict[str, Any]:
         """Bone-quality, breach-direction and facet metrics for one screw.
 
         A manually placed screw has no pedicle analysis behind it, so the
