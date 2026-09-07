@@ -6,6 +6,8 @@ import csv
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.models.measurement import Measurement
@@ -137,3 +139,37 @@ def test_csv_has_signed_angle_columns(tmp_path):
     header = path.read_text(encoding="utf-8").splitlines()[0]
     assert "convergence_angle_deg" in header and "craniocaudal_angle_deg" in header
     assert "mean_hu" in header and "source" in header
+
+
+def test_payload_angles_are_recomputed_from_geometry():
+    """Stale insertion_angle/medial_angle in a payload must be discarded and
+    recomputed from entry/target/side, not trusted as-is (see screw_from_dict's
+    call to screw._recompute_geometry())."""
+    from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+    from src.utils.planning_io import screw_from_dict
+
+    entry = [20.0, 30.0, 0.0]
+    target = [12.0, -8.0, 0.0]
+
+    payload_left = {
+        "entry_point": entry, "target_point": target, "diameter": 6.0,
+        "vertebra_level": "L4", "side": "left", "grade": "A", "breach_distance": 0.0,
+        # Deliberately wrong stale values that must NOT survive deserialization.
+        "insertion_angle": 168.0, "medial_angle": -90.0,
+    }
+    screw_left = screw_from_dict(payload_left)
+
+    expected_medial_left = convergence_angle_deg(entry, target, "left")
+    expected_craniocaudal = craniocaudal_angle_deg(entry, target)
+    assert screw_left.medial_angle == pytest.approx(expected_medial_left)
+    assert expected_medial_left == pytest.approx(11.9, abs=0.1)
+    assert screw_left.insertion_angle == pytest.approx(expected_craniocaudal)
+    assert expected_craniocaudal == pytest.approx(0.0, abs=1e-6)
+
+    # Same geometry, opposite side: sign must flip, proving `side` is applied
+    # before the recompute rather than the stale payload value being reused.
+    payload_right = dict(payload_left, side="right")
+    screw_right = screw_from_dict(payload_right)
+    expected_medial_right = convergence_angle_deg(entry, target, "right")
+    assert screw_right.medial_angle == pytest.approx(expected_medial_right)
+    assert expected_medial_right == pytest.approx(-expected_medial_left)
