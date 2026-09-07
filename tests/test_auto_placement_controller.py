@@ -192,8 +192,11 @@ class _DummySegCtrl:
 
 
 class _DummyStatusBar:
+    def __init__(self):
+        self.message = ""
+
     def showMessage(self, msg):
-        pass
+        self.message = msg
 
 
 class _DummyLabel:
@@ -770,10 +773,12 @@ def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
 class _FinishedThread:
     """Stand-in for a finished ``_PlanningThread``."""
 
-    def __init__(self, cancelled=False, skipped_sides=()):
+    def __init__(self, cancelled=False, skipped_sides=(), generation=None):
         self.cancelled = cancelled
         self.skipped_sides = list(skipped_sides)
         self.cancel_requested = False
+        if generation is not None:
+            self.generation = generation
 
     def request_cancel(self):
         self.cancel_requested = True
@@ -973,4 +978,140 @@ def test_run_planning_shows_a_cancellable_progress_dialog(monkeypatch, tmp_path)
     assert (dialog.minimum(), dialog.maximum()) == (0, 0)   # indeterminate
     dialog.canceled.emit()
     assert ctrl._thread.cancel_requested is True
+    ctrl._close_progress_dialog()
+
+
+# ---------------------------------------------------------------------------
+# A run in flight when the study changes
+# ---------------------------------------------------------------------------
+
+
+def _running_run(ctrl):
+    """Put ``ctrl`` in the state of a run in flight, and return its parts."""
+    thread = _FinishedThread(generation=ctrl._run_generation)
+    ctrl._thread = thread
+    dialog = QProgressDialog("Planning screw trajectories...", "Cancel", 0, 0, None)
+    dialog.canceled.connect(ctrl._on_cancel_requested)
+    ctrl._progress_dialog = dialog
+    dialog.show()
+    return thread, dialog
+
+
+def test_reset_state_cancels_the_run_in_flight_and_closes_its_dialog(
+    controller_with_window,
+):
+    ctrl, _window = controller_with_window
+    thread, dialog = _running_run(ctrl)
+
+    ctrl.reset_state()
+
+    assert thread.cancel_requested is True
+    assert ctrl._progress_dialog is None
+    assert not dialog.isVisible()
+
+
+def test_a_late_result_from_the_previous_study_is_dropped(controller_with_window):
+    """The new study must not inherit the old study's screws."""
+    ctrl, window = controller_with_window
+    thread, _dialog = _running_run(ctrl)
+    ctrl.reset_state()
+
+    ctrl._on_finished([_planned("L4", "left")])
+
+    assert window._tool_ctrl.screw_tool.get_screws() == []
+    assert window._tool_ctrl.added == []
+    assert ctrl.last_planned == []
+    assert window.auto_screw_status._text == "No auto plan"
+    assert ctrl._thread is None
+
+
+def test_a_late_error_from_the_previous_study_is_dropped(
+    controller_with_window, monkeypatch
+):
+    ctrl, window = controller_with_window
+    shown = []
+    monkeypatch.setattr(
+        "src.controllers.auto_placement_controller.QMessageBox.critical",
+        lambda *a, **k: shown.append(a),
+    )
+    _running_run(ctrl)
+    ctrl.reset_state()
+
+    ctrl._on_error("boom")
+
+    assert shown == []
+    assert window.auto_screw_status._text == "No auto plan"
+    assert ctrl._thread is None
+
+
+def test_a_result_from_the_current_study_is_kept(controller_with_window):
+    ctrl, window = controller_with_window
+    _running_run(ctrl)
+
+    ctrl._on_finished([_planned("L4", "left")])
+
+    assert len(window._tool_ctrl.screw_tool.get_screws()) == 1
+
+
+# ---------------------------------------------------------------------------
+# The cancel label survives in-flight progress
+# ---------------------------------------------------------------------------
+
+
+def test_progress_does_not_overwrite_the_cancelling_label(controller_with_window):
+    ctrl, window = controller_with_window
+    _running_run(ctrl)
+
+    ctrl._on_cancel_requested()
+    assert window.auto_screw_status._text == "Cancelling planning..."
+
+    # A message the worker had already queued before it saw the cancel.
+    ctrl._on_progress("Planning L4 right (2/10)…")
+
+    assert window.auto_screw_status._text == "Cancelling planning..."
+    # The status bar still tracks the run winding down.
+    assert window.statusbar.message == "Planning L4 right (2/10)…"
+
+
+def test_a_new_run_clears_the_cancelling_label(monkeypatch, tmp_path):
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *_args, **_kwargs):
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+        def request_cancel(self):
+            return None
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+    ctrl._cancel_requested = True
+
+    ctrl.run_planning()
+
+    assert ctrl._cancel_requested is False
+    assert ctrl._thread.generation == ctrl._run_generation
+    ctrl._on_progress("Planning L4 left (1/2)…")
+    assert window.auto_screw_status._text == "Planning L4 left (1/2)…"
     ctrl._close_progress_dialog()

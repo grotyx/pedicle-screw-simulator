@@ -99,6 +99,13 @@ class AutoPlacementController:
         self._thread: Optional[_PlanningThread] = None
         self._last_planned: List[PlannedScrew] = []
         self._progress_dialog: Optional[QProgressDialog] = None
+        #: Bumped by :meth:`reset_state`.  A thread carries the generation it
+        #: was started for, so a result that arrives after the study changed can
+        #: be recognised and dropped instead of landing in the new plan.
+        self._run_generation = 0
+        #: Set once the user has asked to cancel, so a progress message already
+        #: queued from the worker cannot overwrite the "Cancelling" label.
+        self._cancel_requested = False
 
     @property
     def is_running(self) -> bool:
@@ -171,6 +178,7 @@ class AutoPlacementController:
         self._window.auto_screw_plan_btn.setEnabled(False)
         self._window.auto_screw_status.setText("Planning...")
         self._window.statusbar.showMessage("Auto screw planning started")
+        self._cancel_requested = False
 
         # Modeless: planning is a background job, and the surgeon may want to
         # keep reading the study while it runs.  Indeterminate because the cost
@@ -195,6 +203,7 @@ class AutoPlacementController:
             config=self._window.planner_config(),
             pedicle_mask=getattr(seg_ctrl, "_last_pedicle_mask", None),
         )
+        self._thread.generation = self._run_generation
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_finished)
         self._thread.error.connect(self._on_error)
@@ -210,7 +219,17 @@ class AutoPlacementController:
             self._thread.request_cancel()
 
     def reset_state(self):
-        """Reset controller state for a new DICOM load."""
+        """Reset controller state for a new DICOM load.
+
+        A run still in flight belongs to the study being replaced: it is asked
+        to stop, its dialog goes away with the study it was measuring, and the
+        generation bump makes its eventual result stale, so it cannot inject the
+        previous study's screws into the new plan.
+        """
+        self._run_generation += 1
+        self.request_cancel()
+        self._close_progress_dialog()
+        self._cancel_requested = False
         self._last_planned = []
         if hasattr(self._window, 'auto_screw_status'):
             self._window.auto_screw_status.setText("No auto plan")
@@ -240,15 +259,35 @@ class AutoPlacementController:
         """Ask the running planning thread to stop at the next (level, side)."""
         if self._thread is None or self._progress_dialog is None:
             return
+        self._cancel_requested = True
         self._window.auto_screw_status.setText("Cancelling planning...")
         self._thread.request_cancel()
 
     def _on_progress(self, message: str):
-        self._window.auto_screw_status.setText(message)
+        # Once a cancel is in, the label belongs to it: the worker finishes the
+        # pedicle it is on and its already-queued message would otherwise put
+        # "Planning L4 right…" back over "Cancelling planning...".  The status
+        # bar still tracks the run winding down.
+        if not self._cancel_requested:
+            self._window.auto_screw_status.setText(message)
         self._window.statusbar.showMessage(message)
+
+    def _is_stale(self, thread) -> bool:
+        """Whether ``thread``'s result belongs to a study that has been replaced."""
+        return getattr(thread, "generation", self._run_generation) != self._run_generation
+
+    def _discard_stale(self, thread, what: str) -> None:
+        """Drop a result from a superseded run, leaving the new study's UI alone."""
+        logger.info("Discarding %s from a superseded planning run", what)
+        if thread is self._thread:
+            self._thread = None
+        self._refresh_plan_button()
 
     def _on_finished(self, planned: List[PlannedScrew]):
         thread = self._thread
+        if self._is_stale(thread):
+            self._discard_stale(thread, f"{len(planned)} screws")
+            return
         self._close_progress_dialog()
         self._thread = None
         self._refresh_plan_button()
@@ -312,6 +351,10 @@ class AutoPlacementController:
         self._window.statusbar.showMessage(status)
 
     def _on_error(self, error: str):
+        thread = self._thread
+        if self._is_stale(thread):
+            self._discard_stale(thread, f"error {error!r}")
+            return
         self._close_progress_dialog()
         self._thread = None
         self._refresh_plan_button()
