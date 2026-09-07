@@ -14,7 +14,7 @@ echo "[1/3] Upgrading pip in project venv..."
 "${PYTHON_BIN}" -m pip install --upgrade pip
 
 echo "[2/3] Installing TotalSegmentator..."
-"${PYTHON_BIN}" -m pip install TotalSegmentator
+"${PYTHON_BIN}" -m pip install "TotalSegmentator==2.12.0"
 
 TORCH_SHM_MANAGER="$("${PYTHON_BIN}" - <<'PY'
 from pathlib import Path

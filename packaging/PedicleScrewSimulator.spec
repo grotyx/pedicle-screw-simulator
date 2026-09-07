@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -35,12 +36,23 @@ for package_name in (
     "totalsegmentator",
     "nnunetv2",
     "dynamic_network_architectures",
-    "batchgenerators",
     "batchgeneratorsv2",
     "acvl_utils",
 ):
     package_datas, package_binaries, package_hiddenimports = collect_all(
         package_name
+    )
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hiddenimports
+
+# "batchgenerators" (the legacy v1 package, distinct from "batchgeneratorsv2")
+# is only a transitive dependency in some TotalSegmentator/nnU-Net dependency
+# resolutions. Guard the collect_all() call so a build environment that never
+# installed it does not fail with a ModuleNotFoundError.
+if importlib.util.find_spec("batchgenerators") is not None:
+    package_datas, package_binaries, package_hiddenimports = collect_all(
+        "batchgenerators"
     )
     datas += package_datas
     binaries += package_binaries
@@ -73,7 +85,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     version=(
@@ -88,7 +100,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="PedicleScrewSimulator",
 )

@@ -56,9 +56,6 @@ jobs:
           python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
           python -m pip install -r requirements-desktop.txt
 
-      - name: Clear package download cache
-        run: python -m pip cache purge
-
       - name: Run automated tests
         run: python -m pytest tests -q
 
@@ -71,7 +68,10 @@ jobs:
 
       - name: Verify bundled AI runtime on Windows
         if: runner.os == 'Windows'
-        run: dist\PedicleScrewSimulator\PedicleScrewSimulator.exe --self-check
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\PedicleScrewSimulator\PedicleScrewSimulator.exe -ArgumentList '--self-check' -Wait -PassThru
+          exit $p.ExitCode
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v5

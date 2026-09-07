@@ -142,3 +142,36 @@ def test_windows_launcher_is_cwd_independent_and_checks_pip_exit_codes():
     text = Path("scripts/run_app.ps1").read_text(encoding="utf-8")
     assert "Set-Location $root" in text
     assert text.count("$LASTEXITCODE -ne 0") >= 3
+
+
+# --- Task 6: packaging hardening --------------------------------------------
+
+
+def test_pyinstaller_spec_disables_upx():
+    spec = (
+        Path(__file__).resolve().parents[1]
+        / "packaging"
+        / "PedicleScrewSimulator.spec"
+    ).read_text(encoding="utf-8")
+    assert "upx=False" in spec
+    assert "upx=True" not in spec
+
+
+def test_build_workflow_keeps_pip_cache_and_uses_start_process_self_check():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "build-desktop.yml"
+    ).read_text(encoding="utf-8")
+    assert "pip cache purge" not in workflow
+    assert "Start-Process" in workflow
+
+
+def test_install_totalsegmentator_script_pins_version():
+    install_script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "install_totalsegmentator.sh"
+    ).read_text(encoding="utf-8")
+    assert "TotalSegmentator==2.12.0" in install_script

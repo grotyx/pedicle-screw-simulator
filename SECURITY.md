@@ -6,7 +6,7 @@ The project is currently pre-release research software. Security fixes are appli
 
 ## Reporting a vulnerability
 
-Use GitHub private vulnerability reporting after it is enabled for the public repository. Do not open a public issue containing exploit details, credentials, patient information, or identifying screenshots. If private reporting is unavailable, contact the maintainer through an approved private channel listed on the maintainer's GitHub profile.
+Use GitHub private vulnerability reporting after it is enabled for the public repository. Do not open a public issue containing exploit details, credentials, patient information, or identifying screenshots. If private reporting is unavailable, report the vulnerability by e-mail to [psmini@snu.ac.kr](mailto:psmini@snu.ac.kr), the maintainer contact address published in [README.md](README.md).
 
 Include:
 
