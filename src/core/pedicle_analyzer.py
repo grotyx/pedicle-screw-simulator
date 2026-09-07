@@ -61,6 +61,11 @@ class PedicleAnalyzer:
         Original CT volume for Hounsfield-unit sampling.  Not used in
         the current implementation but reserved for future density-aware
         analysis.
+    pedicle_mask : ndarray, optional
+        Boolean ``(z, y, x)`` pedicle subregion label on the *same grid*
+        as ``mask_image``.  When supplied it is measured directly instead
+        of hunting for the isthmus geometrically; see
+        :meth:`_find_pedicle_from_label`.
     """
 
     # -- Coronal isthmus search parameters -------------------------------
@@ -84,11 +89,15 @@ class PedicleAnalyzer:
     PEDICLE_WINDOW_AREA_RATIO: float = 1.25
     # Fewest window records needed to fit an axis through their centroids.
     MIN_AXIS_WINDOW_RECORDS: int = 3
+    # Fewest labelled voxels on one side before that side is measured.  Below
+    # this the label is a speck of leakage rather than a pedicle.
+    MIN_LABEL_SIDE_VOXELS: int = 20
 
     def __init__(
         self,
         mask_image: sitk.Image,
         ct_image: Optional[sitk.Image] = None,
+        pedicle_mask: Optional[np.ndarray] = None,
     ) -> None:
         self._mask_image = mask_image
         self._ct_image = ct_image
@@ -98,6 +107,18 @@ class PedicleAnalyzer:
         self._mask_array: np.ndarray = sitk.GetArrayFromImage(mask_image)
         self._spacing: Tuple[float, float, float] = mask_image.GetSpacing()  # (sx, sy, sz)
         self._origin: Tuple[float, float, float] = mask_image.GetOrigin()
+
+        if pedicle_mask is not None:
+            pedicle_mask = np.asarray(pedicle_mask)
+            if pedicle_mask.shape != self._mask_array.shape:
+                raise ValueError(
+                    "pedicle_mask shape "
+                    f"{pedicle_mask.shape} does not match the vertebra mask "
+                    f"{self._mask_array.shape}; both must be (z, y, x) on the "
+                    "same grid"
+                )
+            pedicle_mask = pedicle_mask.astype(bool, copy=False)
+        self._pedicle_mask: Optional[np.ndarray] = pedicle_mask
 
     # ------------------------------------------------------------------
     # Index <-> physical helpers
@@ -210,15 +231,20 @@ class PedicleAnalyzer:
         ------------------
         1. Extract the binary mask for this vertebra and estimate the
            vertebral body centre from its anterior portion.
-        2. **Primary** — coronal isthmus search
+        2. **Preferred** — pedicle subregion label
+           (:meth:`_find_pedicle_from_label`): when a ``pedicle_mask``
+           was supplied, measure the isthmus inside the labelled corridor
+           instead of inferring where it is.
+        3. **Primary** — coronal isthmus search
            (:meth:`_find_pedicle_coronal`): walk coronal slices
            posteriorly from the body centre, isolate the pedicle zone
            between the posterior body wall and the lamina, and take the
-           narrowest cross-section on each side.
-        3. **Fallback** — axial connected-component search: label each
+           narrowest cross-section on each side.  Runs only for the sides
+           the label did not supply.
+        4. **Fallback** — axial connected-component search: label each
            axial slice and treat the smaller lateral components as
-           pedicles.  Used only when the coronal search finds neither
-           side (no body centre, or a mask with no pedicle zone).
+           pedicles.  Used only when neither of the above finds a side
+           (no body centre, or a mask with no pedicle zone).
 
         ``result.method`` records which path produced the pedicle data.
         """
@@ -266,13 +292,30 @@ class PedicleAnalyzer:
                 tuple(float(v) for v in body_center)
             )
 
+        # --- Preferred: measure the pedicle subregion label directly --------
+        # Warnings from both searches are held back rather than recorded
+        # immediately: if the axial fallback then succeeds these would only
+        # mislead the UI.
+        label_warnings: List[str] = []
+        label_sides: List[str] = []
+        if body_center_ijk is not None and self._pedicle_mask is not None:
+            for side in ("left", "right"):
+                found = self._find_pedicle_from_label(binary, body_center_ijk, side)
+                if found is None:
+                    label_warnings.append(
+                        f"No {side} pedicle found in the pedicle subregion label"
+                    )
+                    continue
+                label_sides.append(side)
+                self._record_side(result, side, found)
+
         # --- Primary: coronal cross-section isthmus search ------------------
-        # Held back rather than recorded immediately: if the axial fallback
-        # then succeeds these would only mislead the UI.
         coronal_warnings: List[str] = []
         coronal_found = False
         if body_center_ijk is not None:
             for side in ("left", "right"):
+                if side in label_sides:
+                    continue
                 found = self._find_pedicle_coronal(
                     binary,
                     body_center_ijk,
@@ -285,19 +328,18 @@ class PedicleAnalyzer:
                     )
                     continue
                 coronal_found = True
-                if side == "left":
-                    result.left_pedicle_center = found["center_lps"]
-                    result.left_pedicle_axis = found["axis_lps"]
-                    result.left_pedicle_width = found["width_mm"]
-                    result.left_pedicle_height = found["height_mm"]
-                else:
-                    result.right_pedicle_center = found["center_lps"]
-                    result.right_pedicle_axis = found["axis_lps"]
-                    result.right_pedicle_width = found["width_mm"]
-                    result.right_pedicle_height = found["height_mm"]
-        if coronal_found:
+                self._record_side(result, side, found)
+
+        if label_sides or coronal_found:
+            result.warnings.extend(label_warnings)
             result.warnings.extend(coronal_warnings)
-            result.method = "coronal_isthmus"
+            # Name the paths that actually produced the recorded geometry.
+            if not label_sides:
+                result.method = "coronal_isthmus"
+            elif coronal_found:
+                result.method = "subregion_label+coronal_isthmus"
+            else:
+                result.method = "subregion_label"
             result.success = True
             return result
 
@@ -418,9 +460,134 @@ class PedicleAnalyzer:
             result.method = "axial_components"
             result.success = True
         else:
+            result.warnings.extend(label_warnings)
             result.warnings.extend(coronal_warnings)
 
         return result
+
+    @staticmethod
+    def _record_side(
+        result: PedicleAnalysisResult,
+        side: str,
+        found: Dict[str, object],
+    ) -> None:
+        """Copy one ``_find_pedicle_*`` record onto *result* for *side*."""
+        if side == "left":
+            result.left_pedicle_center = found["center_lps"]
+            result.left_pedicle_axis = found["axis_lps"]
+            result.left_pedicle_width = found["width_mm"]
+            result.left_pedicle_height = found["height_mm"]
+        else:
+            result.right_pedicle_center = found["center_lps"]
+            result.right_pedicle_axis = found["axis_lps"]
+            result.right_pedicle_width = found["width_mm"]
+            result.right_pedicle_height = found["height_mm"]
+
+    def _find_pedicle_from_label(
+        self,
+        binary: np.ndarray,
+        body_center_ijk: Tuple[float, float, float],
+        side: str,
+    ) -> Optional[Dict[str, object]]:
+        """Measure one pedicle inside the supplied pedicle subregion label.
+
+        The label already says which voxels are pedicle, so there is no
+        posterior-wall / spinolaminar bracketing to do: the labelled
+        corridor is intersected with this vertebra, split at the body
+        centre, reduced to its largest connected component on this side
+        (which drops leakage specks), and its narrowest coronal slice is
+        the isthmus.
+
+        The two end slices are ignored when picking that isthmus — they
+        taper into the body and the lamina, so they are routinely the
+        smallest cross-sections in the corridor without being the
+        anatomical isthmus.  As in :meth:`_find_pedicle_coronal`, a
+        corridor of uniform calibre ties across many slices, and the
+        middle of the tied run is taken.
+
+        Parameters
+        ----------
+        binary:
+            Vertebra mask as a ``(z, y, x)`` array.
+        body_center_ijk:
+            Vertebral body centre as a continuous ``(i, j, k)`` index.
+        side:
+            ``"left"`` (+X in LPS) or ``"right"`` (-X in LPS).
+
+        Returns
+        -------
+        dict or None
+            The same keys as :meth:`_find_pedicle_coronal`.  ``None``
+            when no label was supplied, or when this side holds too few
+            labelled voxels to measure.
+        """
+        if self._pedicle_mask is None:
+            return None
+
+        sx, _, sz = self._spacing
+        cx = float(body_center_ijk[0])
+        voxels = np.argwhere(binary.astype(bool) & self._pedicle_mask)  # z, y, x
+        if voxels.shape[0] == 0:
+            return None
+
+        lateral = (voxels[:, 2] - cx) * (1.0 if side == "left" else -1.0)
+        side_voxels = voxels[lateral > 0]
+        if side_voxels.shape[0] < self.MIN_LABEL_SIDE_VOXELS:
+            return None
+
+        # Largest connected component on this side (drops stray voxels).
+        sub = np.zeros(binary.shape, dtype=bool)
+        sub[side_voxels[:, 0], side_voxels[:, 1], side_voxels[:, 2]] = True
+        labeled, n_components = ndi.label(sub)
+        if n_components > 1:
+            sizes = ndi.sum(sub, labeled, index=range(1, n_components + 1))
+            sub = labeled == (int(np.argmax(sizes)) + 1)
+            side_voxels = np.argwhere(sub)
+            if side_voxels.shape[0] < self.MIN_LABEL_SIDE_VOXELS:
+                return None
+
+        js, counts = np.unique(side_voxels[:, 1], return_counts=True)
+        areas = counts.astype(np.float64) * sx * sz
+        # Ignore the end slices that taper into body / lamina.
+        interior = slice(1, -1) if js.size > 2 else slice(None)
+        interior_js = js[interior]
+        interior_areas = areas[interior]
+        min_area = float(interior_areas.min())
+        tied = np.flatnonzero(interior_areas == min_area)
+        isthmus_j = int(interior_js[tied[tied.size // 2]])
+
+        coords = side_voxels[side_voxels[:, 1] == isthmus_j]
+        # Outer voxel-boundary extents, as in _find_pedicle_coronal.
+        width_mm = float(coords[:, 2].max() - coords[:, 2].min() + 1) * sx
+        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        center = self._continuous_ijk_to_lps(
+            float(coords[:, 2].mean()),
+            float(isthmus_j),
+            float(coords[:, 0].mean()),
+        )
+
+        axis = self._compute_pedicle_axis(side_voxels)
+        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
+            # A cloud whose principal axis is not AP enough to trust — fall
+            # back on body centre -> isthmus, as the coronal search does.
+            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
+            fallback = center - body_center_lps
+            norm = float(np.linalg.norm(fallback))
+            if norm > 1e-9:
+                axis = fallback / norm
+        if axis[1] < 0:
+            axis = -axis
+
+        return {
+            "center_lps": center,
+            "axis_lps": axis,
+            "width_mm": width_mm,
+            "height_mm": height_mm,
+            "isthmus_j": isthmus_j,
+            # The axis is fitted over the whole labelled corridor, so the
+            # window it covers is that corridor's full coronal span.
+            "isthmus_window_j": (int(js[0]), int(js[-1])),
+        }
 
     def _find_pedicle_coronal(
         self,

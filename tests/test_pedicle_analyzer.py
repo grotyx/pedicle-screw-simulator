@@ -499,6 +499,70 @@ class TestCoronalIsthmus:
 
 
 # ---------------------------------------------------------------------------
+# PedicleAnalyzer: pedicle subregion label path
+# ---------------------------------------------------------------------------
+
+def _make_pedicle_label(shape: tuple, centres=(30, 60)) -> np.ndarray:
+    """A pedicle subregion label narrower (6 mm) than the phantom's 8 mm.
+
+    Deliberately mismatched so a measurement that came from the label can be
+    told apart from one the geometric search produced off the phantom itself.
+    """
+    zz, yy, xx = np.mgrid[0:shape[0], 0:shape[1], 0:shape[2]]
+    pedicle = np.zeros(shape, bool)
+    for cx in centres:
+        pedicle |= (
+            (((xx - cx) / 3.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1)
+            & (yy >= 48)
+            & (yy < 62)
+        )
+    return pedicle
+
+
+class TestSubregionLabelPath:
+    def test_pedicle_label_overrides_geometric_search(self):
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        pedicle = _make_pedicle_label(arr.shape)
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        assert result.method == "subregion_label"
+        assert 5.0 <= result.left_pedicle_width <= 7.0
+        assert np.linalg.norm(result.left_pedicle_center - np.array([60.0, 55.0, 32.0])) <= 1.5
+
+    def test_shape_mismatch_is_rejected(self):
+        mask = _make_anatomical_phantom()
+        with pytest.raises(ValueError):
+            PedicleAnalyzer(mask, pedicle_mask=np.zeros((2, 2, 2), bool))
+
+    def test_single_sided_label_falls_back_to_coronal_for_the_other_side(self):
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        pedicle = _make_pedicle_label(arr.shape, centres=(60,))  # left only
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.method == "subregion_label+coronal_isthmus"
+        # Left came from the 6 mm label, right from the 8 mm phantom geometry.
+        assert 5.0 <= result.left_pedicle_width <= 7.0
+        assert 7.0 <= result.right_pedicle_width <= 9.0
+        assert np.linalg.norm(result.right_pedicle_center - np.array([30.0, 55.0, 32.0])) <= 2.0
+
+    def test_no_label_keeps_the_coronal_path(self):
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom(), pedicle_mask=None)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        assert result.method == "coronal_isthmus"
+
+    def test_empty_label_falls_back_to_the_coronal_path(self):
+        mask = _make_anatomical_phantom()
+        empty = np.zeros(sitk.GetArrayFromImage(mask).shape, bool)
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=empty)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        assert result.method == "coronal_isthmus"
+        assert result.success
+
+
+# ---------------------------------------------------------------------------
 # PedicleAnalyzer: analyze_all
 # ---------------------------------------------------------------------------
 
