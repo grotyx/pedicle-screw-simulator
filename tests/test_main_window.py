@@ -212,3 +212,47 @@ def test_legacy_theme_and_geometry_are_migrated_into_the_unified_scope(
     finally:
         window.close()
         window.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# closeEvent -- cancel a running auto-placement optimiser instead of blocking
+# ---------------------------------------------------------------------------
+
+
+class _FakeAutoPlacementThread:
+    """Stand-in for a still-running auto-placement optimiser thread."""
+
+    def __init__(self):
+        self.cancel_called = False
+
+    def isRunning(self):
+        return True
+
+    def request_cancel(self):
+        self.cancel_called = True
+
+
+def test_close_event_cancels_running_auto_placement_instead_of_blocking(
+    ui_main_window,
+):
+    from PyQt6.QtGui import QCloseEvent
+
+    window = ui_main_window
+    ctrl = window._auto_placement_ctrl
+    ctrl._thread = _FakeAutoPlacementThread()
+
+    try:
+        event = QCloseEvent()
+        window.closeEvent(event)
+
+        assert ctrl._thread.cancel_called is True
+        assert not event.isAccepted()
+        assert (
+            window.statusbar.currentMessage()
+            == "Cancelling planning — close again once it stops"
+        )
+    finally:
+        # The stub always reports itself as running; clear it so the
+        # window's own teardown close() doesn't hit closeEvent's
+        # "still running" path again during qtbot cleanup.
+        ctrl._thread = None

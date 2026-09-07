@@ -2065,11 +2065,9 @@ class MainWindow(QMainWindow):
             return
 
         if self._auto_placement_ctrl.is_running:
-            QMessageBox.warning(
-                self,
-                "Planning Running",
-                "Auto screw planning is still running. "
-                "Please wait for completion.",
+            self._auto_placement_ctrl.request_cancel()
+            self.statusbar.showMessage(
+                "Cancelling planning — close again once it stops"
             )
             event.ignore()
             return
