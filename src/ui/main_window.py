@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
     QPushButton, QToolBar, QLabel, QSlider, QSpinBox,
     QStatusBar, QMessageBox, QApplication, QComboBox, QListWidget,
-    QCheckBox, QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
+    QCheckBox, QScrollArea,
     QSplitter, QSizePolicy, QListWidgetItem, QAbstractItemView,
 )
 from PyQt6.QtCore import QSettings, Qt, QTimer
@@ -435,20 +435,6 @@ class MainWindow(QMainWindow):
         self.auto_screw_plan_btn.setEnabled(False)
         auto_layout.addWidget(self.auto_screw_plan_btn)
 
-        # Retained as a hidden compatibility surface for older plan files/tests.
-        self.auto_screw_table = QTableWidget(0, 6)
-        self.auto_screw_table.setHorizontalHeaderLabels(
-            ["Vertebra", "Side", "Length", "Dia", "Grade", "Conf"]
-        )
-        self.auto_screw_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.auto_screw_table.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows
-        )
-        self.auto_screw_table.setMaximumHeight(64)
-        self.auto_screw_table.hide()
-
         # Status
         self.auto_screw_status = QLabel("No auto plan")
         self.auto_screw_status.setWordWrap(True)
@@ -616,6 +602,12 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Safety"), 2, 0)
         self.selected_screw_grade = QLabel("Grade --")
         selected_screw_details.addWidget(self.selected_screw_grade, 2, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory HU"), 3, 0)
+        self.selected_screw_hu = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_hu, 3, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Source"), 4, 0)
+        self.selected_screw_source = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_source, 4, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         screw_list_layout.addWidget(self.selected_screw_metrics)
 
@@ -1326,6 +1318,8 @@ class MainWindow(QMainWindow):
             self.selected_screw_convergence.setText("--")
             self.selected_screw_craniocaudal.setText("--")
             self.selected_screw_grade.setText("Grade --")
+            self.selected_screw_hu.setText("--")
+            self.selected_screw_source.setText("--")
             self.selected_screw_warning.setText(
                 "Select a screw to inspect its trajectory."
             )
@@ -1361,15 +1355,37 @@ class MainWindow(QMainWindow):
         self.selected_screw_convergence.setText(f"{convergence:+.1f}°")
         self.selected_screw_craniocaudal.setText(f"{craniocaudal:+.1f}°")
         self.selected_screw_grade.setText(f"Grade {screw.grade}")
+
+        mean_hu = getattr(screw, "mean_hu", None)
+        min_hu = getattr(screw, "min_hu", None)
+        if mean_hu is None or min_hu is None:
+            self.selected_screw_hu.setText("-- (no CT sample)")
+        else:
+            self.selected_screw_hu.setText(
+                f"mean {mean_hu:.0f} / min {min_hu:.0f} HU"
+            )
+        self.selected_screw_source.setText(
+            "Auto plan"
+            if getattr(screw, "source", "manual") == "auto"
+            else "Manual"
+        )
+
         breach_distance = float(getattr(screw, "breach_distance", 0.0))
-        if breach_distance > 0.0:
-            self.selected_screw_warning.setText(
-                f"Estimated breach {breach_distance:.1f} mm — verify on CT."
+        lines = list(getattr(screw, "warnings", []) or [])
+        if screw.grade == "N/A":
+            lines.insert(
+                0, "Grade N/A — run segmentation to grade this screw."
+            )
+        elif breach_distance > 0.0:
+            lines.insert(
+                0,
+                f"Estimated breach {breach_distance:.1f} mm — verify on CT.",
             )
         else:
-            self.selected_screw_warning.setText(
-                "No estimated breach — CT review is still required."
+            lines.insert(
+                0, "No estimated breach — CT review is still required."
             )
+        self.selected_screw_warning.setText("\n".join(lines))
 
     def update_vertebra_level_checks(self, detected_labels: list) -> None:
         """Build the shared 3D visibility and planning checkbox set."""

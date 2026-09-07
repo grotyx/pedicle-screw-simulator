@@ -81,6 +81,56 @@ class TestScrewTool:
         assert screw.grade == "A"          # low HU must not be called a breach
         assert screw.mean_hu == pytest.approx(80.0)
 
+    def test_regrade_all_grades_screws_placed_before_segmentation(self):
+        import numpy as np
+        import SimpleITK as sitk
+        from src.core.screw_grading import ScrewGrader
+
+        tool = ScrewTool(FakeVolumeManager())
+        tool.on_click(30.0, 38.0, 30.0, plane="axial")
+        screw = tool.on_click(30.0, 22.0, 30.0, plane="axial")
+        assert screw.grade == "N/A"
+        assert any(w.startswith("Not graded") for w in screw.warnings)
+
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))
+        tool.set_grader(ScrewGrader(mask, ct))
+
+        tool.regrade_all()
+
+        regraded = tool.get_screws()[0]
+        assert regraded.grade == "A"
+        assert not any(w.startswith("Not graded") for w in regraded.warnings)
+        assert regraded.mean_hu == pytest.approx(80.0)
+
+    def test_grade_description_covers_not_available(self):
+        assert (
+            ScrewTool.get_grade_description("N/A")
+            == "Not graded — run segmentation first"
+        )
+
+    def test_evaluate_strips_every_not_graded_warning_variant(self):
+        tool = ScrewTool(FakeVolumeManager())
+        screw = Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, 0.0, 30.0),
+            diameter=6.0,
+            warnings=[
+                "Not graded: run segmentation first",
+                "Not graded: trajectory does not pass through a segmented vertebra",
+                "planner note",
+            ],
+        )
+        tool._evaluate_screw(screw)
+        assert screw.warnings.count("Not graded: run segmentation first") == 1
+        assert "planner note" in screw.warnings
+        assert (
+            "Not graded: trajectory does not pass through a segmented vertebra"
+            not in screw.warnings
+        )
+
     def test_replace_screw_keeps_metadata(self):
         tool = ScrewTool(FakeVolumeManager())
         original = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, 0.0, 40.0),

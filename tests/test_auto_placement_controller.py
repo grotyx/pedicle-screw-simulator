@@ -5,7 +5,6 @@ import pytest
 
 from src.controllers.auto_placement_controller import (
     AutoPlacementController,
-    GRADE_COLORS,
     planned_screw_to_screw,
 )
 from src.core.auto_screw_planner import PlannedScrew
@@ -79,29 +78,6 @@ class TestPlannedScrewToScrew:
         screw = planned_screw_to_screw(ps)
         traj = np.array(screw.trajectory)
         assert np.linalg.norm(traj) == pytest.approx(1.0, abs=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# Grade color mapping
-# ---------------------------------------------------------------------------
-
-
-class TestGradeColors:
-    """Test grade-to-color mapping constants."""
-
-    def test_all_grades_have_colors(self):
-        for grade in ("A", "B", "C", "D", "E"):
-            assert grade in GRADE_COLORS
-
-    def test_colors_are_rgb_tuples(self):
-        for grade, color in GRADE_COLORS.items():
-            assert len(color) == 3
-            for c in color:
-                assert 0.0 <= c <= 1.0, f"Grade {grade} color out of range"
-
-    def test_grade_a_is_green(self):
-        r, g, b = GRADE_COLORS["A"]
-        assert g > r and g > b
 
 
 # ---------------------------------------------------------------------------
@@ -204,24 +180,6 @@ class _DummyLabel:
         self._text = text
 
 
-class _DummyTableWidget:
-    def __init__(self):
-        self._rows = 0
-        self._items = {}
-
-    def setRowCount(self, n):
-        self._rows = n
-
-    def setItem(self, row, col, item):
-        self._items[(row, col)] = item
-
-    def selectedIndexes(self):
-        return []
-
-    def rowCount(self):
-        return self._rows
-
-
 class _DummyCheckBox:
     def __init__(self, checked=True):
         self._checked = checked
@@ -257,7 +215,6 @@ class _DummyWindow:
         self._tool_ctrl = _DummyToolCtrl()
         self._seg_ctrl = _DummySegCtrl()
         self.statusbar = _DummyStatusBar()
-        self.auto_screw_table = _DummyTableWidget()
         self.auto_screw_status = _DummyLabel("No auto plan")
         self.auto_screw_plan_btn = _DummyButton()
         self.screw_list_widget = _DummyListWidget()
@@ -282,6 +239,80 @@ class _DummyWindow:
         pass
 
 
+def _planned(vertebra_name="L4", side="left", **overrides):
+    """Build a PlannedScrew with sensible defaults for controller tests."""
+    defaults = dict(
+        vertebra_name=vertebra_name,
+        side=side,
+        entry_lps=np.array([0.0, 10.0, 0.0]),
+        target_lps=np.array([0.0, -20.0, 0.0]),
+        length_mm=30.0,
+        diameter_mm=6.0,
+        convergence_angle=10.0,
+        craniocaudal_angle=5.0,
+        mean_bone_density=400.0,
+        min_bone_density=200.0,
+        gertzbein_grade="A",
+        confidence=0.8,
+    )
+    defaults.update(overrides)
+    return PlannedScrew(**defaults)
+
+
+@pytest.fixture
+def controller_with_window():
+    """AutoPlacementController wired to a minimal main-window stub."""
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    return AutoPlacementController(VolumeManager(), window), window
+
+
+def test_on_finished_adds_editable_screws_and_keeps_last_planned(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    ps = _planned("L4", "left")
+    ctrl._on_finished([ps])
+    assert len(window._tool_ctrl.screw_tool.get_screws()) == 1
+    assert ctrl.last_planned[0] is ps
+    assert not hasattr(ctrl, "accept_all")
+
+
+def test_last_planned_is_a_defensive_copy(controller_with_window):
+    ctrl, _window = controller_with_window
+    ctrl._on_finished([_planned()])
+    ctrl.last_planned.clear()
+    assert len(ctrl.last_planned) == 1
+
+
+def test_reset_state_clears_last_planned(controller_with_window):
+    ctrl, window = controller_with_window
+    ctrl._on_finished([_planned()])
+    ctrl.reset_state()
+    assert ctrl.last_planned == []
+    assert window.auto_screw_status._text == "No auto plan"
+
+
+def test_dead_preview_api_is_gone(controller_with_window):
+    ctrl, _window = controller_with_window
+    for name in (
+        "accept_all",
+        "accept_selected",
+        "reject_selected",
+        "clear_plan",
+        "_accept_screws",
+        "_refresh_table",
+        "_clear_preview",
+        "_remove_preview_at",
+        "_preview_actors",
+        "_preview_overlay_ids",
+        "_next_preview_overlay_id",
+        "planned_screws",
+    ):
+        assert not hasattr(ctrl, name), f"{name} should have been removed"
+
+
 class TestAutoPlacementControllerUnit:
     """Unit tests for AutoPlacementController (no real Qt widgets)."""
 
@@ -295,7 +326,7 @@ class TestAutoPlacementControllerUnit:
     def test_initial_state(self):
         ctrl, _ = self._make_controller()
         assert not ctrl.is_running
-        assert ctrl.planned_screws == []
+        assert ctrl.last_planned == []
 
     def test_get_selected_labels(self):
         ctrl, window = self._make_controller()
@@ -349,22 +380,6 @@ class TestAutoPlacementControllerUnit:
         assert window._seg_ctrl.ensure_mpr_calls == 1
         assert ctrl._thread.started is True
 
-    def test_clear_plan(self):
-        ctrl, window = self._make_controller()
-        # Simulate having some planned screws.
-        ps = PlannedScrew(
-            vertebra_name="L4", side="left",
-            entry_lps=np.array([0, 0, 0]),
-            target_lps=np.array([0, -30, 0]),
-            length_mm=30, diameter_mm=6,
-            convergence_angle=10, craniocaudal_angle=5,
-            mean_bone_density=400, min_bone_density=200,
-            gertzbein_grade="A", confidence=0.8,
-        )
-        ctrl._planned_screws = [ps]
-        ctrl.clear_plan()
-        assert ctrl.planned_screws == []
-
     def test_on_finished_registers_editable_screws_and_selects_first_new_row(self):
         ctrl, window = self._make_controller()
         planned = [
@@ -388,11 +403,9 @@ class TestAutoPlacementControllerUnit:
             ),
         ]
         ctrl._on_finished(planned)
-        assert ctrl.planned_screws == []
         assert len(window._tool_ctrl.screw_tool._screws) == 2
         assert [select for _screw, select in window._tool_ctrl.added] == [True, False]
         assert window.screw_list_widget.currentRow() == 0
-        assert window.auto_screw_table._rows == 0
 
     def test_on_finished_appends_after_existing_screw_and_selects_first_new_row(self):
         ctrl, window = self._make_controller()
@@ -417,13 +430,12 @@ class TestAutoPlacementControllerUnit:
             gertzbein_grade="A", confidence=0.8,
         )
         ctrl._on_finished([ps])
-        assert len(ctrl.planned_screws) == 0
         assert len(window._tool_ctrl.screw_tool._screws) == 2
         assert window.screw_list_widget.currentRow() == 1
 
     def test_reset_state(self):
         ctrl, window = self._make_controller()
-        ctrl._planned_screws = [
+        ctrl._last_planned = [
             PlannedScrew(
                 vertebra_name="L4", side="left",
                 entry_lps=np.array([0, 0, 0]),
@@ -435,7 +447,7 @@ class TestAutoPlacementControllerUnit:
             )
         ]
         ctrl.reset_state()
-        assert ctrl.planned_screws == []
+        assert ctrl.last_planned == []
 
     def test_on_finished_uses_permanent_registration_path(self):
         ctrl, window = self._make_controller()
@@ -455,97 +467,6 @@ class TestAutoPlacementControllerUnit:
         assert window._tool_ctrl.added[0][0].vertebra_level == "L4"
         assert window._tool_ctrl.added[0][0].side == "left"
 
-    def test_clear_plan_removes_mpr_overlays(self):
-        ctrl, window = self._make_controller()
-        planned = [
-            PlannedScrew(
-                vertebra_name="L4", side="left",
-                entry_lps=np.array([0, 10, 0]),
-                target_lps=np.array([0, -20, 0]),
-                length_mm=30, diameter_mm=6,
-                convergence_angle=10, craniocaudal_angle=5,
-                mean_bone_density=400, min_bone_density=200,
-                gertzbein_grade="A", confidence=0.8,
-            ),
-        ]
-        ctrl._on_finished(planned)
-        ctrl.clear_plan()
-        for viewer in window._mpr_viewers:
-            assert len(viewer._screw_overlays) == 0
-
-    def test_clear_plan_preserves_permanent_mpr_overlays(self):
-        ctrl, window = self._make_controller()
-        planned = [
-            PlannedScrew(
-                vertebra_name="L4", side="left",
-                entry_lps=np.array([0, 10, 0]),
-                target_lps=np.array([0, -20, 0]),
-                length_mm=30, diameter_mm=6,
-                convergence_angle=10, craniocaudal_angle=5,
-                mean_bone_density=400, min_bone_density=200,
-                gertzbein_grade="A", confidence=0.8,
-            ),
-        ]
-        for viewer in window._mpr_viewers:
-            viewer.add_screw_overlay(0, (0, 0, 0), (0, 0, 10))
-
-        ctrl._on_finished(planned)
-        ctrl.clear_plan()
-
-        for viewer in window._mpr_viewers:
-            assert set(viewer._screw_overlays) == {0}
-
-    def test_finished_plan_keeps_no_preview_overlay_state(self):
-        ctrl, window = self._make_controller()
-        planned = [
-            PlannedScrew(
-                vertebra_name="L4", side=side,
-                entry_lps=np.array([offset, 10, 0]),
-                target_lps=np.array([offset, -20, 0]),
-                length_mm=30, diameter_mm=6,
-                convergence_angle=10, craniocaudal_angle=5,
-                mean_bone_density=400, min_bone_density=200,
-                gertzbein_grade="A", confidence=0.8,
-            )
-            for side, offset in (("left", 0), ("right", 5))
-        ]
-        ctrl._on_finished(planned)
-
-        assert ctrl._preview_overlay_ids == []
-        assert ctrl._preview_actors == []
-        assert len(window._tool_ctrl.screw_tool.get_screws()) == 2
-
-    def test_reject_selected_removes_from_list(self):
-        ctrl, window = self._make_controller()
-        ps1 = PlannedScrew(
-            vertebra_name="L4", side="left",
-            entry_lps=np.array([0, 10, 0]),
-            target_lps=np.array([0, -20, 0]),
-            length_mm=30, diameter_mm=6,
-            convergence_angle=10, craniocaudal_angle=5,
-            mean_bone_density=400, min_bone_density=200,
-            gertzbein_grade="A", confidence=0.8,
-        )
-        ps2 = PlannedScrew(
-            vertebra_name="L4", side="right",
-            entry_lps=np.array([5, 10, 0]),
-            target_lps=np.array([5, -20, 0]),
-            length_mm=30, diameter_mm=6,
-            convergence_angle=10, craniocaudal_angle=5,
-            mean_bone_density=350, min_bone_density=180,
-            gertzbein_grade="B", confidence=0.6,
-        )
-        ctrl._planned_screws = [ps1, ps2]
-        # Simulate selecting row 0.
-        class _FakeIndex:
-            def __init__(self, r):
-                self._row = r
-            def row(self):
-                return self._row
-        window.auto_screw_table.selectedIndexes = lambda: [_FakeIndex(0)]
-        ctrl.reject_selected()
-        assert len(ctrl.planned_screws) == 1
-        assert ctrl.planned_screws[0].side == "right"
 
 
 def test_planned_screw_to_screw_copies_metadata():

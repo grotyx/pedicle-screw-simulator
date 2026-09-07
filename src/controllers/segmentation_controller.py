@@ -226,6 +226,7 @@ class SegmentationController:
                     )
                     grader = None
                 self._window._tool_ctrl.screw_tool.set_grader(grader)
+                self._window._tool_ctrl.regrade_all()
             else:
                 self._window._tool_ctrl.screw_tool.set_grader(None)
             self._window.update_vertebra_level_checks(detected)

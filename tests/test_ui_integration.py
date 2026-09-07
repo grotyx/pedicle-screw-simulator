@@ -343,6 +343,7 @@ def test_default_control_panel_expands_only_main_workflow(ui_main_window):
     assert not hasattr(window, "auto_accept_all_btn")
     assert not hasattr(window, "auto_accept_sel_btn")
     assert not hasattr(window, "auto_reject_btn")
+    assert not hasattr(window, "auto_screw_table")
     assert window.screw_list_widget.minimumHeight() >= 110
     assert window.screw_list_widget.maximumHeight() >= 110
     assert window.remove_screw_btn.text() == "Delete Screw"
@@ -1178,3 +1179,78 @@ def test_ui_shows_geometry_warning_dialog(ui_main_window, monkeypatch, tmp_path)
     )
 
     assert any(title == "Geometry Warning" for title, _ in warning_calls)
+
+
+def test_inspector_shows_hu_source_and_warnings(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0, 30, 0), target_point=(0, -10, 0), diameter=6.0,
+        vertebra_level="L4", side="left", grade="B", breach_distance=0.8,
+        mean_hu=210.0, min_hu=95.0,
+        warnings=["Breach distance 0.8 mm (grade B)"], source="auto",
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert "210" in window.selected_screw_hu.text()
+    assert "95" in window.selected_screw_hu.text()
+    assert "Auto" in window.selected_screw_source.text()
+    assert "0.8 mm" in window.selected_screw_warning.text()
+    assert "Breach distance 0.8 mm (grade B)" in window.selected_screw_warning.text()
+
+
+def test_inspector_reports_manual_source_and_missing_hu(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0, 30, 0), target_point=(0, -10, 0), diameter=6.0,
+        vertebra_level="L4", side="right", grade="N/A",
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert "no CT sample" in window.selected_screw_hu.text()
+    assert window.selected_screw_source.text() == "Manual"
+    assert "run segmentation" in window.selected_screw_warning.text().lower()
+
+
+def test_inspector_resets_hu_and_source_without_selection(ui_main_window):
+    window = ui_main_window
+    window.update_selected_screw_inspector(-1, None, False)
+
+    assert window.selected_screw_hu.text() == "--"
+    assert window.selected_screw_source.text() == "--"
+
+
+def test_segmentation_regrades_screws_placed_before_segmentation(
+    ui_main_window, tmp_path
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-REGRADE", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+
+    screw = Screw(
+        entry_point=(4.0, 4.0, 4.0),
+        target_point=(4.0, 12.0, 4.0),
+        diameter=6.0,
+        grade="N/A",
+        warnings=["Not graded: run segmentation first"],
+    )
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+
+    mask_path = tmp_path / "mask_regrade.nii.gz"
+    _write_mask(image, mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+    regraded = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert "Not graded: run segmentation first" not in regraded.warnings

@@ -636,6 +636,11 @@ class ToolController:
             item.setText(self._format_screw_list_text(index, screw))
         self._window._screw_mpr_ctrl.on_screw_updated(index)
 
+    def regrade_all(self) -> None:
+        """Re-grade every screw and refresh its linked representations."""
+        for index, screw in enumerate(self.screw_tool.regrade_all()):
+            self.refresh_screw(index, screw)
+
     def set_selected_screw_diameter(self, diameter: float) -> None:
         """Resize the selected screw and refresh every linked representation."""
         row = self._window.screw_list_widget.currentRow()

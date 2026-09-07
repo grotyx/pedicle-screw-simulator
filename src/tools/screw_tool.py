@@ -243,7 +243,9 @@ class ScrewTool:
     def _evaluate_screw(self, screw: Screw):
         """Grade with the segmentation mask; mark N/A when no mask exists."""
         note = "Not graded: run segmentation first"
-        screw.warnings = [w for w in screw.warnings if w != note]
+        screw.warnings = [
+            w for w in screw.warnings if not w.startswith("Not graded")
+        ]
         if self._grader is None:
             screw.grade = "N/A"
             screw.breach_distance = 0.0
@@ -285,6 +287,12 @@ class ScrewTool:
     def add_screw(self, screw: Screw):
         """Append an existing screw (used for plan restore)."""
         self._screws.append(screw)
+
+    def regrade_all(self) -> List[Screw]:
+        """Re-evaluate every stored screw against the current grader."""
+        for screw in self._screws:
+            self._evaluate_screw(screw)
+        return self._screws.copy()
 
     def replace_screw(
         self,
@@ -362,5 +370,6 @@ class ScrewTool:
             "C": GRADE_C_DESCRIPTION,
             "D": GRADE_D_DESCRIPTION,
             "E": GRADE_E_DESCRIPTION,
+            "N/A": "Not graded — run segmentation first",
         }
         return descriptions.get(grade, "Unknown grade")
