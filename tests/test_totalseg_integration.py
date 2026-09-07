@@ -93,7 +93,7 @@ class TestTotalSegIntegration:
     ):
         captured = []
 
-        def _fake_run(command, **_kwargs):
+        def _fake_popen(command, **_kwargs):
             captured.extend(command)
             input_path = command[command.index("-i") + 1]
             output_path = command[command.index("-o") + 1]
@@ -101,11 +101,16 @@ class TestTotalSegIntegration:
             mask = sitk.Cast(image > 0, sitk.sitkUInt8)
             mask.CopyInformation(image)
             sitk.WriteImage(mask, str(output_path))
-            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            return types.SimpleNamespace(
+                returncode=0,
+                communicate=lambda: ("", ""),
+                poll=lambda: 0,
+                terminate=lambda: None,
+            )
 
         fake_spec = types.SimpleNamespace(origin="/tmp/TotalSegmentator.py")
         monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _name: fake_spec)
-        monkeypatch.setattr(totalseg.subprocess, "run", _fake_run)
+        monkeypatch.setattr(totalseg.subprocess, "Popen", _fake_popen)
         monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
 
         result_path = totalseg.run_totalsegmentator(
@@ -375,3 +380,209 @@ def test_purge_stale_skips_symlinks(tmp_path):
     assert removed == 0
     assert link.is_symlink()
     assert real_target.exists()
+
+
+class _FakePopen:
+    """Minimal subprocess.Popen stand-in for cancellation tests."""
+
+    def __init__(self, command, stdout=None, stderr=None, text=None,
+                 on_communicate=None, returncode=0):
+        self.command = list(command)
+        self.terminated = False
+        self.returncode = returncode
+        self._on_communicate = on_communicate
+        self._exited = False
+
+    def poll(self):
+        return self.returncode if self._exited else None
+
+    def terminate(self):
+        self.terminated = True
+
+    def communicate(self):
+        if self._on_communicate is not None:
+            self._on_communicate(self)
+        self._exited = True
+        return "", ""
+
+
+def test_process_holder_terminate_marks_cancelled():
+    from src.core.totalseg_integration import ProcessHolder
+
+    class Fake:
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    holder = ProcessHolder()
+    holder.process = Fake()
+    holder.terminate()
+    assert holder.cancelled is True and holder.process.terminated is True
+
+
+def test_process_holder_terminate_without_process_is_safe():
+    holder = totalseg.ProcessHolder()
+    holder.terminate()
+    assert holder.cancelled is True
+    assert holder.process is None
+
+
+def test_process_holder_does_not_terminate_finished_process():
+    holder = totalseg.ProcessHolder()
+    proc = _FakePopen(["x"], returncode=0)
+    proc._exited = True
+    holder.process = proc
+    holder.terminate()
+    assert holder.cancelled is True
+    assert proc.terminated is False
+
+
+def test_run_totalsegmentator_raises_cancelled_when_holder_cancelled(
+    tmp_path, monkeypatch
+):
+    holder = totalseg.ProcessHolder()
+
+    def _fake_popen(command, **kwargs):
+        return _FakePopen(
+            command,
+            on_communicate=lambda proc: holder.terminate(),
+            returncode=-15,
+        )
+
+    fake_spec = types.SimpleNamespace(origin="/tmp/TotalSegmentator.py")
+    monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _n: fake_spec)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_totalsegmentator(
+            image=_create_test_image(),
+            work_dir=str(tmp_path),
+            process_holder=holder,
+        )
+
+    assert holder.process.terminated is True
+
+
+def test_run_totalsegmentator_registers_process_on_holder(tmp_path, monkeypatch):
+    holder = totalseg.ProcessHolder()
+    created = []
+
+    def _fake_popen(command, **kwargs):
+        def _write(proc):
+            input_path = command[command.index("-i") + 1]
+            output_path = command[command.index("-o") + 1]
+            image = sitk.ReadImage(str(input_path))
+            mask = sitk.Cast(image > 0, sitk.sitkUInt8)
+            mask.CopyInformation(image)
+            sitk.WriteImage(mask, str(output_path))
+
+        proc = _FakePopen(command, on_communicate=_write, returncode=0)
+        created.append(proc)
+        return proc
+
+    fake_spec = types.SimpleNamespace(origin="/tmp/TotalSegmentator.py")
+    monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _n: fake_spec)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+    result_path = totalseg.run_totalsegmentator(
+        image=_create_test_image(),
+        work_dir=str(tmp_path),
+        process_holder=holder,
+    )
+
+    assert Path(result_path).exists()
+    assert holder.process is created[0]
+
+
+def test_frozen_run_raises_cancelled_before_starting(tmp_path, monkeypatch):
+    started = []
+    fake_package = types.ModuleType("totalsegmentator")
+    fake_package.__path__ = []
+    fake_api = types.ModuleType("totalsegmentator.python_api")
+    fake_api.totalsegmentator = lambda *a, **k: started.append(a)
+    monkeypatch.setitem(sys.modules, "totalsegmentator", fake_package)
+    monkeypatch.setitem(sys.modules, "totalsegmentator.python_api", fake_api)
+    monkeypatch.setattr(totalseg.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+    holder = totalseg.ProcessHolder()
+    holder.terminate()
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_totalsegmentator(
+            image=sitk.Image([2, 2, 2], sitk.sitkInt16),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=holder,
+        )
+
+    assert started == []
+
+
+def test_fallback_runner_reraises_cancel(monkeypatch, tmp_path):
+    import numpy as np
+
+    monkeypatch.setattr(totalseg, "is_totalsegmentator_available", lambda: True)
+
+    def fake_run(**kwargs):
+        raise totalseg.SegmentationCancelled("cancelled")
+
+    monkeypatch.setattr(totalseg, "run_totalsegmentator", fake_run)
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_segmentation_with_fallback(
+            image=image, work_dir=str(tmp_path), device="cpu"
+        )
+
+
+def test_fallback_runner_forwards_process_holder(monkeypatch, tmp_path):
+    holders = []
+    monkeypatch.setattr(totalseg, "is_totalsegmentator_available", lambda: True)
+
+    def _fake_totalseg(image, work_dir, process_holder=None, **_kwargs):
+        holders.append(process_holder)
+        output_path = Path(work_dir) / "holder_mask.nii.gz"
+        mask = sitk.Cast(image > 0, sitk.sitkUInt8)
+        mask.CopyInformation(image)
+        sitk.WriteImage(mask, str(output_path))
+        return str(output_path)
+
+    monkeypatch.setattr(totalseg, "run_totalsegmentator", _fake_totalseg)
+    holder = totalseg.ProcessHolder()
+
+    result = totalseg.run_segmentation_with_fallback(
+        image=_create_test_image(300),
+        work_dir=str(tmp_path),
+        device="cpu",
+        process_holder=holder,
+    )
+
+    assert result.method == "totalsegmentator"
+    assert holders == [holder]
+
+
+def test_cancel_on_gpu_attempt_does_not_retry_on_cpu(monkeypatch, tmp_path):
+    devices = []
+    monkeypatch.setattr(totalseg, "is_totalsegmentator_available", lambda: True)
+
+    def _fake_totalseg(image, work_dir, device, **_kwargs):
+        devices.append(device)
+        raise totalseg.SegmentationCancelled("cancelled")
+
+    monkeypatch.setattr(totalseg, "run_totalsegmentator", _fake_totalseg)
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_segmentation_with_fallback(
+            image=_create_test_image(300),
+            work_dir=str(tmp_path),
+            device="gpu",
+        )
+
+    assert devices == ["gpu"]

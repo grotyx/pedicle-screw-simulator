@@ -46,6 +46,29 @@ SPINE_ROI_SUBSET = (
 )
 
 
+class SegmentationCancelled(RuntimeError):
+    """Raised when the user cancels a running segmentation."""
+
+
+class ProcessHolder:
+    """Shared handle to the running TotalSegmentator subprocess.
+
+    The worker thread stores the live ``Popen`` here so the GUI thread can
+    terminate it when the user presses Cancel.
+    """
+
+    def __init__(self) -> None:
+        self.process: Optional[subprocess.Popen] = None
+        self.cancelled: bool = False
+
+    def terminate(self) -> None:
+        """Mark the run as cancelled and terminate the process if running."""
+        self.cancelled = True
+        proc = self.process
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+
+
 class SegmentationWorkspace:
     """Owns temporary directories that hold patient volumes and masks."""
 
@@ -143,11 +166,16 @@ def run_totalsegmentator(
     fast: bool = False,
     force_split: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
+    process_holder: Optional[ProcessHolder] = None,
 ) -> str:
     """
     Run TotalSegmentator on a SimpleITK volume and return mask path.
 
     Output is a multilabel NIfTI mask file.
+
+    When ``process_holder`` is supplied the spawned subprocess is published on
+    it so another thread can cancel the run; a cancelled run raises
+    :class:`SegmentationCancelled`.
     """
     _ensure_torch_shm_executable()
 
@@ -168,6 +196,10 @@ def run_totalsegmentator(
     )
 
     if getattr(sys, "frozen", False):
+        # nnU-Net runs in-process here and cannot be interrupted once started,
+        # so cancellation is only honoured before the run begins.
+        if process_holder is not None and process_holder.cancelled:
+            raise SegmentationCancelled("Segmentation cancelled by user")
         _run_frozen_totalsegmentator(
             input_path=input_path,
             output_path=output_path,
@@ -212,13 +244,19 @@ def run_totalsegmentator(
     if force_split:
         command.append("-fs")
 
-    completed = subprocess.run(
+    process = subprocess.Popen(
         command,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
+    if process_holder is not None:
+        process_holder.process = process
+    stdout, stderr = process.communicate()
+    if process_holder is not None and process_holder.cancelled:
+        raise SegmentationCancelled("Segmentation cancelled by user")
+    if process.returncode != 0:
+        detail = (stderr or "").strip() or (stdout or "").strip()
         raise RuntimeError(
             f"TotalSegmentator execution failed: {detail or 'unknown error'}"
         )
@@ -411,6 +449,7 @@ def run_segmentation_with_fallback(
     fast: bool = False,
     force_split: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
+    process_holder: Optional[ProcessHolder] = None,
 ) -> SegmentationRunResult:
     """
     Run TotalSegmentator with fallback strategy.
@@ -418,6 +457,9 @@ def run_segmentation_with_fallback(
     Behavior:
     1) If TotalSegmentator is available and succeeds -> use it.
     2) Otherwise fallback to threshold mask.
+
+    A user cancellation propagates as :class:`SegmentationCancelled`; no
+    threshold fallback mask is produced in that case.
     """
     if not is_totalsegmentator_available():
         mask_path = run_threshold_fallback(
@@ -454,6 +496,7 @@ def run_segmentation_with_fallback(
                     or (attempt_device == "cpu" and not fast)
                 ),
                 progress_callback=progress_callback,
+                process_holder=process_holder,
             )
             message = "TotalSegmentator segmentation completed."
             if attempt_index > 0:
@@ -467,7 +510,7 @@ def run_segmentation_with_fallback(
                 message=message,
             )
         except BaseException as exc:
-            if isinstance(exc, KeyboardInterrupt):
+            if isinstance(exc, (KeyboardInterrupt, SegmentationCancelled)):
                 raise
             errors.append(f"{attempt_device}: {exc}")
             if attempt_index + 1 < len(attempt_devices):

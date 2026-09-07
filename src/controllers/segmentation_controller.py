@@ -7,6 +7,7 @@ and visibility toggling.
 """
 
 import logging
+import sys
 import traceback
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
@@ -14,6 +15,8 @@ from typing import Dict, Optional
 
 from src.core.totalseg_integration import (
     SPINE_ROI_SUBSET,
+    ProcessHolder,
+    SegmentationCancelled,
     SegmentationWorkspace,
     preferred_segmentation_device,
     run_segmentation_with_fallback,
@@ -33,6 +36,7 @@ class AutoSegmentationThread(QThread):
     finished = pyqtSignal(object)  # SegmentationRunResult
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
+    cancelled = pyqtSignal()
 
     def __init__(self, sitk_image, task: str, device: str, work_dir: str,
                  roi_subset=None, fast=False, force_split=False):
@@ -44,6 +48,11 @@ class AutoSegmentationThread(QThread):
         self.roi_subset = roi_subset
         self.fast = fast
         self.force_split = force_split
+        self._holder = ProcessHolder()
+
+    def request_cancel(self) -> None:
+        """Terminate the running segmentation subprocess (GUI thread safe)."""
+        self._holder.terminate()
 
     def _on_progress(self, message: str) -> None:
         """Refresh the workspace heartbeat lock, then forward progress."""
@@ -61,9 +70,14 @@ class AutoSegmentationThread(QThread):
                 fast=self.fast,
                 force_split=self.force_split,
                 progress_callback=self._on_progress,
+                process_holder=self._holder,
             )
             self.progress.emit("Segmentation completed.")
             self.finished.emit(result)
+        except SegmentationCancelled:
+            logger.info("Auto segmentation cancelled by user")
+            self.cancelled.emit()
+            return
         except Exception as e:
             logger.error("Auto segmentation failed: %s", e)
             logger.debug("Traceback:\n%s", traceback.format_exc())
@@ -138,7 +152,7 @@ class SegmentationController:
 
         self._segmentation_progress = QProgressDialog(
             "Preparing auto segmentation...",
-            None,
+            "Cancel",
             0,
             0,
             self._window,
@@ -147,6 +161,13 @@ class SegmentationController:
             Qt.WindowModality.WindowModal
         )
         self._segmentation_progress.setMinimumDuration(0)
+        self._segmentation_progress.canceled.connect(self._on_cancel_requested)
+        if getattr(sys, "frozen", False):
+            # The packaged build runs nnU-Net in-process and cannot interrupt it.
+            self._segmentation_progress.setCancelButton(None)
+            self._window.seg_status_label.setToolTip(
+                "Cancellation is not available in the packaged build"
+            )
         self._segmentation_progress.show()
 
         self._window.seg_run_btn.setEnabled(False)
@@ -166,7 +187,25 @@ class SegmentationController:
         self._segmentation_thread.progress.connect(self._on_progress)
         self._segmentation_thread.finished.connect(self._on_finished)
         self._segmentation_thread.error.connect(self._on_error)
+        self._segmentation_thread.cancelled.connect(self._on_cancelled)
         self._segmentation_thread.start()
+
+    def _on_cancel_requested(self):
+        """Ask the running segmentation thread to terminate its subprocess."""
+        if self._segmentation_thread is not None:
+            self._window.seg_status_label.setText("Cancelling segmentation...")
+            self._segmentation_thread.request_cancel()
+
+    def _on_cancelled(self):
+        """Reset UI state after the segmentation run was cancelled."""
+        if self._segmentation_progress is not None:
+            self._segmentation_progress.close()
+            self._segmentation_progress = None
+        self._window.seg_run_btn.setEnabled(True)
+        self._segmentation_thread = None
+        self.workspace.purge()
+        self._window.seg_status_label.setText("Segmentation cancelled")
+        self._window.statusbar.showMessage("Auto segmentation cancelled")
 
     def _on_progress(self, message: str):
         """Update UI while segmentation is running."""

@@ -16,8 +16,13 @@ sitk = pytest.importorskip("SimpleITK")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 
 from src.core.totalseg_integration import SegmentationRunResult
 from src.models.screw import Screw
@@ -1342,3 +1347,175 @@ def test_close_event_purges_segmentation_temp_dirs(ui_main_window, tmp_path):
 
     assert not Path(created).exists()
     assert event.isAccepted()
+
+
+def test_cancel_request_asks_thread_to_terminate(ui_main_window):
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+
+    class _StubThread:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+
+        def isRunning(self):
+            return False
+
+    stub = _StubThread()
+    ctrl._segmentation_thread = stub
+    try:
+        ctrl._on_cancel_requested()
+    finally:
+        ctrl._segmentation_thread = None
+
+    assert stub.cancel_calls == 1
+    assert window.seg_status_label.text() == "Cancelling segmentation..."
+
+
+def test_cancel_request_without_thread_is_noop(ui_main_window):
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl._segmentation_thread = None
+    window.seg_status_label.setText("Ready for automatic segmentation")
+
+    ctrl._on_cancel_requested()
+
+    assert window.seg_status_label.text() == "Ready for automatic segmentation"
+
+
+def test_on_cancelled_resets_ui_and_purges_workspace(ui_main_window, tmp_path):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    created = ctrl.workspace.create()
+    ctrl._segmentation_thread = object()
+    window.seg_run_btn.setEnabled(False)
+
+    ctrl._on_cancelled()
+
+    assert not Path(created).exists()
+    assert window.seg_run_btn.isEnabled() is True
+    assert ctrl._segmentation_thread is None
+    assert window.seg_status_label.text() == "Segmentation cancelled"
+
+
+def test_segmentation_thread_emits_cancelled_signal(qtbot, tmp_path, monkeypatch):
+    from src.core.totalseg_integration import SegmentationCancelled
+
+    def _raise_cancel(**_kwargs):
+        raise SegmentationCancelled("cancelled")
+
+    monkeypatch.setattr(
+        seg_controller_module,
+        "run_segmentation_with_fallback",
+        _raise_cancel,
+    )
+
+    thread = seg_controller_module.AutoSegmentationThread(
+        sitk_image=sitk.Image([2, 2, 2], sitk.sitkInt16),
+        task="total",
+        device="cpu",
+        work_dir=str(tmp_path),
+    )
+    errors = []
+    thread.error.connect(errors.append)
+
+    with qtbot.waitSignal(thread.cancelled, timeout=5000):
+        thread.start()
+    thread.wait(5000)
+
+    assert errors == []
+
+
+def test_segmentation_thread_request_cancel_marks_holder(tmp_path):
+    thread = seg_controller_module.AutoSegmentationThread(
+        sitk_image=sitk.Image([2, 2, 2], sitk.sitkInt16),
+        task="total",
+        device="cpu",
+        work_dir=str(tmp_path),
+    )
+
+    thread.request_cancel()
+
+    assert thread._holder.cancelled is True
+
+
+class _FakeSegThread(QObject):
+    """Non-running stand-in for AutoSegmentationThread in dialog tests."""
+
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.kwargs = kwargs
+        self.started = False
+
+    def isRunning(self):
+        return False
+
+    def start(self):
+        self.started = True
+
+    def request_cancel(self):
+        self.cancelled.emit()
+
+
+def _prepare_segmentation_run(window, monkeypatch, tmp_path, frozen=False):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    image = sitk.Image([4, 4, 4], sitk.sitkInt16)
+    monkeypatch.setattr(ctrl._vm, "get_vtk_image", lambda: object())
+    monkeypatch.setattr(ctrl._vm, "get_sitk_image", lambda: image)
+    monkeypatch.setattr(
+        seg_controller_module, "AutoSegmentationThread", _FakeSegThread
+    )
+    monkeypatch.setattr(
+        seg_controller_module.sys, "frozen", frozen, raising=False
+    )
+    return ctrl
+
+
+def test_progress_dialog_exposes_cancel_button(ui_main_window, monkeypatch, tmp_path):
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+
+    ctrl.run()
+
+    dialog = ctrl._segmentation_progress
+    assert dialog is not None
+    cancel_button = dialog.findChild(QPushButton)
+    assert cancel_button is not None
+    assert cancel_button.text() == "Cancel"
+
+    # Cancelling routes through the thread and resets the UI.
+    cancel_button.click()
+    assert window.seg_status_label.text() == "Segmentation cancelled"
+    assert window.seg_run_btn.isEnabled() is True
+    assert ctrl._segmentation_thread is None
+
+
+def test_frozen_build_hides_cancel_button(ui_main_window, monkeypatch, tmp_path):
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path, frozen=True)
+
+    ctrl.run()
+
+    dialog = ctrl._segmentation_progress
+    assert dialog is not None
+    assert dialog.findChild(QPushButton) is None
+    assert (
+        window.seg_status_label.toolTip()
+        == "Cancellation is not available in the packaged build"
+    )
+    ctrl._segmentation_thread = None
+    dialog.close()
+    ctrl._segmentation_progress = None
