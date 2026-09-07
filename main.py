@@ -102,6 +102,13 @@ def run_dependency_self_check() -> None:
 
 def run_application() -> None:
     """Import and launch the GUI after frozen-process setup is complete."""
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    removed = SegmentationWorkspace.purge_stale(older_than_seconds=3600)
+    logging.getLogger(__name__).info(
+        "Purged %d stale segmentation directories", removed
+    )
+
     from src.ui.main_window import main as launch_main_window
 
     launch_main_window()

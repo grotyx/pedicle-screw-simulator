@@ -1587,6 +1587,8 @@ class MainWindow(QMainWindow):
             if viewer:
                 viewer.cleanup()
 
+        self._seg_ctrl.reset_state()
+
         event.accept()
 
     # ------------------------------------------------------------------

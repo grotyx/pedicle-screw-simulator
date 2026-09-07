@@ -312,3 +312,66 @@ def test_purge_stale_removes_only_prefixed_dirs(tmp_path):
     removed = SegmentationWorkspace.purge_stale(root=str(tmp_path), older_than_seconds=5)
     assert removed == 1
     assert not stale.exists() and other.exists()
+
+
+def test_workspace_create_writes_lock_file(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    created = ws.create()
+    assert (Path(created) / ".lock").exists()
+
+
+def test_workspace_touch_updates_lock_mtime(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    created = ws.create()
+    lock_path = Path(created) / ".lock"
+    old = time.time() - 100
+    os.utime(lock_path, (old, old))
+    SegmentationWorkspace.touch(created)
+    assert lock_path.stat().st_mtime > old
+
+
+def test_purge_stale_keeps_dir_with_fresh_lock_heartbeat(tmp_path):
+    stale = tmp_path / (SegmentationWorkspace.PREFIX + "heartbeat")
+    stale.mkdir()
+    old = time.time() - 10
+    os.utime(stale, (old, old))
+    # Directory mtime is old, but the heartbeat lock file is fresh.
+    SegmentationWorkspace.touch(str(stale))
+
+    removed = SegmentationWorkspace.purge_stale(root=str(tmp_path), older_than_seconds=5)
+
+    assert removed == 0
+    assert stale.exists()
+
+
+def _can_symlink(tmp_path: Path) -> bool:
+    target = tmp_path / "_symlink_target_probe"
+    target.mkdir(exist_ok=True)
+    link = tmp_path / "_symlink_probe"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return False
+    finally:
+        if link.is_symlink():
+            link.unlink()
+    return True
+
+
+def test_purge_stale_skips_symlinks(tmp_path):
+    if not _can_symlink(tmp_path):
+        pytest.skip("Platform/user does not support creating symlinks")
+
+    real_target = tmp_path / "real_target"
+    real_target.mkdir()
+    old = time.time() - 10
+    os.utime(real_target, (old, old))
+
+    link = tmp_path / (SegmentationWorkspace.PREFIX + "link")
+    os.symlink(real_target, link, target_is_directory=True)
+
+    removed = SegmentationWorkspace.purge_stale(root=str(tmp_path), older_than_seconds=5)
+
+    assert removed == 0
+    assert link.is_symlink()
+    assert real_target.exists()

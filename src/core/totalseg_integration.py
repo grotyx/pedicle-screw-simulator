@@ -50,6 +50,7 @@ class SegmentationWorkspace:
     """Owns temporary directories that hold patient volumes and masks."""
 
     PREFIX = "screwfix_totalseg_"
+    LOCK_NAME = ".lock"
 
     def __init__(self, root: Optional[str] = None) -> None:
         self._root = root or tempfile.gettempdir()
@@ -58,6 +59,7 @@ class SegmentationWorkspace:
     def create(self) -> str:
         path = tempfile.mkdtemp(prefix=self.PREFIX, dir=self._root)
         self._dirs.append(path)
+        (Path(path) / self.LOCK_NAME).touch()
         return path
 
     def purge(self) -> None:
@@ -65,14 +67,31 @@ class SegmentationWorkspace:
             shutil.rmtree(self._dirs.pop(), ignore_errors=True)
 
     @classmethod
+    def touch(cls, path: str) -> None:
+        """Update the heartbeat lock file's mtime to keep `path` alive."""
+        lock_path = Path(path) / cls.LOCK_NAME
+        try:
+            lock_path.touch(exist_ok=True)
+            os.utime(lock_path, None)
+        except OSError:
+            # Best effort only; a missed heartbeat just risks a stale purge.
+            pass
+
+    @classmethod
     def purge_stale(cls, root: Optional[str] = None, older_than_seconds: float = 0.0) -> int:
         base = Path(root or tempfile.gettempdir())
         removed = 0
         now = time.time()
         for entry in base.glob(cls.PREFIX + "*"):
+            if entry.is_symlink():
+                continue
             if not entry.is_dir():
                 continue
-            if now - entry.stat().st_mtime < older_than_seconds:
+            age_mtime = entry.stat().st_mtime
+            lock_path = entry / cls.LOCK_NAME
+            if lock_path.exists():
+                age_mtime = max(age_mtime, lock_path.stat().st_mtime)
+            if now - age_mtime < older_than_seconds:
                 continue
             shutil.rmtree(entry, ignore_errors=True)
             removed += 1

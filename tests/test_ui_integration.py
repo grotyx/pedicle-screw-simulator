@@ -889,6 +889,62 @@ def test_loaded_plan_rebuilds_screw_overlays_in_all_mpr_views(ui_main_window):
         assert viewer.screw_overlays[0]["target"] == screw.target_point
 
 
+def test_loaded_plan_is_regraded_when_a_grader_is_attached(ui_main_window):
+    """Plans saved by the old HU heuristic carry stale grades; loading a plan
+    while a segmentation-based grader is attached must re-grade every screw
+    rather than trusting the persisted (possibly stale) values."""
+    import numpy as np
+    from src.core.screw_grading import ScrewGrader
+    from src.utils.planning_io import screw_from_dict
+
+    window = ui_main_window
+
+    screw = screw_from_dict(
+        {
+            "entry_point": [30.0, 38.0, 30.0],
+            "target_point": [30.0, 22.0, 30.0],
+            "diameter": 6.5,
+            "grade": "A",
+        }
+    )
+    assert screw.grade == "A"
+    assert screw.mean_hu is None
+
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[20:40, 20:40, 20:40] = 28
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))
+    window._tool_ctrl.screw_tool.set_grader(ScrewGrader(mask, ct))
+
+    window._plan_ctrl._apply_loaded_plan([screw], [], [])
+
+    regraded = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert regraded.grade == "A"
+    assert regraded.mean_hu == pytest.approx(80.0)
+
+
+def test_loaded_plan_keeps_grade_when_no_grader_is_attached(ui_main_window):
+    """Without a grader, a loaded plan's grade must be left untouched."""
+    from src.utils.planning_io import screw_from_dict
+
+    window = ui_main_window
+    assert window._tool_ctrl.screw_tool.grader is None
+
+    screw = screw_from_dict(
+        {
+            "entry_point": [2.0, 3.0, 4.0],
+            "target_point": [8.0, 9.0, 24.0],
+            "diameter": 6.0,
+            "grade": "A",
+        }
+    )
+
+    window._plan_ctrl._apply_loaded_plan([screw], [], [])
+
+    loaded = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert loaded.grade == "A"
+
+
 def test_refresh_screw_replaces_same_overlay_id_and_list_row(ui_main_window):
     window = ui_main_window
     image = _create_test_image()
@@ -1254,3 +1310,35 @@ def test_segmentation_regrades_screws_placed_before_segmentation(
 
     regraded = window._tool_ctrl.screw_tool.get_screws()[0]
     assert "Not graded: run segmentation first" not in regraded.warnings
+
+
+def test_reset_workspace_purges_segmentation_temp_dirs(ui_main_window, tmp_path):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    created = ctrl.workspace.create()
+    assert Path(created).exists()
+
+    window.reset_workspace()
+
+    assert not Path(created).exists()
+
+
+def test_close_event_purges_segmentation_temp_dirs(ui_main_window, tmp_path):
+    from PyQt6.QtGui import QCloseEvent
+
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    created = ctrl.workspace.create()
+    assert Path(created).exists()
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert not Path(created).exists()
+    assert event.isAccepted()

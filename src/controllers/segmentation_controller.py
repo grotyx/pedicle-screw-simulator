@@ -6,14 +6,15 @@ background thread, applying results to viewers, label filtering,
 and visibility toggling.
 """
 
-import tempfile
 import logging
+import traceback
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from typing import Dict, Optional
 
 from src.core.totalseg_integration import (
     SPINE_ROI_SUBSET,
+    SegmentationWorkspace,
     preferred_segmentation_device,
     run_segmentation_with_fallback,
 )
@@ -33,35 +34,39 @@ class AutoSegmentationThread(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, sitk_image, task: str, device: str,
+    def __init__(self, sitk_image, task: str, device: str, work_dir: str,
                  roi_subset=None, fast=False, force_split=False):
         super().__init__()
         self.sitk_image = sitk_image
         self.task = task
         self.device = device
+        self.work_dir = work_dir
         self.roi_subset = roi_subset
         self.fast = fast
         self.force_split = force_split
 
+    def _on_progress(self, message: str) -> None:
+        """Refresh the workspace heartbeat lock, then forward progress."""
+        SegmentationWorkspace.touch(self.work_dir)
+        self.progress.emit(message)
+
     def run(self):
         try:
-            work_dir = tempfile.mkdtemp(prefix="screwfix_totalseg_")
             result = run_segmentation_with_fallback(
                 image=self.sitk_image,
-                work_dir=work_dir,
+                work_dir=self.work_dir,
                 task=self.task,
                 device=self.device,
                 roi_subset=self.roi_subset,
                 fast=self.fast,
                 force_split=self.force_split,
-                progress_callback=self.progress.emit,
+                progress_callback=self._on_progress,
             )
             self.progress.emit("Segmentation completed.")
             self.finished.emit(result)
         except Exception as e:
-            import traceback
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            print(f"Segmentation Error: {error_msg}")
+            logger.error("Auto segmentation failed: %s", e)
+            logger.debug("Traceback:\n%s", traceback.format_exc())
             self.error.emit(str(e))
 
 
@@ -71,6 +76,7 @@ class SegmentationController:
     def __init__(self, volume_manager, main_window):
         self._vm = volume_manager
         self._window = main_window
+        self.workspace = SegmentationWorkspace()
         self._segmentation_thread: Optional[AutoSegmentationThread] = None
         self._segmentation_progress: Optional[QProgressDialog] = None
         self._last_segmentation_mask_path: Optional[str] = None
@@ -147,10 +153,12 @@ class SegmentationController:
         self._window.seg_status_label.setText("Running segmentation...")
         self._window.statusbar.showMessage("Auto segmentation started")
 
+        work_dir = self.workspace.create()
         self._segmentation_thread = AutoSegmentationThread(
             sitk_image=sitk_image,
             task=task,
             device=device,
+            work_dir=work_dir,
             roi_subset=roi_subset,
             fast=fast,
             force_split=force_split,
@@ -560,3 +568,4 @@ class SegmentationController:
         self._window.seg_show_2d_check.setChecked(True)
         self._window.seg_show_3d_check.setChecked(True)
         self.refresh_label_options()
+        self.workspace.purge()
