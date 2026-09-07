@@ -14,6 +14,12 @@ from .screw_geometry import unit_trajectory
 
 Point3 = Sequence[float]
 
+#: LPS axis-aligned direction matrix. ``dicom_loader.normalize_orientation``
+#: guarantees it for every volume the app loads, and the vectorised index
+#: transform below relies on it (a point maps to an index by origin/spacing
+#: alone, with no rotation).
+_IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
 
 @dataclass
 class GradeResult:
@@ -44,6 +50,9 @@ class ScrewGrader:
 
     ``ct_image``, when given, is sampled with the mask's own index transform and
     must therefore lie on the same grid as ``mask_image``.
+
+    ``mask_image`` must have an identity direction matrix (LPS axis-aligned);
+    ``dicom_loader.normalize_orientation`` produces one for every loaded volume.
     """
 
     def __init__(
@@ -54,6 +63,11 @@ class ScrewGrader:
         radial_samples: int = 8,
         crop_margin_mm: float = 12.0,
     ) -> None:
+        if not np.allclose(mask_image.GetDirection(), _IDENTITY_DIRECTION, atol=1e-6):
+            raise ValueError(
+                "mask_image must have an identity (LPS axis-aligned) direction matrix; "
+                f"got {tuple(float(v) for v in mask_image.GetDirection())}"
+            )
         self._mask = mask_image
         self._mask_array = sitk.GetArrayFromImage(mask_image)  # (z, y, x)
         self._ct = ct_image
@@ -65,27 +79,81 @@ class ScrewGrader:
         self._crop_margin = float(crop_margin_mm)
         sx, sy, sz = mask_image.GetSpacing()
         self._sampling_zyx = (float(sz), float(sy), float(sx))
+        self._origin = np.asarray(mask_image.GetOrigin(), dtype=np.float64)      # x, y, z
+        self._spacing = np.asarray(mask_image.GetSpacing(), dtype=np.float64)    # x, y, z
+        self._size = np.asarray(mask_image.GetSize(), dtype=np.int64)            # x, y, z
         self._maps: Dict[int, Optional[_DistanceMaps]] = {}
 
     @property
     def crop_margin_mm(self) -> float:
         return self._crop_margin
 
+    # ------------------------------------------------------------------ access
+    def mask_image(self) -> sitk.Image:
+        """The segmentation this grader was built from."""
+        return self._mask
+
+    def ct_image(self) -> Optional[sitk.Image]:
+        """The CT this grader samples HU from, or ``None`` if it was built without one."""
+        return self._ct
+
+    def label_array(self) -> np.ndarray:
+        """The segmentation as a read-only ``(z, y, x)`` array."""
+        view = self._mask_array.view()
+        view.flags.writeable = False
+        return view
+
     # ------------------------------------------------------------------ labels
     def detect_label(self, entry: Point3, target: Point3) -> Optional[int]:
         from .pedicle_analyzer import VERTEBRA_LABELS  # local import: avoids cycle
 
+        points = np.asarray(self._centreline(entry, target), dtype=np.float64)
+        idx_zyx, inside = self._indices(points)
+        sel = idx_zyx[inside]
+        values = self._mask_array[sel[:, 0], sel[:, 1], sel[:, 2]]
+
         counts: Dict[int, int] = {}
-        for point in self._centreline(entry, target):
-            idx = self._to_index(point)
-            if idx is None:
-                continue
-            value = int(self._mask_array[idx[2], idx[1], idx[0]])
+        for raw in values:                       # ordered along the trajectory: ties keep the first label seen
+            value = int(raw)
             if value in VERTEBRA_LABELS:
                 counts[value] = counts.get(value, 0) + 1
         if not counts:
             return None
         return max(counts, key=counts.get)
+
+    # ----------------------------------------------------------------- sampling
+    def cylinder_points(self, entry: Point3, target: Point3, diameter_mm: float) -> np.ndarray:
+        """Sample points filling the screw cylinder, as an ``(N, 3)`` LPS array.
+
+        Points are ordered by centreline step; each step contributes its centre
+        followed by ``radial_samples`` points one radius out, perpendicular to
+        the trajectory. A degenerate (zero-length) trajectory has no defined
+        perpendicular plane, so only the centreline points are returned.
+        """
+        centres = np.asarray(self._centreline(entry, target), dtype=np.float64)
+        direction = np.asarray(unit_trajectory(entry, target), dtype=np.float64)
+        if not direction.any():
+            return centres
+        offsets = np.asarray(
+            self._radial_offsets(direction, float(diameter_mm) / 2.0), dtype=np.float64
+        ).reshape(-1, 3)
+        if offsets.shape[0] == 0:
+            return centres
+        samples = np.empty((centres.shape[0], offsets.shape[0] + 1, 3), dtype=np.float64)
+        samples[:, 0, :] = centres
+        samples[:, 1:, :] = centres[:, None, :] + offsets[None, :, :]
+        return samples.reshape(-1, 3)
+
+    def hu_at_points(self, points: np.ndarray) -> np.ndarray:
+        """HU at each ``(N, 3)`` LPS point; ``NaN`` where there is no CT value."""
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        values = np.full(pts.shape[0], np.nan, dtype=np.float64)
+        if self._ct_array is None or pts.shape[0] == 0:
+            return values
+        idx_zyx, inside = self._indices(pts)
+        sel = idx_zyx[inside]
+        values[inside] = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]]
+        return values
 
     # ------------------------------------------------------------------ grading
     def grade(
@@ -103,25 +171,22 @@ class ScrewGrader:
         if maps is None:
             return None
 
-        direction = np.asarray(unit_trajectory(entry, target), dtype=np.float64)
-        if not direction.any():
+        if not np.asarray(unit_trajectory(entry, target), dtype=np.float64).any():
             return None
-        radius = float(diameter_mm) / 2.0
-        offsets = self._radial_offsets(direction, radius)
 
-        breach = 0.0
-        min_wall = math.inf
-        hu_samples: List[float] = []
-        for centre in self._centreline(entry, target):
-            for point in (centre, *[centre + o for o in offsets]):
-                idx = self._to_index(point)
-                d_out, d_in = self._lookup(maps, idx)
-                breach = max(breach, d_out)
-                if d_out == 0.0:
-                    min_wall = min(min_wall, d_in)
-                hu = self._hu_at(idx)
-                if hu is not None:
-                    hu_samples.append(hu)
+        points = self.cylinder_points(entry, target, diameter_mm)
+        idx_zyx, inside = self._indices(points)
+        d_out, d_in = self._lookup(maps, idx_zyx, inside)
+
+        breach = float(d_out.max()) if d_out.size else 0.0
+        on_surface = d_out == 0.0
+        min_wall = float(d_in[on_surface].min()) if on_surface.any() else math.inf
+
+        if self._ct_array is None:
+            hu_samples = np.empty(0, dtype=np.float64)
+        else:
+            sel = idx_zyx[inside]
+            hu_samples = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]].astype(np.float64)
 
         if breach > 0.0:
             min_wall = 0.0
@@ -132,8 +197,8 @@ class ScrewGrader:
             breach_mm=float(breach),
             min_wall_mm=float(min_wall),
             label=int(label),
-            mean_hu=float(np.mean(hu_samples)) if hu_samples else None,
-            min_hu=float(np.min(hu_samples)) if hu_samples else None,
+            mean_hu=float(np.mean(hu_samples)) if hu_samples.size else None,
+            min_hu=float(np.min(hu_samples)) if hu_samples.size else None,
         )
 
     @staticmethod
@@ -181,20 +246,25 @@ class ScrewGrader:
             for k in range(self._radial)
         ]
 
-    def _to_index(self, point: np.ndarray) -> Optional[Tuple[int, int, int]]:
-        try:
-            idx = self._mask.TransformPhysicalPointToIndex([float(point[0]), float(point[1]), float(point[2])])
-        except RuntimeError:
-            return None
-        size = self._mask.GetSize()
-        if not (0 <= idx[0] < size[0] and 0 <= idx[1] < size[1] and 0 <= idx[2] < size[2]):
-            return None
-        return int(idx[0]), int(idx[1]), int(idx[2])
+    def _indices(self, points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Vectorised ``TransformPhysicalPointToIndex`` plus a bounds test.
 
-    def _hu_at(self, idx: Optional[Tuple[int, int, int]]) -> Optional[float]:
-        if self._ct_array is None or idx is None:
-            return None
-        return float(self._ct_array[idx[2], idx[1], idx[0]])
+        Returns ``(indices_zyx, inside)``: an ``(N, 3)`` int array of array
+        indices and an ``(N,)`` bool mask of the points that land in the volume.
+        Index values for out-of-volume points are clamped and must not be used.
+        ITK rounds half-integers up, hence ``floor(x + 0.5)``; the identity
+        direction enforced in ``__init__`` is what makes the axis-wise form
+        valid. Indices are clipped before the integer cast so that huge or
+        non-finite coordinates cannot overflow.
+        """
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        with np.errstate(invalid="ignore"):
+            continuous = (pts - self._origin) / self._spacing
+        continuous = np.where(np.isfinite(continuous), continuous, -1.0)
+        clipped = np.clip(np.floor(continuous + 0.5), -1.0, self._size.astype(np.float64))
+        idx_xyz = clipped.astype(np.int64)
+        inside = np.all((idx_xyz >= 0) & (idx_xyz < self._size), axis=1)
+        return idx_xyz[:, ::-1], inside
 
     def _maps_for(self, label: int) -> Optional[_DistanceMaps]:
         if label in self._maps:
@@ -214,11 +284,18 @@ class ScrewGrader:
         self._maps[label] = maps
         return maps
 
-    def _lookup(self, maps: _DistanceMaps, idx: Optional[Tuple[int, int, int]]) -> Tuple[float, float]:
-        if idx is None:
-            return self._crop_margin, 0.0
-        local = np.array([idx[2], idx[1], idx[0]]) - maps.crop_min
-        if np.any(local < 0) or np.any(local >= maps.shape):
-            return self._crop_margin, 0.0
-        z, y, x = (int(v) for v in local)
-        return float(maps.outside[z, y, x]), float(maps.inside[z, y, x])
+    def _lookup(
+        self, maps: _DistanceMaps, idx_zyx: np.ndarray, inside: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Outside/inside distances per sample; samples off the cropped maps
+        score ``crop_margin_mm`` outside and 0 mm inside."""
+        d_out = np.full(idx_zyx.shape[0], self._crop_margin, dtype=np.float64)
+        d_in = np.zeros(idx_zyx.shape[0], dtype=np.float64)
+        if idx_zyx.shape[0] == 0:
+            return d_out, d_in
+        local = idx_zyx - maps.crop_min
+        on_map = inside & np.all((local >= 0) & (local < maps.shape), axis=1)
+        sel = local[on_map]
+        d_out[on_map] = maps.outside[sel[:, 0], sel[:, 1], sel[:, 2]]
+        d_in[on_map] = maps.inside[sel[:, 0], sel[:, 1], sel[:, 2]]
+        return d_out, d_in

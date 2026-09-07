@@ -139,3 +139,97 @@ class TestScrewGrader:
     def test_crop_margin_mm_is_exposed(self):
         grader = ScrewGrader(_cube_mask(), crop_margin_mm=8.0)
         assert grader.crop_margin_mm == 8.0
+
+
+class TestSamplingHelpers:
+    def test_cylinder_points_shape_and_ordering(self):
+        grader = ScrewGrader(_cube_mask(), sample_step_mm=1.0, radial_samples=8)
+        entry, target = (30.0, 35.0, 30.0), (30.0, 25.0, 30.0)
+        points = grader.cylinder_points(entry, target, diameter_mm=6.0)
+        assert isinstance(points, np.ndarray)
+        assert points.dtype == np.float64
+        # 10 mm at 1 mm steps -> 11 centres, each with 1 + 8 samples
+        assert points.shape == (11 * 9, 3)
+        # The first sample of each block is the centreline point itself.
+        centres = points[::9]
+        assert centres[0] == pytest.approx(np.asarray(entry))
+        assert centres[-1] == pytest.approx(np.asarray(target))
+        assert centres[:, 1] == pytest.approx(np.arange(35.0, 24.9, -1.0))
+        # Every radial sample sits exactly one radius from its centre.
+        for block in range(11):
+            centre = points[block * 9]
+            radial = points[block * 9 + 1: block * 9 + 9]
+            assert np.linalg.norm(radial - centre, axis=1) == pytest.approx(3.0)
+
+    def test_cylinder_points_radial_samples_are_perpendicular(self):
+        grader = ScrewGrader(_cube_mask(), sample_step_mm=2.0)
+        points = grader.cylinder_points((30.0, 35.0, 30.0), (30.0, 25.0, 30.0), 6.0)
+        # Trajectory runs along -y, so every radial offset must keep y constant.
+        assert points[1:9, 1] == pytest.approx(35.0)
+
+    def test_cylinder_points_honours_radial_samples_setting(self):
+        grader = ScrewGrader(_cube_mask(), sample_step_mm=1.0, radial_samples=4)
+        points = grader.cylinder_points((30.0, 35.0, 30.0), (30.0, 25.0, 30.0), 6.0)
+        assert points.shape == (11 * 5, 3)
+
+    def test_cylinder_points_for_a_degenerate_trajectory(self):
+        grader = ScrewGrader(_cube_mask())
+        points = grader.cylinder_points((30.0, 30.0, 30.0), (30.0, 30.0, 30.0), 6.0)
+        assert points.ndim == 2 and points.shape[1] == 3
+        assert points == pytest.approx(np.full(points.shape, 30.0))
+
+    def test_hu_at_points_matches_the_ct_and_is_nan_outside(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask, inside_hu=350, outside_hu=-50))
+        hu = grader.hu_at_points(np.array([
+            [30.0, 30.0, 30.0],     # inside the label
+            [5.0, 5.0, 5.0],        # inside the volume, outside the label
+            [-10.0, 30.0, 30.0],    # outside the volume
+            [30.0, 30.0, 999.0],    # outside the volume
+        ]))
+        assert hu.shape == (4,)
+        assert hu[0] == pytest.approx(350.0)
+        assert hu[1] == pytest.approx(-50.0)
+        assert np.isnan(hu[2]) and np.isnan(hu[3])
+
+    def test_hu_at_points_is_all_nan_without_a_ct(self):
+        grader = ScrewGrader(_cube_mask())
+        hu = grader.hu_at_points(np.array([[30.0, 30.0, 30.0], [31.0, 30.0, 30.0]]))
+        assert hu.shape == (2,)
+        assert np.all(np.isnan(hu))
+
+    def test_hu_at_points_accepts_an_empty_array(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        assert grader.hu_at_points(np.empty((0, 3))).shape == (0,)
+
+    def test_hu_at_points_matches_simpleitk_index_rounding(self):
+        mask = _cube_mask(spacing=(0.5, 1.0, 2.0))
+        ct_arr = np.arange(60 ** 3, dtype=np.int32).reshape(60, 60, 60)
+        ct = sitk.GetImageFromArray(ct_arr)
+        ct.CopyInformation(mask)
+        grader = ScrewGrader(mask, ct)
+        rng = np.random.default_rng(7)
+        points = rng.uniform(-5.0, 40.0, size=(500, 3))
+        expected = []
+        for point in points:
+            idx = mask.TransformPhysicalPointToIndex([float(v) for v in point])
+            size = mask.GetSize()
+            inside = all(0 <= idx[a] < size[a] for a in range(3))
+            expected.append(float(ct_arr[idx[2], idx[1], idx[0]]) if inside else np.nan)
+        np.testing.assert_array_equal(grader.hu_at_points(points), np.asarray(expected))
+
+    def test_label_array_and_mask_image_expose_the_segmentation(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        labels = grader.label_array()
+        assert labels.shape == (60, 60, 60)          # (z, y, x)
+        assert int(labels[30, 30, 30]) == 28
+        assert int(labels[5, 5, 5]) == 0
+        assert grader.mask_image() is mask
+
+    def test_non_identity_direction_is_rejected(self):
+        mask = _cube_mask()
+        mask.SetDirection((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
+        with pytest.raises(ValueError, match="identity"):
+            ScrewGrader(mask)
