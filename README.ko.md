@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
 powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
-현재 자동 테스트는 **469개**입니다.
+현재 자동 테스트 스위트를 실행하고 최신 테스트 개수를 확인하려면 `./scripts/run_app.sh --test`(macOS/Linux) 또는 `powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test`(Windows)를 실행하십시오.
 
 검증된 macOS/Python 3.12 환경을 동일하게 재현하려면 다음 파일을 사용합니다.
 
@@ -210,7 +210,12 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - Heary et al. (2004) — 척추경 나사못 피질골 천공 방향 분류.
 - Babu et al. (2012) — 척추경 나사못에 의한 후관절(facet) 침범 등급 분류.
 - Scherer et al. (2022), *The Spine Journal* — 척추경 나사못 궤적 계획의 평가자 간 일치도.
-- Wang et al. (2024), *Bioengineering* — 나사못 부피 Dice 중첩도 및 계획 비교 방법.
+- Wang et al. (2024), *Bioengineering* — 척추경 나사못 크기 결정 규칙(협부 폭 대비 직경 비율 및 피질골 여유거리)과 나사못 부피 Dice 중첩도·계획 비교 방법.
+- Da Mutten et al. (2026), *Journal of Imaging Informatics in Medicine* — 흉요추 세부영역(pedicle/corpus/lamina/spinous/transverse/articular)을 자동 분할하는 nnU-Net 모델로, 선택적 척추경 세부영역 모델에서 사용합니다.
+- Massalimova et al. (2025), *Scientific Reports* — 자동 나사못 궤적 평가를 위한 척추경 중심 오프셋(pedicle-centre offset) 지표.
+- Herkner et al. (2026), *Journal of Clinical Medicine* — 자동 산출 임플란트 치수와 술자 선택 치수의 Bland-Altman 비교.
+- Zhang et al. (2024), *Asian Spine Journal* — cortical bone trajectory(CBT) 나사못 적응증에 대한 Delphi 합의.
+- Zeng et al. (2024), *Orthopaedic Surgery* — CT 기반 cortical bone trajectory(CBT) 나사못 궤적 파라미터.
 
 ## 라이선스
 

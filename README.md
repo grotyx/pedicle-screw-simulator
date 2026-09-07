@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check
 powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 ```
 
-The current automated suite contains **469 tests**.
+Run `./scripts/run_app.sh --test` (macOS/Linux) or `powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test` (Windows) to run the current automated test suite and see the up-to-date test count.
 
 For exact reproduction of the validated macOS/Python 3.12 environment:
 
@@ -210,7 +210,12 @@ The bone-quality thresholds, breach/facet classifications, and plan-validation m
 - Heary et al. (2004) — classification of pedicle screw cortical breach direction.
 - Babu et al. (2012) — grading of facet-joint violation by pedicle screw instrumentation.
 - Scherer et al. (2022), *The Spine Journal* — inter-rater agreement in pedicle screw trajectory planning.
-- Wang et al. (2024), *Bioengineering* — screw-volume Dice overlap and plan-comparison methodology.
+- Wang et al. (2024), *Bioengineering* — pedicle screw sizing rule (diameter as a fraction of isthmus width, with cortical wall clearance) and screw-volume Dice overlap / plan-comparison methodology.
+- Da Mutten et al. (2026), *Journal of Imaging Informatics in Medicine* — automated nnU-Net segmentation of thoracolumbar spine subregions (pedicle/corpus/lamina/spinous/transverse/articular), used by the optional pedicle subregion model.
+- Massalimova et al. (2025), *Scientific Reports* — pedicle-centre offset metric for automated screw trajectory evaluation.
+- Herkner et al. (2026), *Journal of Clinical Medicine* — Bland-Altman comparison of automated versus surgeon-selected implant dimensions.
+- Zhang et al. (2024), *Asian Spine Journal* — Delphi consensus on cortical bone trajectory (CBT) screw indications.
+- Zeng et al. (2024), *Orthopaedic Surgery* — CT-based cortical bone trajectory (CBT) screw trajectory parameters.
 
 ## License
 

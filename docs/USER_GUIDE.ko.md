@@ -293,7 +293,22 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 ```bash
 ./scripts/run_app.sh --check
+```
+
+로그 위치는 실행 방식에 따라 다릅니다.
+
+- **소스 빌드(`python main.py` 또는 `run_app.sh`로 실행)**: 프로젝트 디렉터리 안의 `logs/app.log`.
+- **macOS 패키지 빌드**: `~/Library/Logs/PedicleScrewSimulator/app.log`.
+- **Windows 패키지 빌드**: `%LOCALAPPDATA%\PedicleScrewSimulator\logs\app.log`.
+
+해당 파일의 마지막 부분을 확인하십시오. 예시:
+
+```bash
 tail -100 logs/app.log
+```
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\PedicleScrewSimulator\logs\app.log" -Tail 100
 ```
 
 문제를 보고할 때 운영체제, Python 버전, 재현 과정 및 비식별화한 로그를 포함하십시오. 임상 데이터를 첨부하지 마십시오.

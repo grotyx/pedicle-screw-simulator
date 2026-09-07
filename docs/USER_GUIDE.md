@@ -293,7 +293,22 @@ The planner may skip a side when it cannot find an allowed contained trajectory.
 
 ```bash
 ./scripts/run_app.sh --check
+```
+
+Log location depends on how the application is running:
+
+- **Source build (running from `python main.py` or `run_app.sh`)**: `logs/app.log` inside the project directory.
+- **Packaged build on macOS**: `~/Library/Logs/PedicleScrewSimulator/app.log`.
+- **Packaged build on Windows**: `%LOCALAPPDATA%\PedicleScrewSimulator\logs\app.log`.
+
+Inspect the last lines of the relevant file, for example:
+
+```bash
 tail -100 logs/app.log
+```
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\PedicleScrewSimulator\logs\app.log" -Tail 100
 ```
 
 When reporting a problem, include the platform, Python version, steps to reproduce, and a redacted log excerpt. Do not attach clinical data.
