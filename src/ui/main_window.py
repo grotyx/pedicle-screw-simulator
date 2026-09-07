@@ -57,6 +57,38 @@ from src.controllers.screw_edit_controller import ScrewEditController
 
 logger = logging.getLogger(__name__)
 
+#: The unified QSettings scope for the whole application. Older builds split
+#: settings across two organization/application pairs; new code must use
+#: this scope exclusively (see :func:`app_settings`).
+_LEGACY_SETTINGS_SCOPE = ("ScrewFixation", "PedicleScrewPlanner")
+_APP_SETTINGS_SCOPE = ("SNUBH", "PedicleScrewSimulator")
+
+#: Keys copied out of the legacy scope on first use of the unified scope.
+_MIGRATED_SETTINGS_KEYS = ("appearance/theme", "geometry", "windowState")
+
+
+def app_settings() -> QSettings:
+    """Return the single QSettings scope every part of the app should use.
+
+    Earlier code split settings between ``ScrewFixation/PedicleScrewPlanner``
+    (theme, window geometry) and ``SNUBH/PedicleScrewSimulator`` (planner,
+    segmentation), so "reset the app's settings" meant clearing two
+    registry/plist locations. This unifies on the latter scope and, the
+    first time it is used on a machine that only has legacy settings,
+    migrates ``appearance/theme`` and the window-geometry keys over so
+    existing users keep their preferences.
+    """
+    settings = QSettings(*_APP_SETTINGS_SCOPE)
+    if settings.value("appearance/theme") is None:
+        legacy = QSettings(*_LEGACY_SETTINGS_SCOPE)
+        if legacy.value("appearance/theme") is not None:
+            for key in _MIGRATED_SETTINGS_KEYS:
+                value = legacy.value(key)
+                if value is not None:
+                    settings.setValue(key, value)
+            settings.sync()
+    return settings
+
 
 def build_about_html() -> str:
     """Return stable creator, version, license, and safety information."""
@@ -102,7 +134,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{__title__} {__version__}")
         self.setMinimumSize(1280, 760)
         self._apply_initial_window_size()
-        self._settings = QSettings("ScrewFixation", "PedicleScrewPlanner")
+        self._settings = app_settings()
         app = QApplication.instance()
         app_theme = app.property("themeName") if app is not None else None
         stored_theme = self._settings.value(
@@ -771,6 +803,9 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Heary"), 8, 0)
         self.selected_screw_heary = QLabel("--")
         selected_screw_details.addWidget(self.selected_screw_heary, 8, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory"), 9, 0)
+        self.selected_screw_trajectory = QLabel("—")
+        selected_screw_details.addWidget(self.selected_screw_trajectory, 9, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         screw_list_layout.addWidget(self.selected_screw_metrics)
 
@@ -1484,19 +1519,22 @@ class MainWindow(QMainWindow):
     # Planning parameters
     # ------------------------------------------------------------------
 
+    # Only settings with an editable widget belong here: `min_convergence_deg`
+    # has no spin box, so persisting it implied an editability that never
+    # existed and pinned the value at the dataclass default regardless of
+    # what was stored.
     PLANNER_SETTINGS_KEYS = (
         "pedicle_fill_ratio",
         "wall_clearance_mm",
         "anterior_margin_mm",
         "max_convergence_deg",
-        "min_convergence_deg",
         "trajectory_hu_threshold",
     )
 
     @staticmethod
     def _segmentation_settings() -> QSettings:
         """Return QSettings positioned inside the persisted segmentation group."""
-        settings = QSettings("SNUBH", "PedicleScrewSimulator")
+        settings = app_settings()
         settings.beginGroup("segmentation")
         return settings
 
@@ -1547,7 +1585,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _planner_settings() -> QSettings:
         """Return QSettings positioned inside the persisted planner group."""
-        settings = QSettings("SNUBH", "PedicleScrewSimulator")
+        settings = app_settings()
         settings.beginGroup("planner")
         return settings
 
@@ -1598,16 +1636,22 @@ class MainWindow(QMainWindow):
         return PlannerConfig.from_mapping(data)
 
     def save_planner_settings(self) -> None:
-        """Persist the panel's planner parameters for the next session."""
+        """Persist the panel's planner parameters for the next session.
+
+        Only values with an editable widget are written: the scalar spin
+        boxes, the mode/trajectory combos, and the three weight sliders.
+        Writing the full `PlannerConfig` mapping would also persist fields
+        (like the two non-slider weights) that no widget ever re-applies on
+        load, implying an editability that does not exist.
+        """
         settings = self._planner_settings()
-        for key, value in self.planner_config().to_mapping().items():
-            if isinstance(value, list):
-                continue        # implant catalogues are not user-editable
-            if isinstance(value, dict):
-                for name, weight in value.items():
-                    settings.setValue(f"{key}/{name}", weight)
-                continue
-            settings.setValue(key, value)
+        values = self.planner_config().to_mapping()
+        for key in self.PLANNER_SETTINGS_KEYS:
+            settings.setValue(key, values[key])
+        for key in self._planner_choice_combos():
+            settings.setValue(key, values[key])
+        for name in self._planner_weight_sliders():
+            settings.setValue(f"weights/{name}", values["weights"][name])
         settings.endGroup()
         settings.sync()
 
@@ -1629,7 +1673,8 @@ class MainWindow(QMainWindow):
         for key in self._planner_choice_combos():
             stored[key] = str(settings.value(key, defaults[key]) or defaults[key])
         weights = {}
-        for name, default_weight in defaults["weights"].items():
+        for name in self._planner_weight_sliders():
+            default_weight = defaults["weights"][name]
             raw = settings.value(f"weights/{name}", default_weight)
             try:
                 weights[name] = float(raw)
@@ -1701,10 +1746,21 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary,
         ):
             label.setText("--")
+        self.selected_screw_trajectory.setText("—")
 
     def _update_screw_metric_rows(self, metrics: dict) -> None:
         """Fill the clinical metric rows from a screw's metric bundle."""
         self._clear_screw_metric_rows()
+
+        trajectory_type = str(metrics.get("trajectory_type") or "").strip().lower()
+        if trajectory_type == "cbt":
+            trajectory_text = "CBT"
+            cranial = metrics.get("cbt_cranial_angle_deg")
+            if cranial is not None:
+                trajectory_text += f" (cranial {float(cranial):.1f}°)"
+            self.selected_screw_trajectory.setText(trajectory_text)
+        elif trajectory_type == "traditional":
+            self.selected_screw_trajectory.setText("Traditional")
 
         body_hu = metrics.get("body_mean_hu")
         if body_hu is not None:
@@ -2074,7 +2130,7 @@ def main():
     """Application entry point."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    settings = QSettings("ScrewFixation", "PedicleScrewPlanner")
+    settings = app_settings()
     saved_theme = settings.value(
         "appearance/theme",
         DEFAULT_THEME,
