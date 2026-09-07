@@ -319,7 +319,7 @@ class ScrewGrader:
             )
             for lo in range(0, count, chunk)
         ]
-        result = BatchResult(*(np.concatenate(values) for values in zip(*parts)))
+        result = BatchResult(*(np.concatenate(values) for values in zip(*parts, strict=True)))
 
         unrankable = lengths < MIN_BATCH_CANDIDATE_LENGTH_MM
         if unrankable.any():

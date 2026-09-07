@@ -61,17 +61,23 @@ def test_build_predict_command_maps_gpu_to_cuda(tmp_path):
 
 
 def test_resample_to_reference_matches_geometry():
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core.subregion_segmentation import resample_to_reference
-    ref = sitk.GetImageFromArray(np.zeros((20, 20, 20), np.int16)); ref.SetSpacing((1.0, 1.0, 1.0))
-    mask = sitk.GetImageFromArray(np.ones((10, 10, 10), np.uint8)); mask.SetSpacing((2.0, 2.0, 2.0))
+    ref = sitk.GetImageFromArray(np.zeros((20, 20, 20), np.int16))
+    ref.SetSpacing((1.0, 1.0, 1.0))
+    mask = sitk.GetImageFromArray(np.ones((10, 10, 10), np.uint8))
+    mask.SetSpacing((2.0, 2.0, 2.0))
     out = resample_to_reference(mask, ref)
     assert out.GetSize() == ref.GetSize() and out.GetSpacing() == ref.GetSpacing()
     assert sitk.GetArrayFromImage(out).max() == 1
 
 
 def test_run_subregion_segmentation_uses_process_holder(tmp_path, monkeypatch):
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core import subregion_segmentation as ss
     model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
                               configuration="3d_fullres", labels={"pedicle": 2})
@@ -84,7 +90,9 @@ def test_run_subregion_segmentation_uses_process_holder(tmp_path, monkeypatch):
             return "", ""
         def poll(self): return 0
     def fake_popen(cmd, **kwargs):
-        calls["cmd"] = cmd; calls["env"] = kwargs.get("env"); return FakeProc()
+        calls["cmd"] = cmd
+        calls["env"] = kwargs.get("env")
+        return FakeProc()
     monkeypatch.setattr(ss.subprocess, "Popen", fake_popen)
     image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
     out = ss.run_subregion_segmentation(image, model, str(tmp_path), "cpu")
@@ -94,7 +102,9 @@ def test_run_subregion_segmentation_uses_process_holder(tmp_path, monkeypatch):
 
 
 def test_run_subregion_segmentation_refuses_frozen_build(tmp_path, monkeypatch):
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core import subregion_segmentation as ss
     model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
                               configuration="3d_fullres", labels={"pedicle": 2})
@@ -106,7 +116,9 @@ def test_run_subregion_segmentation_refuses_frozen_build(tmp_path, monkeypatch):
 
 
 def test_run_subregion_segmentation_cancelled_before_spawn(tmp_path, monkeypatch):
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core import subregion_segmentation as ss
     model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
                               configuration="3d_fullres", labels={"pedicle": 2})
@@ -123,7 +135,9 @@ def test_run_subregion_segmentation_cancelled_before_spawn(tmp_path, monkeypatch
 
 
 def test_run_subregion_segmentation_nonzero_returncode_raises(tmp_path, monkeypatch):
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core import subregion_segmentation as ss
     model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
                               configuration="3d_fullres", labels={"pedicle": 2})
@@ -140,7 +154,9 @@ def test_run_subregion_segmentation_nonzero_returncode_raises(tmp_path, monkeypa
 
 
 def test_run_subregion_segmentation_missing_output_raises(tmp_path, monkeypatch):
-    import numpy as np, SimpleITK as sitk
+    import numpy as np
+    import SimpleITK as sitk
+
     from src.core import subregion_segmentation as ss
     model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
                               configuration="3d_fullres", labels={"pedicle": 2})

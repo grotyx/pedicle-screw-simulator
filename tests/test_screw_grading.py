@@ -307,7 +307,8 @@ class TestSamplingHelpers:
 
 class TestEvaluateBatch:
     def test_batch_matches_single_evaluation(self):
-        mask = _cube_mask(); ct = _ct_like(mask)
+        mask = _cube_mask()
+        ct = _ct_like(mask)
         grader = ScrewGrader(mask, ct)
         entries = np.array([[30.0, 38.0, 30.0], [39.0, 38.0, 30.0], [5.0, 5.0, 30.0]])
         targets = np.array([[30.0, 22.0, 30.0], [39.0, 22.0, 30.0], [5.0, 50.0, 30.0]])
