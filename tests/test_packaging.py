@@ -134,3 +134,11 @@ def test_windows_launcher_supports_same_flags_as_bash():
     for flag in ("--check", "--test", "--with-totalseg"):
         assert flag in text
     assert "python -m venv" in text or "py -3.12 -m venv" in text
+
+
+def test_windows_launcher_is_cwd_independent_and_checks_pip_exit_codes():
+    from pathlib import Path
+
+    text = Path("scripts/run_app.ps1").read_text(encoding="utf-8")
+    assert "Set-Location $root" in text
+    assert text.count("$LASTEXITCODE -ne 0") >= 3

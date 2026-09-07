@@ -30,7 +30,7 @@ def test_citation_file_contains_academic_metadata():
     version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
     for expected in (
-        f"version: {version}",
+        f'version: "{version}"',
         'family-names: "Park"',
         'given-names: "Sang-Min"',
         'email: "psmini@snu.ac.kr"',

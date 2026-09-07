@@ -21,13 +21,18 @@ def _read_version() -> str:
 
     In a frozen (PyInstaller) build, the file is bundled next to the
     executable and extracted under ``sys._MEIPASS``; otherwise it lives two
-    directories above this file (the repository root).
+    directories above this file (the repository root). If the file cannot be
+    read (missing, unreadable, wrong permissions, ...), fall back to a
+    placeholder rather than letting ``import src`` fail outright.
     """
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         version_path = Path(sys._MEIPASS) / "VERSION"
     else:
         version_path = Path(__file__).resolve().parent.parent / "VERSION"
-    return version_path.read_text(encoding="utf-8").strip()
+    try:
+        return version_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "0.0.0+unknown"
 
 
 __title__ = "Pedicle Screw Simulator"
