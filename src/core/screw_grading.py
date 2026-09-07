@@ -36,7 +36,15 @@ class _DistanceMaps:
 
 
 class ScrewGrader:
-    """Grade a screw trajectory against a segmentation mask via distance maps."""
+    """Grade a screw trajectory against a segmentation mask via distance maps.
+
+    Distances are measured between voxel centres of the discretised mask, so a
+    reported breach or wall distance carries up to about half a voxel of
+    optimistic bias with respect to the underlying anatomical surface.
+
+    ``ct_image``, when given, is sampled with the mask's own index transform and
+    must therefore lie on the same grid as ``mask_image``.
+    """
 
     def __init__(
         self,
@@ -49,7 +57,9 @@ class ScrewGrader:
         self._mask = mask_image
         self._mask_array = sitk.GetArrayFromImage(mask_image)  # (z, y, x)
         self._ct = ct_image
-        self._ct_array = sitk.GetArrayFromImage(ct_image) if ct_image is not None else None
+        if self._ct is not None:
+            self._require_same_grid(mask_image, self._ct)
+        self._ct_array = sitk.GetArrayFromImage(self._ct) if self._ct is not None else None
         self._step = float(sample_step_mm)
         self._radial = int(radial_samples)
         self._crop_margin = float(crop_margin_mm)
@@ -104,11 +114,12 @@ class ScrewGrader:
         hu_samples: List[float] = []
         for centre in self._centreline(entry, target):
             for point in (centre, *[centre + o for o in offsets]):
-                d_out, d_in = self._lookup(maps, point)
+                idx = self._to_index(point)
+                d_out, d_in = self._lookup(maps, idx)
                 breach = max(breach, d_out)
                 if d_out == 0.0:
                     min_wall = min(min_wall, d_in)
-                hu = self._hu_at(point)
+                hu = self._hu_at(idx)
                 if hu is not None:
                     hu_samples.append(hu)
 
@@ -138,6 +149,18 @@ class ScrewGrader:
         return "E"
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _require_same_grid(mask_image: sitk.Image, ct_image: sitk.Image, tolerance: float = 1e-4) -> None:
+        """Reject a CT that is not voxel-aligned with the mask (it is sampled by mask index)."""
+        matches = (
+            tuple(ct_image.GetSize()) == tuple(mask_image.GetSize())
+            and np.allclose(ct_image.GetSpacing(), mask_image.GetSpacing(), rtol=0.0, atol=tolerance)
+            and np.allclose(ct_image.GetOrigin(), mask_image.GetOrigin(), rtol=0.0, atol=tolerance)
+            and np.allclose(ct_image.GetDirection(), mask_image.GetDirection(), rtol=0.0, atol=tolerance)
+        )
+        if not matches:
+            raise ValueError("ct_image and mask_image must share the same grid")
+
     def _centreline(self, entry: Point3, target: Point3) -> List[np.ndarray]:
         start = np.asarray(entry, dtype=np.float64)
         end = np.asarray(target, dtype=np.float64)
@@ -168,11 +191,8 @@ class ScrewGrader:
             return None
         return int(idx[0]), int(idx[1]), int(idx[2])
 
-    def _hu_at(self, point: np.ndarray) -> Optional[float]:
-        if self._ct_array is None:
-            return None
-        idx = self._to_index(point)
-        if idx is None:
+    def _hu_at(self, idx: Optional[Tuple[int, int, int]]) -> Optional[float]:
+        if self._ct_array is None or idx is None:
             return None
         return float(self._ct_array[idx[2], idx[1], idx[0]])
 
@@ -194,8 +214,7 @@ class ScrewGrader:
         self._maps[label] = maps
         return maps
 
-    def _lookup(self, maps: _DistanceMaps, point: np.ndarray) -> Tuple[float, float]:
-        idx = self._to_index(point)
+    def _lookup(self, maps: _DistanceMaps, idx: Optional[Tuple[int, int, int]]) -> Tuple[float, float]:
         if idx is None:
             return self._crop_margin, 0.0
         local = np.array([idx[2], idx[1], idx[0]]) - maps.crop_min
