@@ -303,3 +303,79 @@ class TestSamplingHelpers:
         mask.SetDirection((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
         with pytest.raises(ValueError, match="identity"):
             ScrewGrader(mask)
+
+
+class TestEvaluateBatch:
+    def test_batch_matches_single_evaluation(self):
+        mask = _cube_mask(); ct = _ct_like(mask)
+        grader = ScrewGrader(mask, ct)
+        entries = np.array([[30.0, 38.0, 30.0], [39.0, 38.0, 30.0], [5.0, 5.0, 30.0]])
+        targets = np.array([[30.0, 22.0, 30.0], [39.0, 22.0, 30.0], [5.0, 50.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        for i in range(3):
+            single = grader.grade(entries[i], targets[i], 6.0, label=28)
+            assert batch.breach_mm[i] == pytest.approx(single.breach_mm, abs=0.51)
+            assert batch.min_wall_mm[i] == pytest.approx(single.min_wall_mm, abs=0.51)
+        assert np.isfinite(batch.mean_hu[0])
+
+    def test_batch_shapes_and_dtypes(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array([[30.0, 38.0, 30.0], [39.0, 38.0, 30.0]])
+        targets = np.array([[30.0, 22.0, 30.0], [39.0, 22.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        for values in (batch.breach_mm, batch.min_wall_mm, batch.mean_hu, batch.min_hu):
+            assert values.shape == (2,)
+            assert values.dtype == np.float64
+
+    def test_min_wall_is_zero_where_the_screw_breaches(self):
+        grader = ScrewGrader(_cube_mask())
+        entries = np.array([[5.0, 5.0, 30.0]])
+        targets = np.array([[5.0, 50.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        assert batch.breach_mm[0] > 0.0
+        assert batch.min_wall_mm[0] == 0.0
+
+    def test_hu_is_nan_without_a_ct(self):
+        grader = ScrewGrader(_cube_mask())
+        entries = np.array([[30.0, 38.0, 30.0]])
+        targets = np.array([[30.0, 22.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        assert np.isnan(batch.mean_hu[0])
+        assert np.isnan(batch.min_hu[0])
+
+    def test_empty_batch_returns_empty_arrays(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        batch = grader.evaluate_batch(np.empty((0, 3)), np.empty((0, 3)), 6.0, 28)
+        assert batch.breach_mm.shape == (0,)
+        assert batch.min_wall_mm.shape == (0,)
+        assert batch.mean_hu.shape == (0,)
+        assert batch.min_hu.shape == (0,)
+
+    def test_chunking_does_not_change_the_result(self, monkeypatch):
+        import src.core.screw_grading as screw_grading
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        rng = np.random.default_rng(3)
+        entries = rng.uniform(18.0, 42.0, size=(7, 3))
+        targets = rng.uniform(18.0, 42.0, size=(7, 3))
+        whole = grader.evaluate_batch(entries, targets, 6.0, 28)
+        monkeypatch.setattr(screw_grading, "MAX_BATCH_SAMPLE_POINTS", 500)
+        chunked = grader.evaluate_batch(entries, targets, 6.0, 28)
+        np.testing.assert_allclose(chunked.breach_mm, whole.breach_mm)
+        np.testing.assert_allclose(chunked.min_wall_mm, whole.min_wall_mm)
+        np.testing.assert_allclose(chunked.mean_hu, whole.mean_hu)
+        np.testing.assert_allclose(chunked.min_hu, whole.min_hu)
+
+    def test_batch_matches_single_evaluation_on_an_anisotropic_grid(self):
+        mask = _asymmetric_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array([[6.0, 26.0, 50.0], [12.0, 26.0, 44.0], [20.0, 40.0, 60.0]])
+        targets = np.array([[22.0, 26.0, 50.0], [12.0, 26.0, 74.0], [20.0, 10.0, 60.0]])
+        batch = grader.evaluate_batch(entries, targets, 4.0, 28)
+        for i in range(3):
+            single = grader.grade(entries[i], targets[i], 4.0, label=28)
+            assert batch.breach_mm[i] == pytest.approx(single.breach_mm, abs=0.51)
+            assert batch.min_wall_mm[i] == pytest.approx(single.min_wall_mm, abs=0.51)

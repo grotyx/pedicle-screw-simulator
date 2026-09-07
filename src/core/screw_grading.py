@@ -21,6 +21,27 @@ Point3 = Sequence[float]
 _IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
+#: Ceiling on the number of cylinder samples ``evaluate_batch`` materialises in
+#: one pass. Larger batches are split into candidate chunks so that peak memory
+#: stays bounded no matter how many candidates an optimiser throws at it.
+MAX_BATCH_SAMPLE_POINTS = 2_000_000
+
+
+@dataclass
+class BatchResult:
+    """Per-candidate measurements from :meth:`ScrewGrader.evaluate_batch`.
+
+    Every array is ``(C,)`` and indexed by candidate. ``min_wall_mm`` is 0 for a
+    candidate that breaches, and the HU arrays are ``NaN`` for a candidate with
+    no sample inside the CT (including every candidate when there is no CT).
+    """
+
+    breach_mm: np.ndarray
+    min_wall_mm: np.ndarray
+    mean_hu: np.ndarray
+    min_hu: np.ndarray
+
+
 @dataclass
 class GradeResult:
     grade: str
@@ -236,6 +257,122 @@ class ScrewGrader:
             breach_point_lps=breach_point,
             breach_centre_lps=breach_centre,
         )
+
+    def evaluate_batch(
+        self,
+        entries: np.ndarray,
+        targets: np.ndarray,
+        diameter_mm: float,
+        label: int,
+    ) -> BatchResult:
+        """Grade many candidate trajectories at once.
+
+        ``entries`` and ``targets`` are ``(C, 3)`` LPS arrays. Every candidate is
+        sampled with the same number of centreline steps, taken from the longest
+        candidate, so a short candidate is sampled more finely than
+        :meth:`grade` would sample it; because the reductions are a max and a
+        min, the extra samples can only refine the answer, and the two agree to
+        within roughly the sampling step. Unlike :meth:`grade` this never
+        returns ``None``: a candidate whose samples all miss the label's cropped
+        neighbourhood simply scores ``crop_margin_mm`` of breach.
+        """
+        starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
+        ends = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
+        if starts.shape != ends.shape:
+            raise ValueError(
+                f"entries and targets must have the same shape; got {starts.shape} and {ends.shape}"
+            )
+        count = starts.shape[0]
+        if count == 0:
+            return BatchResult(*(np.empty(0, dtype=np.float64) for _ in range(4)))
+
+        deltas = ends - starts
+        lengths = np.linalg.norm(deltas, axis=1)
+        n_samples = int(math.ceil(float(lengths.max()) / self._step)) + 1
+        per_step = 1 + max(0, self._radial)
+
+        # Unit trajectories, with degenerate (zero-length) candidates left at
+        # zero: they get a zero radial frame and collapse to their entry point.
+        directions = np.zeros_like(deltas)
+        movable = lengths > 1e-12
+        directions[movable] = deltas[movable] / lengths[movable, None]
+        offsets = self._batch_radial_offsets(directions, float(diameter_mm) / 2.0)
+
+        chunk = max(1, MAX_BATCH_SAMPLE_POINTS // (n_samples * per_step))
+        parts: List[Tuple[np.ndarray, ...]] = [
+            self._evaluate_slice(
+                starts[lo:lo + chunk], deltas[lo:lo + chunk], offsets[lo:lo + chunk], n_samples, label
+            )
+            for lo in range(0, count, chunk)
+        ]
+        return BatchResult(*(np.concatenate(values) for values in zip(*parts)))
+
+    def _batch_radial_offsets(self, directions: np.ndarray, radius: float) -> np.ndarray:
+        """``(C, radial_samples, 3)`` perpendicular offsets, one frame per direction.
+
+        The frame construction mirrors :meth:`_radial_offsets` — auxiliary axis
+        at the smallest direction component, then two cross products — so a
+        batch and a single evaluation sample the same points around a centre.
+        """
+        count = directions.shape[0]
+        if self._radial <= 0:
+            return np.zeros((count, 0, 3), dtype=np.float64)
+        aux = np.zeros_like(directions)
+        aux[np.arange(count), np.argmin(np.abs(directions), axis=1)] = 1.0
+        u = self._normalise_rows(np.cross(directions, aux))
+        v = self._normalise_rows(np.cross(directions, u))
+        angles = 2.0 * math.pi * np.arange(self._radial, dtype=np.float64) / self._radial
+        return radius * (
+            np.cos(angles)[None, :, None] * u[:, None, :]
+            + np.sin(angles)[None, :, None] * v[:, None, :]
+        )
+
+    @staticmethod
+    def _normalise_rows(vectors: np.ndarray) -> np.ndarray:
+        """Unit-length rows, leaving zero-length rows (degenerate frames) at zero."""
+        norms = np.linalg.norm(vectors, axis=1)
+        nonzero = norms > 0.0
+        out = np.zeros_like(vectors)
+        out[nonzero] = vectors[nonzero] / norms[nonzero, None]
+        return out
+
+    def _evaluate_slice(
+        self,
+        starts: np.ndarray,
+        deltas: np.ndarray,
+        offsets: np.ndarray,
+        n_samples: int,
+        label: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """One chunk of :meth:`evaluate_batch`, reduced along its sample axes."""
+        count = starts.shape[0]
+        per_step = 1 + offsets.shape[1]
+        t = np.linspace(0.0, 1.0, n_samples)
+        centres = starts[:, None, :] + deltas[:, None, :] * t[None, :, None]   # (C, S, 3)
+        points = np.empty((count, n_samples, per_step, 3), dtype=np.float64)
+        points[:, :, 0, :] = centres
+        if offsets.shape[1]:
+            points[:, :, 1:, :] = centres[:, :, None, :] + offsets[:, None, :, :]
+        flat = points.reshape(-1, 3)
+
+        d_out, d_in = self.distances_at_points(flat, label)
+        d_out = d_out.reshape(count, -1)
+        d_in = d_in.reshape(count, -1)
+        breach = d_out.max(axis=1)
+        min_wall = np.where(d_out == 0.0, d_in, np.inf).min(axis=1)
+        min_wall = np.where(np.isfinite(min_wall) & (breach <= 0.0), min_wall, 0.0)
+
+        hu = self.hu_at_points(flat).reshape(count, -1)
+        sampled = np.isfinite(hu)
+        counts = sampled.sum(axis=1)
+        mean_hu = np.full(count, np.nan, dtype=np.float64)
+        np.divide(
+            np.where(sampled, hu, 0.0).sum(axis=1), counts, out=mean_hu, where=counts > 0
+        )
+        min_hu = np.where(
+            counts > 0, np.where(sampled, hu, np.inf).min(axis=1), np.nan
+        )
+        return breach, min_wall, mean_hu, min_hu
 
     @staticmethod
     def grade_from_breach(breach_mm: float) -> str:
