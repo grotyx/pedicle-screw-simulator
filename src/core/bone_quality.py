@@ -72,20 +72,26 @@ def vertebral_body_hu(
     centre_idx = (np.asarray(body_center_lps, dtype=np.float64) - origin) / spacing  # x, y, z
     radii_idx = np.asarray(radii_mm, dtype=np.float64) / spacing                     # x, y, z
 
-    labelled = mask_arr == label
-    if not labelled.any():
+    # Work inside the ellipsoid's index-space bounding box: no voxel outside it
+    # can satisfy the inequality, and a whole-volume grid would cost gigabytes
+    # on a full-resolution CT.
+    extent = np.asarray(mask_arr.shape[::-1], dtype=np.int64)                        # x, y, z
+    lo = np.clip(np.floor(centre_idx - radii_idx).astype(np.int64), 0, extent)
+    hi = np.clip(np.ceil(centre_idx + radii_idx).astype(np.int64) + 1, 0, extent)
+    if np.any(hi <= lo):
         return None
 
-    zz, yy, xx = np.mgrid[0:mask_arr.shape[0], 0:mask_arr.shape[1], 0:mask_arr.shape[2]]
+    axes = [np.arange(lo[a], hi[a], dtype=np.float64) for a in range(3)]             # x, y, z
+    normalised = [((axes[a] - centre_idx[a]) / radii_idx[a]) ** 2 for a in range(3)]
     ellipsoid = (
-        ((xx - centre_idx[0]) / radii_idx[0]) ** 2
-        + ((yy - centre_idx[1]) / radii_idx[1]) ** 2
-        + ((zz - centre_idx[2]) / radii_idx[2]) ** 2
-    ) <= 1.0
-    roi = ellipsoid & labelled
+        normalised[2][:, None, None] + normalised[1][None, :, None] + normalised[0][None, None, :]
+    ) <= 1.0                                                                          # (z, y, x)
+
+    box = (slice(lo[2], hi[2]), slice(lo[1], hi[1]), slice(lo[0], hi[0]))
+    roi = ellipsoid & (mask_arr[box] == label)
     if int(roi.sum()) < MIN_ROI_VOXELS:
         return None
-    return float(ct_arr[roi].mean())
+    return float(ct_arr[box][roi].mean())
 
 
 def assess_bone_quality(
