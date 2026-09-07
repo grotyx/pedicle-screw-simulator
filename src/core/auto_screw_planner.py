@@ -85,8 +85,7 @@ class AutoScrewPlanner:
 
     MIN_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[0]
     MAX_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[-1]
-    LONG_SCREW_SAFE_LENGTH: float = IMPLANT_LENGTHS_MM[-1] + 5.0
-    MAX_BONE_CORRIDOR_SCAN: float = 75.0  # mm, preserves 60 mm eligibility check
+    MAX_BONE_CORRIDOR_SCAN: float = 75.0  # mm, maximum anterior ray-cast distance
     ANTERIOR_SAFETY_MARGIN: float = ANTERIOR_SAFETY_MARGIN_MM
 
     # -- HU thresholds -------------------------------------------------------
@@ -279,17 +278,21 @@ class AutoScrewPlanner:
                 f"{diameter:.1f} mm for cortical containment"
             )
 
-        # 6. Sample HU along trajectory.
-        mean_hu, min_hu, _ = self._sample_hu_along_trajectory(entry, target, diameter)
+        # 6. Grade the accepted trajectory once: containment plus HU statistics.
+        result = self._grader.grade(entry, target, diameter, label=vertebra.label)
+        if result is None:
+            grade = "E"
+            breach_dist = float(self._grader.crop_margin_mm)
+            min_wall = 0.0
+            mean_hu = min_hu = 0.0
+        else:
+            grade = result.grade
+            breach_dist = result.breach_mm
+            min_wall = result.min_wall_mm
+            mean_hu = result.mean_hu if result.mean_hu is not None else 0.0
+            min_hu = result.min_hu if result.min_hu is not None else 0.0
 
-        # 7. Evaluate Gertzbein-Robbins grade.
-        grade, breach_dist = self._evaluate_gertzbein_grade(
-            entry, target, diameter, vertebra.label,
-        )
-        wall = self._grader.grade(entry, target, diameter, label=vertebra.label)
-        min_wall = wall.min_wall_mm if wall else 0.0
-
-        # 8. Calculate angles.
+        # 7. Calculate angles.
         convergence_angle = self._compute_convergence_angle(entry, target, side)
         craniocaudal_angle = self._compute_craniocaudal_angle(entry, target)
 
@@ -298,7 +301,7 @@ class AutoScrewPlanner:
                 f"High convergence angle {convergence_angle:.1f}° — verify on CT"
             )
 
-        # 9. Calculate confidence score.
+        # 8. Calculate confidence score.
         confidence = self._calculate_confidence(grade, mean_hu, pedicle_width, diameter)
 
         if breach_dist > 0:
@@ -524,6 +527,7 @@ class AutoScrewPlanner:
                 entry,
                 candidate,
                 diameter,
+                label=vertebra_label,
             )
             score = (breach_distance, -mean_hu, -length)
             if best_score is None or score < best_score:
@@ -541,8 +545,12 @@ class AutoScrewPlanner:
         entry: np.ndarray,
         target: np.ndarray,
         diameter: float,
+        label: Optional[int] = None,
     ) -> Tuple[float, float, List[float]]:
         """Sample HU statistics along the screw trajectory via the grader.
+
+        ``label`` is auto-detected from the trajectory only when the caller
+        does not already know which vertebra is being instrumented.
 
         Returns
         -------
@@ -551,12 +559,9 @@ class AutoScrewPlanner:
         all_samples : list of float
             Always empty; retained for signature compatibility.
         """
-        result = self._grader.grade(
-            entry,
-            target,
-            diameter,
-            label=self._grader.detect_label(entry, target),
-        )
+        if label is None:
+            label = self._grader.detect_label(entry, target)
+        result = self._grader.grade(entry, target, diameter, label=label)
         if result is None or result.mean_hu is None:
             return 0.0, 0.0, []
         return result.mean_hu, result.min_hu, []
@@ -604,7 +609,14 @@ class AutoScrewPlanner:
         entry: np.ndarray,
         target: np.ndarray,
     ) -> float:
-        """Signed sagittal angulation (positive = tip cranial to entry)."""
+        """Elevation of the trajectory above the axial plane, positive cranial.
+
+        This is the module-wide convention shared with ``Screw.insertion_angle``
+        and the inspector.  It differs from a sagittal-projection angle for
+        converging screws: the lateral component counts toward the horizontal
+        run, so a converging screw's elevation is smaller than its projection
+        onto the YZ plane.
+        """
         return craniocaudal_angle_deg(entry, target)
 
     # =====================================================================

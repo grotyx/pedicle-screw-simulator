@@ -6,6 +6,7 @@ entry/target points, HU profiles, and Gertzbein grades can be verified
 analytically.
 """
 
+import math
 import os
 import sys
 
@@ -311,7 +312,7 @@ class TestTargetPointFinding:
         monkeypatch.setattr(
             planner,
             "_sample_hu_along_trajectory",
-            lambda *_args: (500.0, 300.0, []),
+            lambda *_args, **_kwargs: (500.0, 300.0, []),
         )
 
         target = planner._find_best_target(
@@ -352,7 +353,7 @@ class TestTargetPointFinding:
         monkeypatch.setattr(
             planner,
             "_sample_hu_along_trajectory",
-            lambda *_args: (500.0, 300.0, []),
+            lambda *_args, **_kwargs: (500.0, 300.0, []),
         )
 
         target = planner._find_best_target(
@@ -387,7 +388,7 @@ class TestTargetPointFinding:
         monkeypatch.setattr(
             planner,
             "_sample_hu_along_trajectory",
-            lambda *_args: (500.0, 300.0, []),
+            lambda *_args, **_kwargs: (500.0, 300.0, []),
         )
 
         target = planner._find_best_target(
@@ -423,7 +424,7 @@ class TestTargetPointFinding:
         monkeypatch.setattr(
             planner,
             "_sample_hu_along_trajectory",
-            lambda *_args: (500.0, 300.0, []),
+            lambda *_args, **_kwargs: (500.0, 300.0, []),
         )
 
         target = planner._find_best_target(
@@ -1083,6 +1084,50 @@ class TestAngleCalculations:
 
         angle = planner._compute_craniocaudal_angle(entry, target)
         assert angle > 0.0
+
+    def test_craniocaudal_angle_matches_elevation_magnitude(self):
+        """A purely sagittal 10 degree rise should report exactly 10 degrees."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        entry = np.array([0.0, 30.0, 0.0])
+        target = np.array([
+            0.0,
+            30.0 - 40.0 * math.cos(math.radians(10.0)),
+            40.0 * math.sin(math.radians(10.0)),
+        ])
+
+        angle = planner._compute_craniocaudal_angle(entry, target)
+        assert angle == pytest.approx(10.0)
+
+    def test_craniocaudal_angle_is_elevation_not_sagittal_projection(self):
+        """Convergence must not inflate the reported craniocaudal angle.
+
+        The trajectory below rises 10 degrees above the axial plane while
+        converging 20 degrees medially.  Elevation stays 10 degrees; the
+        sagittal projection atan2(dz, |dy|) would read ~10.6 degrees.
+        """
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        horizontal = 40.0 * math.cos(math.radians(10.0))
+        entry = np.array([20.0, 30.0, 0.0])
+        target = np.array([
+            20.0 - horizontal * math.sin(math.radians(20.0)),
+            30.0 - horizontal * math.cos(math.radians(20.0)),
+            40.0 * math.sin(math.radians(10.0)),
+        ])
+
+        assert planner._compute_convergence_angle(entry, target, "left") == (
+            pytest.approx(20.0)
+        )
+        angle = planner._compute_craniocaudal_angle(entry, target)
+        assert angle == pytest.approx(10.0)
+        projected = math.degrees(
+            math.atan2(target[2] - entry[2], abs(target[1] - entry[1]))
+        )
+        assert projected == pytest.approx(10.63, abs=0.02)
+        assert angle < projected
 
 
 # ---------------------------------------------------------------------------
