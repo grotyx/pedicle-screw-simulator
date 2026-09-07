@@ -208,6 +208,12 @@ class VolumeManager:
             self._bounds[4], min(self._bounds[5], z)
         )
 
+        for plane in ("sagittal", "coronal", "axial"):
+            if plane != source_plane:
+                self._notify_observers(
+                    "slice_changed", plane=plane, position=self._slice_positions[plane]
+                )
+
         self._notify_observers(
             "crosshair_changed",
             position=(x, y, z),

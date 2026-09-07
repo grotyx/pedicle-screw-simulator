@@ -229,5 +229,22 @@ class TestNoSurfaceGeneration:
         assert not hasattr(vm, "set_bone_threshold")
 
 
+class TestCrosshairReslicesOtherPanes:
+    """Phase 2 Task 4: clicking a crosshair should reslice the other panes."""
+
+    def test_crosshair_change_notifies_slice_changed_for_other_planes(self):
+        import numpy as np
+        import SimpleITK as sitk
+        vm = VolumeManager()
+        vm.set_volume(sitk.GetImageFromArray(np.zeros((20, 20, 20), np.int16)))
+        events = []
+        vm.add_observer("t", lambda event, **kw: events.append((event, kw.get("plane"))))
+        vm.set_crosshair_position(5.0, 6.0, 7.0, source_plane="axial")
+        assert ("slice_changed", "sagittal") in events
+        assert ("slice_changed", "coronal") in events
+        assert ("slice_changed", "axial") not in events
+        assert ("crosshair_changed", None) in events
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
