@@ -586,3 +586,54 @@ def test_cancel_on_gpu_attempt_does_not_retry_on_cpu(monkeypatch, tmp_path):
         )
 
     assert devices == ["gpu"]
+
+
+def test_run_totalsegmentator_does_not_spawn_when_already_cancelled(
+    tmp_path, monkeypatch
+):
+    spawned = []
+
+    def _fake_popen(command, **kwargs):
+        spawned.append(command)
+        return _FakePopen(command)
+
+    fake_spec = types.SimpleNamespace(origin="/tmp/TotalSegmentator.py")
+    monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _n: fake_spec)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+    holder = totalseg.ProcessHolder()
+    holder.terminate()
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_totalsegmentator(
+            image=_create_test_image(),
+            work_dir=str(tmp_path),
+            process_holder=holder,
+        )
+
+    assert spawned == []
+
+
+def test_cancel_racing_the_spawn_still_terminates_process(tmp_path, monkeypatch):
+    holder = totalseg.ProcessHolder()
+
+    def _fake_popen(command, **kwargs):
+        # Simulate the user cancelling after Popen returned but before the
+        # holder learned about the process.
+        holder.terminate()
+        return _FakePopen(command, returncode=-15)
+
+    fake_spec = types.SimpleNamespace(origin="/tmp/TotalSegmentator.py")
+    monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _n: fake_spec)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        totalseg.run_totalsegmentator(
+            image=_create_test_image(),
+            work_dir=str(tmp_path),
+            process_holder=holder,
+        )
+
+    assert holder.process.terminated is True

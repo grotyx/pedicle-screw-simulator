@@ -244,6 +244,9 @@ def run_totalsegmentator(
     if force_split:
         command.append("-fs")
 
+    if process_holder is not None and process_holder.cancelled:
+        raise SegmentationCancelled("Segmentation cancelled by user")
+
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -252,6 +255,10 @@ def run_totalsegmentator(
     )
     if process_holder is not None:
         process_holder.process = process
+        # Cancel may have landed between the spawn and the assignment above,
+        # in which case terminate() found no process to kill: retry it here.
+        if process_holder.cancelled:
+            process_holder.terminate()
     stdout, stderr = process.communicate()
     if process_holder is not None and process_holder.cancelled:
         raise SegmentationCancelled("Segmentation cancelled by user")
