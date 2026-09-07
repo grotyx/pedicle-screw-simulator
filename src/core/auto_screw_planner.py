@@ -19,22 +19,16 @@ Key directions:
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import numpy as np
 import SimpleITK as sitk
 
+from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import ScrewGrader
 from .vertebra import PedicleAnalysisResult
-from ..utils.constants import (
-    ANTERIOR_SAFETY_MARGIN_MM,
-    CORTICAL_WALL_CLEARANCE_MM,
-    IMPLANT_LENGTHS_MM,
-    PEDICLE_FILL_RATIO,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +77,7 @@ class AutoScrewPlanner:
     MAX_SCREW_DIAMETER: float = 7.5    # mm
     DIAMETER_WIDE_HEADROOM: float = 1.0  # mm before one-step upsize
 
-    MIN_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[0]
-    MAX_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[-1]
     MAX_BONE_CORRIDOR_SCAN: float = 75.0  # mm, maximum anterior ray-cast distance
-    ANTERIOR_SAFETY_MARGIN: float = ANTERIOR_SAFETY_MARGIN_MM
 
     # -- HU thresholds -------------------------------------------------------
     BONE_HU_MIN: float = 200          # Below this = outside bone
@@ -104,20 +95,39 @@ class AutoScrewPlanner:
         15.0,
         18.0,
     )
-    MAX_CONVERGENCE_ANGLE: float = 35.0
+
+    @property
+    def MIN_SCREW_LENGTH(self) -> float:
+        return self.config.implant_lengths_mm[0]
+
+    @property
+    def MAX_SCREW_LENGTH(self) -> float:
+        return self.config.implant_lengths_mm[-1]
+
+    @property
+    def ANTERIOR_SAFETY_MARGIN(self) -> float:
+        return self.config.anterior_margin_mm
+
+    @property
+    def MAX_CONVERGENCE_ANGLE(self) -> float:
+        return self.config.max_convergence_deg
 
     def __init__(
         self,
         ct_image: sitk.Image,
         mask_image: sitk.Image,
         grader: Optional[ScrewGrader] = None,
+        config: Optional[PlannerConfig] = None,
     ) -> None:
         """
         Args:
             ct_image:  Original CT volume (for HU sampling).
             mask_image:  TotalSegmentator segmentation mask.
             grader:  Optional pre-built grader (defaults to one over this pair).
+            config:  Optional sizing/safety rules (defaults to :class:`PlannerConfig`).
         """
+        self.config = config or PlannerConfig()
+        self.config.validate()
         if tuple(ct_image.GetSize()) != tuple(mask_image.GetSize()):
             mask_image = sitk.Resample(
                 mask_image,
@@ -307,10 +317,10 @@ class AutoScrewPlanner:
         if breach_dist > 0:
             warnings.append(f"Breach distance {breach_dist:.1f} mm (grade {grade})")
 
-        if 0 < min_wall < CORTICAL_WALL_CLEARANCE_MM:
+        if 0 < min_wall < self.config.wall_clearance_mm:
             warnings.append(
                 f"Cortical clearance {min_wall:.1f} mm below "
-                f"{CORTICAL_WALL_CLEARANCE_MM:.0f} mm"
+                f"{self.config.wall_clearance_mm:.0f} mm"
             )
 
         return PlannedScrew(
@@ -514,7 +524,7 @@ class AutoScrewPlanner:
                 candidate,
                 "left" if side_sign > 0.0 else "right",
             )
-            if convergence > self.MAX_CONVERGENCE_ANGLE or convergence < -5.0:
+            if convergence > self.MAX_CONVERGENCE_ANGLE or convergence < self.config.min_convergence_deg:
                 # Reject over-converging and laterally diverging candidates.
                 continue
             _, breach_distance = self._evaluate_gertzbein_grade(
@@ -714,10 +724,11 @@ class AutoScrewPlanner:
     # Private helpers
     # =====================================================================
 
-    @staticmethod
-    def _select_standard_length(safe_length: float) -> Optional[float]:
+    def _select_standard_length(self, safe_length: float) -> Optional[float]:
         """Select the longest catalogue implant that fits the safe corridor."""
-        candidates = [length for length in IMPLANT_LENGTHS_MM if length <= safe_length + 1e-9]
+        candidates = [
+            length for length in self.config.implant_lengths_mm if length <= safe_length + 1e-9
+        ]
         if not candidates:
             return None
         return float(max(candidates))
@@ -770,15 +781,17 @@ class AutoScrewPlanner:
         is too narrow for the smallest available screw.
         """
         available = min(
-            PEDICLE_FILL_RATIO * pedicle_width,
-            pedicle_width - 2.0 * CORTICAL_WALL_CLEARANCE_MM,
+            self.config.pedicle_fill_ratio * pedicle_width,
+            pedicle_width - 2.0 * self.config.wall_clearance_mm,
         )
         if available < self.MIN_SCREW_DIAMETER:
             return None
-        available = min(
-            self.MAX_SCREW_DIAMETER,
-            math.floor(available * 2.0) / 2.0,
-        )
+        catalogue = [
+            d for d in self.config.implant_diameters_mm if d <= available + 1e-9
+        ]
+        if not catalogue:
+            return None
+        available = min(self.MAX_SCREW_DIAMETER, max(catalogue))
         preferred, automatic_maximum = self._diameter_profile_for_level(
             vertebra_name
         )

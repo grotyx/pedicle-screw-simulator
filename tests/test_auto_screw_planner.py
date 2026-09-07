@@ -888,7 +888,9 @@ class TestHelperMethods:
     )
     def test_select_standard_length(self, safe_length, expected):
         """The longest catalogue implant fitting the safe corridor wins."""
-        result = AutoScrewPlanner._select_standard_length(safe_length)
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+        result = planner._select_standard_length(safe_length)
 
         if expected is None:
             assert result is None
@@ -1177,6 +1179,20 @@ class TestDiameterRule:
         assert planner._compute_diameter(10.0, "L4") == pytest.approx(7.0)
         # too narrow
         assert planner._compute_diameter(5.5, "L4") is None
+
+
+class TestPlannerConfig:
+    def test_config_changes_sizing(self):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = TestGrading()._cube()
+        strict = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(pedicle_fill_ratio=0.6, wall_clearance_mm=1.5)
+        )
+        assert strict._compute_diameter(10.0, "L4") == pytest.approx(6.0)  # min(6.0, 7.0) -> 6.0
+        short = AutoScrewPlanner(ct, mask, config=PlannerConfig(implant_lengths_mm=(30.0, 35.0)))
+        assert short._select_standard_length(60.0) == 35.0
+        assert short._select_standard_length(29.0) is None
 
 
 if __name__ == "__main__":
