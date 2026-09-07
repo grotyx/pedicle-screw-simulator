@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
     QPushButton, QToolBar, QLabel, QSlider, QSpinBox, QDoubleSpinBox,
     QStatusBar, QMessageBox, QApplication, QComboBox, QListWidget,
-    QCheckBox, QScrollArea,
+    QCheckBox, QScrollArea, QLineEdit, QFileDialog,
     QSplitter, QSizePolicy, QListWidgetItem, QAbstractItemView,
 )
 from PyQt6.QtCore import QSettings, Qt, QTimer
@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         # Build UI (widgets only, no signal connections to controllers)
         self._setup_ui()
         self.load_planner_settings()
+        self.load_segmentation_settings()
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_statusbar()
@@ -412,6 +413,24 @@ class MainWindow(QMainWindow):
         vertebra_display_buttons.addWidget(self.vertebra_show_selected_btn)
         vertebra_display_buttons.addWidget(self.vertebra_show_all_btn)
         advanced_layout.addLayout(vertebra_display_buttons, 12, 0, 1, 2)
+
+        self.seg_use_subregion_check = QCheckBox("Use pedicle subregion model")
+        self.seg_use_subregion_check.setChecked(False)
+        self.seg_use_subregion_check.setToolTip(
+            "Refine pedicle detection with a locally installed nnU-Net "
+            "subregion model. Leave off to use TotalSegmentator alone."
+        )
+        advanced_layout.addWidget(self.seg_use_subregion_check, 13, 0, 1, 2)
+
+        subregion_dir_row = QHBoxLayout()
+        self.seg_subregion_dir_edit = QLineEdit()
+        self.seg_subregion_dir_edit.setPlaceholderText(
+            "Model directory (dataset.json)"
+        )
+        subregion_dir_row.addWidget(self.seg_subregion_dir_edit, 1)
+        self.seg_subregion_browse_btn = QPushButton("Browse...")
+        subregion_dir_row.addWidget(self.seg_subregion_browse_btn)
+        advanced_layout.addLayout(subregion_dir_row, 14, 0, 1, 2)
 
         self.seg_advanced_panel.hide()
         seg_layout.addWidget(self.seg_advanced_panel)
@@ -976,6 +995,15 @@ class MainWindow(QMainWindow):
             self._seg_ctrl.update_visibility
         )
         self.seg_clear_btn.clicked.connect(self._seg_ctrl.clear_overlay)
+        self.seg_use_subregion_check.stateChanged.connect(
+            self._on_segmentation_setting_changed
+        )
+        self.seg_subregion_dir_edit.textChanged.connect(
+            self._on_segmentation_setting_changed
+        )
+        self.seg_subregion_browse_btn.clicked.connect(
+            self._browse_subregion_model_dir
+        )
         self.vertebra_isolate_btn.clicked.connect(
             self._seg_ctrl.toggle_vertebrae_isolation
         )
@@ -1412,6 +1440,57 @@ class MainWindow(QMainWindow):
         "min_convergence_deg",
         "trajectory_hu_threshold",
     )
+
+    @staticmethod
+    def _segmentation_settings() -> QSettings:
+        """Return QSettings positioned inside the persisted segmentation group."""
+        settings = QSettings("SNUBH", "PedicleScrewSimulator")
+        settings.beginGroup("segmentation")
+        return settings
+
+    def save_segmentation_settings(self) -> None:
+        """Persist the optional subregion-model choices for the next session."""
+        settings = self._segmentation_settings()
+        settings.setValue(
+            "use_subregion_model", self.seg_use_subregion_check.isChecked()
+        )
+        settings.setValue(
+            "subregion_model_dir", self.seg_subregion_dir_edit.text().strip()
+        )
+        settings.endGroup()
+        settings.sync()
+
+    def load_segmentation_settings(self) -> None:
+        """Restore the persisted subregion-model choices."""
+        settings = self._segmentation_settings()
+        raw_enabled = settings.value("use_subregion_model", False)
+        model_dir = settings.value("subregion_model_dir", "")
+        settings.endGroup()
+
+        enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes")
+        for widget in (self.seg_use_subregion_check, self.seg_subregion_dir_edit):
+            previous = widget.blockSignals(True)
+            try:
+                if widget is self.seg_use_subregion_check:
+                    widget.setChecked(enabled)
+                else:
+                    widget.setText(str(model_dir or ""))
+            finally:
+                widget.blockSignals(previous)
+
+    def _on_segmentation_setting_changed(self, _value=None) -> None:
+        """Persist the subregion-model choices whenever the user edits one."""
+        self.save_segmentation_settings()
+
+    def _browse_subregion_model_dir(self) -> None:
+        """Let the user pick the nnU-Net subregion model directory."""
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Pedicle Subregion Model Directory",
+            self.seg_subregion_dir_edit.text().strip(),
+        )
+        if directory:
+            self.seg_subregion_dir_edit.setText(directory)
 
     @staticmethod
     def _planner_settings() -> QSettings:

@@ -176,6 +176,7 @@ class _DummySegCtrl:
     def __init__(self):
         self._last_segmentation_mask_path = None
         self._last_segmentation_method = "totalsegmentator"
+        self._last_pedicle_mask = None
         self.ensure_mpr_calls = 0
 
     def ensure_mpr_vertebrae_isolated(self):
@@ -584,7 +585,7 @@ def test_planning_thread_forwards_config_to_planner(monkeypatch):
     captured = {}
 
     class _Analyzer:
-        def __init__(self, *_args):
+        def __init__(self, *_args, **_kwargs):
             pass
 
         def analyze_all(self, labels=None):
@@ -622,3 +623,96 @@ def test_planning_thread_config_defaults_to_none(monkeypatch):
     )
 
     assert thread._config is None
+
+
+# ---------------------------------------------------------------------------
+# Optional pedicle subregion mask hand-off
+# ---------------------------------------------------------------------------
+
+
+def test_planning_thread_receives_pedicle_mask(monkeypatch, tmp_path):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+    pedicle_mask = np.ones((4, 4, 4), bool)
+    window._seg_ctrl._last_pedicle_mask = pedicle_mask
+
+    captured = {}
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+
+    ctrl.run_planning()
+
+    assert captured["kwargs"].get("pedicle_mask") is pedicle_mask
+
+
+def test_planning_thread_forwards_pedicle_mask_to_analyzer(monkeypatch):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+
+    pedicle_mask = np.ones((2, 2, 2), bool)
+    captured = {}
+
+    class _Analyzer:
+        def __init__(self, _mask, _ct, pedicle_mask=None):
+            captured["pedicle_mask"] = pedicle_mask
+
+        def analyze_all(self, labels=None):
+            return []
+
+    class _Planner:
+        def __init__(self, _ct, _mask, grader=None, config=None):
+            pass
+
+        def plan_all(self, _analyses, sides="both"):
+            return []
+
+    monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
+    monkeypatch.setattr(module, "AutoScrewPlanner", _Planner)
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+        pedicle_mask=pedicle_mask,
+    )
+    thread.run()
+
+    assert captured["pedicle_mask"] is pedicle_mask
+
+
+def test_planning_thread_pedicle_mask_defaults_to_none():
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+    )
+
+    assert thread._pedicle_mask is None

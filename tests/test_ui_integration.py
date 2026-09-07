@@ -1890,3 +1890,53 @@ def test_inspector_metric_rows_default_to_dashes(ui_main_window):
     assert window.selected_screw_wall.text() == "--"
     assert window.selected_screw_facet.text() == "--"
     assert window.selected_screw_heary.text() == "--"
+
+
+# ---------------------------------------------------------------------------
+# Optional pedicle subregion model controls
+# ---------------------------------------------------------------------------
+
+
+def _segmentation_settings(isolated_qsettings):
+    settings = isolated_qsettings("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("segmentation")
+    return settings
+
+
+def test_subregion_controls_exist_and_default_off(ui_main_window):
+    window = ui_main_window
+
+    assert window.seg_use_subregion_check.text() == "Use pedicle subregion model"
+    assert window.seg_use_subregion_check.isChecked() is False
+    assert window.seg_subregion_dir_edit.text() == ""
+    assert (
+        window.seg_subregion_dir_edit.placeholderText()
+        == "Model directory (dataset.json)"
+    )
+    assert window.seg_subregion_browse_btn is not None
+
+
+def test_subregion_checkbox_toggle_persists(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+
+    window.seg_use_subregion_check.setChecked(True)
+    window.seg_subregion_dir_edit.setText(r"C:\models\Dataset501")
+
+    settings = _segmentation_settings(isolated_qsettings)
+    assert str(settings.value("use_subregion_model")).lower() in ("true", "1")
+    assert settings.value("subregion_model_dir") == r"C:\models\Dataset501"
+
+
+def test_subregion_settings_persist_into_a_new_window(ui_main_window, tmp_path):
+    window = ui_main_window
+    model_dir = str(tmp_path / "Dataset501")
+    window.seg_use_subregion_check.setChecked(True)
+    window.seg_subregion_dir_edit.setText(model_dir)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.seg_use_subregion_check.isChecked() is True
+        assert reopened.seg_subregion_dir_edit.text() == model_dir
+    finally:
+        reopened.close()
+        reopened.deleteLater()

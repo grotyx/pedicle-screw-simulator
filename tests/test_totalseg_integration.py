@@ -674,3 +674,152 @@ def test_workspace_remove_is_safe_for_unknown_or_none_paths(tmp_path):
     assert Path(tracked).exists()
     assert not stranger.exists()
     assert ws._dirs == [tracked]
+
+
+# ---------------------------------------------------------------------------
+# Optional subregion (pedicle) stage
+# ---------------------------------------------------------------------------
+
+
+def _fake_totalseg_writer(tmp_path):
+    """Return a run_totalsegmentator stand-in writing a valid multilabel mask."""
+    import numpy as np
+
+    def fake_total(**kwargs):
+        path = tmp_path / "totalseg_multilabel.nii.gz"
+        sitk.WriteImage(
+            sitk.GetImageFromArray(np.zeros((4, 4, 4), np.uint8)), str(path)
+        )
+        return str(path)
+
+    return fake_total
+
+
+def test_subregion_failure_does_not_fail_run(monkeypatch, tmp_path):
+    import numpy as np
+    from src.core import totalseg_integration as ts
+    from src.core.subregion_segmentation import SubregionModel
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_totalseg_writer(tmp_path))
+
+    def fake_sub(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ts, "run_subregion_segmentation", fake_sub)
+
+    model = SubregionModel(
+        root=tmp_path,
+        dataset_id="D",
+        configuration="3d_fullres",
+        labels={"pedicle": 2},
+    )
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+
+    result = ts.run_segmentation_with_fallback(
+        image=image,
+        work_dir=str(tmp_path),
+        device="cpu",
+        subregion_model=model,
+    )
+
+    assert result.method == "totalsegmentator"
+    assert result.subregion_mask_path is None
+    assert "boom" in result.subregion_message
+
+
+def test_subregion_success_populates_result(monkeypatch, tmp_path):
+    import numpy as np
+    from src.core import totalseg_integration as ts
+    from src.core.subregion_segmentation import SubregionModel
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_totalseg_writer(tmp_path))
+
+    sub_path = tmp_path / "subregion.nii.gz"
+    sitk.WriteImage(
+        sitk.GetImageFromArray(np.zeros((4, 4, 4), np.uint8)), str(sub_path)
+    )
+    captured = {}
+
+    def fake_sub(image, model, work_dir, device, progress_callback=None,
+                 process_holder=None):
+        captured["device"] = device
+        captured["work_dir"] = work_dir
+        return str(sub_path)
+
+    monkeypatch.setattr(ts, "run_subregion_segmentation", fake_sub)
+
+    model = SubregionModel(
+        root=tmp_path,
+        dataset_id="D",
+        configuration="3d_fullres",
+        labels={"pedicle": 2, "corpus": 1},
+    )
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+
+    result = ts.run_segmentation_with_fallback(
+        image=image,
+        work_dir=str(tmp_path),
+        device="cpu",
+        subregion_model=model,
+    )
+
+    assert result.method == "totalsegmentator"
+    assert result.subregion_mask_path == str(sub_path)
+    assert result.subregion_labels == {"pedicle": 2, "corpus": 1}
+    assert result.subregion_message == ""
+    assert captured["device"] == "cpu"
+    assert captured["work_dir"] == str(tmp_path)
+
+
+def test_subregion_cancellation_propagates(monkeypatch, tmp_path):
+    import numpy as np
+    from src.core import totalseg_integration as ts
+    from src.core.subregion_segmentation import SubregionModel
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_totalseg_writer(tmp_path))
+
+    def fake_sub(*args, **kwargs):
+        raise totalseg.SegmentationCancelled("cancelled by user")
+
+    monkeypatch.setattr(ts, "run_subregion_segmentation", fake_sub)
+
+    model = SubregionModel(
+        root=tmp_path,
+        dataset_id="D",
+        configuration="3d_fullres",
+        labels={"pedicle": 2},
+    )
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+
+    with pytest.raises(totalseg.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=image,
+            work_dir=str(tmp_path),
+            device="cpu",
+            subregion_model=model,
+        )
+
+
+def test_no_subregion_model_leaves_fields_empty(monkeypatch, tmp_path):
+    import numpy as np
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_totalseg_writer(tmp_path))
+
+    def fail(*args, **kwargs):
+        raise AssertionError("subregion stage must not run without a model")
+
+    monkeypatch.setattr(ts, "run_subregion_segmentation", fail)
+
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    result = ts.run_segmentation_with_fallback(
+        image=image, work_dir=str(tmp_path), device="cpu"
+    )
+
+    assert result.subregion_mask_path is None
+    assert result.subregion_labels == {}
+    assert result.subregion_message == ""

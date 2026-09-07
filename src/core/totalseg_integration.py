@@ -11,9 +11,12 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 import SimpleITK as sitk
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
+    from src.core.subregion_segmentation import SubregionModel
 
 
 SPINE_ROI_SUBSET = (
@@ -142,6 +145,25 @@ class SegmentationRunResult:
     mask_path: str
     message: str
     geometry_warnings: List[str] = field(default_factory=list)
+    # Optional stage-2 spine subregion (pedicle/corpus/lamina) output. Absent
+    # unless a subregion model was supplied and its run succeeded.
+    subregion_mask_path: Optional[str] = None
+    subregion_labels: Dict[str, int] = field(default_factory=dict)
+    subregion_message: str = ""
+
+
+def run_subregion_segmentation(*args, **kwargs) -> str:
+    """Delegate to the subregion runner, imported lazily.
+
+    ``src.core.subregion_segmentation`` imports this module, so the real
+    function cannot be imported at module scope. Keeping this named wrapper
+    here also gives tests a single attribute to patch.
+    """
+    from src.core.subregion_segmentation import (
+        run_subregion_segmentation as _run_subregion,
+    )
+
+    return _run_subregion(*args, **kwargs)
 
 
 def is_totalsegmentator_available() -> bool:
@@ -443,6 +465,9 @@ def _build_result(
     method: str,
     mask_path: str,
     message: str,
+    subregion_mask_path: Optional[str] = None,
+    subregion_labels: Optional[Dict[str, int]] = None,
+    subregion_message: str = "",
 ) -> SegmentationRunResult:
     geometry_warnings = validate_segmentation_output(image, mask_path)
     if geometry_warnings:
@@ -457,7 +482,41 @@ def _build_result(
         mask_path=mask_path,
         message=message,
         geometry_warnings=geometry_warnings,
+        subregion_mask_path=subregion_mask_path,
+        subregion_labels=dict(subregion_labels or {}),
+        subregion_message=subregion_message,
     )
+
+
+def _run_subregion_stage(
+    image: sitk.Image,
+    model: "SubregionModel",
+    work_dir: str,
+    device: str,
+    progress_callback: Optional[Callable[[str], None]],
+    process_holder: Optional[ProcessHolder],
+):
+    """Run the optional stage-2 subregion model after a TotalSegmentator run.
+
+    Returns ``(mask_path, labels, message)``. A stage-2 failure is reported
+    through ``message`` only: the caller keeps the TotalSegmentator mask and
+    never degrades to the threshold fallback because of it. Cancellation is
+    the one exception and propagates to abort the whole run.
+    """
+    try:
+        mask_path = run_subregion_segmentation(
+            image,
+            model,
+            work_dir,
+            device,
+            progress_callback,
+            process_holder,
+        )
+    except SegmentationCancelled:
+        raise
+    except Exception as exc:
+        return None, {}, f"Pedicle model unavailable: {exc}"
+    return mask_path, dict(model.labels), ""
 
 
 def run_segmentation_with_fallback(
@@ -470,6 +529,7 @@ def run_segmentation_with_fallback(
     force_split: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
     process_holder: Optional[ProcessHolder] = None,
+    subregion_model: Optional["SubregionModel"] = None,
 ) -> SegmentationRunResult:
     """
     Run TotalSegmentator with fallback strategy.
@@ -477,6 +537,10 @@ def run_segmentation_with_fallback(
     Behavior:
     1) If TotalSegmentator is available and succeeds -> use it.
     2) Otherwise fallback to threshold mask.
+
+    When ``subregion_model`` is given, a second-stage subregion inference runs
+    after a successful TotalSegmentator run. Its failure never fails the run:
+    it only sets ``subregion_message`` on the result.
 
     A user cancellation propagates as :class:`SegmentationCancelled`; no
     threshold fallback mask is produced in that case.
@@ -525,11 +589,30 @@ def run_segmentation_with_fallback(
                 message = (
                     "TotalSegmentator segmentation completed after CPU retry."
                 )
+            subregion_mask_path = None
+            subregion_labels: Dict[str, int] = {}
+            subregion_message = ""
+            if subregion_model is not None:
+                (
+                    subregion_mask_path,
+                    subregion_labels,
+                    subregion_message,
+                ) = _run_subregion_stage(
+                    image=image,
+                    model=subregion_model,
+                    work_dir=work_dir,
+                    device=attempt_device,
+                    progress_callback=progress_callback,
+                    process_holder=process_holder,
+                )
             return _build_result(
                 image=image,
                 method="totalsegmentator",
                 mask_path=mask_path,
                 message=message,
+                subregion_mask_path=subregion_mask_path,
+                subregion_labels=subregion_labels,
+                subregion_message=subregion_message,
             )
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SegmentationCancelled)):

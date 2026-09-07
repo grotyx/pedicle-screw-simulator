@@ -36,17 +36,22 @@ class _PlanningThread(QThread):
         ct_image,
         labels: List[int],
         config: Optional[PlannerConfig] = None,
+        pedicle_mask=None,
     ):
         super().__init__()
         self._mask = mask_image
         self._ct = ct_image
         self._labels = labels
         self._config = config
+        # Optional (z, y, x) boolean pedicle mask from the subregion model.
+        self._pedicle_mask = pedicle_mask
 
     def run(self):
         try:
             self.progress.emit("Analyzing vertebral pedicles...")
-            analyzer = PedicleAnalyzer(self._mask, self._ct)
+            analyzer = PedicleAnalyzer(
+                self._mask, self._ct, pedicle_mask=self._pedicle_mask
+            )
             analyses = analyzer.analyze_all(labels=self._labels)
 
             successful = [a for a in analyses if a.success]
@@ -154,6 +159,7 @@ class AutoPlacementController:
             ct_image,
             selected_labels,
             config=self._window.planner_config(),
+            pedicle_mask=getattr(seg_ctrl, "_last_pedicle_mask", None),
         )
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_finished)
