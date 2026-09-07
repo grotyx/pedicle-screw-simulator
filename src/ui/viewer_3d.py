@@ -826,7 +826,7 @@ class Viewer3D(QWidget):
             self._color_tf.AddRGBPoint(hu, r, g, b)
 
         # Scalar opacity
-        model_opacity = self.__dict__.get("_model_opacity", 1.0)
+        model_opacity = self._model_opacity
         self._opacity_tf.RemoveAllPoints()
         for hu, opacity in config["opacity_points"]:
             self._opacity_tf.AddPoint(hu, opacity * model_opacity)
@@ -874,7 +874,8 @@ class Viewer3D(QWidget):
 
     def set_volume_opacity(self, opacity: float) -> None:
         """Scale the overall volume opacity (0.0–1.0)."""
-        self._update_volume_opacity_transfer_function(opacity)
+        self._model_opacity = max(0.0, min(1.0, float(opacity)))
+        self._update_volume_opacity_transfer_function(self._model_opacity)
 
         if self._volume_added:
             self._request_render()
@@ -919,7 +920,7 @@ class Viewer3D(QWidget):
             self.MIN_VERTEBRAL_SURFACE_OPACITY,
             1.0 - self._vertebral_transparency,
         )
-        self._apply_screw_focus(self._selected_screw_id is not None)
+        self._apply_screw_focus()
         opacity_label = self.__dict__.get("model_opacity_label")
         if opacity_label is not None:
             opacity_label.setText(
@@ -1071,7 +1072,7 @@ class Viewer3D(QWidget):
         """Remove all screw visuals."""
         if not self._screw_actors:
             self._selected_screw_id = None
-            self._apply_screw_focus(False)
+            self._apply_screw_focus()
             return
         for visual in self._screw_actors:
             for actor in visual.props:
@@ -1079,7 +1080,7 @@ class Viewer3D(QWidget):
         self._screw_actors.clear()
         self._screw_prop_parts.clear()
         self._selected_screw_id = None
-        self._apply_screw_focus(False)
+        self._apply_screw_focus()
         if not self._render_guard_active:
             self._request_render()
 
@@ -1101,11 +1102,11 @@ class Viewer3D(QWidget):
         self._selected_screw_id = None if screw_id is None else int(screw_id)
         for visual in self._screw_actors:
             self._apply_screw_selection_style(visual)
-        self._apply_screw_focus(self._selected_screw_id is not None)
+        self._apply_screw_focus()
         if self._screw_actors:
             self._request_render()
 
-    def _apply_screw_focus(self, active: bool) -> None:
+    def _apply_screw_focus(self) -> None:
         """Keep vertebral transparency under explicit user control."""
         surface_opacity = self.__dict__.get(
             "_vertebral_surface_opacity",

@@ -17,6 +17,27 @@ from src.ui.click_detector import DoubleClickDetector
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 
+@pytest.fixture
+def viewer_3d_with_volume():
+    """A Viewer3D with a loaded-volume rendering pipeline (no Qt/VTK widget)."""
+    import vtk
+    from src.ui.viewer_3d import Viewer3D
+    from src.utils.constants import TRANSFER_FUNCTION_PRESETS
+
+    viewer = Viewer3D.__new__(Viewer3D)
+    viewer._color_tf = vtk.vtkColorTransferFunction()
+    viewer._opacity_tf = vtk.vtkPiecewiseFunction()
+    viewer._gradient_opacity_tf = vtk.vtkPiecewiseFunction()
+    viewer._volume_property = vtk.vtkVolumeProperty()
+    viewer._volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+    viewer._volume_added = False
+    viewer._model_opacity = 1.0
+    viewer.volume_manager = SimpleNamespace(
+        get_transfer_function_config=lambda: TRANSFER_FUNCTION_PRESETS["Bone"]
+    )
+    return viewer
+
+
 class TestNoSurfaceThread:
     """Verify SurfaceGenerationThread has been completely removed."""
 
@@ -391,12 +412,12 @@ class TestScrewVisualGeometry:
         viewer._segmentation_default_opacity = 0.35
         viewer._vertebral_surface_opacity = 0.50
 
-        viewer._apply_screw_focus(True)
+        viewer._apply_screw_focus()
 
         assert viewer._vertebral_mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.50)
         assert viewer._segmentation_actor.GetProperty().GetOpacity() == pytest.approx(0.50)
 
-        viewer._apply_screw_focus(False)
+        viewer._apply_screw_focus()
 
         assert viewer._vertebral_mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.50)
         assert viewer._segmentation_actor.GetProperty().GetOpacity() == pytest.approx(0.50)
@@ -728,6 +749,14 @@ class TestTransferFunctionPresets:
         assert viewer._opacity_tf.GetValue(hu) == pytest.approx(
             base_opacity * 0.5
         )
+
+    def test_opacity_scale_persists_across_preset_change(self, viewer_3d_with_volume):
+        viewer = viewer_3d_with_volume
+        viewer.set_volume_opacity(0.3)
+        viewer.apply_transfer_function_preset("Soft Tissue")
+        from src.utils.constants import TRANSFER_FUNCTION_PRESETS
+        hu, base = TRANSFER_FUNCTION_PRESETS["Soft Tissue"]["opacity_points"][-1]
+        assert viewer._opacity_tf.GetValue(hu) == pytest.approx(base * 0.3, abs=1e-6)
 
 
 if __name__ == "__main__":
