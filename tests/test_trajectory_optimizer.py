@@ -1,5 +1,6 @@
 """Tests for the candidate-based multi-objective trajectory optimiser."""
 
+import logging
 import math
 import os
 import sys
@@ -158,7 +159,9 @@ def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
     elapsed = time.perf_counter() - started
 
     assert result == []
-    assert elapsed <= 5.0, f"optimize_screw took {elapsed:.2f} s"
+    # An order-of-magnitude regression guard, not a benchmark: the measured
+    # runtime is ~3.2 s locally and a shared CI runner is slower still.
+    assert elapsed <= 10.0, f"optimize_screw took {elapsed:.2f} s"
     assert len(set(tried)) == MAX_DIAMETER_STEPS + 1
     assert sorted(set(tried), reverse=True) == [6.5, 6.0, 5.5]
 
@@ -230,3 +233,19 @@ def test_grader_without_ct_still_yields_candidates():
     assert ranked
     assert math.isnan(ranked[0].mean_hu)
     assert ranked[0].components["density"] == 0.0
+
+
+def test_missing_ct_is_warned_once_per_grader(caplog):
+    """Each CT-less study warns once; a second study is not silently downgraded."""
+    _ct, mask, analysis = _setup()
+    config = PlannerConfig()
+
+    with caplog.at_level(logging.WARNING, logger="src.core.trajectory_optimizer"):
+        for _ in range(2):                       # two distinct short-lived graders
+            optimize_screw(ScrewGrader(mask), analysis, "left", config)
+        reused = ScrewGrader(mask)               # one grader, graded twice
+        optimize_screw(reused, analysis, "left", config)
+        optimize_screw(reused, analysis, "right", config)
+
+    warned = [r for r in caplog.records if "has no CT" in r.getMessage()]
+    assert len(warned) == 3

@@ -1239,11 +1239,11 @@ class TestOptimizerMode:
         optim = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer")).plan_all([analysis])
         order = "ABCDE"
         for side in ("left", "right"):
-            l = next(s for s in legacy if s.side == side)
-            o = next(s for s in optim if s.side == side)
-            assert order.index(o.gertzbein_grade) <= order.index(l.gertzbein_grade)
-            assert o.metrics["min_wall_mm"] >= l.metrics["min_wall_mm"] - 0.5
-            assert "score" in o.metrics and "rod_misalignment_mm" in o.metrics
+            before = next(s for s in legacy if s.side == side)
+            after = next(s for s in optim if s.side == side)
+            assert order.index(after.gertzbein_grade) <= order.index(before.gertzbein_grade)
+            assert after.metrics["min_wall_mm"] >= before.metrics["min_wall_mm"] - 0.5
+            assert "score" in after.metrics and "rod_misalignment_mm" in after.metrics
 
     def test_optimizer_screws_carry_score_components_and_clinical_metrics(self):
         from src.core.planner_config import PlannerConfig
@@ -1286,6 +1286,59 @@ class TestOptimizerMode:
 
         assert len(results) == 1
         assert "Optimizer found no feasible trajectory; legacy planner used" in results[0].warnings
+
+
+class TestPlanAllProgressAndCancel:
+    """``plan_all`` narrates each ``(level, side)`` and can stop between them."""
+
+    def _planner(self, mode):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        return AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_progress_reports_one_message_per_level_and_side(self, mode):
+        planner = self._planner(mode)
+        messages = []
+
+        planner.plan_all([_make_analysis()], progress=messages.append)
+
+        assert messages == [
+            "Planning L5 left (1/2)…",
+            "Planning L5 right (2/2)…",
+        ]
+        assert planner.last_run_cancelled is False
+        assert planner.skipped_sides == []
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_cancel_after_the_first_side_returns_a_partial_construct(self, mode):
+        planner = self._planner(mode)
+        analysis = _make_analysis()
+        full = planner.plan_all([analysis])
+        assert len(full) == 2
+
+        asked = []
+
+        def cancel():
+            asked.append(True)
+            return len(asked) > 1
+
+        partial = planner.plan_all([analysis], cancel=cancel)
+
+        assert [s.side for s in partial] == ["left"]
+        assert planner.last_run_cancelled is True
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_last_run_cancelled_resets_on_the_next_run(self, mode):
+        planner = self._planner(mode)
+        analysis = _make_analysis()
+        planner.plan_all([analysis], cancel=lambda: True)
+        assert planner.last_run_cancelled is True
+
+        planner.plan_all([analysis])
+
+        assert planner.last_run_cancelled is False
 
 
 if __name__ == "__main__":

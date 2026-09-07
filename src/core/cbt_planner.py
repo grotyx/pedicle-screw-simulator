@@ -29,6 +29,12 @@ import SimpleITK as sitk
 from ..utils.constants import CBT_CONTRAINDICATION_NOTE, CBT_DEFAULTS
 from .planner_config import PlannerConfig
 from .screw_grading import ScrewGrader
+from .trajectory_optimizer import (
+    DENSITY_HIGH_HU,
+    DENSITY_LOW_HU,
+    SAFETY_CAP_MM,
+    RunProgress,
+)
 from .vertebra import PedicleAnalysisResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -52,13 +58,10 @@ _CAST_MAX_MM = 40.0
 #: Step of the angle sweep either side of the CBT defaults (degrees).
 ANGLE_STEP_DEG = 2.5
 
-#: Wall distance at which the safety objective saturates (mm), and the HU window
-#: the density objective is normalised over.  Mirrors the trajectory optimiser so
-#: the two families' component scores stay comparable, but CBT weights density at
-#: 1.0 rather than 0.5: cortical purchase *is* the technique.
-SAFETY_CAP_MM = 3.0
-DENSITY_LOW_HU = 100.0
-DENSITY_HIGH_HU = 600.0
+#: The safety cap and HU window are imported from the trajectory optimiser, not
+#: restated, so the two families' component scores cannot drift apart.  Only the
+#: weights are local: CBT scores density at 1.0 rather than the optimiser's 0.5
+#: because cortical purchase *is* the technique.
 SAFETY_WEIGHT = 1.0
 DENSITY_WEIGHT = 1.0
 
@@ -126,9 +129,19 @@ def cbt_entry_point(
     axial fallback never produces one) or when the ray finds no bone behind the
     seed, which is what an absent lamina or a pars defect looks like here.
     """
+    return _cbt_entry_point(grader, analysis, side, label)[0]
+
+
+def _cbt_entry_point(
+    grader: ScrewGrader,
+    analysis: PedicleAnalysisResult,
+    side: str,
+    label: int,
+) -> Tuple[Optional[np.ndarray], str]:
+    """:func:`cbt_entry_point` plus the reason it gave up, for the caller to report."""
     corner = _corner_for_side(analysis, side)
     if corner is None:
-        return None
+        return None, "no inferior-medial isthmus corner in the pedicle analysis"
 
     medial_sign = -1.0 if side == "left" else 1.0
     seed = corner + np.array(
@@ -140,17 +153,15 @@ def cbt_entry_point(
     d_out, _d_in = grader.distances_at_points(points, int(label))
     inside = np.flatnonzero(d_out <= 0.0)
     if inside.size == 0:
-        logger.info("No %s CBT entry: no bone posterior to the isthmus corner", side)
-        return None
+        return None, "no bone posterior to the isthmus corner"
 
     surface = seed + np.array([0.0, float(steps[inside[-1]]), 0.0])
     entry = surface - np.array([0.0, ENTRY_BACKOFF_MM, 0.0])
     entry_out, _ = grader.distances_at_points(entry.reshape(1, 3), int(label))
     if entry_out[0] > 0.0:
         # A shell thinner than the back-off; there is nothing to start a screw in.
-        logger.info("No %s CBT entry: posterior cortex thinner than the back-off", side)
-        return None
-    return entry
+        return None, "posterior cortex thinner than the entry back-off"
+    return entry, ""
 
 
 def cbt_directions(side: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -212,15 +223,33 @@ def plan_cbt_screw(
     ``planner`` reuses a caller's :class:`AutoScrewPlanner` (which caches full
     CT and mask arrays) instead of building one per screw.
     """
-    entry = cbt_entry_point(grader, analysis, side, label)
+    return _plan_cbt_screw(grader, analysis, side, label, config, planner=planner)[0]
+
+
+def _plan_cbt_screw(
+    grader: ScrewGrader,
+    analysis: PedicleAnalysisResult,
+    side: str,
+    label: int,
+    config: PlannerConfig,
+    planner=None,
+) -> Tuple[Optional["PlannedScrew"], str]:
+    """:func:`plan_cbt_screw` plus the reason it gave up, for the caller to report.
+
+    A dropped side is a construct the surgeon did not ask for, so the reason has
+    to travel back out to the UI rather than only into the log.
+    """
+    entry, reason = _cbt_entry_point(grader, analysis, side, label)
     if entry is None:
-        return None
+        logger.info("No %s CBT entry for %s: %s", side, analysis.vertebra.name, reason)
+        return None, reason
 
     pedicle_center, pedicle_width = _side_geometry(analysis, side)
     body_center = analysis.vertebral_body_center
     if pedicle_center is None or body_center is None:
-        logger.info("No %s CBT screw: missing isthmus or body centre", side)
-        return None
+        reason = "missing isthmus or body centre"
+        logger.info("No %s CBT screw: %s", side, reason)
+        return None, reason
 
     directions, cranial_deg, _lateral_deg = cbt_directions(side)
     lengths = np.asarray(CBT_DEFAULTS["lengths_mm"], dtype=np.float64)
@@ -264,10 +293,12 @@ def plan_cbt_screw(
                 best_key = key
                 best_pick = (int(i), float(diameter), float(safety[i]), float(density[i]))
     if best_key is None or best_pick is None:
+        reason = "no contained trajectory with the required wall clearance"
         logger.info(
-            "No feasible CBT trajectory for %s %s", analysis.vertebra.name, side
+            "No feasible CBT trajectory for %s %s: %s",
+            analysis.vertebra.name, side, reason,
         )
-        return None
+        return None, reason
 
     score_value, length_value, _ = best_key
     index, diameter, safety_value, density_value = best_pick
@@ -295,7 +326,7 @@ def plan_cbt_screw(
         "safety": safety_value,
         "density": density_value,
     }
-    return planned
+    return planned, ""
 
 
 def plan_cbt_screws(
@@ -305,24 +336,49 @@ def plan_cbt_screws(
     config: PlannerConfig,
     skip_labels: Tuple[int, ...] = (),
     planner=None,
+    progress: Optional[RunProgress] = None,
+    skipped: Optional[List[Tuple[str, str, str]]] = None,
 ) -> List["PlannedScrew"]:
     """Plan a CBT screw per requested side of every analysed vertebra.
 
     Sides that cannot be solved are dropped rather than falling back to a
     traditional trajectory: the two families place their heads in different
     places, and silently mixing them would break the construct the surgeon asked
-    for.
+    for.  Dropping is the policy; hiding it is not, so every dropped side is
+    appended to ``skipped`` as ``(vertebra name, side, reason)`` for the caller
+    to put in front of the surgeon.  Vertebrae in ``skip_labels`` are not
+    recorded: excluding the sacrum is a request, not a failure.
+
+    ``progress`` narrates and, when its ``cancel`` fires, stops the run between
+    sides; the screws planned so far are returned.
     """
     planner = planner if planner is not None else _make_planner(grader, config)
     results: List["PlannedScrew"] = []
     for analysis in analyses:
         vertebra = analysis.vertebra
-        if vertebra.label in skip_labels or not analysis.success:
+        if vertebra.label in skip_labels:
             continue
         for side in sides:
-            planned = plan_cbt_screw(
+            if progress is not None and not progress.start(vertebra.name, side):
+                return results
+            if not analysis.success:
+                _record_skip(skipped, vertebra.name, side, "pedicle analysis failed")
+                continue
+            planned, reason = _plan_cbt_screw(
                 grader, analysis, side, vertebra.label, config, planner=planner
             )
-            if planned is not None:
+            if planned is None:
+                _record_skip(skipped, vertebra.name, side, reason)
+            else:
                 results.append(planned)
     return results
+
+
+def _record_skip(
+    skipped: Optional[List[Tuple[str, str, str]]],
+    name: str,
+    side: str,
+    reason: str,
+) -> None:
+    if skipped is not None:
+        skipped.append((name, side, reason or "no feasible trajectory"))

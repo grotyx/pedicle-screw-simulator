@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import logging
 import math
+import weakref
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -87,6 +88,38 @@ DEFAULT_WEIGHTS = OptimizerWeights()
 
 
 @dataclass
+class RunProgress:
+    """Per-``(level, side)`` narration and cancellation for one planning run.
+
+    Shared by every planning back-end -- the optimiser, the legacy planner and
+    the CBT planner -- so a run reads the same wherever it is planned and stops
+    at the same granularity: between screws, never part-way through grading one.
+    It lives here rather than in ``auto_screw_planner`` because
+    :mod:`~src.core.cbt_planner` cannot import that module at module scope
+    (``auto_screw_planner`` imports *it*), and this module is the one both
+    already depend on.
+    """
+
+    #: How many ``(level, side)`` pairs the run will visit, for the "i/n" count.
+    total: int
+    progress: Optional[Callable[[str], None]] = None
+    cancel: Optional[Callable[[], bool]] = None
+    done: int = 0
+    #: Set once :meth:`start` has refused an iteration.
+    cancelled: bool = False
+
+    def start(self, level: str, side: str) -> bool:
+        """Announce one ``(level, side)``; ``False`` means stop the run here."""
+        if self.cancel is not None and self.cancel():
+            self.cancelled = True
+            return False
+        self.done += 1
+        if self.progress is not None:
+            self.progress(f"Planning {level} {side} ({self.done}/{self.total})…")
+        return True
+
+
+@dataclass
 class Candidate:
     """One scored, feasible trajectory."""
 
@@ -120,20 +153,28 @@ def _rotate(v: np.ndarray, axis: np.ndarray, deg: float) -> np.ndarray:
     )
 
 
-#: Guard for the "grader has no CT" warning, which is a property of the loaded
-#: study rather than of any one candidate and would otherwise repeat per scoring
-#: pass.
-_missing_ct_warned = False
+#: Graders already warned about a missing CT.  The warning is a property of the
+#: loaded study, not of any one candidate, so it is deduplicated -- but per
+#: grader rather than per process, so a second study loaded into the same
+#: session is still warned about.  Weak references keep a closed study's grader
+#: collectable.
+_missing_ct_warned: "weakref.WeakSet[ScrewGrader]" = weakref.WeakSet()
 
 
-def _warn_missing_ct() -> None:
-    global _missing_ct_warned
-    if not _missing_ct_warned:
-        _missing_ct_warned = True
-        logger.warning(
-            "Grader has no CT: trajectory HU is unavailable, scoring every candidate "
-            "with a density component of 0"
-        )
+def _warn_missing_ct(grader: Optional[ScrewGrader] = None) -> None:
+    """Warn once per ``grader`` that trajectory HU is unavailable.
+
+    A caller with no grader to key on (a direct ``score_candidates`` call) is
+    warned every time rather than silenced by another study's run.
+    """
+    if grader is not None:
+        if grader in _missing_ct_warned:
+            return
+        _missing_ct_warned.add(grader)
+    logger.warning(
+        "Grader has no CT: trajectory HU is unavailable, scoring every candidate "
+        "with a density component of 0"
+    )
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -391,6 +432,7 @@ def score_candidates(
     weights: OptimizerWeights,
     tip_batch: Optional[BatchResult] = None,
     surface_shortfall_mm: Optional[np.ndarray] = None,
+    grader: Optional[ScrewGrader] = None,
 ) -> List[Candidate]:
     """Filter graded candidates to the feasible ones and rank them.
 
@@ -404,7 +446,8 @@ def score_candidates(
     missing measurement, not an unrankable trajectory, so the density objective
     drops to 0 instead of failing the whole batch.  Individual ``NaN`` values in
     an otherwise-sampled batch still mean the candidate could not be measured
-    and stay infeasible.
+    and stay infeasible.  ``grader``, when given, deduplicates that missing-CT
+    warning to one per study instead of one per scoring pass.
     """
     entries = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -433,7 +476,7 @@ def score_candidates(
     sampled_hu = np.isfinite(batch.mean_hu)
     without_ct = not sampled_hu.any()
     if without_ct:
-        _warn_missing_ct()
+        _warn_missing_ct(grader)
 
     feasible = (
         (batch.breach_mm <= 0.0)
@@ -567,6 +610,7 @@ def optimize_screw(
             batch, entries, targets, lengths, diameter, analysis, side, config, weights,
             tip_batch=tip_batch,
             surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
+            grader=grader,
         )
         if ranked:
             if diameter < recommended:

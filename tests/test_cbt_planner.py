@@ -173,6 +173,52 @@ def test_plan_all_cbt_trajectory_marks_every_screw(mode):
         assert screw.craniocaudal_angle > 15.0
 
 
+def test_plan_all_records_a_dropped_side_with_a_reason():
+    """A side CBT cannot solve is reported, not silently missing from the plan."""
+    ct, mask, analysis = _setup()
+    analysis.right_pedicle_inferior_medial_lps = None
+    planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(trajectory="cbt"))
+
+    screws = planner.plan_all([analysis])
+
+    assert [s.side for s in screws] == ["left"]
+    name = analysis.vertebra.name
+    assert [(v, s) for v, s, _r in planner.skipped_sides] == [(name, "right")]
+    assert planner.skipped_sides[0][2]          # a non-empty reason
+
+
+def test_plan_all_traditional_trajectory_leaves_skipped_sides_empty():
+    ct, mask, analysis = _setup()
+    planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+    planner.plan_all([analysis])
+    assert planner.skipped_sides == []
+
+
+def test_plan_all_cbt_reports_progress_and_can_be_cancelled():
+    ct, mask, analysis = _setup()
+    planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(trajectory="cbt"))
+    messages = []
+
+    planner.plan_all([analysis], progress=messages.append)
+
+    name = analysis.vertebra.name
+    assert messages == [
+        f"Planning {name} left (1/2)…",
+        f"Planning {name} right (2/2)…",
+    ]
+
+    asked = []
+
+    def cancel():
+        asked.append(True)
+        return len(asked) > 1
+
+    partial = planner.plan_all([analysis], cancel=cancel)
+
+    assert [s.side for s in partial] == ["left"]
+    assert planner.last_run_cancelled is True
+
+
 def test_plan_all_traditional_trajectory_is_labelled_traditional():
     ct, mask, analysis = _setup()
     planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -31,8 +31,13 @@ from .cbt_planner import plan_cbt_screws
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import ScrewGrader
-from .trajectory_optimizer import (Candidate, optimize_construct, optimize_screw,
-                                   rod_misalignment_mm)
+from .trajectory_optimizer import (
+    Candidate,
+    RunProgress,
+    optimize_construct,
+    optimize_screw,
+    rod_misalignment_mm,
+)
 from .vertebra import PedicleAnalysisResult, Vertebra
 
 logger = logging.getLogger(__name__)
@@ -157,6 +162,12 @@ class AutoScrewPlanner:
         self._ct_array: np.ndarray = sitk.GetArrayFromImage(ct_image)   # (z, y, x)
         self._mask_array: np.ndarray = sitk.GetArrayFromImage(mask_image)
         self._grader = grader or ScrewGrader(mask_image, ct_image)
+        #: Whether the last :meth:`plan_all` stopped early on its ``cancel``.
+        self.last_run_cancelled: bool = False
+        #: ``(vertebra name, side, reason)`` per side the last :meth:`plan_all`
+        #: could not place a screw on.  Only the CBT path fills this in: the
+        #: optimiser and legacy paths always fall back to *some* trajectory.
+        self.skipped_sides: List[Tuple[str, str, str]] = []
 
     # =====================================================================
     # Public API
@@ -433,6 +444,8 @@ class AutoScrewPlanner:
         self,
         analyses: List[PedicleAnalysisResult],
         sides: str = "both",
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[Callable[[], bool]] = None,
     ) -> List[PlannedScrew]:
         """Plan screws for all analyzed vertebrae.
 
@@ -442,6 +455,15 @@ class AutoScrewPlanner:
             List of pedicle analysis results.
         sides:
             ``"both"`` (default), ``"left"``, or ``"right"``.
+        progress:
+            Called with ``"Planning L4 left (3/10)…"`` as each ``(level, side)``
+            starts.  Grading one pedicle takes seconds, so a multi-level
+            construct is otherwise a long silence.
+        cancel:
+            Polled at the top of each ``(level, side)``.  When it returns
+            ``True`` the run stops there and returns the screws planned so far,
+            with :attr:`last_run_cancelled` set.  Never interrupts a pedicle
+            part-way: a half-graded trajectory is not a screw.
 
         ``config.trajectory == "cbt"`` replaces the trajectory family for both
         back-ends: a cortical bone trajectory has its own entry landmark, angle
@@ -452,8 +474,19 @@ class AutoScrewPlanner:
             raise ValueError(f"sides must be 'both', 'left', or 'right', got {sides!r}")
 
         side_list = ["left", "right"] if sides == "both" else [sides]
+        self.last_run_cancelled = False
+        self.skipped_sides = []
 
         if self.config.trajectory == "cbt":
+            planned_levels = sum(
+                1 for a in analyses if a.vertebra.label != _SACRUM_LABEL
+            )
+            reporter = RunProgress(
+                total=planned_levels * len(side_list),
+                progress=progress,
+                cancel=cancel,
+            )
+            skipped: List[Tuple[str, str, str]] = []
             screws = plan_cbt_screws(
                 self._grader,
                 analyses,
@@ -461,20 +494,34 @@ class AutoScrewPlanner:
                 self.config,
                 skip_labels=(_SACRUM_LABEL,),
                 planner=self,
+                progress=reporter,
+                skipped=skipped,
             )
+            self.skipped_sides = skipped
+            self.last_run_cancelled = reporter.cancelled
             self._stamp_rod_misalignment(screws)
             return screws
 
+        reporter = RunProgress(
+            total=len(analyses) * len(side_list),
+            progress=progress,
+            cancel=cancel,
+        )
         if self.config.mode == "optimizer":
-            return self._plan_all_optimized(analyses, side_list)
+            results = self._plan_all_optimized(analyses, side_list, reporter)
+        else:
+            results = []
+            for analysis in analyses:
+                for side in side_list:
+                    if not reporter.start(analysis.vertebra.name, side):
+                        break
+                    planned = self.plan_screw(analysis, side)
+                    if planned is not None:
+                        results.append(planned)
+                if reporter.cancelled:
+                    break
 
-        results: List[PlannedScrew] = []
-        for analysis in analyses:
-            for side in side_list:
-                planned = self.plan_screw(analysis, side)
-                if planned is not None:
-                    results.append(planned)
-
+        self.last_run_cancelled = reporter.cancelled
         return results
 
     # =====================================================================
@@ -485,6 +532,7 @@ class AutoScrewPlanner:
         self,
         analyses: List[PedicleAnalysisResult],
         side_list: List[str],
+        reporter: RunProgress,
     ) -> List[PlannedScrew]:
         """Plan every screw through the candidate optimiser.
 
@@ -492,15 +540,23 @@ class AutoScrewPlanner:
         :func:`~src.core.trajectory_optimizer.optimize_construct` then picks one
         per screw so the heads of each side line up.  A pedicle the optimiser
         cannot solve silently falls back to :meth:`plan_screw`.
+
+        ``reporter`` narrates and cancels the candidate search — the pass that
+        actually costs the time.  A cancelled run assembles a construct from the
+        pedicles it reached, and never plans one it never announced.
         """
         per_screw: Dict[Tuple[str, str], List[Candidate]] = {}
         keys: Dict[Tuple[int, str], Tuple[str, str]] = {}
+        visited: List[Tuple[PedicleAnalysisResult, str]] = []
 
         for analysis in analyses:
             vertebra = analysis.vertebra
-            if vertebra.label == _SACRUM_LABEL or not analysis.success:
-                continue    # the legacy fallback rejects these anyway
             for side in side_list:
+                if not reporter.start(vertebra.name, side):
+                    break
+                visited.append((analysis, side))
+                if vertebra.label == _SACRUM_LABEL or not analysis.success:
+                    continue    # the legacy fallback rejects these anyway
                 key = self._construct_key(vertebra, side, per_screw)
                 try:
                     candidates = optimize_screw(
@@ -521,21 +577,22 @@ class AutoScrewPlanner:
                 if candidates:
                     per_screw[key] = candidates
                     keys[(vertebra.label, side)] = key
+            if reporter.cancelled:
+                break
 
         chosen = optimize_construct(per_screw, self.config.weights) if per_screw else {}
 
         results: List[PlannedScrew] = []
-        for analysis in analyses:
-            for side in side_list:
-                key = keys.get((analysis.vertebra.label, side))
-                candidate = chosen.get(key) if key is not None else None
-                planned = (
-                    self._screw_from_candidate(analysis, side, candidate)
-                    if candidate is not None
-                    else self._legacy_fallback(analysis, side)
-                )
-                if planned is not None:
-                    results.append(planned)
+        for analysis, side in visited:
+            key = keys.get((analysis.vertebra.label, side))
+            candidate = chosen.get(key) if key is not None else None
+            planned = (
+                self._screw_from_candidate(analysis, side, candidate)
+                if candidate is not None
+                else self._legacy_fallback(analysis, side)
+            )
+            if planned is not None:
+                results.append(planned)
 
         self._stamp_rod_misalignment(results)
         return results

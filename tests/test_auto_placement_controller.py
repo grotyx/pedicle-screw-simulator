@@ -2,12 +2,19 @@
 
 import numpy as np
 import pytest
+from PyQt6.QtWidgets import QProgressDialog, QWidget
 
 from src.controllers.auto_placement_controller import (
     AutoPlacementController,
     planned_screw_to_screw,
 )
 from src.core.auto_screw_planner import PlannedScrew
+
+
+@pytest.fixture(autouse=True)
+def _application(qapp):
+    """The window stub is a real ``QWidget`` so it can parent a progress dialog."""
+    return qapp
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +231,15 @@ class _DummyListWidget:
         return self.row
 
 
-class _DummyWindow:
-    """Minimal MainWindow stub for controller testing."""
+class _DummyWindow(QWidget):
+    """Minimal MainWindow stub for controller testing.
+
+    A ``QWidget`` because :class:`AutoPlacementController` parents its planning
+    progress dialog to the window.
+    """
 
     def __init__(self):
+        super().__init__()
         self.viewer_3d = _DummyViewer3D()
         self._tool_ctrl = _DummyToolCtrl()
         self._seg_ctrl = _DummySegCtrl()
@@ -595,7 +607,7 @@ def test_planning_thread_forwards_config_to_planner(monkeypatch):
         def __init__(self, _ct, _mask, grader=None, config=None):
             captured["config"] = config
 
-        def plan_all(self, _analyses, sides="both"):
+        def plan_all(self, _analyses, sides="both", **_kwargs):
             return []
 
     monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
@@ -688,7 +700,7 @@ def test_planning_thread_forwards_pedicle_mask_to_analyzer(monkeypatch):
         def __init__(self, _ct, _mask, grader=None, config=None):
             pass
 
-        def plan_all(self, _analyses, sides="both"):
+        def plan_all(self, _analyses, sides="both", **_kwargs):
             return []
 
     monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
@@ -731,3 +743,224 @@ def test_on_finished_omits_rod_misalignment_when_absent(controller_with_window):
     ctrl, window = controller_with_window
     ctrl._on_finished([_planned("L4", "left")])
     assert "Rod misalignment" not in window.auto_screw_status._text
+
+
+def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
+    """A side with no screws must not be reported as perfectly aligned."""
+    ctrl, window = controller_with_window
+    ctrl._on_finished([_planned("L4", "left", metrics={"rod_misalignment_mm": 1.24})])
+    text = window.auto_screw_status._text
+    assert text.endswith("Rod misalignment L 1.2 mm")
+    assert "R 0.0 mm" not in text
+
+
+# ---------------------------------------------------------------------------
+# Progress, cancellation and dropped CBT sides
+# ---------------------------------------------------------------------------
+
+
+class _FinishedThread:
+    """Stand-in for a finished ``_PlanningThread``."""
+
+    def __init__(self, cancelled=False, skipped_sides=()):
+        self.cancelled = cancelled
+        self.skipped_sides = list(skipped_sides)
+        self.cancel_requested = False
+
+    def request_cancel(self):
+        self.cancel_requested = True
+
+
+def _thread_for(mask_size=2):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+
+    return module._PlanningThread(
+        sitk.Image([mask_size] * 3, sitk.sitkUInt8),
+        sitk.Image([mask_size] * 3, sitk.sitkInt16),
+        [28],
+    )
+
+
+def test_request_cancel_sets_the_planning_threads_event():
+    thread = _thread_for()
+    assert thread._cancel.is_set() is False
+    thread.request_cancel()
+    assert thread._cancel.is_set() is True
+
+
+def test_controller_request_cancel_reaches_the_running_thread(controller_with_window):
+    ctrl, _window = controller_with_window
+    thread = _FinishedThread()
+    ctrl._thread = thread
+    ctrl.request_cancel()
+    assert thread.cancel_requested is True
+
+
+def test_request_cancel_without_a_run_is_a_no_op(controller_with_window):
+    ctrl, _window = controller_with_window
+    ctrl.request_cancel()          # must not raise
+
+
+def test_planning_thread_forwards_progress_and_cancel_to_the_planner(monkeypatch):
+    import src.controllers.auto_placement_controller as module
+
+    captured = {}
+
+    class _Analyzer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def analyze_all(self, labels=None):
+            return []
+
+    class _Planner:
+        skipped_sides = [("L2", "right", "no isthmus corner")]
+        last_run_cancelled = True
+
+        def __init__(self, _ct, _mask, grader=None, config=None):
+            pass
+
+        def plan_all(self, _analyses, sides="both", progress=None, cancel=None):
+            captured["progress"] = progress
+            captured["cancel"] = cancel
+            progress("Planning L4 left (1/2)…")
+            return []
+
+    monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
+    monkeypatch.setattr(module, "AutoScrewPlanner", _Planner)
+
+    thread = _thread_for()
+    emitted = []
+    thread.progress.connect(emitted.append)
+    thread.run()
+
+    assert captured["cancel"]() is False
+    thread.request_cancel()
+    assert captured["cancel"]() is True
+    assert "Planning L4 left (1/2)…" in emitted
+    assert thread.skipped_sides == [("L2", "right", "no isthmus corner")]
+    assert thread.cancelled is True
+
+
+def test_on_finished_closes_the_dialog_without_re_entering_cancel(
+    controller_with_window,
+):
+    ctrl, _window = controller_with_window
+    thread = _FinishedThread()
+    ctrl._thread = thread
+    dialog = QProgressDialog("Planning screws…", "Cancel", 0, 0, None)
+    dialog.canceled.connect(ctrl._on_cancel_requested)
+    ctrl._progress_dialog = dialog
+
+    ctrl._on_finished([_planned()])
+
+    assert ctrl._progress_dialog is None
+    assert not dialog.isVisible()
+    assert thread.cancel_requested is False
+
+
+def test_on_error_closes_the_dialog(controller_with_window, monkeypatch):
+    ctrl, _window = controller_with_window
+    monkeypatch.setattr(
+        "src.controllers.auto_placement_controller.QMessageBox.critical",
+        lambda *a, **k: None,
+    )
+    dialog = QProgressDialog("Planning screws…", "Cancel", 0, 0, None)
+    dialog.canceled.connect(ctrl._on_cancel_requested)
+    ctrl._progress_dialog = dialog
+
+    ctrl._on_error("boom")
+
+    assert ctrl._progress_dialog is None
+    assert not dialog.isVisible()
+
+
+def test_on_finished_reports_a_cancelled_run_instead_of_success(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    ctrl._thread = _FinishedThread(cancelled=True)
+
+    ctrl._on_finished([_planned("L4", "left"), _planned("L4", "right")])
+
+    assert window.auto_screw_status._text == "Planning cancelled — 2 screws kept"
+    # The partial construct is still added, so the surgeon keeps what was planned.
+    assert len(window._tool_ctrl.screw_tool.get_screws()) == 2
+
+
+def test_on_finished_reports_a_cancelled_run_with_no_screws(controller_with_window):
+    ctrl, window = controller_with_window
+    ctrl._thread = _FinishedThread(cancelled=True)
+    ctrl._on_finished([])
+    assert window.auto_screw_status._text == "Planning cancelled — 0 screws kept"
+
+
+def test_on_finished_names_sides_with_no_feasible_cbt_trajectory(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    ctrl._thread = _FinishedThread(
+        skipped_sides=[
+            ("L2", "right", "no isthmus corner"),
+            ("L3", "right", "no feasible trajectory"),
+        ]
+    )
+
+    ctrl._on_finished([_planned()])
+
+    assert (
+        "No feasible CBT trajectory: L2 right, L3 right"
+        in window.auto_screw_status._text
+    )
+
+
+def test_on_finished_names_dropped_sides_even_with_no_screws(controller_with_window):
+    ctrl, window = controller_with_window
+    ctrl._thread = _FinishedThread(skipped_sides=[("L2", "right", "no corner")])
+    ctrl._on_finished([])
+    assert "No feasible CBT trajectory: L2 right" in window.auto_screw_status._text
+
+
+def test_run_planning_shows_a_cancellable_progress_dialog(monkeypatch, tmp_path):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *_args, **_kwargs):
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+            self.cancel_requested = False
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return True
+
+        def request_cancel(self):
+            self.cancel_requested = True
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+
+    ctrl.run_planning()
+
+    dialog = ctrl._progress_dialog
+    assert dialog is not None
+    assert (dialog.minimum(), dialog.maximum()) == (0, 0)   # indeterminate
+    dialog.canceled.emit()
+    assert ctrl._thread.cancel_requested is True
+    ctrl._close_progress_dialog()

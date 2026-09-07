@@ -7,10 +7,11 @@ screw trajectories.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, TYPE_CHECKING
+import threading
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
@@ -45,6 +46,15 @@ class _PlanningThread(QThread):
         self._config = config
         # Optional (z, y, x) boolean pedicle mask from the subregion model.
         self._pedicle_mask = pedicle_mask
+        self._cancel = threading.Event()
+        #: ``(vertebra name, side, reason)`` per side the planner dropped.
+        self.skipped_sides: List[Tuple[str, str, str]] = []
+        #: Whether the planner stopped early on :meth:`request_cancel`.
+        self.cancelled = False
+
+    def request_cancel(self) -> None:
+        """Ask the planner to stop at the next (level, side) (GUI thread safe)."""
+        self._cancel.set()
 
     def run(self):
         try:
@@ -61,7 +71,14 @@ class _PlanningThread(QThread):
             )
 
             planner = AutoScrewPlanner(self._ct, self._mask, config=self._config)
-            planned = planner.plan_all(analyses, sides="both")
+            planned = planner.plan_all(
+                analyses,
+                sides="both",
+                progress=self.progress.emit,
+                cancel=self._cancel.is_set,
+            )
+            self.skipped_sides = list(getattr(planner, "skipped_sides", ()) or ())
+            self.cancelled = bool(getattr(planner, "last_run_cancelled", False))
 
             self.progress.emit(
                 f"Planned {len(planned)} screw trajectories."
@@ -81,6 +98,7 @@ class AutoPlacementController:
         self._window = main_window
         self._thread: Optional[_PlanningThread] = None
         self._last_planned: List[PlannedScrew] = []
+        self._progress_dialog: Optional[QProgressDialog] = None
 
     @property
     def is_running(self) -> bool:
@@ -154,6 +172,22 @@ class AutoPlacementController:
         self._window.auto_screw_status.setText("Planning...")
         self._window.statusbar.showMessage("Auto screw planning started")
 
+        # Modeless: planning is a background job, and the surgeon may want to
+        # keep reading the study while it runs.  Indeterminate because the cost
+        # of a pedicle varies too much for a percentage to mean anything.
+        self._progress_dialog = QProgressDialog(
+            "Planning screw trajectories...",
+            "Cancel",
+            0,
+            0,
+            self._window,
+        )
+        self._progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
+        self._progress_dialog.setMinimumDuration(0)
+        self._progress_dialog.setRange(0, 0)
+        self._progress_dialog.canceled.connect(self._on_cancel_requested)
+        self._progress_dialog.show()
+
         self._thread = _PlanningThread(
             mask_image,
             ct_image,
@@ -166,6 +200,15 @@ class AutoPlacementController:
         self._thread.error.connect(self._on_error)
         self._thread.start()
 
+    def request_cancel(self) -> None:
+        """Ask a running planning run to stop at the next (level, side).
+
+        Public so the main window can call it while closing rather than refusing
+        to close, or leaving the user to kill the process.
+        """
+        if self._thread is not None:
+            self._thread.request_cancel()
+
     def reset_state(self):
         """Reset controller state for a new DICOM load."""
         self._last_planned = []
@@ -176,23 +219,56 @@ class AutoPlacementController:
     # Private: planning callbacks
     # ------------------------------------------------------------------
 
+    def _close_progress_dialog(self):
+        """Close the planning dialog without re-entering the cancel path.
+
+        ``QProgressDialog.close()`` emits ``canceled()``, so the connection has
+        to be dropped first or every normal completion would look like a user
+        cancellation.  Mirrors ``SegmentationController._close_progress_dialog``.
+        """
+        dialog = self._progress_dialog
+        if dialog is None:
+            return
+        self._progress_dialog = None
+        try:
+            dialog.canceled.disconnect(self._on_cancel_requested)
+        except TypeError:   # pragma: no cover - never connected
+            pass
+        dialog.close()
+
+    def _on_cancel_requested(self):
+        """Ask the running planning thread to stop at the next (level, side)."""
+        if self._thread is None or self._progress_dialog is None:
+            return
+        self._window.auto_screw_status.setText("Cancelling planning...")
+        self._thread.request_cancel()
+
     def _on_progress(self, message: str):
         self._window.auto_screw_status.setText(message)
         self._window.statusbar.showMessage(message)
 
     def _on_finished(self, planned: List[PlannedScrew]):
+        thread = self._thread
+        self._close_progress_dialog()
         self._thread = None
         self._refresh_plan_button()
+
+        cancelled = bool(getattr(thread, "cancelled", False))
+        skipped = list(getattr(thread, "skipped_sides", None) or ())
+        note = _dropped_sides_note(skipped)
+        if skipped:
+            logger.info("Planner dropped %d side(s): %s", len(skipped), skipped)
 
         self._last_planned = list(planned)
 
         if not planned:
-            self._window.auto_screw_status.setText(
-                "Planning complete: no valid trajectories found"
-            )
-            self._window.statusbar.showMessage(
-                "Auto planning: no valid screw trajectories"
-            )
+            if cancelled:
+                status = bar = "Planning cancelled — 0 screws kept"
+            else:
+                status = "Planning complete: no valid trajectories found"
+                bar = "Auto planning: no valid screw trajectories"
+            self._window.auto_screw_status.setText(status + note)
+            self._window.statusbar.showMessage(bar + note)
             return
 
         first_new_index = len(
@@ -205,28 +281,38 @@ class AutoPlacementController:
             )
         self._window.screw_list_widget.setCurrentRow(first_new_index)
 
-        grade_counts: Dict[str, int] = {}
-        for ps in planned:
-            grade_counts[ps.gertzbein_grade] = (
-                grade_counts.get(ps.gertzbein_grade, 0) + 1
+        if cancelled:
+            # A partial construct: report what was kept, not a success summary.
+            status = f"Planning cancelled — {len(planned)} screws kept"
+        else:
+            grade_counts: Dict[str, int] = {}
+            for ps in planned:
+                grade_counts[ps.gertzbein_grade] = (
+                    grade_counts.get(ps.gertzbein_grade, 0) + 1
+                )
+            grade_summary = ", ".join(
+                f"{g}:{n}" for g, n in sorted(grade_counts.items())
             )
-        grade_summary = ", ".join(
-            f"{g}:{n}" for g, n in sorted(grade_counts.items())
-        )
-        status = (
-            f"Added {len(planned)} editable screws. "
-            f"Grades: {grade_summary}. Select a screw and drag it directly."
-        )
-        rod = _rod_misalignment_by_side(planned)
-        if rod:
-            status += (
-                f" Rod misalignment L {rod.get('left', 0.0):.1f} mm"
-                f" / R {rod.get('right', 0.0):.1f} mm"
+            status = (
+                f"Added {len(planned)} editable screws. "
+                f"Grades: {grade_summary}. Select a screw and drag it directly."
             )
+            rod = _rod_misalignment_by_side(planned)
+            # Only the sides that actually have screws: "R 0.0 mm" for a side
+            # with none reads as a perfectly aligned rod that does not exist.
+            measured = [
+                f"{initial} {rod[side]:.1f} mm"
+                for side, initial in (("left", "L"), ("right", "R"))
+                if side in rod
+            ]
+            if measured:
+                status += " Rod misalignment " + " / ".join(measured)
+        status += note
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)
 
     def _on_error(self, error: str):
+        self._close_progress_dialog()
         self._thread = None
         self._refresh_plan_button()
         self._window.auto_screw_status.setText("Planning failed")
@@ -260,6 +346,19 @@ class AutoPlacementController:
             updater(apply_to_view=False)
         else:
             self._window.auto_screw_plan_btn.setEnabled(True)
+
+
+def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
+    """Name the sides the planner could not place a screw on.
+
+    Only the CBT path drops sides (the traditional paths always fall back to
+    *some* trajectory), and a shorter construct than the one that was requested
+    must never reach the surgeon unannounced.
+    """
+    if not skipped:
+        return ""
+    sides = ", ".join(f"{name} {side}" for name, side, _reason in skipped)
+    return f" No feasible CBT trajectory: {sides}"
 
 
 def _rod_misalignment_by_side(planned: List[PlannedScrew]) -> Dict[str, float]:
