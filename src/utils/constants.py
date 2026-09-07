@@ -209,3 +209,12 @@ TRANSFER_FUNCTION_PRESETS = {
         "blend_mode": "maximum_intensity",
     },
 }
+
+# Implant catalogue used by the automatic planner (mm)
+IMPLANT_LENGTHS_MM = (25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0)
+IMPLANT_DIAMETERS_MM = (4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
+# Sizing rules (Götschi 2026, Wang 2024): diameter <= 80 % of isthmus width and
+# >= 1 mm cortical clearance each side; tip >= 4 mm behind the anterior cortex.
+PEDICLE_FILL_RATIO = 0.80
+CORTICAL_WALL_CLEARANCE_MM = 1.0
+ANTERIOR_SAFETY_MARGIN_MM = 4.0

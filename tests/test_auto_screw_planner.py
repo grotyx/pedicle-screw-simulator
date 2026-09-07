@@ -6,7 +6,6 @@ entry/target points, HU profiles, and Gertzbein grades can be verified
 analytically.
 """
 
-import math
 import os
 import sys
 
@@ -446,12 +445,12 @@ class TestHUSampling:
     """Test HU sampling along trajectory."""
 
     def test_uniform_hu_sampling(self):
-        """In a uniform-HU bone, mean and min should equal the HU value."""
+        """A trajectory inside uniform bone should report that HU value."""
         hu_val = 600.0
         ct, mask = _make_bone_cylinder(hu_value=hu_val)
         planner = AutoScrewPlanner(ct, mask)
 
-        # Trajectory entirely within bone.
+        # Trajectory entirely within bone, radius small enough to stay inside.
         entry = np.array([30.0, 25.0, 20.0])
         target = np.array([30.0, 15.0, 20.0])
 
@@ -459,11 +458,10 @@ class TestHUSampling:
             entry, target, diameter=5.0,
         )
 
-        assert len(samples) > 0
-        # All samples inside bone should equal hu_val.
-        # Some radial samples may be outside bone (-1000 air).
-        # The centreline samples should all be hu_val.
-        assert mean_hu > 0
+        assert mean_hu == pytest.approx(hu_val)
+        assert min_hu == pytest.approx(hu_val)
+        # The raw sample list is no longer returned by the shared grader.
+        assert samples == []
 
     def test_empty_trajectory(self):
         """Zero-length trajectory should return zeros."""
@@ -540,18 +538,6 @@ class TestGertzbeinGradeEvaluation:
         )
         assert grade == "E"
         assert breach >= 6.0
-
-    def test_grade_from_breach_thresholds(self):
-        """Verify _grade_from_breach boundary values."""
-        assert AutoScrewPlanner._grade_from_breach(0.0) == "A"
-        assert AutoScrewPlanner._grade_from_breach(0.5) == "B"
-        assert AutoScrewPlanner._grade_from_breach(1.99) == "B"
-        assert AutoScrewPlanner._grade_from_breach(2.0) == "C"
-        assert AutoScrewPlanner._grade_from_breach(3.9) == "C"
-        assert AutoScrewPlanner._grade_from_breach(4.0) == "D"
-        assert AutoScrewPlanner._grade_from_breach(5.9) == "D"
-        assert AutoScrewPlanner._grade_from_breach(6.0) == "E"
-        assert AutoScrewPlanner._grade_from_breach(10.0) == "E"
 
 
 # ---------------------------------------------------------------------------
@@ -744,14 +730,14 @@ class TestPlanScrew:
         assert not np.allclose(result.entry_lps, result.target_lps)
 
     def test_screw_diameter_respects_pedicle_width(self):
-        """Diameter should preserve a cortical safety margin."""
+        """Diameter should keep 1 mm cortical clearance on each side."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
         analysis = _make_analysis(left_width=6.0)
 
         result = planner.plan_screw(analysis, "left")
         assert result is not None
-        assert result.diameter_mm == pytest.approx(5.0)
+        assert result.diameter_mm == pytest.approx(4.0)
 
     def test_diameter_is_reduced_until_trajectory_is_grade_a_or_b(
         self,
@@ -894,13 +880,13 @@ class TestHelperMethods:
             (25.0, 25.0),
             (34.9, 30.0),
             (50.0, 50.0),
-            (59.9, 50.0),
-            (60.0, 55.0),
+            (54.9, 50.0),
+            (55.0, 55.0),
             (72.0, 55.0),
         ],
     )
     def test_select_standard_length(self, safe_length, expected):
-        """Only a 60 mm safe corridor may unlock a 55 mm screw."""
+        """The longest catalogue implant fitting the safe corridor wins."""
         result = AutoScrewPlanner._select_standard_length(safe_length)
 
         if expected is None:
@@ -921,40 +907,16 @@ class TestHelperMethods:
         expected = np.array([-0.1, 0.9, -0.1])
         np.testing.assert_array_almost_equal(result, expected)
 
-    def test_perpendicular_frame_orthogonal(self):
-        """Perpendicular frame vectors should be orthogonal to direction."""
-        direction = np.array([0.0, 1.0, 0.0])
-        u, v = AutoScrewPlanner._perpendicular_frame(direction)
-
-        assert pytest.approx(np.dot(u, direction), abs=1e-10) == 0.0
-        assert pytest.approx(np.dot(v, direction), abs=1e-10) == 0.0
-        assert pytest.approx(np.dot(u, v), abs=1e-10) == 0.0
-        assert pytest.approx(np.linalg.norm(u), abs=1e-10) == 1.0
-        assert pytest.approx(np.linalg.norm(v), abs=1e-10) == 1.0
-
-    def test_perpendicular_frame_various_directions(self):
-        """Frame should be valid for various axis directions."""
-        directions = [
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.0, 0.0, 1.0]),
-            np.array([1.0, 1.0, 0.0]) / math.sqrt(2),
-            np.array([1.0, 1.0, 1.0]) / math.sqrt(3),
-        ]
-        for d in directions:
-            u, v = AutoScrewPlanner._perpendicular_frame(d)
-            assert pytest.approx(np.dot(u, d), abs=1e-10) == 0.0
-            assert pytest.approx(np.dot(v, d), abs=1e-10) == 0.0
-
     @pytest.mark.parametrize(
         ("level", "pedicle_width", "expected"),
         [
-            ("S1", 8.0, 6.5),
-            ("L5", 8.0, 6.5),
-            ("L3", 8.0, 6.5),
-            ("L2", 7.5, 6.0),
-            ("L1", 7.5, 6.0),
-            ("T12", 7.0, 5.5),
-            ("T4", 7.0, 5.5),
+            ("S1", 9.0, 6.5),
+            ("L5", 9.0, 6.5),
+            ("L3", 9.0, 6.5),
+            ("L2", 8.5, 6.0),
+            ("L1", 8.5, 6.0),
+            ("T12", 8.0, 5.5),
+            ("T4", 8.0, 5.5),
         ],
     )
     def test_compute_diameter_uses_level_preference(
@@ -973,9 +935,9 @@ class TestHelperMethods:
     @pytest.mark.parametrize(
         ("level", "pedicle_width", "expected"),
         [
-            ("L5", 8.5, 7.0),
-            ("L1", 8.0, 6.5),
-            ("T8", 7.5, 6.0),
+            ("L5", 9.5, 7.0),
+            ("L1", 9.0, 6.5),
+            ("T8", 8.5, 6.0),
         ],
     )
     def test_compute_diameter_upsizes_only_one_step_for_wide_pedicle(
@@ -996,14 +958,14 @@ class TestHelperMethods:
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(5.0, "L4") == pytest.approx(4.0)
+        assert planner._compute_diameter(6.0, "L4") == pytest.approx(4.0)
 
     def test_compute_diameter_minimum_clamp(self):
-        """Width without a 1 mm margin should be rejected."""
+        """Width without 1 mm clearance each side should be rejected."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(4.5, "L4") is None
+        assert planner._compute_diameter(5.0, "L4") is None
 
     def test_compute_diameter_too_narrow(self):
         """Width below MIN_SCREW_DIAMETER should return None."""
@@ -1069,19 +1031,6 @@ class TestHelperMethods:
         )
         assert inside is False
 
-    def test_radial_offsets_count_and_magnitude(self):
-        """Radial offsets should have correct count and radius."""
-        ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
-
-        direction = np.array([0.0, 1.0, 0.0])
-        radius = 3.0
-        offsets = planner._get_radial_offsets(direction, radius)
-
-        assert len(offsets) == planner.RADIAL_SAMPLE_ANGLES
-        for offset in offsets:
-            assert pytest.approx(np.linalg.norm(offset), abs=1e-10) == radius
-
 
 # ---------------------------------------------------------------------------
 # Angle calculation tests
@@ -1134,6 +1083,55 @@ class TestAngleCalculations:
 
         angle = planner._compute_craniocaudal_angle(entry, target)
         assert angle > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Delegation to ScrewGrader / shared geometry / sizing constants
+# ---------------------------------------------------------------------------
+
+class TestGrading:
+    def _cube(self, label=28):
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = label
+        mask = _make_image(arr)
+        ct = _make_image(np.where(arr > 0, 350, -50).astype(np.int16))
+        return ct, mask
+
+    def test_screw_fully_outside_bone_is_grade_E(self):
+        ct, mask = self._cube()
+        planner = AutoScrewPlanner(ct, mask)
+        grade, breach = planner._evaluate_gertzbein_grade(
+            np.array([5.0, 5.0, 30.0]), np.array([5.0, 50.0, 30.0]), 6.5, 28)
+        assert grade == "E"
+        assert breach >= 6.0
+
+    def test_contained_screw_is_grade_A(self):
+        ct, mask = self._cube()
+        planner = AutoScrewPlanner(ct, mask)
+        grade, breach = planner._evaluate_gertzbein_grade(
+            np.array([30.0, 38.0, 30.0]), np.array([30.0, 22.0, 30.0]), 6.0, 28)
+        assert (grade, breach) == ("A", 0.0)
+
+
+class TestSignedConvergence:
+    def test_lateral_divergence_is_negative_for_left(self):
+        ct, mask = TestGrading()._cube()
+        planner = AutoScrewPlanner(ct, mask)
+        entry = np.array([10.0, 30.0, 0.0])
+        assert planner._compute_convergence_angle(entry, np.array([0.0, 0.0, 0.0]), "left") > 0
+        assert planner._compute_convergence_angle(entry, np.array([20.0, 0.0, 0.0]), "left") < 0
+
+
+class TestDiameterRule:
+    def test_diameter_capped_at_80_percent_and_clearance(self):
+        ct, mask = TestGrading()._cube()
+        planner = AutoScrewPlanner(ct, mask)
+        # width 7.0 -> min(0.8*7=5.6, 7-2=5.0) -> floor to 0.5 -> 5.0
+        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.0)
+        # width 10 -> min(8.0, 8.0) -> 8.0 -> capped by level preset/automatic max (7.0 for L4)
+        assert planner._compute_diameter(10.0, "L4") == pytest.approx(7.0)
+        # too narrow
+        assert planner._compute_diameter(5.5, "L4") is None
 
 
 if __name__ == "__main__":

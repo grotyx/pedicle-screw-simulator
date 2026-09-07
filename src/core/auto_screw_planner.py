@@ -26,7 +26,15 @@ from typing import List, Optional, Tuple
 import numpy as np
 import SimpleITK as sitk
 
+from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+from .screw_grading import ScrewGrader
 from .vertebra import PedicleAnalysisResult
+from ..utils.constants import (
+    ANTERIOR_SAFETY_MARGIN_MM,
+    CORTICAL_WALL_CLEARANCE_MM,
+    IMPLANT_LENGTHS_MM,
+    PEDICLE_FILL_RATIO,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +58,8 @@ class PlannedScrew:
     min_bone_density: float     # Minimum HU along trajectory
     gertzbein_grade: str        # "A", "B", "C", "D", "E"
     confidence: float           # 0.0 -- 1.0
+    breach_mm: float = 0.0      # Maximum cortical breach depth (mm)
+    min_wall_mm: float = 0.0    # Thinnest cortical wall clearance (mm)
     warnings: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -71,15 +81,13 @@ class AutoScrewPlanner:
     # -- Screw sizing rules --------------------------------------------------
     MIN_SCREW_DIAMETER: float = 4.0    # mm
     MAX_SCREW_DIAMETER: float = 7.5    # mm
-    DIAMETER_SAFETY_MARGIN: float = 1.0  # mm total cortical corridor margin
     DIAMETER_WIDE_HEADROOM: float = 1.0  # mm before one-step upsize
 
-    MIN_SCREW_LENGTH: float = 25.0     # mm
-    MAX_SCREW_LENGTH: float = 55.0     # mm
-    STANDARD_LENGTH_STEP: float = 5.0  # mm
-    LONG_SCREW_SAFE_LENGTH: float = 60.0  # mm safe corridor required for 55 mm
+    MIN_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[0]
+    MAX_SCREW_LENGTH: float = IMPLANT_LENGTHS_MM[-1]
+    LONG_SCREW_SAFE_LENGTH: float = IMPLANT_LENGTHS_MM[-1] + 5.0
     MAX_BONE_CORRIDOR_SCAN: float = 75.0  # mm, preserves 60 mm eligibility check
-    ANTERIOR_SAFETY_MARGIN: float = 2.0  # mm from anterior cortex
+    ANTERIOR_SAFETY_MARGIN: float = ANTERIOR_SAFETY_MARGIN_MM
 
     # -- HU thresholds -------------------------------------------------------
     BONE_HU_MIN: float = 200          # Below this = outside bone
@@ -87,7 +95,6 @@ class AutoScrewPlanner:
 
     # -- Sampling parameters -------------------------------------------------
     TRAJECTORY_SAMPLE_STEP: float = 0.5   # mm between samples
-    RADIAL_SAMPLE_ANGLES: int = 8         # Number of radial directions
     ENTRY_BACKOFF: float = 1.0            # mm back inside bone from surface
     TARGET_LATERAL_OFFSETS: Tuple[float, ...] = (
         0.0,
@@ -104,16 +111,28 @@ class AutoScrewPlanner:
         self,
         ct_image: sitk.Image,
         mask_image: sitk.Image,
+        grader: Optional[ScrewGrader] = None,
     ) -> None:
         """
         Args:
             ct_image:  Original CT volume (for HU sampling).
             mask_image:  TotalSegmentator segmentation mask.
+            grader:  Optional pre-built grader (defaults to one over this pair).
         """
+        if tuple(ct_image.GetSize()) != tuple(mask_image.GetSize()):
+            mask_image = sitk.Resample(
+                mask_image,
+                ct_image,
+                sitk.Transform(),
+                sitk.sitkNearestNeighbor,
+                0,
+                mask_image.GetPixelID(),
+            )
         self._ct = ct_image
         self._mask = mask_image
         self._ct_array: np.ndarray = sitk.GetArrayFromImage(ct_image)   # (z, y, x)
         self._mask_array: np.ndarray = sitk.GetArrayFromImage(mask_image)
+        self._grader = grader or ScrewGrader(mask_image, ct_image)
 
     # =====================================================================
     # Public API
@@ -267,6 +286,8 @@ class AutoScrewPlanner:
         grade, breach_dist = self._evaluate_gertzbein_grade(
             entry, target, diameter, vertebra.label,
         )
+        wall = self._grader.grade(entry, target, diameter, label=vertebra.label)
+        min_wall = wall.min_wall_mm if wall else 0.0
 
         # 8. Calculate angles.
         convergence_angle = self._compute_convergence_angle(entry, target, side)
@@ -283,6 +304,12 @@ class AutoScrewPlanner:
         if breach_dist > 0:
             warnings.append(f"Breach distance {breach_dist:.1f} mm (grade {grade})")
 
+        if 0 < min_wall < CORTICAL_WALL_CLEARANCE_MM:
+            warnings.append(
+                f"Cortical clearance {min_wall:.1f} mm below "
+                f"{CORTICAL_WALL_CLEARANCE_MM:.0f} mm"
+            )
+
         return PlannedScrew(
             vertebra_name=vertebra.name,
             side=side,
@@ -296,6 +323,8 @@ class AutoScrewPlanner:
             min_bone_density=min_hu,
             gertzbein_grade=grade,
             confidence=confidence,
+            breach_mm=breach_dist,
+            min_wall_mm=min_wall,
             warnings=warnings,
         )
 
@@ -482,7 +511,8 @@ class AutoScrewPlanner:
                 candidate,
                 "left" if side_sign > 0.0 else "right",
             )
-            if convergence > self.MAX_CONVERGENCE_ANGLE:
+            if convergence > self.MAX_CONVERGENCE_ANGLE or convergence < -5.0:
+                # Reject over-converging and laterally diverging candidates.
                 continue
             _, breach_distance = self._evaluate_gertzbein_grade(
                 entry,
@@ -512,48 +542,24 @@ class AutoScrewPlanner:
         target: np.ndarray,
         diameter: float,
     ) -> Tuple[float, float, List[float]]:
-        """Sample HU values along screw trajectory.
-
-        Samples both centreline and radial points at screw radius.
+        """Sample HU statistics along the screw trajectory via the grader.
 
         Returns
         -------
         mean_hu : float
         min_hu : float
         all_samples : list of float
+            Always empty; retained for signature compatibility.
         """
-        direction = target - entry
-        length = np.linalg.norm(direction)
-        if length < 1e-9:
+        result = self._grader.grade(
+            entry,
+            target,
+            diameter,
+            label=self._grader.detect_label(entry, target),
+        )
+        if result is None or result.mean_hu is None:
             return 0.0, 0.0, []
-
-        direction_unit = direction / length
-        radius = diameter / 2.0
-        n_steps = max(1, int(length / self.TRAJECTORY_SAMPLE_STEP))
-        radial_offsets = self._get_radial_offsets(direction_unit, radius)
-
-        all_samples: List[float] = []
-
-        for i in range(n_steps + 1):
-            t = i / n_steps
-            centre_point = entry + direction * t
-
-            # Centre-line sample.
-            hu = self._get_hu_at_lps(centre_point)
-            if hu is not None:
-                all_samples.append(hu)
-
-            # Radial samples.
-            for offset in radial_offsets:
-                radial_point = centre_point + offset
-                hu = self._get_hu_at_lps(radial_point)
-                if hu is not None:
-                    all_samples.append(hu)
-
-        if not all_samples:
-            return 0.0, 0.0, []
-
-        return float(np.mean(all_samples)), float(np.min(all_samples)), all_samples
+        return result.mean_hu, result.min_hu, []
 
     # =====================================================================
     # Gertzbein-Robbins evaluation
@@ -566,99 +572,19 @@ class AutoScrewPlanner:
         diameter: float,
         vertebra_label: int,
     ) -> Tuple[str, float]:
-        """Evaluate Gertzbein-Robbins screw placement grade.
-
-        Sample along trajectory at screw radius.  Check if any point
-        is outside the vertebra mask.  Measure maximum breach distance.
+        """Evaluate the Gertzbein-Robbins grade via :class:`ScrewGrader`.
 
         Returns
         -------
         grade : str
             "A" through "E".
         breach_distance_mm : float
-            Maximum radial distance outside the vertebra mask (0 for A).
+            Maximum distance of the screw envelope outside the vertebra mask.
         """
-        direction = target - entry
-        length = np.linalg.norm(direction)
-        if length < 1e-9:
-            return "E", 0.0
-
-        direction_unit = direction / length
-        radius = diameter / 2.0
-        n_steps = max(1, int(length / self.TRAJECTORY_SAMPLE_STEP))
-        radial_offsets = self._get_radial_offsets(direction_unit, radius)
-
-        max_breach_distance = 0.0
-
-        for i in range(n_steps + 1):
-            t = i / n_steps
-            centre_point = entry + direction * t
-
-            # Check centreline.
-            if not self._is_point_inside_mask(centre_point, vertebra_label):
-                # Centreline is outside -- full radius breach.
-                max_breach_distance = max(max_breach_distance, radius)
-                continue
-
-            # Check radial sample points.
-            for offset in radial_offsets:
-                radial_point = centre_point + offset
-                if not self._is_point_inside_mask(radial_point, vertebra_label):
-                    # This radial point is outside the mask.
-                    # Estimate breach distance by binary search along
-                    # the radial direction from centre to this offset.
-                    breach_dist = self._estimate_breach_distance(
-                        centre_point, offset, vertebra_label,
-                    )
-                    max_breach_distance = max(max_breach_distance, breach_dist)
-
-        return self._grade_from_breach(max_breach_distance), max_breach_distance
-
-    def _estimate_breach_distance(
-        self,
-        centre: np.ndarray,
-        offset: np.ndarray,
-        vertebra_label: int,
-    ) -> float:
-        """Estimate radial breach distance from centreline to mask boundary.
-
-        Uses a simple binary search along the offset direction.
-        Returns the breach distance in mm.
-        """
-        radius = np.linalg.norm(offset)
-        if radius < 1e-9:
-            return 0.0
-
-        direction = offset / radius
-        n_search = 8  # binary search iterations
-
-        # Find the mask boundary along this radial line.
-        lo, hi = 0.0, radius
-        for _ in range(n_search):
-            mid = (lo + hi) / 2.0
-            test_point = centre + direction * mid
-            if self._is_point_inside_mask(test_point, vertebra_label):
-                lo = mid
-            else:
-                hi = mid
-
-        boundary_distance = (lo + hi) / 2.0
-        breach = radius - boundary_distance
-        return max(0.0, breach)
-
-    @staticmethod
-    def _grade_from_breach(breach_distance: float) -> str:
-        """Convert breach distance (mm) to Gertzbein-Robbins grade."""
-        if breach_distance <= 0.0:
-            return "A"
-        elif breach_distance < 2.0:
-            return "B"
-        elif breach_distance < 4.0:
-            return "C"
-        elif breach_distance < 6.0:
-            return "D"
-        else:
-            return "E"
+        result = self._grader.grade(entry, target, diameter, label=int(vertebra_label))
+        if result is None:
+            return "E", float(self._grader.crop_margin_mm)
+        return result.grade, result.breach_mm
 
     # =====================================================================
     # Angle calculations
@@ -670,47 +596,16 @@ class AutoScrewPlanner:
         target: np.ndarray,
         side: str,
     ) -> float:
-        """Compute medial convergence angle in degrees.
-
-        Medial convergence is the angle between the screw trajectory
-        projected onto the axial (XY) plane and the pure posterior
-        direction (+Y).  A positive value indicates the screw tip
-        converges toward the midline.
-        """
-        direction = target - entry
-        # Project onto axial (XY) plane.
-        dx, dy = direction[0], direction[1]
-        axial_length = math.sqrt(dx * dx + dy * dy)
-        if axial_length < 1e-9:
-            return 0.0
-
-        # Angle from the anterior direction (-Y).
-        # atan2(dx, -dy) gives angle from the -Y axis.
-        angle_rad = math.atan2(abs(dx), abs(dy))
-        angle_deg = math.degrees(angle_rad)
-
-        return angle_deg
+        """Signed medial convergence angle (positive = toward the midline)."""
+        return convergence_angle_deg(entry, target, side)
 
     def _compute_craniocaudal_angle(
         self,
         entry: np.ndarray,
         target: np.ndarray,
     ) -> float:
-        """Compute craniocaudal (sagittal) angulation in degrees.
-
-        Positive = cranially directed (screw tip superior to entry).
-        Negative = caudally directed.
-        """
-        direction = target - entry
-        # Project onto sagittal (YZ) plane.
-        dy, dz = direction[1], direction[2]
-        yz_length = math.sqrt(dy * dy + dz * dz)
-        if yz_length < 1e-9:
-            return 0.0
-
-        # atan2(dz, |dy|) -- positive dz = cranial.
-        angle_rad = math.atan2(dz, abs(dy))
-        return math.degrees(angle_rad)
+        """Signed sagittal angulation (positive = tip cranial to entry)."""
+        return craniocaudal_angle_deg(entry, target)
 
     # =====================================================================
     # Confidence scoring
@@ -803,65 +698,17 @@ class AutoScrewPlanner:
 
         return int(self._mask_array[z, y, x]) == vertebra_label
 
-    def _get_radial_offsets(
-        self,
-        direction_unit: np.ndarray,
-        radius: float,
-    ) -> List[np.ndarray]:
-        """Compute radial offset vectors perpendicular to the trajectory.
-
-        Returns ``RADIAL_SAMPLE_ANGLES`` vectors, each of length
-        ``radius``, uniformly distributed around the trajectory axis.
-        """
-        # Find two orthogonal vectors perpendicular to direction_unit.
-        u, v = self._perpendicular_frame(direction_unit)
-
-        offsets: List[np.ndarray] = []
-        for k in range(self.RADIAL_SAMPLE_ANGLES):
-            theta = 2.0 * math.pi * k / self.RADIAL_SAMPLE_ANGLES
-            offset = radius * (math.cos(theta) * u + math.sin(theta) * v)
-            offsets.append(offset)
-
-        return offsets
-
-    @staticmethod
-    def _perpendicular_frame(
-        direction: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Build an orthonormal frame (u, v) perpendicular to ``direction``.
-
-        ``direction`` must be a unit vector.
-        """
-        # Choose the axis least aligned with direction for the cross product.
-        abs_d = np.abs(direction)
-        if abs_d[0] <= abs_d[1] and abs_d[0] <= abs_d[2]:
-            aux = np.array([1.0, 0.0, 0.0])
-        elif abs_d[1] <= abs_d[2]:
-            aux = np.array([0.0, 1.0, 0.0])
-        else:
-            aux = np.array([0.0, 0.0, 1.0])
-
-        u = np.cross(direction, aux)
-        u /= np.linalg.norm(u)
-        v = np.cross(direction, u)
-        v /= np.linalg.norm(v)
-        return u, v
-
     # =====================================================================
     # Private helpers
     # =====================================================================
 
     @staticmethod
     def _select_standard_length(safe_length: float) -> Optional[float]:
-        """Select a 5 mm implant length from the available safe corridor."""
-        if safe_length < AutoScrewPlanner.MIN_SCREW_LENGTH:
+        """Select the longest catalogue implant that fits the safe corridor."""
+        candidates = [length for length in IMPLANT_LENGTHS_MM if length <= safe_length + 1e-9]
+        if not candidates:
             return None
-        if safe_length >= AutoScrewPlanner.LONG_SCREW_SAFE_LENGTH:
-            return AutoScrewPlanner.MAX_SCREW_LENGTH
-        stepped_length = math.floor(
-            (safe_length + 1e-9) / AutoScrewPlanner.STANDARD_LENGTH_STEP
-        ) * AutoScrewPlanner.STANDARD_LENGTH_STEP
-        return min(50.0, float(stepped_length))
+        return float(max(candidates))
 
     @staticmethod
     def _endplate_aligned_target_z(
@@ -906,10 +753,14 @@ class AutoScrewPlanner:
     ) -> Optional[float]:
         """Combine a level preset with the measured safe pedicle capacity.
 
-        Returns ``None`` if the pedicle is too narrow for the smallest
-        available screw.
+        The corridor is limited both by the pedicle fill ratio and by a
+        cortical clearance on each side.  Returns ``None`` if the pedicle
+        is too narrow for the smallest available screw.
         """
-        available = pedicle_width - self.DIAMETER_SAFETY_MARGIN
+        available = min(
+            PEDICLE_FILL_RATIO * pedicle_width,
+            pedicle_width - 2.0 * CORTICAL_WALL_CLEARANCE_MM,
+        )
         if available < self.MIN_SCREW_DIAMETER:
             return None
         available = min(
