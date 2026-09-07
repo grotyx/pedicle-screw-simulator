@@ -194,23 +194,25 @@ def test_csv_has_metric_columns(tmp_path):
                   metrics={"trajectory_mean_hu": 180.5, "pedicle_mean_hu": 210.0,
                            "body_mean_hu": 150.0, "trajectory_body_ratio": 1.203,
                            "min_wall_mm": 1.25, "heary_direction": "medial",
-                           "facet_grade": 2})
+                           "facet_grade": 2, "trajectory_type": "traditional"})
     path = tmp_path / "s.csv"
     export_screws_csv(str(path), [screw, Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))])
     with path.open("r", encoding="utf-8") as handle:
         rows = list(_csv.reader(handle))
     header = rows[0]
     for column in ("trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
-                   "min_wall_mm", "heary_direction", "facet_grade"):
+                   "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type"):
         assert column in header
     row = dict(zip(header, rows[1], strict=True))
     assert row["trajectory_mean_hu"] == "180.500"
     assert row["hu_ratio"] == "1.203"
     assert row["heary_direction"] == "medial"
     assert row["facet_grade"] == "2"
+    assert row["trajectory_type"] == "traditional"
     # A screw with no metrics leaves the columns empty rather than shifting them.
     blank = dict(zip(header, rows[2], strict=True))
     assert blank["trajectory_mean_hu"] == "" and blank["facet_grade"] == ""
+    assert blank["trajectory_type"] == ""
 
 
 def test_csv_tolerates_non_numeric_metric_values(tmp_path):
@@ -302,3 +304,89 @@ def test_plan_payload_contains_no_patient_identifiers():
     text = json.dumps(payload).lower()
     for token in ("patient", "birth", "studydate", "accession"):
         assert token not in text
+
+
+def test_score_components_round_trip_as_a_dict(tmp_path):
+    """``score_components`` is a documented v3 field: it must stay a mapping.
+
+    A nested dict used to fall through ``_jsonable_metric`` to ``str(value)``,
+    so the plan file held a single-quoted Python literal that no JSON consumer
+    — this app on reload included — could read back as numbers.
+    """
+    import json
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import (
+        deserialize_plan,
+        load_plan_json,
+        save_plan_json,
+        serialize_plan,
+    )
+
+    screw = Screw(entry_point=(1.0, 2.0, 3.0), target_point=(1.0, -30.0, 3.0),
+                  side="left", source="auto",
+                  metrics={"score": 1.9,
+                           "score_components": {"safety": 0.9, "density": 0.4},
+                           "rod_misalignment_mm": 2.5})
+    payload = serialize_plan("series", [screw], [], [])
+    assert payload["version"] == 3
+    # The in-memory payload must already be JSON-native, not a repr string.
+    assert payload["screws"][0]["metrics"]["score_components"] == {
+        "safety": 0.9, "density": 0.4,
+    }
+
+    path = tmp_path / "plan.json"
+    save_plan_json(str(path), payload)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(raw["screws"][0]["metrics"]["score_components"], dict)
+
+    loaded = deserialize_plan(load_plan_json(str(path)))["screws"][0]
+    components = loaded.metrics["score_components"]
+    assert isinstance(components, dict)
+    assert set(components) == {"safety", "density"}
+    assert all(isinstance(value, float) for value in components.values())
+    assert components["safety"] == pytest.approx(0.9)
+    assert loaded.metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+
+
+def test_nested_metric_containers_are_normalised():
+    """Numpy scalars and non-finite floats inside containers are coerced too."""
+    import json
+
+    import numpy as np
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import screw_to_dict
+
+    screw = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, 0.0, 30.0))
+    screw.metrics = {
+        "score_components": {"safety": np.float64(0.75), "density": float("nan")},
+        "candidate_scores": [np.float32(1.5), (np.int64(2), float("inf"))],
+    }
+    data = screw_to_dict(screw)
+    json.dumps(data, allow_nan=False)          # raises if NaN/inf survived
+    components = data["metrics"]["score_components"]
+    assert components["safety"] == pytest.approx(0.75)
+    assert components["density"] is None
+    assert data["metrics"]["candidate_scores"] == [1.5, [2, None]]
+
+
+def test_csv_has_trajectory_type_column(tmp_path):
+    """The CSV must name the trajectory family; CBT vs traditional is clinical."""
+    import csv as _csv
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import export_screws_csv
+
+    cbt = Screw(entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+                metrics={"trajectory_type": "cbt"})
+    manual = Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))
+    path = tmp_path / "s.csv"
+    export_screws_csv(str(path), [cbt, manual])
+    with path.open("r", encoding="utf-8") as handle:
+        rows = list(_csv.reader(handle))
+    header = rows[0]
+    assert "trajectory_type" in header
+    assert dict(zip(header, rows[1], strict=True))["trajectory_type"] == "cbt"
+    # Absent on a manual screw: an empty cell, not a shifted row.
+    assert dict(zip(header, rows[2], strict=True))["trajectory_type"] == ""

@@ -5,6 +5,7 @@ Planning I/O helpers for saving/loading simulation plans.
 import csv
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,9 +29,18 @@ def _jsonable_metric(value: Any) -> Any:
     Metric values are floats, ints, strings or ``None``; numpy scalars reach
     here from the graders, and a non-finite float would otherwise be written as
     the non-standard ``NaN``/``Infinity`` literal, so both are normalised.
+
+    Containers recurse.  The optimiser stores ``score_components`` as a dict of
+    per-term contributions, and without recursion it fell through to
+    ``str(value)`` — the file then held a single-quoted Python literal that no
+    JSON consumer, this app on reload included, could turn back into numbers.
     """
     if value is None or isinstance(value, (bool, str)):
         return value
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable_metric(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_metric(item) for item in value]
     if isinstance(value, int):
         return int(value)
     if isinstance(value, float):
@@ -253,7 +263,8 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
             "convergence_angle_deg", "craniocaudal_angle_deg",
             "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
-            "min_wall_mm", "heary_direction", "facet_grade", "warnings",
+            "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
+            "warnings",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -284,5 +295,10 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "min_wall_mm"),
                 "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
                 _metric_number(metrics, "facet_grade", "d"),
+                # CBT and traditional screws are graded on the same scale but
+                # are not clinically interchangeable, so the export names the
+                # family; a manually placed screw belongs to neither and the
+                # cell stays empty rather than guessing "traditional".
+                "" if metrics.get("trajectory_type") is None else str(metrics["trajectory_type"]),
                 "|".join(screw.warnings),
             ])
