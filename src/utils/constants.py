@@ -218,3 +218,13 @@ IMPLANT_DIAMETERS_MM = (4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
 PEDICLE_FILL_RATIO = 0.80
 CORTICAL_WALL_CLEARANCE_MM = 1.0
 ANTERIOR_SAFETY_MARGIN_MM = 4.0
+
+# Trajectory HU below which screw loosening risk rises (Yamamoto 2025, Dhar 2026)
+TRAJECTORY_HU_LOOSENING_THRESHOLD = 123.0
+# L1-L5 trabecular HU thresholds from TotalSegmentator-derived ROIs (Sankar 2026)
+VERTEBRAL_HU_LOW_BMD_THRESHOLD = 141.0
+VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD = 132.0
+# Trajectory / body HU ratio below which loosening odds rise (Yang 2026)
+TRAJECTORY_BODY_HU_RATIO_THRESHOLD = 1.0
+# Facet violation: distance from screw head cylinder to the cephalad vertebra (Babu 2012 approximation)
+FACET_CONTACT_DISTANCE_MM = 1.0
