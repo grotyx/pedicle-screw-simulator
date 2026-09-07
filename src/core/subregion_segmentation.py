@@ -172,9 +172,13 @@ def build_predict_command(
 
     Prefers the console-script entry point installed alongside the running
     interpreter, falling back to invoking the module directly with the
-    current interpreter (needed in frozen/packaged builds where the console
-    script is not installed). ``device`` values starting with "gpu" map to
-    nnU-Net's "cuda" device; anything else runs on "cpu".
+    current interpreter. That fallback only works with a real Python
+    interpreter and an nnunetv2 install on its module path; it cannot run in
+    a frozen/packaged build, where ``sys.executable`` is the frozen app
+    itself rather than a Python interpreter (see the ``sys.frozen`` guard in
+    ``run_subregion_segmentation``, which refuses to run there at all).
+    ``device`` values starting with "gpu" map to nnU-Net's "cuda" device;
+    anything else runs on "cpu".
     """
     executable = _find_nnunet_predict_executable()
     base = [executable] if executable else [sys.executable, "-m", "nnunetv2.inference.predict_from_raw_data"]
@@ -206,7 +210,17 @@ def run_subregion_segmentation(
     ``nnUNetv2_predict`` as a subprocess. When ``process_holder`` is supplied
     the spawned process is published on it so another thread can cancel the
     run; a cancelled run raises :class:`SegmentationCancelled`.
+
+    Raises ``RuntimeError`` immediately in a frozen build: unlike
+    TotalSegmentator (which runs nnU-Net in-process there), this path always
+    shells out to ``nnUNetv2_predict``, and a frozen app has no Python
+    interpreter to fall back to for the "-m nnunetv2..." invocation.
     """
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "The spine subregion model requires a non-frozen Python environment with nnunetv2 installed"
+        )
+
     input_dir = Path(work_dir) / "subregion_in"
     output_dir = Path(work_dir) / "subregion_out"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -219,6 +233,9 @@ def run_subregion_segmentation(
     env.setdefault("nnUNet_preprocessed", str(Path(work_dir) / "nnunet_pre"))
 
     _emit_progress(progress_callback, "Running spine subregion model (pedicle/corpus/lamina)...")
+
+    if process_holder is not None and process_holder.cancelled:
+        raise SegmentationCancelled("Subregion segmentation cancelled by user")
 
     process = subprocess.Popen(
         build_predict_command(model, input_dir, output_dir, device),

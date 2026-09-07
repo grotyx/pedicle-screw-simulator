@@ -91,3 +91,66 @@ def test_run_subregion_segmentation_uses_process_holder(tmp_path, monkeypatch):
     assert out.endswith("spine.nii.gz")
     assert calls["env"]["nnUNet_results"] == str(tmp_path)
     assert (tmp_path / "subregion_in" / "spine_0000.nii.gz").exists()
+
+
+def test_run_subregion_segmentation_refuses_frozen_build(tmp_path, monkeypatch):
+    import numpy as np, SimpleITK as sitk
+    from src.core import subregion_segmentation as ss
+    model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
+                              configuration="3d_fullres", labels={"pedicle": 2})
+    monkeypatch.setattr(ss.sys, "frozen", True, raising=False)
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    with pytest.raises(RuntimeError, match="non-frozen"):
+        ss.run_subregion_segmentation(image, model, str(tmp_path), "cpu")
+    assert not (tmp_path / "subregion_in").exists()
+
+
+def test_run_subregion_segmentation_cancelled_before_spawn(tmp_path, monkeypatch):
+    import numpy as np, SimpleITK as sitk
+    from src.core import subregion_segmentation as ss
+    model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
+                              configuration="3d_fullres", labels={"pedicle": 2})
+
+    def fake_popen(cmd, **kwargs):
+        raise AssertionError("Popen should not be called once the run is already cancelled")
+    monkeypatch.setattr(ss.subprocess, "Popen", fake_popen)
+
+    holder = ss.ProcessHolder()
+    holder.cancelled = True
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    with pytest.raises(ss.SegmentationCancelled):
+        ss.run_subregion_segmentation(image, model, str(tmp_path), "cpu", process_holder=holder)
+
+
+def test_run_subregion_segmentation_nonzero_returncode_raises(tmp_path, monkeypatch):
+    import numpy as np, SimpleITK as sitk
+    from src.core import subregion_segmentation as ss
+    model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
+                              configuration="3d_fullres", labels={"pedicle": 2})
+
+    class FakeProc:
+        returncode = 1
+        def communicate(self): return "", "boom"
+        def poll(self): return 1
+    monkeypatch.setattr(ss.subprocess, "Popen", lambda cmd, **kwargs: FakeProc())
+
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    with pytest.raises(RuntimeError, match="Subregion model failed"):
+        ss.run_subregion_segmentation(image, model, str(tmp_path), "cpu")
+
+
+def test_run_subregion_segmentation_missing_output_raises(tmp_path, monkeypatch):
+    import numpy as np, SimpleITK as sitk
+    from src.core import subregion_segmentation as ss
+    model = ss.SubregionModel(root=tmp_path / "Dataset501_X" / "cfg", dataset_id="Dataset501_X",
+                              configuration="3d_fullres", labels={"pedicle": 2})
+
+    class FakeProc:
+        returncode = 0
+        def communicate(self): return "", ""
+        def poll(self): return 0
+    monkeypatch.setattr(ss.subprocess, "Popen", lambda cmd, **kwargs: FakeProc())
+
+    image = sitk.GetImageFromArray(np.zeros((4, 4, 4), np.int16))
+    with pytest.raises(RuntimeError, match="produced no output"):
+        ss.run_subregion_segmentation(image, model, str(tmp_path), "cpu")
