@@ -10,7 +10,11 @@ Usage::
     python scripts/validate_plans.py --pred pred.json --ref ref.json --out report
 
 writes ``report.csv`` (one row per matched screw) and ``report.json`` (the
-cohort summary) next to whatever base path ``--out`` names.
+cohort summary) next to whatever base path ``--out`` names. Screw level and
+side strings are case/whitespace-normalised before matching, so plans from
+other tools ("l4"/"L4", "Left"/"left") still pair up correctly. Exits with
+status 2 (and writes no report) when no screws matched between the two
+plans.
 
 This script is Qt-free and can be run standalone or from CI.
 """
@@ -23,6 +27,7 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 # Allow running as `python scripts/validate_plans.py` from the repo root
 # without installing the package.
@@ -44,6 +49,38 @@ SCREW_FIELDS = [
     "pedicle_center_offset_mm",
     "dice",
 ]
+
+
+def _normalize_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``payload`` with screw level/side casing normalised.
+
+    ``match_screws`` pairs screws by raw ``(vertebra_level, side)`` string
+    equality, so a reference plan exported by another tool with different
+    casing (``"l4"`` vs. ``"L4"``, ``"Left"`` vs. ``"left"``) would otherwise
+    fail to match. Normalise both fields the same way this script's own
+    output uses (level upper-case, side lower-case) before comparing.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    screws = payload.get("screws")
+    if not isinstance(screws, list):
+        return payload
+
+    normalized_screws = []
+    for item in screws:
+        if isinstance(item, dict):
+            item = dict(item)
+            level = item.get("vertebra_level")
+            if isinstance(level, str):
+                item["vertebra_level"] = level.strip().upper()
+            side = item.get("side")
+            if isinstance(side, str):
+                item["side"] = side.strip().lower()
+        normalized_screws.append(item)
+
+    normalized = dict(payload)
+    normalized["screws"] = normalized_screws
+    return normalized
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -69,11 +106,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    pred_payload = load_plan_json(args.pred)
-    ref_payload = load_plan_json(args.ref)
+    pred_payload = _normalize_plan_payload(load_plan_json(args.pred))
+    ref_payload = _normalize_plan_payload(load_plan_json(args.ref))
 
     comparisons, summary = compare_plans(pred_payload, ref_payload, voxel_mm=args.voxel_mm)
 
+    if summary.n_matched == 0:
+        print(
+            "No screws matched between pred and ref plans "
+            f"(pred={summary.n_unmatched_pred}, ref={summary.n_unmatched_ref}); "
+            "nothing to compare."
+        )
+        return 2
+
+    print(f"voxel_mm: {args.voxel_mm}")
     for key, value in asdict(summary).items():
         print(f"{key}: {value}")
 

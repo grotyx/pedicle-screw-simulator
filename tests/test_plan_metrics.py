@@ -257,3 +257,19 @@ def test_cli_writes_csv_and_json(tmp_path):
                          capture_output=True, text=True, check=True)
     assert "head_mad_mean" in out.stdout
     assert (tmp_path / "report.csv").exists() and (tmp_path / "report.json").exists()
+
+
+def test_cli_exits_nonzero_when_no_screws_match(tmp_path):
+    import json, subprocess, sys
+    from src.utils.planning_io import serialize_plan
+    a = _s((20, 30, 0), (10, -8, 0), "L4", "left")
+    b = _s((-20, 30, 0), (-10, -8, 0), "L5", "right")
+    (tmp_path / "pred.json").write_text(json.dumps(serialize_plan("s", [a], [], [])))
+    (tmp_path / "ref.json").write_text(json.dumps(serialize_plan("s", [b], [], [])))
+    out = subprocess.run([sys.executable, "scripts/validate_plans.py", "--pred", str(tmp_path / "pred.json"),
+                          "--ref", str(tmp_path / "ref.json"), "--out", str(tmp_path / "report")],
+                         capture_output=True, text=True)
+    assert out.returncode == 2
+    assert "no screws matched" in out.stdout.lower()
+    assert not (tmp_path / "report.csv").exists()
+    assert not (tmp_path / "report.json").exists()
