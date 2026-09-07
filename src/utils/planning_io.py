@@ -51,15 +51,24 @@ def metrics_to_dict(metrics: Any) -> Dict[str, Any]:
     return {str(key): _jsonable_metric(value) for key, value in metrics.items()}
 
 
-def _metric_number(metrics: Dict[str, Any], key: str) -> str:
-    """Format one numeric metric for CSV; empty when missing or unmeasurable."""
+def _metric_number(metrics: Dict[str, Any], key: str, spec: str = ".3f") -> str:
+    """Format one numeric metric for CSV; empty when missing or unmeasurable.
+
+    ``spec`` is a format spec, except for ``"d"``, which rounds to a plain
+    integer (grades read better as ``2`` than as ``2.000``). Anything that is
+    not a number — including a string a future writer might store under a
+    numeric key — yields an empty cell rather than raising mid-export.
+    """
     value = metrics.get(key)
     if value is None or isinstance(value, (bool, str)):
         return ""
     try:
-        return f"{float(value):.3f}"
+        number = float(value)
     except (TypeError, ValueError):
         return ""
+    if not math.isfinite(number):
+        return ""
+    return f"{int(number):d}" if spec == "d" else format(number, spec)
 
 
 def screw_to_dict(screw: Screw) -> Dict[str, Any]:
@@ -274,6 +283,6 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "trajectory_body_ratio"),
                 _metric_number(metrics, "min_wall_mm"),
                 "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
-                "" if metrics.get("facet_grade") is None else f"{int(metrics['facet_grade'])}",
+                _metric_number(metrics, "facet_grade", "d"),
                 "|".join(screw.warnings),
             ])

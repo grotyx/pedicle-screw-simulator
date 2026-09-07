@@ -163,6 +163,43 @@ class TestScrewTool:
         assert moved.mean_hu is None and moved.min_hu is None
         assert moved.metrics == {}
 
+    def _breaching_tool_and_screw(self, side):
+        """A screw whose worst breach leaves the cube through an x wall."""
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask, ct))
+        # The centreline stays inside the cube but the 6.5 mm shaft overhangs
+        # the x = 20 wall, so the worst breach sample sits 3.25 mm off the
+        # centreline on the x axis -- exactly the case where medial vs lateral
+        # depends on which side of the midline the screw is.
+        screw = Screw(
+            entry_point=(22.0, 38.0, 30.0),
+            target_point=(22.0, 24.0, 30.0),
+            diameter=6.5,
+            side=side,
+        )
+        tool.add_screw(screw)
+        tool.regrade_all()
+        return tool.get_screws()[0]
+
+    def test_heary_direction_is_side_agnostic_without_a_side(self):
+        screw = self._breaching_tool_and_screw("")
+        assert screw.breach_distance > 0
+        # An unknown side must not be silently read as "right".
+        assert screw.metrics["heary_direction"] == "mediolateral"
+
+    def test_heary_direction_uses_side_when_known(self):
+        screw = self._breaching_tool_and_screw("left")
+        assert screw.breach_distance > 0
+        assert screw.metrics["heary_direction"] == "medial"
+
     def test_regrade_replaces_stale_planner_breach_warnings(self):
         import numpy as np
         import SimpleITK as sitk

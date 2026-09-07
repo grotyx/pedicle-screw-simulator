@@ -281,6 +281,11 @@ class ScrewTool:
             screw.warnings.append(
                 f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
             )
+        # ScrewTool holds no PlannerConfig, so it reads the raw constant that
+        # PlannerConfig.wall_clearance_mm defaults to. Once planner configs are
+        # user-editable this must follow the active config instead (or take an
+        # optional threshold from whoever installs the grader), or a manual and
+        # an auto screw will be judged against different clearances.
         if 0 < result.min_wall_mm < CORTICAL_WALL_CLEARANCE_MM:
             screw.warnings.append(
                 f"Cortical clearance {result.min_wall_mm:.1f} mm below "
@@ -304,7 +309,7 @@ class ScrewTool:
         depend on them come back ``None``.
         """
         from ..core.bone_quality import assess_bone_quality
-        from ..core.breach_classification import facet_violation_grade, heary_direction
+        from ..core.breach_classification import facet_violation_grade
 
         quality = assess_bone_quality(
             self._grader,
@@ -316,12 +321,6 @@ class ScrewTool:
         facet_grade, facet_text = facet_violation_grade(
             self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
         )
-        if result.breach_point_lps is not None:
-            heary = heary_direction(
-                result.breach_point_lps, result.breach_centre_lps, screw.side
-            )
-        else:
-            heary = "none"
         return {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -329,10 +328,36 @@ class ScrewTool:
             "body_mean_hu": quality.body_mean_hu,
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
-            "heary_direction": heary,
+            "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
         }
+
+    @staticmethod
+    def _heary_label(side: str, result: "GradeResult") -> str:
+        """Breach direction, degraded to ``"mediolateral"`` when the side is unknown.
+
+        :func:`~src.core.breach_classification.heary_direction` needs to know
+        which side of the midline the screw sits on to tell medial from lateral,
+        and a manually placed screw often has no ``side`` yet. Rather than let
+        the empty string be read as "right" — which silently flips the label a
+        surgeon reads in the inspector and in the exported CSV — an x-dominant
+        breach is reported side-agnostically. The other four directions do not
+        depend on the side and are passed through unchanged.
+        """
+        from ..core.breach_classification import heary_direction
+
+        if result.breach_point_lps is None:
+            return "none"
+        known_side = str(side).lower()
+        if known_side in ("left", "right"):
+            return heary_direction(
+                result.breach_point_lps, result.breach_centre_lps, known_side
+            )
+        label = heary_direction(
+            result.breach_point_lps, result.breach_centre_lps, "left"
+        )
+        return "mediolateral" if label in ("medial", "lateral") else label
 
     def _reset_state(self):
         """Reset tool state."""
@@ -381,7 +406,8 @@ class ScrewTool:
             vertebra_level=original.vertebra_level,
             side=original.side,
             source=original.source,
-            warnings=[w for w in original.warnings if not w.startswith("Not graded")],
+            # _evaluate_screw strips and regenerates every grader-derived note.
+            warnings=list(original.warnings),
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated
@@ -406,7 +432,8 @@ class ScrewTool:
             vertebra_level=original.vertebra_level,
             side=original.side,
             source=original.source,
-            warnings=[w for w in original.warnings if not w.startswith("Not graded")],
+            # _evaluate_screw strips and regenerates every grader-derived note.
+            warnings=list(original.warnings),
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated

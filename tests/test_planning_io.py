@@ -213,6 +213,25 @@ def test_csv_has_metric_columns(tmp_path):
     assert blank["trajectory_mean_hu"] == "" and blank["facet_grade"] == ""
 
 
+def test_csv_tolerates_non_numeric_metric_values(tmp_path):
+    """A metric stored under a numeric key as text must not abort the export."""
+    import csv as _csv
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import export_screws_csv
+    screw = Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30),
+                  metrics={"facet_grade": "grade two", "min_wall_mm": float("nan"),
+                           "heary_direction": "medial"})
+    path = tmp_path / "s.csv"
+    export_screws_csv(str(path), [screw])       # must not raise
+    with path.open("r", encoding="utf-8") as handle:
+        rows = list(_csv.reader(handle))
+    row = dict(zip(rows[0], rows[1], strict=True))
+    assert row["facet_grade"] == ""
+    assert row["min_wall_mm"] == ""
+    assert row["heary_direction"] == "medial"
+
+
 def test_v1_payload_without_metadata_loads():
     from src.utils.planning_io import deserialize_plan
     payload = {"version": 1, "series_id": None, "measurements": [], "screws": [
