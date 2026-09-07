@@ -63,6 +63,20 @@ class PedicleAnalyzer:
         analysis.
     """
 
+    # -- Coronal isthmus search parameters -------------------------------
+    # Half-width of the midline band that separates body/lamina slices
+    # from pedicle-zone slices.
+    MIDLINE_BAND_MM: float = 3.0
+    # Smallest coronal cross-section accepted as a pedicle.
+    MIN_PEDICLE_AREA_MM2: float = 10.0
+    # Accepted lateral offset of a pedicle centroid from the midline.
+    MIN_LATERAL_MM: float = 3.0
+    MAX_LATERAL_MM: float = 40.0
+    # Tolerance on the vertebra z-range when accepting a candidate.
+    Z_RANGE_MARGIN_MM: float = 5.0
+    # Below this |Y| the PCA axis is considered unreliable.
+    MIN_AXIS_AP_COMPONENT: float = 0.3
+
     def __init__(
         self,
         mask_image: sitk.Image,
@@ -89,6 +103,13 @@ class PedicleAnalyzer:
         """
         # sitk index order: (x=i, y=j, z=k)
         pt = self._mask_image.TransformIndexToPhysicalPoint((int(i), int(j), int(k)))
+        return np.array(pt, dtype=np.float64)
+
+    def _continuous_ijk_to_lps(self, i: float, j: float, k: float) -> np.ndarray:
+        """Convert a *continuous* ijk index to LPS physical coordinates."""
+        pt = self._mask_image.TransformContinuousIndexToPhysicalPoint(
+            (float(i), float(j), float(k))
+        )
         return np.array(pt, dtype=np.float64)
 
     def _indices_centroid_lps(self, indices_zyx: np.ndarray) -> np.ndarray:
@@ -181,19 +202,19 @@ class PedicleAnalyzer:
 
         Algorithm overview
         ------------------
-        1. Extract the binary mask for this vertebra.
-        2. Restrict to the **superior half** of the axial slice range
-           (pedicles are located in the upper portion of each vertebra).
-        3. For each axial slice in that range, run connected-component
-           analysis and identify left / right pedicle regions by their
-           x-coordinate relative to the vertebra centroid.
-        4. Locate the *pedicle isthmus* — the slice with the minimum
-           pedicle cross-sectional area.
-        5. Compute the pedicle axis via PCA on the pedicle voxels near
-           the isthmus.
-        6. Measure minimum transverse pedicle width at the isthmus.
-        7. Estimate the vertebral body centre from the anterior portion
-           of the vertebra.
+        1. Extract the binary mask for this vertebra and estimate the
+           vertebral body centre from its anterior portion.
+        2. **Primary** — coronal isthmus search
+           (:meth:`_find_pedicle_coronal`): walk coronal slices
+           posteriorly from the body centre, isolate the pedicle zone
+           between the posterior body wall and the lamina, and take the
+           narrowest cross-section on each side.
+        3. **Fallback** — axial connected-component search: label each
+           axial slice and treat the smaller lateral components as
+           pedicles.  Used only when the coronal search finds neither
+           side (no body centre, or a mask with no pedicle zone).
+
+        ``result.method`` records which path produced the pedicle data.
         """
         result = PedicleAnalysisResult(vertebra=vertebra)
 
@@ -229,12 +250,48 @@ class PedicleAnalyzer:
         centroid_x_idx = float(indices_zyx[:, 2].mean())
         body_center = self._estimate_body_center(binary, indices_zyx)
         result.vertebral_body_center = body_center
+        body_center_ijk: Optional[Tuple[float, float, float]] = None
         if body_center is not None:
             result.upper_endplate_normal = self._estimate_upper_endplate_normal(
                 indices_zyx,
                 body_center,
             )
+            body_center_ijk = self._mask_image.TransformPhysicalPointToContinuousIndex(
+                tuple(float(v) for v in body_center)
+            )
 
+        # --- Primary: coronal cross-section isthmus search ------------------
+        coronal_found = False
+        if body_center_ijk is not None:
+            for side in ("left", "right"):
+                found = self._find_pedicle_coronal(
+                    binary,
+                    body_center_ijk,
+                    (z_min, z_max),
+                    side,
+                )
+                if found is None:
+                    result.warnings.append(
+                        f"No {side} pedicle found by coronal isthmus search"
+                    )
+                    continue
+                coronal_found = True
+                if side == "left":
+                    result.left_pedicle_center = found["center_lps"]
+                    result.left_pedicle_axis = found["axis_lps"]
+                    result.left_pedicle_width = found["width_mm"]
+                    result.left_pedicle_height = found["height_mm"]
+                else:
+                    result.right_pedicle_center = found["center_lps"]
+                    result.right_pedicle_axis = found["axis_lps"]
+                    result.right_pedicle_width = found["width_mm"]
+                    result.right_pedicle_height = found["height_mm"]
+        if coronal_found:
+            result.method = "coronal_isthmus"
+            result.success = True
+            return result
+
+        # --- Fallback: axial connected-component search ---------------------
         for z in range(z_min, z_max + 1):
             axial_slice = binary[z]
             if axial_slice.sum() == 0:
@@ -346,108 +403,137 @@ class PedicleAnalyzer:
                 result.right_pedicle_axis = axis
                 result.right_pedicle_width = width
 
-        if body_center is not None:
-            crop_min = indices_zyx.min(axis=0)
-            crop_max = indices_zyx.max(axis=0) + 1
-            cropped_binary = binary[
-                crop_min[0]:crop_max[0],
-                crop_min[1]:crop_max[1],
-                crop_min[2]:crop_max[2],
-            ]
-            cropped_distance = ndi.distance_transform_edt(
-                cropped_binary,
-                sampling=(self._spacing[2], self._spacing[1], self._spacing[0]),
-            )
-            local_indices = indices_zyx - crop_min
-            clearances = cropped_distance[
-                local_indices[:, 0],
-                local_indices[:, 1],
-                local_indices[:, 2],
-            ]
-            points_lps = self._indices_to_lps(indices_zyx)
-            for side in ("left", "right"):
-                fallback = self._estimate_connected_pedicle(
-                    vertebra,
-                    side,
-                    points_lps,
-                    clearances,
-                    body_center,
-                )
-                if fallback is None:
-                    continue
-                center, axis, width = fallback
-                if side == "left":
-                    result.left_pedicle_center = center
-                    result.left_pedicle_axis = axis
-                    result.left_pedicle_width = width
-                else:
-                    result.right_pedicle_center = center
-                    result.right_pedicle_axis = axis
-                    result.right_pedicle_width = width
-                result.warnings.append(
-                    f"{side} pedicle estimated from 3D anatomical corridor"
-                )
-
         # Mark success when at least one pedicle was found.
         if result.left_pedicle_center is not None or result.right_pedicle_center is not None:
+            result.method = "axial_components"
             result.success = True
 
         return result
 
-    def _estimate_connected_pedicle(
+    def _find_pedicle_coronal(
         self,
-        vertebra: Vertebra,
+        binary: np.ndarray,
+        body_center_ijk: Tuple[float, float, float],
+        z_range: Tuple[int, int],
         side: str,
-        points_lps: np.ndarray,
-        clearances: np.ndarray,
-        body_center: np.ndarray,
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, float]]:
-        """Estimate a pedicle corridor when the vertebra is one component."""
-        bounds_min, bounds_max = vertebra.bounding_box
-        extent = np.maximum(bounds_max - bounds_min, 1.0)
-        side_sign = 1.0 if side == "left" else -1.0
-        expected = np.array(
-            [
-                body_center[0] + side_sign * 0.28 * extent[0],
-                body_center[1] + 0.30 * extent[1],
-                body_center[2] + 0.05 * extent[2],
-            ],
-            dtype=np.float64,
-        )
-        radii = np.maximum(extent * np.array([0.22, 0.20, 0.30]), 3.0)
-        offsets = (points_lps - expected) / radii
-        side_mask = (
-            points_lps[:, 0] > body_center[0]
-            if side == "left"
-            else points_lps[:, 0] < body_center[0]
-        )
-        posterior_mask = points_lps[:, 1] > body_center[1]
-        candidate_mask = (
-            side_mask
-            & posterior_mask
-            & (np.abs(offsets[:, 0]) <= 1.0)
-            & (np.abs(offsets[:, 1]) <= 1.0)
-            & (np.abs(offsets[:, 2]) <= 1.0)
-        )
-        candidate_indices = np.flatnonzero(candidate_mask)
-        if candidate_indices.size == 0:
+    ) -> Optional[Dict[str, object]]:
+        """Locate one pedicle by scanning coronal cross-sections.
+
+        Walking posteriorly from the vertebral body centre, coronal
+        slices first cut the body, then the *pedicle zone* where the two
+        pedicles are the only structures and nothing reaches the
+        midline, and finally the lamina.  The narrowest cross-section
+        inside that zone is the pedicle isthmus.
+
+        Parameters
+        ----------
+        binary:
+            Vertebra mask as a ``(z, y, x)`` array.
+        body_center_ijk:
+            Vertebral body centre as a continuous ``(i, j, k)`` index.
+        z_range:
+            Inclusive ``(z_min, z_max)`` index range of the vertebra.
+        side:
+            ``"left"`` (+X in LPS) or ``"right"`` (-X in LPS).
+
+        Returns
+        -------
+        dict or None
+            Keys ``center_lps``, ``axis_lps`` (posterior-oriented),
+            ``width_mm``, ``height_mm`` and ``isthmus_j``; ``None`` when
+            fewer than two pedicle cross-sections were found.
+        """
+        sx, _, sz = self._spacing
+        cx = float(body_center_ijk[0])
+        j_start = int(round(body_center_ijk[1]))
+        lateral_sign = 1.0 if side == "left" else -1.0
+        band = max(1, int(round(self.MIDLINE_BAND_MM / sx)))
+        records: List[Tuple[int, float, np.ndarray]] = []
+        body_ended = False
+
+        for j in range(j_start, binary.shape[1]):
+            coronal = binary[:, j, :]  # (z, x)
+            if not coronal.any():
+                if body_ended and records:
+                    break
+                continue
+
+            labeled, n_components = ndi.label(coronal)
+            lo = max(0, int(cx) - band)
+            hi = min(coronal.shape[1], int(cx) + band + 1)
+            midline_ids = set(np.unique(labeled[:, lo:hi])) - {0}
+            if not body_ended:
+                if midline_ids:
+                    continue          # still inside the vertebral body
+                body_ended = True     # posterior body wall passed
+            elif midline_ids:
+                break                 # lamina / spinous process reached
+
+            best: Optional[Tuple[float, np.ndarray]] = None
+            for comp_id in range(1, n_components + 1):
+                coords = np.argwhere(labeled == comp_id)  # (n, 2) -> z, x
+                if coords.shape[0] * sx * sz < self.MIN_PEDICLE_AREA_MM2:
+                    continue
+                lateral_mm = (float(coords[:, 1].mean()) - cx) * sx * lateral_sign
+                if not self.MIN_LATERAL_MM <= lateral_mm <= self.MAX_LATERAL_MM:
+                    continue
+                z_mean = float(coords[:, 0].mean())
+                margin = self.Z_RANGE_MARGIN_MM / sz
+                if not z_range[0] - margin <= z_mean <= z_range[1] + margin:
+                    continue
+                # The pedicle is the candidate nearest the midline; anything
+                # further lateral is transverse process or facet.
+                if best is None or lateral_mm < best[0]:
+                    best = (lateral_mm, coords)
+            if best is not None:
+                records.append((j, best[1].shape[0] * sx * sz, best[1]))
+
+        if len(records) < 2:
             return None
 
-        candidate_clearances = clearances[candidate_indices]
-        normalized_distance = np.linalg.norm(offsets[candidate_indices], axis=1)
-        max_clearance = max(float(np.max(candidate_clearances)), 1.0)
-        scores = (
-            candidate_clearances
-            - 0.4 * max_clearance * normalized_distance
+        # Isthmus = narrowest cross-section.  A corridor of uniform calibre
+        # ties across many slices, so take the middle of the narrowest run.
+        min_area = min(area for _, area, _ in records)
+        tied = [record for record in records if record[1] == min_area]
+        isthmus_j, _, coords = tied[len(tied) // 2]
+
+        width_mm = float(coords[:, 1].max() - coords[:, 1].min() + 1) * sx
+        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        center = self._continuous_ijk_to_lps(
+            float(coords[:, 1].mean()),
+            float(isthmus_j),
+            float(coords[:, 0].mean()),
         )
-        best = candidate_indices[int(np.argmax(scores))]
-        center = points_lps[best]
-        clearance = float(clearances[best])
-        axis = center - body_center
-        axis_norm = float(np.linalg.norm(axis))
-        if axis_norm <= 1e-9 or clearance <= 0.0:
-            return None
-        return center.copy(), axis / axis_norm, 2.0 * clearance
+
+        all_zyx = np.vstack([
+            np.column_stack(
+                [
+                    rec_coords[:, 0],
+                    np.full(rec_coords.shape[0], rec_j),
+                    rec_coords[:, 1],
+                ]
+            )
+            for rec_j, _, rec_coords in records
+        ])
+        axis = self._compute_pedicle_axis(all_zyx)
+        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
+            # PCA follows the widest spread, which for a short corridor is
+            # not the AP direction — use body centre -> isthmus instead.
+            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
+            fallback = center - body_center_lps
+            norm = float(np.linalg.norm(fallback))
+            if norm > 1e-9:
+                axis = fallback / norm
+        if axis[1] < 0:
+            axis = -axis
+
+        return {
+            "center_lps": center,
+            "axis_lps": axis,
+            "width_mm": width_mm,
+            "height_mm": height_mm,
+            "isthmus_j": int(isthmus_j),
+        }
 
     def analyze_all(
         self, labels: Optional[List[int]] = None

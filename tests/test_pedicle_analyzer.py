@@ -106,6 +106,28 @@ def _make_connected_vertebra_mask(label: int = 27) -> sitk.Image:
     return connected
 
 
+
+def _make_anatomical_phantom(label: int = 28) -> sitk.Image:
+    """Body ellipse + two 8 mm pedicles + posterior arch, 1 mm isotropic, LPS identity.
+
+    The laminar arch starts at ``yy >= 60`` so that it joins the pedicles from
+    behind and leaves the spinal canal hollow, instead of filling the canal
+    with bone anterior to the laminae.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 15) & (zz < 45)
+    ped = np.zeros_like(body)
+    for cx in (30, 60):
+        ped |= (((xx - cx) / 4.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1) & (yy >= 48) & (yy < 62)
+    arch = ((((xx - 45) / 22.0) ** 2 + ((yy - 66) / 10.0) ** 2 <= 1)
+            & ~(((xx - 45) / 14.0) ** 2 + ((yy - 64) / 6.0) ** 2 <= 1)
+            & (yy >= 60) & (zz >= 26) & (zz < 40))
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped | arch] = label
+    return sitk.GetImageFromArray(arr)
+
+
 # ---------------------------------------------------------------------------
 # Vertebra dataclass tests
 # ---------------------------------------------------------------------------
@@ -320,7 +342,7 @@ class TestAnalyzePedicle:
         assert result.right_pedicle_center[0] < result.vertebral_body_center[0]
         assert result.left_pedicle_center[1] > result.vertebral_body_center[1]
         assert result.right_pedicle_center[1] > result.vertebral_body_center[1]
-        assert any("3D anatomical corridor" in warning for warning in result.warnings)
+        assert result.method in {"coronal_isthmus", "axial_components"}
 
     def test_upper_endplate_normal_tracks_sagittal_body_tilt(self):
         """Superior body envelope should recover its AP-to-superior slope."""
@@ -413,6 +435,42 @@ class TestAnalyzePedicle:
         result = analyzer.analyze_pedicle(vertebrae[0])
         # Should not crash; may or may not find pedicles.
         assert isinstance(result, PedicleAnalysisResult)
+
+
+# ---------------------------------------------------------------------------
+# PedicleAnalyzer: coronal isthmus search
+# ---------------------------------------------------------------------------
+
+class TestCoronalIsthmus:
+    def test_anatomical_phantom_isthmus_within_2mm(self):
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())
+        vertebra = analyzer.get_available_vertebrae()[0]
+        result = analyzer.analyze_pedicle(vertebra)
+        assert result.success and result.method == "coronal_isthmus"
+        assert np.linalg.norm(result.left_pedicle_center - np.array([60.0, 55.0, 32.0])) <= 2.0
+        assert np.linalg.norm(result.right_pedicle_center - np.array([30.0, 55.0, 32.0])) <= 2.0
+        assert 7.0 <= result.left_pedicle_width <= 9.0
+        assert 11.0 <= result.left_pedicle_height <= 13.0
+        assert result.left_pedicle_axis[1] > 0.7  # posterior-oriented, mostly AP
+
+    def test_phantom_yields_two_planned_screws_through_pedicles(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 400, -50).astype(np.int16))
+        ct.CopyInformation(mask)
+        analyzer = PedicleAnalyzer(mask)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        planner = AutoScrewPlanner(ct, mask)
+        screws = planner.plan_all([result])
+        assert {s.side for s in screws} == {"left", "right"}
+        for screw in screws:
+            cx = 60.0 if screw.side == "left" else 30.0
+            direction = screw.target_lps - screw.entry_lps
+            samples = [screw.entry_lps + direction * t for t in np.linspace(0, 1, 40)]
+            inside = sum(1 for p in samples if 48 <= p[1] < 62 and abs(p[0] - cx) <= 4 and abs(p[2] - 32) <= 6)
+            assert inside >= 8, f"{screw.side} trajectory misses the pedicle corridor"
+            assert screw.gertzbein_grade in {"A", "B"}
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,14 @@ class PedicleAnalysisResult:
     left_pedicle_width: float = 0.0
     right_pedicle_width: float = 0.0
 
+    # Pedicle craniocaudal height at the isthmus (mm)
+    left_pedicle_height: float = 0.0
+    right_pedicle_height: float = 0.0
+
+    # Which detection path produced the pedicle data
+    # ("coronal_isthmus" or "axial_components"; empty when none succeeded).
+    method: str = ""
+
     # Anterior vertebral body centre (LPS)
     vertebral_body_center: Optional[np.ndarray] = None
 
