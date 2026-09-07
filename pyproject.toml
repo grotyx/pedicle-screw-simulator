@@ -1,7 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pedicle-screw-simulator"
 dynamic = ["version"]
 requires-python = ">=3.12"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools]
+# The app runs from source or via PyInstaller, not as an installed
+# distribution; this keeps the metadata valid without claiming a
+# distributable package layout.
+packages = []
 
 [tool.ruff]
 line-length = 100

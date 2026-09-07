@@ -1,11 +1,30 @@
 """Project credit, license, citation, and About-dialog metadata tests."""
 
+import tomllib
 from pathlib import Path
 
 import src
 from src.ui import main_window as main_window_module
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+# --- M10: pyproject.toml is valid, buildable package metadata --------------
+
+
+def test_pyproject_declares_a_build_backend_for_the_dynamic_version():
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        data = tomllib.load(handle)
+
+    assert data["project"]["dynamic"] == ["version"]
+    assert data["build-system"]["build-backend"] == "setuptools.build_meta"
+    assert any(
+        req.startswith("setuptools") for req in data["build-system"]["requires"]
+    )
+    assert data["tool"]["setuptools"]["dynamic"]["version"] == {"file": "VERSION"}
+    # No distributable package layout is claimed; the app runs from source
+    # or via PyInstaller.
+    assert data["tool"]["setuptools"]["packages"] == []
 
 
 def test_public_creator_metadata_is_complete():
