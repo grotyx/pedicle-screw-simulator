@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.models.measurement import Measurement
 from src.models.screw import Screw
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 VALID_PLANES = {"axial", "sagittal", "coronal"}
 
 
@@ -35,6 +35,10 @@ def screw_to_dict(screw: Screw) -> Dict[str, Any]:
         "medial_angle": float(screw.medial_angle),
         "grade": screw.grade,
         "breach_distance": float(screw.breach_distance),
+        "mean_hu": None if screw.mean_hu is None else float(screw.mean_hu),
+        "min_hu": None if screw.min_hu is None else float(screw.min_hu),
+        "warnings": list(screw.warnings),
+        "source": screw.source,
     }
 
 
@@ -53,17 +57,25 @@ def screw_from_dict(data: Dict[str, Any]) -> Screw:
     )
     screw.vertebra_level = str(data.get("vertebra_level", ""))
     screw.side = str(data.get("side", ""))
-    screw.insertion_angle = float(
-        data.get("insertion_angle", screw.insertion_angle)
-    )
-    screw.medial_angle = float(data.get("medial_angle", screw.medial_angle))
     screw.grade = str(data.get("grade", screw.grade))
     screw.breach_distance = float(
         data.get("breach_distance", screw.breach_distance)
     )
 
+    mean_hu = data.get("mean_hu")
+    min_hu = data.get("min_hu")
+    screw.mean_hu = None if mean_hu is None else float(mean_hu)
+    screw.min_hu = None if min_hu is None else float(min_hu)
+    raw_warnings = data.get("warnings", [])
+    screw.warnings = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
+    screw.source = str(data.get("source", "manual"))
+
     if "trajectory" in data:
         screw.trajectory = _parse_point3(data["trajectory"], "trajectory")
+
+    # insertion_angle/medial_angle are derived from entry/target/side; recompute
+    # rather than trust stale values from the payload.
+    screw._recompute_geometry()
 
     return screw
 
@@ -183,38 +195,31 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
     with target.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow([
-            "index",
-            "length_mm",
-            "diameter_mm",
-            "grade",
-            "breach_distance_mm",
-            "entry_x",
-            "entry_y",
-            "entry_z",
-            "target_x",
-            "target_y",
-            "target_z",
-            "insertion_angle_deg",
-            "medial_angle_deg",
-            "vertebra_level",
-            "side",
+            "index", "vertebra_level", "side", "source", "length_mm", "diameter_mm",
+            "grade", "breach_distance_mm", "mean_hu", "min_hu",
+            "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
+            "convergence_angle_deg", "craniocaudal_angle_deg", "warnings",
         ])
 
         for index, screw in enumerate(screws, start=1):
             writer.writerow([
                 index,
+                screw.vertebra_level,
+                screw.side,
+                screw.source,
                 f"{screw.length:.3f}",
                 f"{screw.diameter:.3f}",
                 screw.grade,
                 f"{screw.breach_distance:.3f}",
+                "" if screw.mean_hu is None else f"{screw.mean_hu:.3f}",
+                "" if screw.min_hu is None else f"{screw.min_hu:.3f}",
                 f"{screw.entry_point[0]:.3f}",
                 f"{screw.entry_point[1]:.3f}",
                 f"{screw.entry_point[2]:.3f}",
                 f"{screw.target_point[0]:.3f}",
                 f"{screw.target_point[1]:.3f}",
                 f"{screw.target_point[2]:.3f}",
-                f"{screw.insertion_angle:.3f}",
                 f"{screw.medial_angle:.3f}",
-                screw.vertebra_level,
-                screw.side,
+                f"{screw.insertion_angle:.3f}",
+                "|".join(screw.warnings),
             ])

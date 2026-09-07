@@ -77,9 +77,9 @@ class TestPlanningIO:
             rows = list(csv.reader(handle))
 
         assert rows[0][0] == "index"
-        assert rows[0][1] == "length_mm"
+        assert rows[0][4] == "length_mm"
         assert rows[1][0] == "1"
-        assert rows[1][2] == "5.000"
+        assert rows[1][5] == "5.000"
 
     def test_serialize_plan_rejects_invalid_plane(self):
         measurements = [
@@ -101,3 +101,39 @@ class TestPlanningIO:
             assert "Invalid measurement plane" in str(exc)
             return
         assert False, "Expected ValueError for invalid plane"
+
+
+def test_v2_roundtrip_preserves_metadata(tmp_path):
+    from src.models.screw import Screw
+    from src.utils.planning_io import serialize_plan, deserialize_plan, save_plan_json, load_plan_json
+    screw = Screw(entry_point=(1.0, 2.0, 3.0), target_point=(1.0, -30.0, 3.0), diameter=6.0,
+                  vertebra_level="L4", side="left", grade="B", breach_distance=0.8,
+                  mean_hu=210.0, min_hu=90.0, warnings=["note"], source="auto")
+    payload = serialize_plan("series", [screw], [], [])
+    assert payload["version"] == 2
+    path = tmp_path / "plan.json"
+    save_plan_json(str(path), payload)
+    parsed = deserialize_plan(load_plan_json(str(path)))
+    loaded = parsed["screws"][0]
+    assert loaded.mean_hu == 210.0 and loaded.min_hu == 90.0
+    assert loaded.warnings == ["note"] and loaded.source == "auto"
+
+
+def test_v1_payload_without_metadata_loads():
+    from src.utils.planning_io import deserialize_plan
+    payload = {"version": 1, "series_id": None, "measurements": [], "screws": [
+        {"entry_point": [0, 0, 0], "target_point": [0, 0, 30], "length": 30, "diameter": 6.5,
+         "vertebra_level": "", "side": "", "grade": "A", "breach_distance": 0.0}]}
+    parsed = deserialize_plan(payload)
+    screw = parsed["screws"][0]
+    assert screw.source == "manual" and screw.warnings == [] and screw.mean_hu is None
+
+
+def test_csv_has_signed_angle_columns(tmp_path):
+    from src.models.screw import Screw
+    from src.utils.planning_io import export_screws_csv
+    path = tmp_path / "s.csv"
+    export_screws_csv(str(path), [Screw(entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left")])
+    header = path.read_text(encoding="utf-8").splitlines()[0]
+    assert "convergence_angle_deg" in header and "craniocaudal_angle_deg" in header
+    assert "mean_hu" in header and "source" in header

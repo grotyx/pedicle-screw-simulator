@@ -1,6 +1,5 @@
 """Main application window with VWORKS-style and MPR-focus layouts."""
 
-import math
 import sys
 import logging
 from PyQt6.QtWidgets import (
@@ -1349,13 +1348,9 @@ class MainWindow(QMainWindow):
         if not identity:
             identity = f"Screw #{index + 1}"
 
-        dx = float(screw.target_point[0] - screw.entry_point[0])
-        dy = float(screw.target_point[1] - screw.entry_point[1])
-        dz = float(screw.target_point[2] - screw.entry_point[2])
-        convergence = math.degrees(math.atan2(abs(dx), abs(dy)))
-        craniocaudal = math.degrees(
-            math.atan2(dz, math.sqrt(dx * dx + dy * dy))
-        )
+        from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+        convergence = convergence_angle_deg(screw.entry_point, screw.target_point, screw.side or None)
+        craniocaudal = craniocaudal_angle_deg(screw.entry_point, screw.target_point)
 
         self.selected_screw_title.setText(identity)
         previous = self.selected_screw_diameter.blockSignals(True)
@@ -1363,7 +1358,7 @@ class MainWindow(QMainWindow):
         self.selected_screw_diameter.blockSignals(previous)
         self.selected_screw_diameter.setEnabled(True)
         self.selected_screw_length.setText(f"{screw.length:.1f} mm")
-        self.selected_screw_convergence.setText(f"{convergence:.1f}°")
+        self.selected_screw_convergence.setText(f"{convergence:+.1f}°")
         self.selected_screw_craniocaudal.setText(f"{craniocaudal:+.1f}°")
         self.selected_screw_grade.setText(f"Grade {screw.grade}")
         breach_distance = float(getattr(screw, "breach_distance", 0.0))
