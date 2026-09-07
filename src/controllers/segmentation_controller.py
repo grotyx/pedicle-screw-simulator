@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 import traceback
-from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from typing import Dict, Optional
 
@@ -338,7 +338,12 @@ class SegmentationController:
             )
             self._window.viewer_3d.set_vertebral_mesh(vtk_mask, labels=detected)
             self._last_segmentation_mask_path = result.mask_path
-            self._last_pedicle_mask = self._load_pedicle_mask(result, mask_image)
+            self._window.statusbar.showMessage("Resampling pedicle mask…")
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                self._last_pedicle_mask = self._load_pedicle_mask(result, mask_image)
+            finally:
+                QApplication.restoreOverrideCursor()
             from src.core.screw_grading import ScrewGrader
             if result.method == "totalsegmentator":
                 try:
@@ -350,7 +355,12 @@ class SegmentationController:
                     )
                     grader = None
                 self._window._tool_ctrl.screw_tool.set_grader(grader)
-                self._window._tool_ctrl.regrade_all()
+                self._window.statusbar.showMessage("Re-grading screws…")
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    self._window._tool_ctrl.regrade_all()
+                finally:
+                    QApplication.restoreOverrideCursor()
             else:
                 self._window._tool_ctrl.screw_tool.set_grader(None)
             self._window.update_vertebra_level_checks(detected)
@@ -727,7 +737,13 @@ class SegmentationController:
             and self._segmentation_thread.isRunning()
         ):
             self._segmentation_thread.request_cancel()
-            self._segmentation_thread.wait(5000)
+            if not self._segmentation_thread.wait(5000):
+                logger.warning(
+                    "Segmentation thread did not stop within 5s while "
+                    "resetting state; purging its workspace directory "
+                    "anyway (run dir: %s)",
+                    self._active_work_dir,
+                )
         if self._vertebrae_isolated:
             self.restore_full_volume()
         self._last_segmentation_mask_path = None
