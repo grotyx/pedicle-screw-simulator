@@ -559,20 +559,23 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(self.plan_hu_threshold_spin, 6, 1, 1, 2)
 
         weight_rows = (
-            ("Safety weight", "plan_weight_safety", 100,
-             "Importance of cortical wall clearance"),
-            ("Density weight", "plan_weight_density", 50,
+            ("Safety weight", "safety", "Importance of cortical wall clearance"),
+            ("Density weight", "density",
              "Importance of dense bone along the trajectory"),
-            ("Rod weight", "plan_weight_rod", 30,
+            ("Rod weight", "rod",
              "Importance of lining up the screw heads for the rod"),
         )
         self._planner_weight_value_labels = {}
-        for row, (caption, attribute, default, tip) in enumerate(weight_rows, start=7):
+        for row, (caption, name, tip) in enumerate(weight_rows, start=7):
+            attribute = f"plan_weight_{name}"
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 300)
             slider.setSingleStep(5)
             slider.setPageStep(25)
-            slider.setValue(default)
+            # Percent of the nominal weight, so the catalogue default is 100 %.
+            slider.setValue(
+                int(round(getattr(planner_defaults.weights, name) * 100.0))
+            )
             slider.setToolTip(f"{tip} (percent of the nominal weight)")
             setattr(self, attribute, slider)
             value_label = QLabel()
