@@ -82,6 +82,15 @@ class PedicleAnalysisResult:
     left_pedicle_height: float = 0.0
     right_pedicle_height: float = 0.0
 
+    # Inferior-medial corner of the isthmus cross-section (LPS world
+    # coordinates): the most inferior voxel of the isthmus slice, taking the
+    # one nearest the midline where several tie.  This is the landmark a
+    # cortical bone trajectory starts from (see :mod:`src.core.cbt_planner`).
+    # ``None`` when the pedicle came from the axial fallback, which never
+    # isolates a single isthmus slice.
+    left_pedicle_inferior_medial_lps: Optional[np.ndarray] = None
+    right_pedicle_inferior_medial_lps: Optional[np.ndarray] = None
+
     # Which detection path produced the pedicle data ("subregion_label",
     # "subregion_label+coronal_isthmus", "coronal_isthmus" or
     # "axial_components"; empty when none succeeded).

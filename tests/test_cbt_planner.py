@@ -1,0 +1,182 @@
+"""Tests for the cortical bone trajectory (CBT / mCBT) planning mode."""
+
+import os
+import sys
+
+import numpy as np
+import pytest
+import SimpleITK as sitk
+from scipy import ndimage as ndi
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from src.core.auto_screw_planner import AutoScrewPlanner
+from src.core.cbt_planner import cbt_entry_point, plan_cbt_screw
+from src.core.pedicle_analyzer import PedicleAnalyzer
+from src.core.planner_config import PlannerConfig
+from src.core.screw_grading import ScrewGrader
+from src.utils.constants import CBT_CONTRAINDICATION_NOTE, CBT_DEFAULTS
+
+LABEL = 28  # L4
+
+
+def _make_tall_phantom(label: int = LABEL) -> sitk.Image:
+    """A blocky L4 with a tall pedicle and a deep posterior arch, 1 mm isotropic.
+
+    ``tests.test_pedicle_analyzer._make_anatomical_phantom`` is deliberately
+    tight: its 30 mm body and 12 mm pedicles leave no room for a 25 deg cranial
+    trajectory to run 30 mm of catalogue length, and it has no bone inferomedial
+    to the isthmus for a CBT entry to sit on.  This phantom keeps the same
+    coordinate conventions (LPS identity, midline at x = 45) and adds what CBT
+    needs:
+
+    * a 40 mm tall body box (``z`` 10..49) so the cranial trajectory stays
+      inside bone all the way to a 40 mm tip;
+    * pedicles as tall ellipses (14 x 22 mm, centred ``x`` = 56 / 34, ``z`` = 32)
+      spanning ``y`` 44..61, whose medial edge stops short of the 6 mm midline
+      band so the coronal isthmus search still brackets them;
+    * a deep posterior arch block (``y`` 54..77) standing in for the
+      pars/lamina, which reaches the midline (ending the isthmus search where
+      the spinolaminar junction would) and carries the inferomedial CBT entry.
+
+    The isthmus therefore lands at ``y`` = 52 with its inferior-medial corner at
+    ``(56, 52, 21)``; the CBT entry seed (2 mm medial, 3 mm inferior) casts
+    posteriorly into the arch.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (xx >= 25) & (xx < 66) & (yy >= 20) & (yy < 50) & (zz >= 10) & (zz < 50)
+    ped = np.zeros_like(body)
+    for cx in (34, 56):
+        ped |= (
+            (((xx - cx) / 7.0) ** 2 + ((zz - 32) / 11.0) ** 2 <= 1)
+            & (yy >= 44)
+            & (yy < 62)
+        )
+    arch = (
+        (xx >= 23) & (xx < 68) & (yy >= 54) & (yy < 78) & (zz >= 12) & (zz < 40)
+    )
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped | arch] = label
+    return sitk.GetImageFromArray(arr)
+
+
+def _make_ct(mask: sitk.Image, cortical_hu: int = 900, cancellous_hu: int = 200) -> sitk.Image:
+    """A CT on the mask grid with a 2 mm cortical shell around the bone.
+
+    CBT trades pedicle fill for cortical purchase, so a uniform-HU phantom
+    cannot tell the two trajectory families apart; the shell makes the
+    difference measurable.
+    """
+    arr = sitk.GetArrayFromImage(mask)
+    bone = arr > 0
+    interior = ndi.binary_erosion(bone, iterations=2)
+    hu = np.full(bone.shape, -50, dtype=np.int16)
+    hu[bone] = cortical_hu
+    hu[interior] = cancellous_hu
+    ct = sitk.GetImageFromArray(hu)
+    ct.CopyInformation(mask)
+    return ct
+
+
+def _setup():
+    """Phantom + matching CT + pedicle analysis."""
+    mask = _make_tall_phantom()
+    ct = _make_ct(mask)
+    analyzer = PedicleAnalyzer(mask)
+    analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+    return ct, mask, analysis
+
+
+# --------------------------------------------------------------- analysis side
+def test_analysis_exposes_inferior_medial_isthmus_corner():
+    _ct, _mask, analysis = _setup()
+    for side in ("left", "right"):
+        corner = getattr(analysis, f"{side}_pedicle_inferior_medial_lps")
+        center = getattr(analysis, f"{side}_pedicle_center")
+        assert corner is not None
+        assert corner.shape == (3,)
+        assert corner[1] == pytest.approx(center[1])          # same isthmus slice
+        assert corner[2] < center[2]                          # inferior
+        medial = -1.0 if side == "left" else 1.0
+        assert medial * (corner[0] - center[0]) <= 0.0        # at or medial to centre
+
+
+# ------------------------------------------------------------------- entry point
+def test_cbt_entry_is_posterior_and_inferior_to_isthmus():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    entry = cbt_entry_point(grader, analysis, "left", LABEL)
+    assert entry is not None
+    assert entry[1] > analysis.left_pedicle_center[1]        # posterior
+    assert entry[2] < analysis.left_pedicle_center[2]        # inferior
+
+
+def test_cbt_entry_sits_inside_bone():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    for side in ("left", "right"):
+        entry = cbt_entry_point(grader, analysis, side, LABEL)
+        assert entry is not None
+        d_out, _d_in = grader.distances_at_points(entry.reshape(1, 3), LABEL)
+        assert d_out[0] == 0.0
+
+
+def test_cbt_entry_without_a_corner_returns_none():
+    ct, mask, analysis = _setup()
+    analysis.left_pedicle_inferior_medial_lps = None
+    grader = ScrewGrader(mask, ct)
+    assert cbt_entry_point(grader, analysis, "left", LABEL) is None
+
+
+# ------------------------------------------------------------------ screw plan
+def test_cbt_screw_angles_and_size():
+    ct, mask, analysis = _setup()
+    screw = plan_cbt_screw(
+        ScrewGrader(mask, ct), analysis, "left", LABEL, PlannerConfig(trajectory="cbt")
+    )
+    assert screw is not None
+    assert 18.0 <= screw.craniocaudal_angle <= 32.0
+    assert -17.0 <= screw.convergence_angle <= -5.0        # lateral = negative convergence
+    assert screw.diameter_mm in CBT_DEFAULTS["diameter_mm"]
+    assert screw.length_mm in CBT_DEFAULTS["lengths_mm"]
+    assert screw.gertzbein_grade in {"A", "B"}
+    assert screw.metrics["trajectory_type"] == "cbt"
+    assert CBT_CONTRAINDICATION_NOTE in screw.warnings
+
+
+def test_cbt_screw_diverges_laterally_on_both_sides():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(trajectory="cbt")
+    for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
+        screw = plan_cbt_screw(grader, analysis, side, LABEL, config)
+        assert screw is not None
+        travel = screw.target_lps - screw.entry_lps
+        assert lateral_sign * travel[0] > 0.0     # tip lands lateral to the entry
+        assert travel[1] < 0.0                    # advancing anteriorly
+        assert travel[2] > 0.0                    # advancing cranially
+
+
+# --------------------------------------------------------------- plan_all wiring
+@pytest.mark.parametrize("mode", ["optimizer", "legacy"])
+def test_plan_all_cbt_trajectory_marks_every_screw(mode):
+    ct, mask, analysis = _setup()
+    planner = AutoScrewPlanner(
+        ct, mask, config=PlannerConfig(mode=mode, trajectory="cbt")
+    )
+    screws = planner.plan_all([analysis])
+    assert len(screws) == 2
+    assert {s.side for s in screws} == {"left", "right"}
+    for screw in screws:
+        assert screw.metrics["trajectory_type"] == "cbt"
+        assert screw.craniocaudal_angle > 15.0
+
+
+def test_plan_all_traditional_trajectory_is_labelled_traditional():
+    ct, mask, analysis = _setup()
+    planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+    screws = planner.plan_all([analysis])
+    assert screws
+    for screw in screws:
+        assert screw.metrics["trajectory_type"] == "traditional"

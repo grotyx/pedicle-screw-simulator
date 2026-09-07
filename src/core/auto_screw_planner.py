@@ -27,6 +27,7 @@ import SimpleITK as sitk
 
 from .bone_quality import assess_bone_quality
 from .breach_classification import facet_violation_grade, heary_direction
+from .cbt_planner import plan_cbt_screws
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import ScrewGrader
@@ -381,6 +382,8 @@ class AutoScrewPlanner:
             "heary_direction": heary,
             "facet_grade": facet_grade,
             "facet_text": facet_text,
+            # Overwritten by :mod:`.cbt_planner`, which shares this tail.
+            "trajectory_type": "traditional",
         }
         warnings.extend(quality.warnings)
         if facet_grade >= 2:
@@ -439,11 +442,28 @@ class AutoScrewPlanner:
             List of pedicle analysis results.
         sides:
             ``"both"`` (default), ``"left"``, or ``"right"``.
+
+        ``config.trajectory == "cbt"`` replaces the trajectory family for both
+        back-ends: a cortical bone trajectory has its own entry landmark, angle
+        window and implant catalogue, so neither the optimiser's convergent
+        candidate grid nor the legacy planner's medialising search applies.
         """
         if sides not in ("both", "left", "right"):
             raise ValueError(f"sides must be 'both', 'left', or 'right', got {sides!r}")
 
         side_list = ["left", "right"] if sides == "both" else [sides]
+
+        if self.config.trajectory == "cbt":
+            screws = plan_cbt_screws(
+                self._grader,
+                analyses,
+                side_list,
+                self.config,
+                skip_labels=(_SACRUM_LABEL,),
+                planner=self,
+            )
+            self._stamp_rod_misalignment(screws)
+            return screws
 
         if self.config.mode == "optimizer":
             return self._plan_all_optimized(analyses, side_list)

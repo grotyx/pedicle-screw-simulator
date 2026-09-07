@@ -228,3 +228,22 @@ VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD = 132.0
 TRAJECTORY_BODY_HU_RATIO_THRESHOLD = 1.0
 # Facet violation: distance from screw head cylinder to the cephalad vertebra (Babu 2012 approximation)
 FACET_CONTACT_DISTANCE_MM = 1.0
+
+# ------------------------------------------------------------------
+# Cortical bone trajectory (CBT / mCBT)
+# ------------------------------------------------------------------
+# Starting angles from Zeng 2024 (3D-CT morphometry of lumbar CBT corridors:
+# cranial 22-25 deg, lateral 11-14 deg) with the screw catalogue CBT actually
+# uses -- short, narrow screws that buy their purchase from cortex rather than
+# from pedicle fill.
+CBT_DEFAULTS = {
+    "cranial_angle_deg": 25.0,        # 22-25°
+    "lateral_angle_deg": 12.0,        # 11-14°
+    "angle_search_deg": 5.0,          # ± search window
+    "diameter_mm": (5.0, 5.5, 6.0),
+    "lengths_mm": (30.0, 35.0, 40.0),
+}
+# Zhang 2024 Delphi consensus on when CBT must not be used; attached to every
+# planned CBT screw so the reviewer is reminded to rule these out on the CT.
+CBT_CONTRAINDICATION_NOTE = ("CBT consensus contraindications: spondylolisthesis grade >= 3, pars defect, "
+                             "absent lamina/isthmus, rotational deformity > 2° (Zhang 2024)")

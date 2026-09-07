@@ -489,11 +489,33 @@ class PedicleAnalyzer:
             result.left_pedicle_axis = found["axis_lps"]
             result.left_pedicle_width = found["width_mm"]
             result.left_pedicle_height = found["height_mm"]
+            result.left_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
         else:
             result.right_pedicle_center = found["center_lps"]
             result.right_pedicle_axis = found["axis_lps"]
             result.right_pedicle_width = found["width_mm"]
             result.right_pedicle_height = found["height_mm"]
+            result.right_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
+
+    def _inferior_medial_corner_lps(
+        self,
+        z_indices: np.ndarray,
+        x_indices: np.ndarray,
+        isthmus_j: int,
+        side: str,
+    ) -> np.ndarray:
+        """LPS corner voxel of one isthmus slice: most inferior, then most medial.
+
+        ``z_indices`` / ``x_indices`` are the slice's voxel indices.  The
+        inferior end of the pedicle is the lowest ``z`` index and the medial
+        side is the ``x`` index nearest the midline, which is the smaller ``x``
+        for the patient's left (+X in LPS) and the larger one for the right —
+        the same index-to-LPS orientation the rest of this module assumes.
+        """
+        z_min = int(np.min(z_indices))
+        on_floor = x_indices[z_indices == z_min]
+        x_medial = int(on_floor.min() if side == "left" else on_floor.max())
+        return self._ijk_to_lps(x_medial, int(isthmus_j), z_min)
 
     def _find_pedicle_from_label(
         self,
@@ -600,6 +622,9 @@ class PedicleAnalyzer:
             "width_mm": width_mm,
             "height_mm": height_mm,
             "isthmus_j": isthmus_j,
+            "inferior_medial_lps": self._inferior_medial_corner_lps(
+                coords[:, 0], coords[:, 2], isthmus_j, side
+            ),
             # The axis is fitted over the whole labelled corridor, so the
             # window it covers is that corridor's full coronal span.
             "isthmus_window_j": (int(js[0]), int(js[-1])),
@@ -647,7 +672,9 @@ class PedicleAnalyzer:
         -------
         dict or None
             Keys ``center_lps``, ``axis_lps`` (posterior-oriented),
-            ``width_mm``, ``height_mm``, ``isthmus_j`` and
+            ``width_mm``, ``height_mm``, ``isthmus_j``,
+            ``inferior_medial_lps`` (the isthmus slice's inferior-medial
+            corner voxel, the CBT entry landmark) and
             ``isthmus_window_j`` (the inclusive ``(j_lo, j_hi)`` slice
             range the axis was fitted over); ``None`` when fewer than
             two pedicle cross-sections were found.
@@ -749,6 +776,9 @@ class PedicleAnalyzer:
             "width_mm": width_mm,
             "height_mm": height_mm,
             "isthmus_j": int(isthmus_j),
+            "inferior_medial_lps": self._inferior_medial_corner_lps(
+                coords[:, 0], coords[:, 1], isthmus_j, side
+            ),
             "isthmus_window_j": (int(records[lo_index][0]), int(records[hi_index][0])),
         }
 
