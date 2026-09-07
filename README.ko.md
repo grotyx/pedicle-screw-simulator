@@ -195,6 +195,21 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
 
+## 참고문헌
+
+[사용설명서](docs/USER_GUIDE.ko.md)에서 설명하는 골질(HU) 임계값, breach·facet 분류, 계획 검증 지표는 아래 문헌을 근거로 합니다. 프로그램의 상수와 계산식은 이 문헌들을 공학적으로 근사한 것이며 문헌 자체를 대체하지 않습니다. 정확한 구현은 `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, `src/core/plan_metrics.py`를 참고하십시오.
+
+- Götschi et al. (2026), *Journal of Spine Surgery* — 척추경 나사못 크기 결정 여유값(pedicle fill ratio, 피질골 여유거리, anterior margin).
+- Yamamoto et al. (2025), *Asian Spine Journal* — 나사못 이완(loosening) 위험과 관련된 궤적 HU 기준값.
+- Dhar et al. (2026), *Asian Spine Journal* — 나사못 이완과 관련된 궤적 HU 범위.
+- Chen et al. (2024), *Orthopaedic Surgery* — 척추경 영역 HU 측정 방법.
+- Yang et al. (2026), *Global Spine Journal* — 궤적/척추체 HU 비율과 이완 위험도.
+- Sankar et al. (2026), *Neurosurgery* — L1–L5 해면골 HU 기준값(골다공증·저골밀도).
+- Heary et al. (2004) — 척추경 나사못 피질골 천공 방향 분류.
+- Babu et al. (2012) — 척추경 나사못에 의한 후관절(facet) 침범 등급 분류.
+- Scherer et al. (2022), *The Spine Journal* — 척추경 나사못 궤적 계획의 평가자 간 일치도.
+- Wang et al. (2024), *Bioengineering* — 나사못 부피 Dice 중첩도 및 계획 비교 방법.
+
 ## 라이선스
 
 프로젝트 소스 코드는 [MIT License](LICENSE)로 공개합니다. 저작권 및 허가문을 유지하면 사용, 수정 및 재배포할 수 있습니다.

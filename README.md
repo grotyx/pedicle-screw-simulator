@@ -195,6 +195,21 @@ If this software supports academic work, use GitHub's **Cite this repository** f
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 
+## References
+
+The bone-quality thresholds, breach/facet classifications, and plan-validation measures documented in the [User Guide](docs/USER_GUIDE.md) draw on the following literature. The application's constants and formulas are engineering approximations of these sources, not a substitute for them; see `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, and `src/core/plan_metrics.py` for the exact implementation.
+
+- Götschi et al. (2026), *Journal of Spine Surgery* — pedicle screw sizing margins (pedicle fill ratio, cortical wall clearance, anterior safety margin).
+- Yamamoto et al. (2025), *Asian Spine Journal* — trajectory HU cutoff associated with screw loosening risk.
+- Dhar et al. (2026), *Asian Spine Journal* — trajectory HU range associated with screw loosening.
+- Chen et al. (2024), *Orthopaedic Surgery* — pedicle-region HU sampling methodology.
+- Yang et al. (2026), *Global Spine Journal* — trajectory-to-vertebral-body HU ratio and loosening odds.
+- Sankar et al. (2026), *Neurosurgery* — L1-L5 trabecular HU thresholds for osteoporosis and low bone density.
+- Heary et al. (2004) — classification of pedicle screw cortical breach direction.
+- Babu et al. (2012) — grading of facet-joint violation by pedicle screw instrumentation.
+- Scherer et al. (2022), *The Spine Journal* — inter-rater agreement in pedicle screw trajectory planning.
+- Wang et al. (2024), *Bioengineering* — screw-volume Dice overlap and plan-comparison methodology.
+
 ## License
 
 Project source code is released under the [MIT License](LICENSE). Use, modification, and redistribution are permitted provided that the copyright and permission notice are retained.

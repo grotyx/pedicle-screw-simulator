@@ -118,7 +118,21 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 
 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
 
-### 5.5 Screw MPR 검토
+### 5.5 계획 매개변수(Planning Parameters)
+
+**Planning** 아래의 접이식 **Planning parameters** 그룹에서는 자동 플래너가 스크류 크기와 위치를 정할 때 사용하는 설정을 조정할 수 있습니다. 각 값은 입력 즉시 검증되고 저장되므로(Qt `QSettings`), 프로그램을 다시 시작해도 유지됩니다.
+
+| 항목 | 기본값 | 의미 |
+|---|---:|---|
+| Pedicle fill | 0.80 | 측정된 척추경 협부(isthmus) 폭 대비 스크류 직경의 비율 |
+| Wall clearance | 1.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
+| Anterior margin | 4.0 mm | anterior cortex 뒤쪽에 유지하는 안전 여유 |
+| Max convergence | 35° | 플래너가 사용할 수 있는 최대 medial 수렴각 |
+| HU threshold | 123 HU | 이완(loosening) 위험 경고가 표시되는 궤적 HU 기준값 |
+
+**Reset Defaults**를 선택하면 이 다섯 개 값이 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
+
+### 5.6 Screw MPR 검토
 
 1. 목록, MPR 또는 3D에서 스크류를 선택합니다.
 2. **Screw MPR**을 선택합니다.
@@ -128,7 +142,7 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 
 Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현재 단면과 만나는 스크류가 표시됩니다.
 
-### 5.6 스크류 측정값과 등급
+### 5.7 스크류 측정값과 등급
 
 **Selected Screw** 패널에는 다음 값이 표시됩니다.
 
@@ -139,6 +153,30 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하이면서 각 방향으로 최소 1 mm의 피질골 여유를 확보하도록 설정하고, 팁을 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
 
 불러온 volume은 표시 전에 LPS(identity 방향)로 재정렬됩니다. Oblique 방식으로 촬영된 volume은 identity 방향 격자로 resampling되며, 이 경우 정보 패널에 "(oblique volume resampled)"가 표시됩니다.
+
+### 5.8 스크류 골질(骨質) 지표(Screw Quality Metrics)
+
+스크류가 segmentation을 기준으로 등급이 매겨지면, **Selected Screw** 패널(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
+
+- **Trajectory HU(평균/최소):** 스크류의 원통형 궤적을 따라 측정한 Hounsfield Unit의 평균값과 최소값입니다.
+- **Pedicle HU:** 척추경 협부(isthmus) 중심에서 10 mm 이내에 있는 궤적 샘플만으로 계산한 평균 HU입니다. 자동 계획된 스크류에서만 제공됩니다 — 수동 스크류는 기준이 될 isthmus 중심이 없기 때문입니다.
+- **Vertebral body HU(척추체 HU):** 척추체 중심에 위치한 8×8×6 mm 타원체 관심영역을 해당 척추의 segmentation label과 교차시켜 계산한 평균 HU입니다. 같은 이유로 자동 계획된 스크류에서만 제공됩니다.
+- **Trajectory/body HU 비율:** 궤적 평균 HU를 척추체 HU로 나눈 값입니다.
+- **최소 피질골 여유거리("Wall margin"):** 스크류와 피질골 사이의 가장 가까운 거리(mm)입니다.
+- **Heary breach 방향:** 가장 심한 피질골 천공의 해부학적 방향 — medial, lateral, anterior, posterior, superior, inferior 중 하나입니다(Heary 2004). Side 정보가 없는 수동 스크류에서 medial/lateral 방향의 breach가 발생하면 "mediolateral"로, breach가 없으면 "none"으로 표시됩니다.
+- **후관절(facet) 침범 등급(0–3):** Babu(2012) 등급을 근사한 값으로, 스크류 근위부(entry에서 가까운 1/3) 구간과 상위(cephalad) 척추의 segmentation label 사이 관계로 판정합니다 — 0은 접촉 없음, 1은 1 mm 이내로 후관절에 접함, 2는 1 mm 미만으로 침범, 3은 1 mm 이상 침범을 의미합니다.
+
+측정값이 문헌 기준값을 넘으면 패널과 내보내기에 경고가 함께 표시됩니다.
+
+| 지표 | 기준값 | 경고 | 참고문헌 |
+|---|---|---|---|
+| Trajectory HU | 123 HU 미만 | 이완(loosening) 위험 | Yamamoto 2025; Dhar 2026 |
+| Vertebral body HU | 132 HU 미만 | 골다공증 | Sankar 2026 |
+| Vertebral body HU | 141 HU 미만(골다공증에 해당하지 않는 경우) | 저골밀도 | Sankar 2026 |
+| Trajectory/body HU 비율 | 1.0 미만 | 이완 위험 | Yang 2026 |
+| 후관절 침범 등급 | 2 이상 | 후관절 침범 | Babu 2012 |
+
+이러한 골질 관련 경고는 자동 계획된 스크류에서만 생성됩니다. 수동으로 배치한 스크류도 전체 지표 모음은 제공받지만 골질 경고는 받지 않습니다. Segmentation을 다시 실행하거나 계획을 불러올 때(이미 segmentation이 있는 경우) 계획을 다시 등급 매기면 모든 스크류의 breach distance·피질골 여유 경고가 다시 생성됩니다.
 
 ## 6. 스크류 수정
 
@@ -222,7 +260,7 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 - 지원되는 계획 표를 CSV로 내보냅니다.
 - 지원되는 골 표면을 STL로 내보냅니다.
 
-계획 파일은 schema version 2를 사용하며 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열과 함께 `mean_hu`, `min_hu`, `source`, `warnings` 열이 포함됩니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.8절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열과 함께 schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`가 포함됩니다.
 
 계획 파일, 스크린샷과 3D 메시는 DICOM 헤더가 없어도 환자와 연결될 수 있으므로 공유 전에 확인하십시오.
 

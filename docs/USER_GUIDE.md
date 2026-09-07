@@ -118,7 +118,21 @@ Current defaults:
 
 These values are workflow presets, not universal clinical recommendations.
 
-### 5.5 Review in Screw MPR
+### 5.5 Planning Parameters
+
+The collapsible **Planning parameters** group below **Planning** exposes the settings the automatic planner uses to size and place screws. Each field is validated and saved immediately (Qt `QSettings`), so a value survives an application restart.
+
+| Field | Default | Meaning |
+|---|---:|---|
+| Pedicle fill | 0.80 | Screw diameter as a fraction of the narrowest measured pedicle (isthmus) width |
+| Wall clearance | 1.0 mm | Minimum distance kept between the screw and the cortical wall |
+| Anterior margin | 4.0 mm | Safety margin kept behind the anterior vertebral body cortex |
+| Max convergence | 35° | Largest medial convergence angle the planner may use |
+| HU threshold | 123 HU | Trajectory HU below which the loosening-risk warning is flagged |
+
+Select **Reset Defaults** to restore these five built-in values and save them immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
+
+### 5.6 Review in Screw MPR
 
 1. Select a screw from the list, MPR, or 3D.
 2. Select **Screw MPR**.
@@ -128,7 +142,7 @@ These values are workflow presets, not universal clinical recommendations.
 
 Screw MPR shows the selected screw. Standard MPR shows screws intersecting the current slice.
 
-### 5.6 Screw Metrics and Grading
+### 5.7 Screw Metrics and Grading
 
 The **Selected Screw** panel reports:
 
@@ -139,6 +153,30 @@ The **Selected Screw** panel reports:
 Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width with at least 1 mm of cortical clearance on each side, keeps the tip at least 4 mm behind the anterior cortex, and selects lengths from the 25-55 mm catalogue in 5 mm steps. These values are workflow presets, not universal clinical recommendations.
 
 Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
+
+### 5.8 Screw Quality Metrics
+
+Once a screw is graded against a segmentation, the **Selected Screw** panel (Body HU, Wall margin, Facet, Heary rows) and the CSV/JSON export report a bundle of literature-based bone-quality and safety measurements:
+
+- **Trajectory HU (mean / min):** the mean and minimum Hounsfield Unit sampled along the screw's cylindrical trajectory.
+- **Pedicle HU:** mean HU restricted to trajectory samples within 10 mm of the pedicle isthmus centre. Auto-planned screws only — a manually placed screw has no isthmus centre to sample around.
+- **Vertebral body HU:** mean HU of an 8×8×6 mm ellipsoidal region of interest at the vertebral body centre, intersected with that vertebra's segmentation label. Auto-planned screws only, for the same reason.
+- **Trajectory/body HU ratio:** trajectory mean HU divided by vertebral body HU.
+- **Minimum cortical wall distance ("Wall margin"):** the closest approach, in mm, between the screw and the cortical wall.
+- **Heary breach direction:** the anatomical direction of the worst cortical breach — medial, lateral, anterior, posterior, superior, or inferior (Heary 2004). Reported as "mediolateral" for a medial/lateral breach on a manually placed screw with no known side, and "none" when there is no breach.
+- **Facet-joint violation grade (0-3):** an approximation of the Babu (2012) grading, measured from the proximal third of the screw to the cephalad vertebra's segmentation label — 0 no contact, 1 abuts the facet within 1 mm, 2 enters it by less than 1 mm, 3 penetrates it by 1 mm or more.
+
+The panel and export also warn when a measurement crosses a literature threshold:
+
+| Metric | Threshold | Warning | Reference |
+|---|---|---|---|
+| Trajectory HU | below 123 HU | Loosening risk | Yamamoto 2025; Dhar 2026 |
+| Vertebral body HU | below 132 HU | Osteoporosis | Sankar 2026 |
+| Vertebral body HU | below 141 HU (and not already osteoporotic) | Low bone density | Sankar 2026 |
+| Trajectory/body HU ratio | below 1.0 | Loosening risk | Yang 2026 |
+| Facet-joint violation grade | 2 or higher | Facet violation | Babu 2012 |
+
+These bone-quality warnings are generated only for automatically planned screws; a manually placed screw still receives the full metric bundle but not the bone-quality warnings. Re-grading a plan — after running segmentation again or on plan load, whenever a segmentation is already available — regenerates the breach-distance and cortical-clearance warnings for every screw.
 
 ## 6. Edit Screws
 
@@ -222,7 +260,7 @@ Measurements belong to the cut where they were created. They hide on another cut
 - Export supported planning tables as CSV.
 - Export supported bone surfaces as STL.
 
-Plan files use schema version 2, which adds `mean_hu`, `min_hu`, `warnings`, and `source` for each screw; plan files saved by earlier versions still load. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns plus `mean_hu`, `min_hu`, `source`, and `warnings`.
+Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.8, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, and the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`.
 
 Planning files, screenshots, and meshes may still be identifiable derivatives. Review them before sharing.
 
