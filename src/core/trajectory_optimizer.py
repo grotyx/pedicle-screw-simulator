@@ -39,6 +39,15 @@ ENDPLATE_TOLERANCE_DEG = 15.0
 #: Length of the distal segment the anterior-margin check is measured over (mm).
 TIP_SEGMENT_MM = 4.0
 
+#: Head-misalignment (mm) at which the rod objective costs a full unit of score.
+ROD_TOLERANCE_MM = 3.0
+
+#: Fraction of a screw's own best score the construct re-ranking may trade away.
+CONSTRUCT_SCORE_TOLERANCE = 0.10
+
+#: Cap on the greedy coordinate-descent sweeps over the construct.
+_CONSTRUCT_MAX_PASSES = 5
+
 #: Step and reach of the 1-D scan that seats an entry point on the posterior
 #: surface of the screw corridor (mm).
 _ANCHOR_STEP_MM = 0.5
@@ -49,8 +58,8 @@ class OptimizerWeights:
     """Relative importance of each normalised objective.
 
     Every component is clipped to ``[0, 1]`` before weighting, so a weight is
-    directly comparable to the others.  ``rod`` is unused here; it is consumed
-    by the multi-level construct optimiser.
+    directly comparable to the others.  ``rod`` is unused by the single-screw
+    scoring; it is consumed by :func:`optimize_construct`.
     """
 
     safety: float = 1.0      # min wall distance (capped at 3 mm, normalised)
@@ -462,3 +471,81 @@ def optimize_screw(
         if ranked:
             return ranked[:top_k]
     return []
+
+
+# ------------------------------------------------------------ construct level
+def rod_misalignment_mm(head_points: np.ndarray) -> float:
+    """RMS distance of the screw heads on one side from their best-fit 3-D line.
+
+    The rod is a smooth curve threaded through the heads of one side, so how far
+    the heads sit off a common line is a first-order proxy for how much the rod
+    has to be bent (and how much the surgeon has to reduce).  Fewer than three
+    heads always lie on a line, so they score a perfect 0.
+    """
+    heads = np.asarray(head_points, dtype=np.float64).reshape(-1, 3)
+    if heads.shape[0] < 3:
+        return 0.0
+    centred = heads - heads.mean(axis=0)
+    # First right-singular vector = principal axis = direction of the best-fit line.
+    direction = np.linalg.svd(centred, full_matrices=False)[2][0]
+    residuals = centred - np.outer(centred @ direction, direction)
+    return float(np.sqrt(np.mean(np.sum(residuals**2, axis=1))))
+
+
+def optimize_construct(
+    per_screw_candidates: Dict[Tuple[str, str], List[Candidate]],
+    weights: OptimizerWeights = DEFAULT_WEIGHTS,
+) -> Dict[Tuple[str, str], Candidate]:
+    """Re-rank per-screw candidates so the heads of each side line up.
+
+    Keys are ``(level_name, side)``.  Starting from every screw's own best
+    trajectory, greedy coordinate descent sweeps the screws (at most
+    :data:`_CONSTRUCT_MAX_PASSES` times, stopping early once a pass changes
+    nothing) and swaps in the candidate minimising
+
+    ``-score + weights.rod * rod_misalignment_mm(side heads) / ROD_TOLERANCE_MM``
+
+    Only candidates whose own score stays within
+    :data:`CONSTRUCT_SCORE_TOLERANCE` of that screw's best are eligible, so rod
+    alignment can never buy a materially worse screw.  Levels are only ever
+    compared against the same side's heads; the other side's term is constant
+    for that screw and cannot change the choice.
+    """
+    chosen: Dict[Tuple[str, str], Candidate] = {}
+    eligible: Dict[Tuple[str, str], List[Candidate]] = {}
+    for key, candidates in per_screw_candidates.items():
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda c: c.score)
+        floor = best.score - CONSTRUCT_SCORE_TOLERANCE * abs(best.score)
+        chosen[key] = best
+        eligible[key] = [c for c in candidates if c.score >= floor - 1e-12]
+
+    def side_misalignment(side: str, key: Tuple[str, str], candidate: Candidate) -> float:
+        heads = [
+            (candidate if k == key else c).entry
+            for k, c in chosen.items()
+            if k[1] == side
+        ]
+        return rod_misalignment_mm(np.asarray(heads, dtype=np.float64)) if heads else 0.0
+
+    for _ in range(_CONSTRUCT_MAX_PASSES):
+        changed = False
+        for key in list(chosen):
+            side = key[1]
+            best_candidate = chosen[key]
+            best_cost = -best_candidate.score + weights.rod * side_misalignment(
+                side, key, best_candidate
+            ) / ROD_TOLERANCE_MM
+            for candidate in eligible[key]:
+                cost = -candidate.score + weights.rod * side_misalignment(
+                    side, key, candidate
+                ) / ROD_TOLERANCE_MM
+                if cost < best_cost - 1e-12:
+                    best_cost, best_candidate = cost, candidate
+            if best_candidate is not chosen[key]:
+                chosen[key] = best_candidate
+                changed = True
+        if not changed:
+            break
+    return chosen
