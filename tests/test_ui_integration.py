@@ -20,6 +20,7 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QWidget,
 )
@@ -1400,11 +1401,15 @@ def test_cancel_request_asks_thread_to_terminate(ui_main_window):
             return False
 
     stub = _StubThread()
+    dialog = QProgressDialog("running", "Cancel", 0, 0, window)
     ctrl._segmentation_thread = stub
+    ctrl._segmentation_progress = dialog
     try:
         ctrl._on_cancel_requested()
     finally:
         ctrl._segmentation_thread = None
+        ctrl._segmentation_progress = None
+        dialog.deleteLater()
 
     assert stub.cancel_calls == 1
     assert window.seg_status_label.text() == "Cancelling segmentation..."
@@ -1421,6 +1426,32 @@ def test_cancel_request_without_thread_is_noop(ui_main_window):
     assert window.seg_status_label.text() == "Ready for automatic segmentation"
 
 
+def test_cancel_request_after_dialog_closed_is_noop(ui_main_window):
+    """A late canceled() with no live dialog must not cancel anything."""
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+
+    class _StubThread:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def request_cancel(self):
+            self.cancel_calls += 1
+
+        def isRunning(self):
+            return False
+
+    stub = _StubThread()
+    ctrl._segmentation_thread = stub
+    ctrl._segmentation_progress = None
+    try:
+        ctrl._on_cancel_requested()
+    finally:
+        ctrl._segmentation_thread = None
+
+    assert stub.cancel_calls == 0
+
+
 def test_on_cancelled_resets_ui_and_purges_workspace(ui_main_window, tmp_path):
     from src.core.totalseg_integration import SegmentationWorkspace
 
@@ -1428,12 +1459,14 @@ def test_on_cancelled_resets_ui_and_purges_workspace(ui_main_window, tmp_path):
     ctrl = window._seg_ctrl
     ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
     created = ctrl.workspace.create()
+    ctrl._active_work_dir = created
     ctrl._segmentation_thread = object()
     window.seg_run_btn.setEnabled(False)
 
     ctrl._on_cancelled()
 
     assert not Path(created).exists()
+    assert ctrl._active_work_dir is None
     assert window.seg_run_btn.isEnabled() is True
     assert ctrl._segmentation_thread is None
     assert window.seg_status_label.text() == "Segmentation cancelled"
@@ -1555,3 +1588,75 @@ def test_frozen_build_hides_cancel_button(ui_main_window, monkeypatch, tmp_path)
     ctrl._segmentation_thread = None
     dialog.close()
     ctrl._segmentation_progress = None
+
+
+def test_cancelling_a_run_keeps_the_previous_runs_mask_dir(ui_main_window, tmp_path):
+    """Cancelling run N must not delete run N-1's mask directory."""
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+
+    finished_dir = ctrl.workspace.create()
+    ctrl._last_segmentation_mask_path = str(
+        Path(finished_dir) / "totalseg_multilabel.nii.gz"
+    )
+    Path(ctrl._last_segmentation_mask_path).write_bytes(b"mask")
+
+    cancelled_dir = ctrl.workspace.create()
+    ctrl._active_work_dir = cancelled_dir
+    ctrl._segmentation_thread = object()
+
+    ctrl._on_cancelled()
+
+    assert not Path(cancelled_dir).exists()
+    assert Path(finished_dir).exists()
+    assert Path(ctrl._last_segmentation_mask_path).exists()
+
+
+def test_normal_completion_does_not_request_cancel(ui_main_window, monkeypatch, tmp_path):
+    """Closing the progress dialog emits canceled(); it must not cancel the run."""
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "critical", lambda *a, **k: None
+    )
+    ctrl.run()
+    thread = ctrl._segmentation_thread
+    cancel_calls = []
+    thread.request_cancel = lambda: cancel_calls.append(1)
+
+    ctrl._on_error("boom")
+
+    assert cancel_calls == []
+    assert ctrl._segmentation_progress is None
+
+
+def test_normal_finish_does_not_request_cancel(ui_main_window, monkeypatch, tmp_path):
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    ctrl.run()
+    thread = ctrl._segmentation_thread
+    cancel_calls = []
+    thread.request_cancel = lambda: cancel_calls.append(1)
+
+    image = sitk.Image([4, 4, 4], sitk.sitkInt16)
+    mask_path = tmp_path / "finish_mask.nii.gz"
+    _write_mask(image, mask_path)
+    ctrl._on_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+    assert cancel_calls == []
+    assert ctrl._segmentation_progress is None

@@ -93,6 +93,7 @@ class SegmentationController:
         self.workspace = SegmentationWorkspace()
         self._segmentation_thread: Optional[AutoSegmentationThread] = None
         self._segmentation_progress: Optional[QProgressDialog] = None
+        self._active_work_dir: Optional[str] = None
         self._last_segmentation_mask_path: Optional[str] = None
         self._last_segmentation_method: str = "totalsegmentator"
         self._segmentation_label_map: Dict[int, str] = {}
@@ -161,12 +162,15 @@ class SegmentationController:
             Qt.WindowModality.WindowModal
         )
         self._segmentation_progress.setMinimumDuration(0)
-        self._segmentation_progress.canceled.connect(self._on_cancel_requested)
         if getattr(sys, "frozen", False):
             # The packaged build runs nnU-Net in-process and cannot interrupt it.
             self._segmentation_progress.setCancelButton(None)
             self._window.seg_status_label.setToolTip(
                 "Cancellation is not available in the packaged build"
+            )
+        else:
+            self._segmentation_progress.canceled.connect(
+                self._on_cancel_requested
             )
         self._segmentation_progress.show()
 
@@ -175,6 +179,7 @@ class SegmentationController:
         self._window.statusbar.showMessage("Auto segmentation started")
 
         work_dir = self.workspace.create()
+        self._active_work_dir = work_dir
         self._segmentation_thread = AutoSegmentationThread(
             sitk_image=sitk_image,
             task=task,
@@ -190,20 +195,40 @@ class SegmentationController:
         self._segmentation_thread.cancelled.connect(self._on_cancelled)
         self._segmentation_thread.start()
 
+    def _close_progress_dialog(self):
+        """Close the progress dialog without re-entering the cancel path.
+
+        ``QProgressDialog.close()`` emits ``canceled()``, so the connection has
+        to be dropped first or every normal completion would look like a user
+        cancellation and terminate the (already finished) run.
+        """
+        dialog = self._segmentation_progress
+        if dialog is None:
+            return
+        self._segmentation_progress = None
+        try:
+            dialog.canceled.disconnect(self._on_cancel_requested)
+        except TypeError:
+            # Never connected (frozen build); nothing to detach.
+            pass
+        dialog.close()
+
     def _on_cancel_requested(self):
         """Ask the running segmentation thread to terminate its subprocess."""
-        if self._segmentation_thread is not None:
-            self._window.seg_status_label.setText("Cancelling segmentation...")
-            self._segmentation_thread.request_cancel()
+        if self._segmentation_thread is None or self._segmentation_progress is None:
+            return
+        self._window.seg_status_label.setText("Cancelling segmentation...")
+        self._segmentation_thread.request_cancel()
 
     def _on_cancelled(self):
         """Reset UI state after the segmentation run was cancelled."""
-        if self._segmentation_progress is not None:
-            self._segmentation_progress.close()
-            self._segmentation_progress = None
+        self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
         self._segmentation_thread = None
-        self.workspace.purge()
+        # Only this run's directory: earlier runs may still own the mask that
+        # `_last_segmentation_mask_path` points at.
+        self.workspace.remove(self._active_work_dir)
+        self._active_work_dir = None
         self._window.seg_status_label.setText("Segmentation cancelled")
         self._window.statusbar.showMessage("Auto segmentation cancelled")
 
@@ -215,9 +240,7 @@ class SegmentationController:
 
     def _on_finished(self, result):
         """Handle completed segmentation run."""
-        if self._segmentation_progress is not None:
-            self._segmentation_progress.close()
-            self._segmentation_progress = None
+        self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
         self._segmentation_thread = None
 
@@ -330,9 +353,7 @@ class SegmentationController:
 
     def _on_error(self, error: str):
         """Handle segmentation failure."""
-        if self._segmentation_progress is not None:
-            self._segmentation_progress.close()
-            self._segmentation_progress = None
+        self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
         self._segmentation_thread = None
         self._window.seg_status_label.setText("Segmentation failed")

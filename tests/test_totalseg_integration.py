@@ -643,3 +643,34 @@ def test_cancel_racing_the_spawn_still_terminates_process(tmp_path, monkeypatch)
         )
 
     assert holder.process.terminated is True
+
+
+def test_workspace_remove_deletes_only_the_given_dir(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    first = ws.create()
+    second = ws.create()
+
+    ws.remove(second)
+
+    assert Path(first).exists()
+    assert not Path(second).exists()
+    assert second not in ws._dirs
+
+    # The still-tracked directory is purged normally afterwards.
+    ws.purge()
+    assert not Path(first).exists()
+
+
+def test_workspace_remove_is_safe_for_unknown_or_none_paths(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    tracked = ws.create()
+    stranger = tmp_path / "not_tracked"
+    stranger.mkdir()
+
+    ws.remove(None)
+    ws.remove(str(stranger))
+    ws.remove(str(tmp_path / "missing"))
+
+    assert Path(tracked).exists()
+    assert not stranger.exists()
+    assert ws._dirs == [tracked]

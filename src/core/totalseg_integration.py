@@ -55,7 +55,12 @@ class ProcessHolder:
         self.cancelled: bool = False
 
     def terminate(self) -> None:
-        """Mark the run as cancelled and terminate the process if running."""
+        """Mark the run as cancelled and terminate the process if running.
+
+        On Windows this kills only the TotalSegmentator process itself; the
+        nnU-Net worker children it spawned are not in a job object and may
+        outlive the call until they finish on their own.
+        """
         self.cancelled = True
         proc = self.process
         if proc is not None and proc.poll() is None:
@@ -77,6 +82,21 @@ class SegmentationWorkspace:
         self._dirs.append(path)
         (Path(path) / self.LOCK_NAME).touch()
         return path
+
+    def remove(self, path: Optional[str]) -> None:
+        """Delete one workspace directory, leaving the other runs intact.
+
+        Used when a single run is abandoned (cancelled) and the directories of
+        earlier, still-referenced runs must survive.
+        """
+        if not path:
+            return
+        shutil.rmtree(path, ignore_errors=True)
+        try:
+            self._dirs.remove(path)
+        except ValueError:
+            # Not tracked by this workspace; the rmtree above was still valid.
+            pass
 
     def purge(self) -> None:
         while self._dirs:
@@ -462,6 +482,8 @@ def run_segmentation_with_fallback(
     threshold fallback mask is produced in that case.
     """
     if not is_totalsegmentator_available():
+        # No subprocess is ever spawned on this path, so Cancel is a no-op:
+        # the threshold mask is cheap and completes before the user can react.
         mask_path = run_threshold_fallback(
             image=image,
             work_dir=work_dir,
