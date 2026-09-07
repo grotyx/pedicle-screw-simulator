@@ -103,7 +103,16 @@ def _cylinder_actor(
     elif dot < 0.0:
         transform.RotateX(180.0)
 
-    transform_filter = vtk.vtkTransformPolyDataFilter()
+    # vtkTransformFilter (VTK >= 9.7) replaces the deprecated
+    # vtkTransformPolyDataFilter. Its declared output type is vtkPointSet,
+    # but it mirrors the input type at runtime, so a vtkPolyData input
+    # (from vtkCylinderSource here) still yields a vtkPolyData output that
+    # vtkPolyDataMapper can consume directly via GetOutputPort().
+    transform_filter = (
+        vtk.vtkTransformFilter()
+        if hasattr(vtk, "vtkTransformFilter")
+        else vtk.vtkTransformPolyDataFilter()
+    )
     transform_filter.SetInputConnection(cylinder.GetOutputPort())
     transform_filter.SetTransform(transform)
     mapper = vtk.vtkPolyDataMapper()
