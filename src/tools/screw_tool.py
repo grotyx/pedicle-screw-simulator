@@ -23,7 +23,39 @@ from ..utils.constants import (
 
 #: Warning prefixes the grader owns: they are regenerated on every evaluation so
 #: a re-graded screw can never keep a note that contradicts its current grade.
-_DERIVED_WARNING_PREFIXES = ("Not graded", "Breach distance", "Cortical clearance")
+#: The texts must match :mod:`src.core.bone_quality`,
+#: :mod:`src.core.breach_classification` and
+#: :mod:`src.core.auto_screw_planner` verbatim, or a planner-authored note will
+#: survive an edit that disproves it.  Everything else a screw carries — the
+#: CBT contraindication note, the optimiser fallback note, the diameter
+#: step-down note — describes how the screw was *chosen*, not how it grades,
+#: and is left alone.
+_DERIVED_WARNING_PREFIXES = (
+    "Not graded",
+    "Breach distance",
+    "Cortical clearance",
+    "Trajectory HU",
+    "Vertebral body HU",
+    "Trajectory/body HU ratio",
+    "Facet violation grade",
+    "High convergence angle",
+)
+
+#: Metrics that need the pedicle analysis (isthmus and vertebral-body centres)
+#: that only the auto planner has.  ``_compute_metrics`` returns ``None`` for
+#: them here, which means "not measured", not "measured as nothing", so a
+#: re-grade keeps whatever the planner recorded instead of blanking a column
+#: the inspector and the CSV export both read.
+_PEDICLE_ANALYSIS_METRIC_KEYS = (
+    "pedicle_mean_hu",
+    "body_mean_hu",
+    "trajectory_body_ratio",
+)
+
+#: Mirrors the planner's ``High convergence angle`` threshold
+#: (:meth:`src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`), so a
+#: manual and an auto screw are flagged at the same convergence.
+_HIGH_CONVERGENCE_ANGLE_DEG = 30.0
 
 if TYPE_CHECKING:
     from ..core.volume_manager import VolumeManager
@@ -248,10 +280,18 @@ class ScrewTool:
     def _evaluate_screw(self, screw: Screw):
         """Grade with the segmentation mask; mark N/A when no mask exists.
 
-        Every grader-derived field is rewritten from scratch, including the
-        metric bundle and the breach/clearance warnings, so that re-grading an
-        edited or restored screw can never leave a stale value (or a note
-        contradicting the grade now displayed) behind.
+        Every grader-derived field is rewritten from scratch — the measured
+        metrics and every warning in :data:`_DERIVED_WARNING_PREFIXES` — so
+        that re-grading an edited or restored screw can never leave a stale
+        value (or a note contradicting the grade now displayed) behind.
+
+        What the grader cannot re-measure is *merged*, not discarded.  This
+        runs on every drag, every diameter change and every ``regrade_all``
+        (which ``PlanController.load`` and the segmentation controller both
+        trigger), so replacing the bundle wholesale used to erase the
+        optimiser's ``score``/``score_components``, ``rod_misalignment_mm`` and
+        the ``trajectory_type`` that is the only marker of a CBT screw — from
+        every screw in the plan at once.
         """
         screw.warnings = [
             w for w in screw.warnings
@@ -272,11 +312,13 @@ class ScrewTool:
         screw.breach_distance = result.breach_mm
         screw.mean_hu = result.mean_hu
         screw.min_hu = result.min_hu
-        screw.metrics = self._compute_metrics(screw, result)
+        measured, derived_warnings = self._compute_metrics(screw, result)
+        screw.metrics = self._merge_metrics(screw.metrics, measured)
         if not screw.vertebra_level:
             from ..core.pedicle_analyzer import VERTEBRA_LABELS
             screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
 
+        screw.warnings.extend(derived_warnings)
         if result.breach_mm > 0:
             screw.warnings.append(
                 f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
@@ -301,12 +343,20 @@ class ScrewTool:
         screw.min_hu = None
         screw.metrics = {}
 
-    def _compute_metrics(self, screw: Screw, result: "GradeResult") -> Dict[str, Any]:
-        """Bone-quality, breach-direction and facet metrics for one screw.
+    def _compute_metrics(
+        self, screw: Screw, result: "GradeResult"
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        """Bone-quality, breach-direction and facet metrics, and their warnings.
 
         A manually placed screw has no pedicle analysis behind it, so the
         isthmus and vertebral-body centres are unknown and the metrics that
-        depend on them come back ``None``.
+        depend on them come back ``None``; :meth:`_merge_metrics` decides what
+        that means for a screw that once had them.
+
+        The warnings are returned alongside rather than pushed onto the screw
+        so that both halves of one measurement are produced together — the
+        clinical notes a reviewer reads next to a grade have to describe the
+        same trajectory the grade does.
         """
         from ..core.bone_quality import assess_bone_quality
         from ..core.breach_classification import facet_violation_grade
@@ -321,7 +371,7 @@ class ScrewTool:
         facet_grade, facet_text = facet_violation_grade(
             self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
         )
-        return {
+        metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
             "pedicle_mean_hu": quality.pedicle_mean_hu,
@@ -332,6 +382,55 @@ class ScrewTool:
             "facet_grade": facet_grade,
             "facet_text": facet_text,
         }
+        warnings = list(quality.warnings)
+        if facet_grade >= 2:
+            warnings.append(f"Facet violation grade {facet_grade}: {facet_text}")
+        # ``Screw.medial_angle`` is the same signed convergence the planner
+        # computes, so the same threshold flags the same trajectories.
+        if screw.medial_angle > _HIGH_CONVERGENCE_ANGLE_DEG:
+            warnings.append(
+                f"High convergence angle {screw.medial_angle:.1f}° — verify on CT"
+            )
+        return metrics, warnings
+
+    @staticmethod
+    def _merge_metrics(existing: Any, measured: Dict[str, Any]) -> Dict[str, Any]:
+        """Overlay freshly measured metrics onto the bundle a screw already has.
+
+        Keys the grader does not own are carried through untouched: the
+        optimiser's ``score`` and ``score_components``, the construct-level
+        ``rod_misalignment_mm``, and ``trajectory_type`` /
+        ``cbt_cranial_angle_deg``.
+
+        The three :data:`_PEDICLE_ANALYSIS_METRIC_KEYS` need centres this tool
+        never has, so a ``None`` from that cause is not allowed to overwrite a
+        planner measurement.  ``trajectory_body_ratio`` is the exception among
+        them: it is purely derived, so it is recomputed from the new trajectory
+        HU against the preserved body HU rather than left behind describing the
+        old trajectory.
+        """
+        merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        for key, value in measured.items():
+            if (
+                value is None
+                and key in _PEDICLE_ANALYSIS_METRIC_KEYS
+                and merged.get(key) is not None
+            ):
+                continue
+            merged[key] = value
+
+        if measured.get("trajectory_body_ratio") is None:
+            trajectory_hu = merged.get("trajectory_mean_hu")
+            body_hu = merged.get("body_mean_hu")
+            if (
+                isinstance(trajectory_hu, (int, float))
+                and not isinstance(trajectory_hu, bool)
+                and isinstance(body_hu, (int, float))
+                and not isinstance(body_hu, bool)
+                and float(body_hu) != 0.0
+            ):
+                merged["trajectory_body_ratio"] = float(trajectory_hu) / float(body_hu)
+        return merged
 
     @staticmethod
     def _heary_label(side: str, result: "GradeResult") -> str:
@@ -406,12 +505,21 @@ class ScrewTool:
             vertebra_level=original.vertebra_level,
             side=original.side,
             source=original.source,
-            # _evaluate_screw strips and regenerates every grader-derived note.
+            # _evaluate_screw strips and regenerates every grader-derived note,
+            # and merges over the metrics it can re-measure; carrying both
+            # across keeps what only the planner knows (score, trajectory_type,
+            # rod alignment) attached to the screw the user just dragged.
             warnings=list(original.warnings),
+            metrics=self._carried_metrics(original),
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated
         return updated
+
+    @staticmethod
+    def _carried_metrics(original: Screw) -> Dict[str, Any]:
+        """A private copy of a screw's metric bundle for its replacement."""
+        return dict(original.metrics) if isinstance(original.metrics, dict) else {}
 
     def update_screw_diameter(self, index: int, diameter: float) -> Screw:
         """Resize one screw and recalculate its diameter-dependent safety data."""
@@ -434,6 +542,7 @@ class ScrewTool:
             source=original.source,
             # _evaluate_screw strips and regenerates every grader-derived note.
             warnings=list(original.warnings),
+            metrics=self._carried_metrics(original),
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated
