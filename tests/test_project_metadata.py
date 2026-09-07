@@ -5,7 +5,6 @@ from pathlib import Path
 import src
 from src.ui import main_window as main_window_module
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -73,3 +72,48 @@ def test_reproducibility_lock_pins_validated_environment():
     ):
         assert expected in lock_text
     assert ">=" not in lock_text
+
+
+# --- Task 4: CI workflow metadata -------------------------------------------
+
+
+def _load_test_workflow():
+    """Load .github/workflows/test.yml, preferring PyYAML but falling back to
+    a small regex-based parser when PyYAML (a transitive dependency of
+    totalsegmentator) is not installed in the current interpreter."""
+    workflow_path = PROJECT_ROOT / ".github" / "workflows" / "test.yml"
+    text = workflow_path.read_text(encoding="utf-8")
+    try:
+        import yaml
+
+        return yaml.safe_load(text)
+    except ImportError:
+        import re
+
+        # Extract the top-level `on:` block (everything indented under it,
+        # up to the next top-level key).
+        on_match = re.search(r"^on:\n((?:[ \t]+.*\n?)+)", text, re.MULTILINE)
+        on_block = on_match.group(1) if on_match else ""
+        on_keys = set(re.findall(r"^[ \t]+([A-Za-z_]+):", on_block, re.MULTILINE))
+
+        run_lines = re.findall(r"run:\s*(.+)", text)
+
+        return {
+            "on": on_keys,
+            "jobs": {
+                "__fallback__": {
+                    "steps": [{"run": line} for line in run_lines],
+                }
+            },
+        }
+
+
+def test_ci_runs_tests_on_pull_requests():
+    wf = _load_test_workflow()
+    on = wf.get("on") or wf.get(True)
+    assert "pull_request" in on and "push" in on
+    assert any(
+        "pytest" in step.get("run", "")
+        for job in wf["jobs"].values()
+        for step in job["steps"]
+    )
