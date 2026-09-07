@@ -220,6 +220,10 @@ class DicomController:
                 f"Spacing: {metadata.get('spacing', 'Unknown')}\n"
                 f"Slices: {metadata.get('num_slices', 'Unknown')}"
             )
+            if metadata.get("orientation_normalized"):
+                info_text += "\nOrientation: normalised to LPS"
+                if metadata.get("resampled"):
+                    info_text += " (oblique volume resampled)"
             self._window.info_label.setText(info_text)
 
             self._window.statusbar.showMessage(

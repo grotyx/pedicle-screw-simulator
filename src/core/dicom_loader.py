@@ -7,11 +7,57 @@ slice ordering. Manual sorting by filename/instance number can fail with
 various DICOM sources.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
+import numpy as np
 import SimpleITK as sitk
 import pydicom
+
+logger = logging.getLogger(__name__)
+
+_IDENTITY = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def normalize_orientation(image: sitk.Image) -> Tuple[sitk.Image, Dict[str, Any]]:
+    """Return an image whose direction matrix is identity (LPS axis-aligned)."""
+    direction = tuple(float(v) for v in image.GetDirection())
+    info: Dict[str, Any] = {
+        "original_direction": direction,
+        "orientation_normalized": False,
+        "resampled": False,
+    }
+    if np.allclose(direction, _IDENTITY, atol=1e-6):
+        return image, info
+
+    matrix = np.asarray(direction).reshape(3, 3)
+    if np.all(np.isclose(np.abs(matrix), np.round(np.abs(matrix)), atol=1e-6)):
+        oriented = sitk.DICOMOrient(image, "LPS")
+        info["orientation_normalized"] = True
+        logger.info("Reoriented volume from direction %s to LPS identity", direction)
+        return oriented, info
+
+    # Oblique acquisition: resample onto an identity-direction grid.
+    size = np.asarray(image.GetSize(), dtype=np.float64)
+    spacing = np.asarray(image.GetSpacing(), dtype=np.float64)
+    corners = []
+    for i in (0, size[0] - 1):
+        for j in (0, size[1] - 1):
+            for k in (0, size[2] - 1):
+                corners.append(image.TransformContinuousIndexToPhysicalPoint((float(i), float(j), float(k))))
+    corners = np.asarray(corners)
+    lo, hi = corners.min(axis=0), corners.max(axis=0)
+    new_size = [int(np.ceil((hi[a] - lo[a]) / spacing[a])) + 1 for a in range(3)]
+    resampled = sitk.Resample(
+        image, new_size, sitk.Transform(), sitk.sitkLinear,
+        tuple(float(v) for v in lo), tuple(float(v) for v in spacing), _IDENTITY,
+        -1000.0, image.GetPixelID(),
+    )
+    info["orientation_normalized"] = True
+    info["resampled"] = True
+    logger.warning("Oblique direction %s resampled to LPS identity grid", direction)
+    return resampled, info
 
 
 class DicomLoader:
@@ -149,10 +195,12 @@ class DicomLoader:
         reader.LoadPrivateTagsOn()
 
         # Load the image
-        self._image = reader.Execute()
+        raw_image = reader.Execute()
+        self._image, orientation_info = normalize_orientation(raw_image)
 
         # Extract metadata
         self._extract_metadata(reader)
+        self._metadata.update(orientation_info)
 
         return self._image
 

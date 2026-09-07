@@ -107,7 +107,7 @@ class CoordinateSystem:
 
         # Apply transformation
         transform = CoordinateSystem.LPS_TO_RAS[:3, :3]
-        transformed = transform @ dir_matrix @ transform.T
+        transformed = transform @ dir_matrix
 
         return tuple(transformed.flatten())
 
