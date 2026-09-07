@@ -10,11 +10,13 @@ Usage::
     python scripts/validate_plans.py --pred pred.json --ref ref.json --out report
 
 writes ``report.csv`` (one row per matched screw) and ``report.json`` (the
-cohort summary) next to whatever base path ``--out`` names. Screw level and
-side strings are case/whitespace-normalised before matching, so plans from
-other tools ("l4"/"L4", "Left"/"left") still pair up correctly. Exits with
-status 2 (and writes no report) when no screws matched between the two
-plans.
+cohort summary) next to whatever base path ``--out`` names. ``--out`` is
+optional: without it, only the cohort summary is printed to stdout and no
+files are written. Screw level and side strings are case/whitespace-
+normalised before matching, so plans from other tools ("l4"/"L4",
+"Left"/"left") still pair up correctly. Exits with status 2 (and writes no
+report) when no screws matched between the two plans, or when either plan
+file cannot be read or parsed.
 
 This script is Qt-free and can be run standalone or from CI.
 """
@@ -91,8 +93,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ref", required=True, help="Path to reference plan JSON.")
     parser.add_argument(
         "--out",
-        required=True,
-        help="Output base path; writes <out>.csv and <out>.json.",
+        default=None,
+        help=(
+            "Output base path; writes <out>.csv and <out>.json. "
+            "When omitted, only the summary is printed to stdout."
+        ),
     )
     parser.add_argument(
         "--voxel-mm",
@@ -106,8 +111,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    pred_payload = _normalize_plan_payload(load_plan_json(args.pred))
-    ref_payload = _normalize_plan_payload(load_plan_json(args.ref))
+    try:
+        pred_payload = _normalize_plan_payload(load_plan_json(args.pred))
+        ref_payload = _normalize_plan_payload(load_plan_json(args.ref))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: could not load plan file: {exc}", file=sys.stderr)
+        return 2
 
     comparisons, summary = compare_plans(pred_payload, ref_payload, voxel_mm=args.voxel_mm)
 
@@ -122,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"voxel_mm: {args.voxel_mm}")
     for key, value in asdict(summary).items():
         print(f"{key}: {value}")
+
+    if args.out is None:
+        return 0
 
     out_base = Path(args.out)
     out_base.parent.mkdir(parents=True, exist_ok=True)
