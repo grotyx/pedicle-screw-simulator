@@ -27,8 +27,10 @@ Matrix Form:
 
 from __future__ import annotations
 
+from typing import Optional, Tuple
+
 import numpy as np
-from typing import Tuple, Optional
+
 try:
     import vtk
 except ModuleNotFoundError:  # pragma: no cover - optional dependency

@@ -25,11 +25,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.core.totalseg_integration import SegmentationRunResult
-from src.models.screw import Screw
-import src.ui.main_window as main_window_module
 import src.controllers.plan_controller as plan_controller_module
 import src.controllers.segmentation_controller as seg_controller_module
+import src.ui.main_window as main_window_module
+from src.core.totalseg_integration import SegmentationRunResult
+from src.models.screw import Screw
 
 
 class DummyMPRViewer(QWidget):
@@ -956,6 +956,7 @@ def test_loaded_plan_is_regraded_when_a_grader_is_attached(ui_main_window):
     while a segmentation-based grader is attached must re-grade every screw
     rather than trusting the persisted (possibly stale) values."""
     import numpy as np
+
     from src.core.screw_grading import ScrewGrader
     from src.utils.planning_io import screw_from_dict
 

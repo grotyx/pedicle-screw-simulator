@@ -3,9 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Tuple
 
-from ..utils.constants import (ANTERIOR_SAFETY_MARGIN_MM, CORTICAL_WALL_CLEARANCE_MM,
-                               IMPLANT_DIAMETERS_MM, IMPLANT_LENGTHS_MM, PEDICLE_FILL_RATIO,
-                               TRAJECTORY_HU_LOOSENING_THRESHOLD)
+from ..utils.constants import (
+    ANTERIOR_SAFETY_MARGIN_MM,
+    CORTICAL_WALL_CLEARANCE_MM,
+    IMPLANT_DIAMETERS_MM,
+    IMPLANT_LENGTHS_MM,
+    PEDICLE_FILL_RATIO,
+    TRAJECTORY_HU_LOOSENING_THRESHOLD,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .trajectory_optimizer import OptimizerWeights

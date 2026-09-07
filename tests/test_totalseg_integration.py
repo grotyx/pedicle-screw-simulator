@@ -697,6 +697,7 @@ def _fake_totalseg_writer(tmp_path):
 
 def test_subregion_failure_does_not_fail_run(monkeypatch, tmp_path):
     import numpy as np
+
     from src.core import totalseg_integration as ts
     from src.core.subregion_segmentation import SubregionModel
 
@@ -730,6 +731,7 @@ def test_subregion_failure_does_not_fail_run(monkeypatch, tmp_path):
 
 def test_subregion_success_populates_result(monkeypatch, tmp_path):
     import numpy as np
+
     from src.core import totalseg_integration as ts
     from src.core.subregion_segmentation import SubregionModel
 
@@ -775,6 +777,7 @@ def test_subregion_success_populates_result(monkeypatch, tmp_path):
 
 def test_subregion_cancellation_propagates(monkeypatch, tmp_path):
     import numpy as np
+
     from src.core import totalseg_integration as ts
     from src.core.subregion_segmentation import SubregionModel
 
@@ -805,6 +808,7 @@ def test_subregion_cancellation_propagates(monkeypatch, tmp_path):
 
 def test_no_subregion_model_leaves_fields_empty(monkeypatch, tmp_path):
     import numpy as np
+
     from src.core import totalseg_integration as ts
 
     monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)

@@ -10,12 +10,16 @@ import logging
 import os
 import sys
 import traceback
-from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from typing import Dict, Optional
 
 import numpy as np
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
+from src.core.subregion_segmentation import (
+    find_subregion_model,
+    resample_to_reference,
+)
 from src.core.totalseg_integration import (
     SPINE_ROI_SUBSET,
     ProcessHolder,
@@ -28,10 +32,6 @@ from src.core.totalseg_labels import (
     format_label_display,
     format_selected_label_text,
     get_segmentation_label_map,
-)
-from src.core.subregion_segmentation import (
-    find_subregion_model,
-    resample_to_reference,
 )
 
 logger = logging.getLogger(__name__)
@@ -303,9 +303,10 @@ class SegmentationController:
         )
 
         try:
-            from src.utils.vtk_helpers import sitk_to_vtk
-            import SimpleITK as sitk
             import numpy as np
+            import SimpleITK as sitk
+
+            from src.utils.vtk_helpers import sitk_to_vtk
 
             mask_image = sitk.ReadImage(result.mask_path)
             mask_arr = sitk.GetArrayFromImage(mask_image)
@@ -488,8 +489,9 @@ class SegmentationController:
             return False
 
         try:
-            from src.utils.vtk_helpers import sitk_to_vtk
             import SimpleITK as sitk
+
+            from src.utils.vtk_helpers import sitk_to_vtk
 
             mask_image = sitk.ReadImage(self._last_segmentation_mask_path)
             vtk_mask = sitk_to_vtk(mask_image)

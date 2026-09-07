@@ -247,9 +247,13 @@ def test_compare_plans_accepts_minimal_v1_payload():
 
 
 def test_cli_writes_csv_and_json(tmp_path):
-    import json, subprocess, sys
+    import json
+    import subprocess
+    import sys
+
     from src.utils.planning_io import serialize_plan
-    a = _s((20, 30, 0), (10, -8, 0)); b = _s((22, 30, 0), (12, -8, 0))
+    a = _s((20, 30, 0), (10, -8, 0))
+    b = _s((22, 30, 0), (12, -8, 0))
     (tmp_path / "pred.json").write_text(json.dumps(serialize_plan("s", [a], [], [])))
     (tmp_path / "ref.json").write_text(json.dumps(serialize_plan("s", [b], [], [])))
     out = subprocess.run([sys.executable, "scripts/validate_plans.py", "--pred", str(tmp_path / "pred.json"),
@@ -260,7 +264,10 @@ def test_cli_writes_csv_and_json(tmp_path):
 
 
 def test_cli_exits_nonzero_when_no_screws_match(tmp_path):
-    import json, subprocess, sys
+    import json
+    import subprocess
+    import sys
+
     from src.utils.planning_io import serialize_plan
     a = _s((20, 30, 0), (10, -8, 0), "L4", "left")
     b = _s((-20, 30, 0), (-10, -8, 0), "L5", "right")

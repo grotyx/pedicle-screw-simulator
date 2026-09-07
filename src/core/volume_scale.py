@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from math import prod
 from typing import Tuple
 
-
 # Practical workload buckets for this project (spine CT + PoC segmentation).
 MEDIUM_VOLUME_MIN_VOXELS = 80_000_000
 LARGE_VOLUME_MIN_VOXELS = 150_000_000

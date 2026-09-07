@@ -8,11 +8,11 @@ clicks to the active tool, and maintains screw/measurement UI lists.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
-from src.tools.screw_tool import ScrewTool
-from src.tools.measurement_tool import MeasurementTool
 from src.models.measurement import Measurement
+from src.tools.measurement_tool import MeasurementTool
+from src.tools.screw_tool import ScrewTool
 from src.utils.constants import COLOR_SCREW
 
 if TYPE_CHECKING:

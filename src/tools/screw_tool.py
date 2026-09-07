@@ -9,16 +9,23 @@ Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
 import math
-from typing import Any, Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from src.models.screw import Screw
+
 from ..utils.constants import (
     CORTICAL_WALL_CLEARANCE_MM,
-    DEFAULT_SCREW_LENGTH, DEFAULT_SCREW_DIAMETER,
-    MIN_SCREW_LENGTH, MAX_SCREW_LENGTH,
-    MIN_SCREW_DIAMETER, MAX_SCREW_DIAMETER,
-    GRADE_A_DESCRIPTION, GRADE_B_DESCRIPTION,
-    GRADE_C_DESCRIPTION, GRADE_D_DESCRIPTION, GRADE_E_DESCRIPTION
+    DEFAULT_SCREW_DIAMETER,
+    DEFAULT_SCREW_LENGTH,
+    GRADE_A_DESCRIPTION,
+    GRADE_B_DESCRIPTION,
+    GRADE_C_DESCRIPTION,
+    GRADE_D_DESCRIPTION,
+    GRADE_E_DESCRIPTION,
+    MAX_SCREW_DIAMETER,
+    MAX_SCREW_LENGTH,
+    MIN_SCREW_DIAMETER,
+    MIN_SCREW_LENGTH,
 )
 
 #: Warning prefixes the grader owns: they are regenerated on every evaluation so
@@ -64,8 +71,8 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
 _HIGH_CONVERGENCE_ANGLE_DEG = 30.0
 
 if TYPE_CHECKING:
-    from ..core.volume_manager import VolumeManager
     from ..core.screw_grading import GradeResult, ScrewGrader
+    from ..core.volume_manager import VolumeManager
 
 
 class ScrewTool:

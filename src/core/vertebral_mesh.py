@@ -199,9 +199,9 @@ def create_vertebral_only_volume(
     Returns:
         New vtkImageData with non-vertebral voxels set to air and smoothed.
     """
-    from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
     import numpy as np
     from scipy.ndimage import gaussian_filter
+    from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
     ct_scalars = original_vtk.GetPointData().GetScalars()
     mask_scalars = mask_vtk.GetPointData().GetScalars()
@@ -470,7 +470,7 @@ def extract_vertebral_mesh(
     logger.info(
         "extract_vertebral_mesh: %d vertebrae extracted (%s), total cells=%d",
         len(labels_found),
-        ", ".join(VERTEBRA_LABELS.get(l, str(l)) for l in labels_found),
+        ", ".join(VERTEBRA_LABELS.get(label, str(label)) for label in labels_found),
         result.GetNumberOfCells(),
     )
 

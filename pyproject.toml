@@ -23,66 +23,13 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B"]
 ignore = ["E501"]
 
-# Findings below live in files owned by other in-flight Phase 6 tasks (or in
-# modules outside this task's editing scope) and were deliberately left
-# in place rather than fixed here, to avoid colliding with concurrent edits.
-# Each entry names the concrete rule(s) still failing; clear an entry only
-# after fixing the underlying finding in that module.
 [tool.ruff.lint.per-file-ignores]
-# TODO(ruff): fix in main.py - unsorted imports
-"main.py" = ["I001"]
-# TODO(ruff): fix in scripts/build_desktop.py - unsorted imports
-"scripts/build_desktop.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/__init__.py - unsorted imports
-"src/controllers/__init__.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/auto_placement_controller.py - unsorted imports
-"src/controllers/auto_placement_controller.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/dicom_controller.py - unsorted imports
-"src/controllers/dicom_controller.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/plan_controller.py - unsorted imports; zip() without strict=
-"src/controllers/plan_controller.py" = ["I001", "B905"]
-# TODO(ruff): fix in src/controllers/screw_edit_controller.py - unsorted imports
-"src/controllers/screw_edit_controller.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/segmentation_controller.py - unsorted imports
-"src/controllers/segmentation_controller.py" = ["I001"]
-# TODO(ruff): fix in src/controllers/tool_controller.py - unsorted imports; unused `typing.List` import
-"src/controllers/tool_controller.py" = ["I001", "F401"]
-# TODO(ruff): fix in src/core/__init__.py - unsorted imports
-"src/core/__init__.py" = ["I001"]
-# TODO(ruff): fix in src/core/bone_quality.py - unsorted imports
-"src/core/bone_quality.py" = ["I001"]
-# TODO(ruff): fix in src/core/coordinate_system.py - unsorted imports
-"src/core/coordinate_system.py" = ["I001"]
-# TODO(ruff): fix in src/core/dicom_loader.py - unsorted imports; unused `os`/`pathlib.Path` imports
-"src/core/dicom_loader.py" = ["I001", "F401"]
-# TODO(ruff): fix in src/core/pedicle_analyzer.py - unused local variable; unused loop control variables
-"src/core/pedicle_analyzer.py" = ["F841", "B007"]
-# TODO(ruff): fix in src/core/planner_config.py - unsorted imports
-"src/core/planner_config.py" = ["I001"]
-# TODO(ruff): fix in src/core/totalseg_integration.py - unsorted imports; zip() without strict=
-"src/core/totalseg_integration.py" = ["I001", "B905"]
-# TODO(ruff): fix in src/core/vertebral_mesh.py - unsorted imports; ambiguous variable name `l`
-"src/core/vertebral_mesh.py" = ["I001", "E741"]
-# TODO(ruff): fix in src/core/volume_manager.py - unsorted/misplaced imports; unused exception variable
-"src/core/volume_manager.py" = ["I001", "E402", "F841"]
-# TODO(ruff): fix in src/core/volume_scale.py - unsorted imports
-"src/core/volume_scale.py" = ["I001"]
-# TODO(ruff): fix in src/tools/__init__.py - unsorted imports
-"src/tools/__init__.py" = ["I001"]
-# TODO(ruff): fix in src/tools/screw_tool.py - unsorted imports
-"src/tools/screw_tool.py" = ["I001"]
-# TODO(ruff): fix in src/ui/main_window.py - unsorted imports; unused `QSizePolicy` import
-"src/ui/main_window.py" = ["I001", "F401"]
-# TODO(ruff): fix in src/ui/viewer_3d.py - VTK-heavy imports placed mid-module (style only)
-"src/ui/viewer_3d.py" = ["E402"]
-# TODO(ruff): fix in tests/test_auto_placement_controller.py - unsorted imports
-"tests/test_auto_placement_controller.py" = ["I001"]
-# Style-only: sys.path.insert() precedes imports in this test file
+# Structural: sys.path.insert() must run before these test-only imports so
+# the test can locate the `src` package without an installed distribution.
 "tests/test_totalseg_integration.py" = ["E402"]
-# Style-only: sys.path.insert() precedes imports in this test file
-"tests/test_ui_integration.py" = ["E402", "I001"]
-# TODO(ruff): fix in tests/test_plan_metrics.py - multiple imports/statements on one line; unsorted imports
-"tests/test_plan_metrics.py" = ["E401", "E702", "I001"]
+# Structural: sys.path.insert() must run before these test-only imports so
+# the test can locate the `src` package without an installed distribution.
+"tests/test_ui_integration.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

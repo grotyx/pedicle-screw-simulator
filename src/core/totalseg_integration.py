@@ -2,16 +2,16 @@
 TotalSegmentator integration helpers with safe fallback behavior.
 """
 
-from dataclasses import dataclass, field
 import importlib.util
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Callable, Dict, List, Optional, TYPE_CHECKING
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 import SimpleITK as sitk
 
@@ -418,7 +418,7 @@ def check_segmentation_geometry(
 
     ref_spacing = tuple(float(v) for v in reference_image.GetSpacing())
     mask_spacing = tuple(float(v) for v in mask_image.GetSpacing())
-    for axis, (ref_v, mask_v) in enumerate(zip(ref_spacing, mask_spacing)):
+    for axis, (ref_v, mask_v) in enumerate(zip(ref_spacing, mask_spacing, strict=False)):
         if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
             warnings.append(
                 f"spacing mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
@@ -426,7 +426,7 @@ def check_segmentation_geometry(
 
     ref_origin = tuple(float(v) for v in reference_image.GetOrigin())
     mask_origin = tuple(float(v) for v in mask_image.GetOrigin())
-    for axis, (ref_v, mask_v) in enumerate(zip(ref_origin, mask_origin)):
+    for axis, (ref_v, mask_v) in enumerate(zip(ref_origin, mask_origin, strict=False)):
         if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
             warnings.append(
                 f"origin mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
@@ -440,7 +440,7 @@ def check_segmentation_geometry(
             f"mask={len(mask_direction)}"
         )
     else:
-        for index, (ref_v, mask_v) in enumerate(zip(ref_direction, mask_direction)):
+        for index, (ref_v, mask_v) in enumerate(zip(ref_direction, mask_direction, strict=True)):
             if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
                 warnings.append(
                     f"direction mismatch at index {index}: ref={ref_v}, mask={mask_v}"

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from typing import Optional, Tuple
 
-
 Point3D = Tuple[float, float, float]
 
 

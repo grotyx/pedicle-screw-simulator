@@ -8,12 +8,11 @@ various DICOM sources.
 """
 
 import logging
-import os
-from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-import SimpleITK as sitk
 import pydicom
+import SimpleITK as sitk
 
 logger = logging.getLogger(__name__)
 

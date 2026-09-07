@@ -6,8 +6,9 @@ and applying loaded plans back to the tool state.
 """
 
 import logging
-from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from typing import List, Optional
+
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.utils.planning_io import (
     deserialize_plan,
@@ -197,7 +198,7 @@ class PlanController:
             tool_ctrl._add_screw_to_list(screw)
             tool_ctrl._add_screw_to_mpr(screw_index, screw)
 
-        for measurement, plane in zip(measurements, planes):
+        for measurement, plane in zip(measurements, planes, strict=True):
             tool_ctrl.measurement_tool.add_measurement(measurement)
             measurement_id = tool_ctrl._next_measurement_id
             tool_ctrl._next_measurement_id += 1

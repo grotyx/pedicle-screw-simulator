@@ -5,16 +5,17 @@ Handles DICOM folder scanning, series selection, threaded loading,
 and coordinated initial rendering after volume load.
 """
 
-import time
 import logging
+import time
+from typing import Optional
+
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QInputDialog,
     QMessageBox,
     QProgressDialog,
-    QInputDialog,
 )
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal, Qt
-from typing import Optional
 
 from src.core.dicom_loader import DicomLoader
 

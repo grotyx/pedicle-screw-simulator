@@ -21,10 +21,12 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 import SimpleITK as sitk
 
-from ..utils.constants import (TRAJECTORY_BODY_HU_RATIO_THRESHOLD,
-                               TRAJECTORY_HU_LOOSENING_THRESHOLD,
-                               VERTEBRAL_HU_LOW_BMD_THRESHOLD,
-                               VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD)
+from ..utils.constants import (
+    TRAJECTORY_BODY_HU_RATIO_THRESHOLD,
+    TRAJECTORY_HU_LOOSENING_THRESHOLD,
+    VERTEBRAL_HU_LOW_BMD_THRESHOLD,
+    VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD,
+)
 from .screw_grading import ScrewGrader
 
 Point3 = Sequence[float]

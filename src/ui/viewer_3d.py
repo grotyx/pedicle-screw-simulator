@@ -38,6 +38,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core.volume_manager import VolumeManager
+from ..core.volume_scale import assess_volume_scale
+from ..utils.constants import (
+    COLOR_SCREW,
+    TRANSFER_FUNCTION_PRESETS,
+)
+from ..utils.vtk_helpers import downsample_vtk_image
+from .click_detector import DoubleClickDetector
+from .vtk_widget import create_vtk_widget
+
 logger = logging.getLogger(__name__)
 
 VIEWPORT_BACKGROUND = (0.035, 0.035, 0.035)
@@ -233,16 +243,6 @@ def _flush_logs():
     """Force flush all log handlers so we see output before a hang."""
     for handler in logging.getLogger().handlers:
         handler.flush()
-
-from ..core.volume_manager import VolumeManager
-from ..core.volume_scale import assess_volume_scale
-from ..utils.constants import (
-    COLOR_SCREW,
-    TRANSFER_FUNCTION_PRESETS,
-)
-from ..utils.vtk_helpers import downsample_vtk_image
-from .click_detector import DoubleClickDetector
-from .vtk_widget import create_vtk_widget
 
 
 class Viewer3D(QWidget):

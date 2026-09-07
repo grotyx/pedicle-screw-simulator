@@ -4,10 +4,10 @@ Core module - DICOM loading and volume management
 
 from .coordinate_system import CoordinateSystem
 from .volume_scale import (
+    VolumeScaleAssessment,
     assess_volume_scale,
     estimate_voxel_count,
     format_scale_summary,
-    VolumeScaleAssessment,
 )
 
 __all__ = [

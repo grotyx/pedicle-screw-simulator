@@ -385,6 +385,7 @@ class TestAutoPlacementControllerUnit:
         self, monkeypatch, tmp_path
     ):
         import SimpleITK as sitk
+
         import src.controllers.auto_placement_controller as module
 
         ctrl, window = self._make_controller()
@@ -523,8 +524,9 @@ def test_run_planning_refuses_threshold_fallback(controller_with_window, monkeyp
 
 def test_planned_screw_to_screw_copies_metadata():
     import numpy as np
-    from src.core.auto_screw_planner import PlannedScrew
+
     from src.controllers.auto_placement_controller import planned_screw_to_screw
+    from src.core.auto_screw_planner import PlannedScrew
     ps = PlannedScrew(vertebra_name="L4", side="left", entry_lps=np.array([1.0, 2.0, 3.0]),
                       target_lps=np.array([1.0, -30.0, 3.0]), length_mm=32.0, diameter_mm=6.0,
                       convergence_angle=10.0, craniocaudal_angle=0.0, mean_bone_density=210.0,
@@ -548,6 +550,7 @@ def test_run_planning_passes_window_planner_config_to_thread(
     monkeypatch, tmp_path
 ):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
     from src.core.planner_config import PlannerConfig
 
@@ -590,6 +593,7 @@ def test_run_planning_passes_window_planner_config_to_thread(
 
 def test_planning_thread_forwards_config_to_planner(monkeypatch):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
     from src.core.planner_config import PlannerConfig
 
@@ -626,6 +630,7 @@ def test_planning_thread_forwards_config_to_planner(monkeypatch):
 
 def test_planning_thread_config_defaults_to_none(monkeypatch):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
 
     thread = module._PlanningThread(
@@ -644,6 +649,7 @@ def test_planning_thread_config_defaults_to_none(monkeypatch):
 
 def test_planning_thread_receives_pedicle_mask(monkeypatch, tmp_path):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
     from src.core.volume_manager import VolumeManager
 
@@ -684,6 +690,7 @@ def test_planning_thread_receives_pedicle_mask(monkeypatch, tmp_path):
 
 def test_planning_thread_forwards_pedicle_mask_to_analyzer(monkeypatch):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
 
     pedicle_mask = np.ones((2, 2, 2), bool)
@@ -719,6 +726,7 @@ def test_planning_thread_forwards_pedicle_mask_to_analyzer(monkeypatch):
 
 def test_planning_thread_pedicle_mask_defaults_to_none():
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
 
     thread = module._PlanningThread(
@@ -773,6 +781,7 @@ class _FinishedThread:
 
 def _thread_for(mask_size=2):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
 
     return module._PlanningThread(
@@ -924,6 +933,7 @@ def test_on_finished_names_dropped_sides_even_with_no_screws(controller_with_win
 
 def test_run_planning_shows_a_cancellable_progress_dialog(monkeypatch, tmp_path):
     import SimpleITK as sitk
+
     import src.controllers.auto_placement_controller as module
     from src.core.volume_manager import VolumeManager
 

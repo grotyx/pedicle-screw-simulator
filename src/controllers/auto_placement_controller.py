@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
-from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
 

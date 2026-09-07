@@ -384,7 +384,6 @@ class PedicleAnalyzer:
             # The vertebral body is the largest component whose centroid is
             # close to the overall centroid.  Pedicles are the smaller
             # components on each side.
-            body_candidate = components[0]
             pedicle_candidates = components[1:]
 
             for pc in pedicle_candidates:
@@ -418,7 +417,7 @@ class PedicleAnalyzer:
         sx, sy, _ = self._spacing
         voxel_area_mm2 = sx * sy
 
-        for side, voxels_list, areas_dict, set_center, set_axis, set_width in [
+        for side, voxels_list, areas_dict, _set_center, _set_axis, _set_width in [
             ("left", left_voxels_zyx, left_areas,
              "_left_center", "_left_axis", "_left_width"),
             ("right", right_voxels_zyx, right_areas,

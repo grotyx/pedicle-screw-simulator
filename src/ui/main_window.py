@@ -1,17 +1,45 @@
 """Main application window with VWORKS-style and MPR-focus layouts."""
 
-import sys
 import logging
-from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
-    QPushButton, QToolBar, QLabel, QSlider, QSpinBox, QDoubleSpinBox,
-    QStatusBar, QMessageBox, QApplication, QComboBox, QListWidget,
-    QCheckBox, QScrollArea, QLineEdit, QFileDialog,
-    QSplitter, QSizePolicy, QListWidgetItem, QAbstractItemView,
-)
+import sys
+from typing import List, Optional
+
 from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
-from typing import List, Optional
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from src.controllers.auto_placement_controller import AutoPlacementController
+from src.controllers.dicom_controller import DicomController
+from src.controllers.plan_controller import PlanController
+from src.controllers.screw_edit_controller import ScrewEditController
+from src.controllers.screw_mpr_controller import ScrewMPRController
+from src.controllers.segmentation_controller import SegmentationController
+from src.controllers.tool_controller import ToolController
+from src.controllers.view_controller import ViewController
 
 from .. import (
     __academic_affiliation__,
@@ -27,33 +55,24 @@ from .. import (
 )
 from ..core.planner_config import PlannerConfig
 from ..core.volume_manager import VolumeManager
-from .collapsible_group import CollapsibleGroupBox
-from .mpr_viewer import MPRViewer
-from .viewer_3d import Viewer3D
-from .tool_icons import create_tool_icon
-from .spin_boxes import DiameterSpinBox
 from ..utils.constants import (
-    DEFAULT_SCREW_LENGTH,
     DEFAULT_SCREW_DIAMETER,
-    MIN_SCREW_DIAMETER,
+    DEFAULT_SCREW_LENGTH,
     MAX_SCREW_DIAMETER,
+    MIN_SCREW_DIAMETER,
     TRANSFER_FUNCTION_PRESETS,
 )
+from .collapsible_group import CollapsibleGroupBox
+from .mpr_viewer import MPRViewer
+from .spin_boxes import DiameterSpinBox
 from .styles import (
     DEFAULT_THEME,
     THEME_LABELS,
     THEMES,
     load_stylesheet,
 )
-
-from src.controllers.dicom_controller import DicomController
-from src.controllers.segmentation_controller import SegmentationController
-from src.controllers.plan_controller import PlanController
-from src.controllers.tool_controller import ToolController
-from src.controllers.view_controller import ViewController
-from src.controllers.auto_placement_controller import AutoPlacementController
-from src.controllers.screw_mpr_controller import ScrewMPRController
-from src.controllers.screw_edit_controller import ScrewEditController
+from .tool_icons import create_tool_icon
+from .viewer_3d import Viewer3D
 
 logger = logging.getLogger(__name__)
 

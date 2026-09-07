@@ -6,14 +6,15 @@ this manager to ensure coordinate consistency.
 """
 
 import logging
-import vtk
+from typing import Callable, Dict, Optional, Tuple
+
 import SimpleITK as sitk
-from typing import Optional, Tuple, Dict, Callable
+import vtk
+
+from ..utils.constants import TRANSFER_FUNCTION_PRESETS
+from ..utils.vtk_helpers import create_reslice_axes, sitk_to_vtk
 
 logger = logging.getLogger(__name__)
-
-from ..utils.vtk_helpers import sitk_to_vtk, create_reslice_axes
-from ..utils.constants import TRANSFER_FUNCTION_PRESETS
 
 
 class VolumeManager:
@@ -299,7 +300,7 @@ class VolumeManager:
         for callback in self._observers.values():
             try:
                 callback(event, **kwargs)
-            except Exception as e:
+            except Exception:
                 logger.exception("Observer notification failed")
 
     # --- Coordinate Conversion ---
