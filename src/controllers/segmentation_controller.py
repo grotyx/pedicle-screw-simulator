@@ -618,6 +618,12 @@ class SegmentationController:
 
     def reset_state(self):
         """Reset segmentation state for a new DICOM load."""
+        if (
+            self._segmentation_thread is not None
+            and self._segmentation_thread.isRunning()
+        ):
+            self._segmentation_thread.request_cancel()
+            self._segmentation_thread.wait(5000)
         if self._vertebrae_isolated:
             self.restore_full_volume()
         self._last_segmentation_mask_path = None

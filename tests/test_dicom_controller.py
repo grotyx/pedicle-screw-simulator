@@ -78,6 +78,29 @@ def test_open_folder_ignores_duplicate_load(monkeypatch):
     assert "already" in window.statusbar.message.lower()
 
 
+class _SegController:
+    def __init__(self, running):
+        self.is_running = running
+
+
+def test_open_folder_blocks_while_segmentation_is_running(monkeypatch):
+    window = _Window()
+    window._seg_ctrl = _SegController(running=True)
+    controller = DicomController(object(), window)
+
+    def unexpected_dialog(*_args, **_kwargs):
+        raise AssertionError("folder dialog must not open during segmentation")
+
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QFileDialog.getExistingDirectory",
+        unexpected_dialog,
+    )
+
+    controller.open_folder()
+
+    assert "segmentation" in window.statusbar.message.lower()
+
+
 def test_close_event_blocks_while_dicom_is_loading(monkeypatch):
     warnings = []
 

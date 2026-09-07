@@ -90,6 +90,13 @@ class DicomController:
             self._window.statusbar.showMessage("DICOM loading is already running")
             return
 
+        seg_ctrl = getattr(self._window, "_seg_ctrl", None)
+        if seg_ctrl is not None and seg_ctrl.is_running:
+            self._window.statusbar.showMessage(
+                "Cancel or wait for the running segmentation before loading another study"
+            )
+            return
+
         folder = QFileDialog.getExistingDirectory(
             self._window,
             "Select DICOM Folder",

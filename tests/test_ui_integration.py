@@ -1590,6 +1590,62 @@ def test_frozen_build_hides_cancel_button(ui_main_window, monkeypatch, tmp_path)
     ctrl._segmentation_progress = None
 
 
+class _FakeSegmentationThread:
+    """Stand-in for a still-running AutoSegmentationThread.
+
+    Mimics real QThread semantics closely enough for this test: it reports
+    itself as running until `request_cancel()`/`wait()` bring it down, so it
+    never leaves the controller's `is_running` permanently True (which would
+    otherwise make `MainWindow.closeEvent` pop a blocking modal warning
+    during qtbot's window teardown).
+    """
+
+    def __init__(self):
+        self.cancel_called = False
+        self.wait_called_with = None
+        self._running = True
+
+    def isRunning(self):
+        return self._running
+
+    def request_cancel(self):
+        self.cancel_called = True
+        self._running = False
+
+    def wait(self, timeout_ms):
+        self.wait_called_with = timeout_ms
+        self._running = False
+
+
+def test_reset_state_cancels_and_waits_for_a_running_segmentation_thread(
+    ui_main_window, monkeypatch
+):
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "question", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "question", lambda *a, **k: None
+    )
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    fake_thread = _FakeSegmentationThread()
+    ctrl._segmentation_thread = fake_thread
+
+    ctrl.reset_state()
+
+    assert fake_thread.cancel_called is True
+    assert fake_thread.wait_called_with == 5000
+    assert ctrl.is_running is False
+
+    ctrl._segmentation_thread = None
+
+
 def test_cancelling_a_run_keeps_the_previous_runs_mask_dir(ui_main_window, tmp_path):
     """Cancelling run N must not delete run N-1's mask directory."""
     from src.core.totalseg_integration import SegmentationWorkspace
