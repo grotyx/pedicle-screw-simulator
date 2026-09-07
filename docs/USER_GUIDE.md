@@ -117,7 +117,7 @@ The **Selected Screw** panel reports:
 
 - **Convergence:** the signed axial angle toward the midline. Positive is medial (tip toward the midline); negative is lateral.
 - **Craniocaudal:** the signed elevation of the trajectory above the axial plane. Positive is cranial. For a converging screw this differs slightly from a sagittal-projection angle.
-- **Safety (grade):** a Gertzbein-Robbins grade computed from the cylinder-surface distance to the vertebra boundary on the TotalSegmentator mask, never from HU alone. The grade reads `N/A` until a TotalSegmentator mask exists for the screw's vertebra.
+- **Safety (grade):** a Gertzbein-Robbins grade computed from the cylinder-surface distance to the vertebra boundary on the TotalSegmentator mask. HU plays no role in the grade; the reported mean and minimum HU along the trajectory are informational only. The grade reads `N/A` until a TotalSegmentator mask exists for the screw's vertebra.
 
 Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width with at least 1 mm of cortical clearance on each side, keeps the tip at least 4 mm behind the anterior cortex, and selects lengths from the 25-55 mm catalogue in 5 mm steps. These values are workflow presets, not universal clinical recommendations.
 

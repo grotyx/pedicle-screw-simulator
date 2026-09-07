@@ -163,7 +163,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - 자동 계획은 기하학 기반 연구 기능이며 임상적으로 검증된 내비게이션이 아닙니다.
 - 결과는 DICOM geometry와 segmentation 정확도에 영향을 받습니다.
 - 변형, 골절, 삽입물, artifact, 이행성 척추 및 부정확한 segmentation은 제안을 무효화할 수 있습니다.
-- 척추경 협부(isthmus) 탐지는 기하학적 방식(TotalSegmentator mask의 coronal 단면 최소 폭 탐색)이며 변형 척추에서는 검증되지 않았습니다.
+- 척추경 협부(isthmus) 탐지는 기하학적 방식(TotalSegmentator mask의 coronal 단면 최소 면적 탐색)이며 변형 척추에서는 검증되지 않았습니다.
 - Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공하며 Intel macOS와 Linux 패키지는 제공하지 않습니다.
 - Standalone에 TotalSegmentator가 포함되지만 모델은 최초 사용 시 내려받으며 많은 메모리와 저장공간이 필요할 수 있습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.
