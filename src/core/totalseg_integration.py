@@ -6,8 +6,11 @@ from dataclasses import dataclass, field
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from typing import Callable, List, Optional
 
 import SimpleITK as sitk
@@ -41,6 +44,39 @@ SPINE_ROI_SUBSET = (
     "vertebrae_C2",
     "vertebrae_C1",
 )
+
+
+class SegmentationWorkspace:
+    """Owns temporary directories that hold patient volumes and masks."""
+
+    PREFIX = "screwfix_totalseg_"
+
+    def __init__(self, root: Optional[str] = None) -> None:
+        self._root = root or tempfile.gettempdir()
+        self._dirs: List[str] = []
+
+    def create(self) -> str:
+        path = tempfile.mkdtemp(prefix=self.PREFIX, dir=self._root)
+        self._dirs.append(path)
+        return path
+
+    def purge(self) -> None:
+        while self._dirs:
+            shutil.rmtree(self._dirs.pop(), ignore_errors=True)
+
+    @classmethod
+    def purge_stale(cls, root: Optional[str] = None, older_than_seconds: float = 0.0) -> int:
+        base = Path(root or tempfile.gettempdir())
+        removed = 0
+        now = time.time()
+        for entry in base.glob(cls.PREFIX + "*"):
+            if not entry.is_dir():
+                continue
+            if now - entry.stat().st_mtime < older_than_seconds:
+                continue
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+        return removed
 
 
 @dataclass

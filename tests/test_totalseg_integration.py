@@ -282,3 +282,33 @@ class TestTotalSegIntegration:
         assert devices == ["gpu", "cpu"]
         assert force_split_values == [False, True]
         assert "CPU retry" in result.message
+
+
+import time
+
+from src.core.totalseg_integration import SegmentationWorkspace
+
+
+def test_workspace_create_and_purge(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    first = ws.create()
+    second = ws.create()
+    (Path(first) / "input_volume.nii.gz").write_bytes(b"x")
+    assert Path(first).name.startswith(SegmentationWorkspace.PREFIX)
+    assert Path(second).is_dir()
+    ws.purge()
+    assert not Path(first).exists() and not Path(second).exists()
+    ws.purge()  # idempotent
+
+
+def test_purge_stale_removes_only_prefixed_dirs(tmp_path):
+    stale = tmp_path / (SegmentationWorkspace.PREFIX + "abc")
+    stale.mkdir()
+    (stale / "input_volume.nii.gz").write_bytes(b"x")
+    other = tmp_path / "unrelated"
+    other.mkdir()
+    old = time.time() - 10
+    os.utime(stale, (old, old))
+    removed = SegmentationWorkspace.purge_stale(root=str(tmp_path), older_than_seconds=5)
+    assert removed == 1
+    assert not stale.exists() and other.exists()
