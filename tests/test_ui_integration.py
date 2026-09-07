@@ -675,6 +675,42 @@ def test_segmentation_result_hides_method_and_mask_details(
     assert window.vertebra_isolate_btn.isEnabled() is True
 
 
+def test_threshold_fallback_disables_auto_planning(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-FALLBACK-SEG", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "fallback_mask.nii.gz"
+    _write_mask(image, mask_path)
+
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox,
+        "warning",
+        lambda *a, **k: None,
+    )
+
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="threshold_fallback",
+            mask_path=str(mask_path),
+            message="Threshold fallback used.",
+            geometry_warnings=[],
+        )
+    )
+
+    assert window.auto_screw_plan_btn.isEnabled() is False
+    assert (
+        window.seg_status_label.text()
+        == "Threshold mask ready · planning unavailable"
+    )
+
+
 def test_selected_screw_enters_and_exits_screw_axis_mpr(ui_main_window):
     window = ui_main_window
     assert window.screw_axis_mpr_btn.text() == "Screw MPR"

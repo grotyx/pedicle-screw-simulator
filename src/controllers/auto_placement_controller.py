@@ -94,6 +94,15 @@ class AutoPlacementController:
             )
             return
 
+        if getattr(seg_ctrl, "_last_segmentation_method", None) != "totalsegmentator":
+            QMessageBox.warning(
+                self._window,
+                "Planning Unavailable",
+                "Automatic planning needs a TotalSegmentator vertebra mask. "
+                "The current mask is a threshold fallback without vertebra labels.",
+            )
+            return
+
         ct_image = self._vm.get_sitk_image()
         if ct_image is None:
             QMessageBox.warning(

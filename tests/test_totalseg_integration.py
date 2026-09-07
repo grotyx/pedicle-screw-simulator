@@ -23,6 +23,12 @@ def _create_test_image(value: int = 300):
     return image
 
 
+def test_spine_roi_subset_has_no_cervical_levels():
+    from src.core.totalseg_integration import SPINE_ROI_SUBSET
+    assert not any(name.startswith("vertebrae_C") for name in SPINE_ROI_SUBSET)
+    assert "vertebrae_L4" in SPINE_ROI_SUBSET and "sacrum" in SPINE_ROI_SUBSET
+
+
 class TestTotalSegIntegration:
     """Coverage for fallback segmentation flow."""
 

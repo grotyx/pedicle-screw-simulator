@@ -160,6 +160,7 @@ class _DummyToolCtrl:
 class _DummySegCtrl:
     def __init__(self):
         self._last_segmentation_mask_path = None
+        self._last_segmentation_method = "totalsegmentator"
         self.ensure_mpr_calls = 0
 
     def ensure_mpr_vertebrae_isolated(self):
@@ -467,6 +468,20 @@ class TestAutoPlacementControllerUnit:
         assert window._tool_ctrl.added[0][0].vertebra_level == "L4"
         assert window._tool_ctrl.added[0][0].side == "left"
 
+
+
+def test_run_planning_refuses_threshold_fallback(controller_with_window, monkeypatch):
+    ctrl, window = controller_with_window
+    window._seg_ctrl._last_segmentation_mask_path = "dummy.nii.gz"
+    window._seg_ctrl._last_segmentation_method = "threshold_fallback"
+    shown = []
+    monkeypatch.setattr(
+        "src.controllers.auto_placement_controller.QMessageBox.warning",
+        lambda *a, **k: shown.append(a[2]),
+    )
+    ctrl.run_planning()
+    assert shown and "TotalSegmentator" in shown[0]
+    assert ctrl._thread is None
 
 
 def test_planned_screw_to_screw_copies_metadata():

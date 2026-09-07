@@ -282,9 +282,15 @@ class SegmentationController:
             self._last_segmentation_method = result.method
             self.refresh_label_options(method_override=result.method)
 
-            self._window.seg_status_label.setText(
-                f"Segmentation ready · {len(detected)} vertebrae detected"
-            )
+            if result.method != "totalsegmentator":
+                self._window.auto_screw_plan_btn.setEnabled(False)
+                self._window.seg_status_label.setText(
+                    "Threshold mask ready · planning unavailable"
+                )
+            else:
+                self._window.seg_status_label.setText(
+                    f"Segmentation ready · {len(detected)} vertebrae detected"
+                )
             self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
             self._window.vertebra_isolate_btn.setEnabled(True)
             self._window.statusbar.showMessage(result.message)
