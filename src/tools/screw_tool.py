@@ -30,12 +30,18 @@ from ..utils.constants import (
 #: CBT contraindication note, the optimiser fallback note, the diameter
 #: step-down note — describes how the screw was *chosen*, not how it grades,
 #: and is left alone.
+#:
+#: ``"Vertebral body HU"`` is deliberately **not** here.  It describes the
+#: vertebra, not the trajectory, and this tool cannot re-measure it (see
+#: :data:`_PEDICLE_ANALYSIS_METRIC_KEYS`), so ``body_mean_hu`` is preserved
+#: verbatim across a re-grade — the note that explains that number has to be
+#: preserved with it, or the inspector shows an osteoporotic body HU with
+#: nothing saying so.
 _DERIVED_WARNING_PREFIXES = (
     "Not graded",
     "Breach distance",
     "Cortical clearance",
     "Trajectory HU",
-    "Vertebral body HU",
     "Trajectory/body HU ratio",
     "Facet violation grade",
     "High convergence angle",

@@ -154,7 +154,6 @@ def test_regrade_regenerates_facet_and_convergence_warnings():
         "Facet violation grade 3: superior facet violated",
         "High convergence angle 44.0° — verify on CT",
         "Trajectory/body HU ratio 0.63 below 1.0",
-        "Vertebral body HU 120 suggests osteoporosis (<132 HU)",
         CBT_CONTRAINDICATION_NOTE,
     ]
     tool.add_screw(screw)
@@ -162,12 +161,45 @@ def test_regrade_regenerates_facet_and_convergence_warnings():
     tool.regrade_all()
 
     warnings = tool.get_screws()[0].warnings
-    # This straight, facet-free trajectory disproves all four planner notes.
+    # This straight, facet-free trajectory disproves all three planner notes.
     assert not any(w.startswith("Facet violation grade") for w in warnings)
     assert not any(w.startswith("High convergence angle") for w in warnings)
     assert not any(w.startswith("Trajectory/body HU ratio") for w in warnings)
-    assert not any(w.startswith("Vertebral body HU") for w in warnings)
     assert CBT_CONTRAINDICATION_NOTE in warnings
+
+
+def test_edit_keeps_the_body_hu_warning_while_replacing_the_trajectory_one():
+    """The body HU note describes the vertebra, not the trajectory.
+
+    ``body_mean_hu`` needs a body centre this tool never has, so it survives an
+    edit verbatim; the warning that explains that number has to survive with
+    it, or the inspector shows an osteoporotic body HU and says nothing about
+    it.  The trajectory HU note *is* re-measurable and must be replaced.
+    """
+    body_note = "Vertebral body HU 120 suggests osteoporosis (<132 HU)"
+    tool = _split_density_tool()
+    screw = _planner_screw(
+        (34.0, 38.0, 30.0),
+        (34.0, 22.0, 30.0),
+        metrics={"trajectory_mean_hu": 400.0, "body_mean_hu": 120.0},
+    )
+    screw.warnings = [
+        "Trajectory HU 400 below 123 HU — loosening risk "
+        "(consider larger diameter, augmentation, or CBT)",
+        body_note,
+    ]
+    tool.add_screw(screw)
+
+    moved = tool.replace_screw(
+        0, entry_point=(24.0, 38.0, 30.0), target_point=(24.0, 22.0, 30.0)
+    )
+
+    assert body_note in moved.warnings
+    assert moved.metrics["body_mean_hu"] == pytest.approx(120.0)
+    # The stale trajectory note is replaced by one measured on the new path.
+    assert "Trajectory HU 400 below 123 HU — loosening risk " \
+           "(consider larger diameter, augmentation, or CBT)" not in moved.warnings
+    assert any(w.startswith("Trajectory HU 80 below 123 HU") for w in moved.warnings)
 
 
 def test_regrade_adds_a_convergence_warning_for_a_steeply_medialised_screw():
