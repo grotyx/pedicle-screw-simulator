@@ -1227,5 +1227,66 @@ class TestScrewMetrics:
             assert heary == "none"
 
 
+class TestOptimizerMode:
+    """The optimiser-backed plan_all must never be worse than the legacy path."""
+
+    def test_not_worse_than_legacy(self):
+        from src.core.planner_config import PlannerConfig
+        from tests.test_trajectory_optimizer import _setup
+
+        ct, mask, analysis = _setup()
+        legacy = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy")).plan_all([analysis])
+        optim = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer")).plan_all([analysis])
+        order = "ABCDE"
+        for side in ("left", "right"):
+            l = next(s for s in legacy if s.side == side)
+            o = next(s for s in optim if s.side == side)
+            assert order.index(o.gertzbein_grade) <= order.index(l.gertzbein_grade)
+            assert o.metrics["min_wall_mm"] >= l.metrics["min_wall_mm"] - 0.5
+            assert "score" in o.metrics and "rod_misalignment_mm" in o.metrics
+
+    def test_optimizer_screws_carry_score_components_and_clinical_metrics(self):
+        from src.core.planner_config import PlannerConfig
+        from tests.test_trajectory_optimizer import _setup
+
+        ct, mask, analysis = _setup()
+        screws = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer")).plan_all([analysis])
+        assert screws
+        for screw in screws:
+            assert {"safety", "density", "length", "endplate", "centering"} <= set(
+                screw.metrics["score_components"]
+            )
+            # The shared metadata path from plan_screw must still be applied.
+            assert {"trajectory_mean_hu", "pedicle_mean_hu", "min_wall_mm",
+                    "heary_direction", "facet_grade"} <= set(screw.metrics)
+            assert screw.metrics["min_wall_mm"] == pytest.approx(screw.min_wall_mm)
+
+    def test_legacy_mode_matches_plan_screw(self):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis()
+        batch = planner.plan_all([analysis], sides="left")
+        direct = planner.plan_screw(analysis, "left")
+        assert len(batch) == 1
+        assert np.allclose(batch[0].entry_lps, direct.entry_lps)
+        assert np.allclose(batch[0].target_lps, direct.target_lps)
+        assert batch[0].diameter_mm == direct.diameter_mm
+
+    def test_infeasible_optimizer_falls_back_to_legacy(self, monkeypatch):
+        from src.core import auto_screw_planner as module
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer"))
+        monkeypatch.setattr(module, "optimize_screw", lambda *a, **k: [])
+
+        results = planner.plan_all([_make_analysis()], sides="left")
+
+        assert len(results) == 1
+        assert "Optimizer found no feasible trajectory; legacy planner used" in results[0].warnings
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

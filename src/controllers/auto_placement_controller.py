@@ -217,6 +217,12 @@ class AutoPlacementController:
             f"Added {len(planned)} editable screws. "
             f"Grades: {grade_summary}. Select a screw and drag it directly."
         )
+        rod = _rod_misalignment_by_side(planned)
+        if rod:
+            status += (
+                f" Rod misalignment L {rod.get('left', 0.0):.1f} mm"
+                f" / R {rod.get('right', 0.0):.1f} mm"
+            )
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)
 
@@ -254,6 +260,24 @@ class AutoPlacementController:
             updater(apply_to_view=False)
         else:
             self._window.auto_screw_plan_btn.setEnabled(True)
+
+
+def _rod_misalignment_by_side(planned: List[PlannedScrew]) -> Dict[str, float]:
+    """Per-side rod misalignment recorded by the optimiser, if it ran.
+
+    Legacy planning leaves the metric out, in which case the caller omits the
+    readout entirely rather than reporting a misleading 0.0 mm.
+    """
+    rod: Dict[str, float] = {}
+    for ps in planned:
+        value = ps.metrics.get("rod_misalignment_mm")
+        if value is None:
+            continue
+        try:
+            rod[ps.side] = float(value)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring unreadable rod misalignment %r", value)
+    return rod
 
 
 def planned_screw_to_screw(ps: PlannedScrew) -> Screw:

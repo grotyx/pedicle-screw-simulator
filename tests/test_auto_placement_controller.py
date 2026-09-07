@@ -716,3 +716,18 @@ def test_planning_thread_pedicle_mask_defaults_to_none():
     )
 
     assert thread._pedicle_mask is None
+
+
+def test_on_finished_reports_rod_misalignment(controller_with_window):
+    ctrl, window = controller_with_window
+    ctrl._on_finished([
+        _planned("L4", "left", metrics={"rod_misalignment_mm": 1.24}),
+        _planned("L4", "right", metrics={"rod_misalignment_mm": 2.75}),
+    ])
+    assert "Rod misalignment L 1.2 mm / R 2.8 mm" in window.auto_screw_status._text
+
+
+def test_on_finished_omits_rod_misalignment_when_absent(controller_with_window):
+    ctrl, window = controller_with_window
+    ctrl._on_finished([_planned("L4", "left")])
+    assert "Rod misalignment" not in window.auto_screw_status._text

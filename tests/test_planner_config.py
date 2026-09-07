@@ -24,3 +24,25 @@ def test_roundtrip_mapping_ignores_unknown_keys():
 def test_validate_rejects_out_of_range(field, value):
     with pytest.raises(ValueError):
         PlannerConfig(**{field: value}).validate()
+
+
+def test_optimizer_defaults_and_weight_roundtrip():
+    from src.core.trajectory_optimizer import OptimizerWeights
+
+    cfg = PlannerConfig()
+    assert cfg.mode == "optimizer"
+    assert cfg.trajectory == "traditional"
+    assert cfg.weights == OptimizerWeights()
+
+    tuned = PlannerConfig(mode="legacy", trajectory="cbt",
+                          weights=OptimizerWeights(safety=1.5, density=0.25, rod=0.1))
+    data = tuned.to_mapping()
+    assert data["weights"]["safety"] == pytest.approx(1.5)
+    assert isinstance(data["weights"], dict)
+    assert PlannerConfig.from_mapping(data) == tuned
+
+
+@pytest.mark.parametrize("field,value", [("mode", "magic"), ("trajectory", "diagonal")])
+def test_validate_rejects_unknown_enum(field, value):
+    with pytest.raises(ValueError):
+        PlannerConfig(**{field: value}).validate()

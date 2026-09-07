@@ -1851,6 +1851,73 @@ def test_corrupt_planner_settings_fall_back_to_defaults(
         reopened.deleteLater()
 
 
+def test_optimizer_controls_feed_planner_config(ui_main_window):
+    window = ui_main_window
+
+    assert window.plan_mode_combo.currentData() == "optimizer"
+    assert window.plan_trajectory_combo.currentData() == "traditional"
+    assert (window.plan_weight_safety.value(),
+            window.plan_weight_density.value(),
+            window.plan_weight_rod.value()) == (100, 50, 30)
+    for slider in (window.plan_weight_safety, window.plan_weight_density,
+                   window.plan_weight_rod):
+        assert (slider.minimum(), slider.maximum()) == (0, 300)
+
+    window.plan_mode_combo.setCurrentIndex(
+        window.plan_mode_combo.findData("legacy")
+    )
+    window.plan_trajectory_combo.setCurrentIndex(
+        window.plan_trajectory_combo.findData("cbt")
+    )
+    window.plan_weight_safety.setValue(250)
+    window.plan_weight_density.setValue(75)
+    window.plan_weight_rod.setValue(0)
+
+    cfg = window.planner_config()
+    assert cfg.mode == "legacy"
+    assert cfg.trajectory == "cbt"
+    assert cfg.weights.safety == pytest.approx(2.5)
+    assert cfg.weights.density == pytest.approx(0.75)
+    assert cfg.weights.rod == pytest.approx(0.0)
+
+
+def test_optimizer_controls_persist_into_a_new_window(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_mode_combo.setCurrentIndex(window.plan_mode_combo.findData("legacy"))
+    window.plan_trajectory_combo.setCurrentIndex(
+        window.plan_trajectory_combo.findData("cbt")
+    )
+    window.plan_weight_safety.setValue(220)
+    window.plan_weight_rod.setValue(5)
+
+    settings = _planner_settings(isolated_qsettings)
+    assert settings.value("mode") == "legacy"
+    assert settings.value("trajectory") == "cbt"
+    assert float(settings.value("weights/safety")) == pytest.approx(2.2)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_mode_combo.currentData() == "legacy"
+        assert reopened.plan_trajectory_combo.currentData() == "cbt"
+        assert reopened.plan_weight_safety.value() == 220
+        assert reopened.plan_weight_rod.value() == 5
+        assert reopened.planner_config().weights.safety == pytest.approx(2.2)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_planner_reset_defaults_restores_optimizer_controls(ui_main_window):
+    window = ui_main_window
+    window.plan_mode_combo.setCurrentIndex(window.plan_mode_combo.findData("legacy"))
+    window.plan_weight_rod.setValue(300)
+
+    window.plan_reset_defaults_btn.click()
+
+    assert window.plan_mode_combo.currentData() == "optimizer"
+    assert window.plan_weight_rod.value() == 30
+
+
 def test_inspector_shows_metric_rows(ui_main_window):
     window = ui_main_window
     screw = Screw(

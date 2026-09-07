@@ -30,12 +30,22 @@ from .breach_classification import facet_violation_grade, heary_direction
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import ScrewGrader
-from .vertebra import PedicleAnalysisResult
+from .trajectory_optimizer import (Candidate, optimize_construct, optimize_screw,
+                                   rod_misalignment_mm)
+from .vertebra import PedicleAnalysisResult, Vertebra
 
 logger = logging.getLogger(__name__)
 
 # Sacrum label -- not suitable for pedicle screw planning.
 _SACRUM_LABEL = 25
+
+#: Warning attached to a screw the optimiser could not solve.
+OPTIMIZER_FALLBACK_WARNING = (
+    "Optimizer found no feasible trajectory; legacy planner used"
+)
+
+#: How many ranked trajectories per pedicle the construct stage may choose from.
+_CONSTRUCT_TOP_K = 10
 
 
 @dataclass
@@ -292,6 +302,41 @@ class AutoScrewPlanner:
                 f"{diameter:.1f} mm for cortical containment"
             )
 
+        return self._finalise_screw(
+            vertebra,
+            side,
+            entry,
+            target,
+            diameter,
+            pedicle_center,
+            body_center,
+            warnings,
+            pedicle_width,
+        )
+
+    def _finalise_screw(
+        self,
+        vertebra: Vertebra,
+        side: str,
+        entry: np.ndarray,
+        target: np.ndarray,
+        diameter: float,
+        pedicle_center: np.ndarray,
+        body_center: np.ndarray,
+        extra_warnings: Optional[List[str]] = None,
+        pedicle_width: float = 0.0,
+    ) -> PlannedScrew:
+        """Grade an accepted trajectory and wrap it in a :class:`PlannedScrew`.
+
+        Shared tail of both planning modes, so an optimiser-chosen trajectory
+        carries exactly the same grade, HU statistics, bone-quality metrics,
+        facet/Heary classification, angles and warnings as a legacy one.
+        ``extra_warnings`` are the messages the caller accumulated while
+        constructing the trajectory; they are copied, never mutated.
+        """
+        warnings: List[str] = list(extra_warnings or [])
+        length = float(np.linalg.norm(target - entry))
+
         # 6. Grade the accepted trajectory once: containment plus HU statistics.
         result = self._grader.grade(entry, target, diameter, label=vertebra.label)
         if result is None:
@@ -399,8 +444,11 @@ class AutoScrewPlanner:
             raise ValueError(f"sides must be 'both', 'left', or 'right', got {sides!r}")
 
         side_list = ["left", "right"] if sides == "both" else [sides]
-        results: List[PlannedScrew] = []
 
+        if self.config.mode == "optimizer":
+            return self._plan_all_optimized(analyses, side_list)
+
+        results: List[PlannedScrew] = []
         for analysis in analyses:
             for side in side_list:
                 planned = self.plan_screw(analysis, side)
@@ -408,6 +456,145 @@ class AutoScrewPlanner:
                     results.append(planned)
 
         return results
+
+    # =====================================================================
+    # Optimiser-backed planning
+    # =====================================================================
+
+    def _plan_all_optimized(
+        self,
+        analyses: List[PedicleAnalysisResult],
+        side_list: List[str],
+    ) -> List[PlannedScrew]:
+        """Plan every screw through the candidate optimiser.
+
+        Each pedicle contributes its best :data:`_CONSTRUCT_TOP_K` trajectories;
+        :func:`~src.core.trajectory_optimizer.optimize_construct` then picks one
+        per screw so the heads of each side line up.  A pedicle the optimiser
+        cannot solve silently falls back to :meth:`plan_screw`.
+        """
+        per_screw: Dict[Tuple[str, str], List[Candidate]] = {}
+        keys: Dict[Tuple[int, str], Tuple[str, str]] = {}
+
+        for analysis in analyses:
+            vertebra = analysis.vertebra
+            if vertebra.label == _SACRUM_LABEL or not analysis.success:
+                continue    # the legacy fallback rejects these anyway
+            for side in side_list:
+                key = self._construct_key(vertebra, side, per_screw)
+                try:
+                    candidates = optimize_screw(
+                        self._grader,
+                        analysis,
+                        side,
+                        self.config,
+                        self.config.weights,
+                        top_k=_CONSTRUCT_TOP_K,
+                    )
+                except Exception:   # pragma: no cover - defensive
+                    logger.exception(
+                        "Optimizer failed for %s %s; falling back to the legacy planner",
+                        vertebra.name,
+                        side,
+                    )
+                    continue
+                if candidates:
+                    per_screw[key] = candidates
+                    keys[(vertebra.label, side)] = key
+
+        chosen = optimize_construct(per_screw, self.config.weights) if per_screw else {}
+
+        results: List[PlannedScrew] = []
+        for analysis in analyses:
+            for side in side_list:
+                key = keys.get((analysis.vertebra.label, side))
+                candidate = chosen.get(key) if key is not None else None
+                planned = (
+                    self._screw_from_candidate(analysis, side, candidate)
+                    if candidate is not None
+                    else self._legacy_fallback(analysis, side)
+                )
+                if planned is not None:
+                    results.append(planned)
+
+        self._stamp_rod_misalignment(results)
+        return results
+
+    @staticmethod
+    def _construct_key(
+        vertebra: Vertebra,
+        side: str,
+        taken: Dict[Tuple[str, str], List[Candidate]],
+    ) -> Tuple[str, str]:
+        """A ``(level, side)`` construct key, disambiguated on name collisions."""
+        key = (vertebra.name, side)
+        if key in taken:
+            key = (f"{vertebra.name}#{vertebra.label}", side)
+        return key
+
+    def _screw_from_candidate(
+        self,
+        analysis: PedicleAnalysisResult,
+        side: str,
+        candidate: Candidate,
+    ) -> Optional[PlannedScrew]:
+        """Convert a chosen :class:`Candidate` into a fully graded screw."""
+        vertebra = analysis.vertebra
+        pedicle_center, _axis, pedicle_width = self._get_side_data(analysis, side)
+        body_center = analysis.vertebral_body_center
+        if pedicle_center is None or body_center is None:
+            return self._legacy_fallback(analysis, side)
+
+        warnings: List[str] = []
+        if analysis.upper_endplate_normal is None:
+            warnings.append(
+                "Upper endplate unavailable; used horizontal sagittal trajectory"
+            )
+        recommended = self._compute_diameter(pedicle_width, vertebra.name)
+        if recommended is not None and candidate.diameter < recommended - 1e-9:
+            warnings.append(
+                f"Diameter reduced from {recommended:.1f} to "
+                f"{candidate.diameter:.1f} mm for cortical containment"
+            )
+
+        planned = self._finalise_screw(
+            vertebra,
+            side,
+            np.asarray(candidate.entry, dtype=np.float64),
+            np.asarray(candidate.target, dtype=np.float64),
+            float(candidate.diameter),
+            pedicle_center,
+            body_center,
+            warnings,
+            pedicle_width,
+        )
+        planned.metrics["score"] = float(candidate.score)
+        planned.metrics["score_components"] = dict(candidate.components)
+        return planned
+
+    def _legacy_fallback(
+        self,
+        analysis: PedicleAnalysisResult,
+        side: str,
+    ) -> Optional[PlannedScrew]:
+        """Plan one screw the legacy way and flag it as an optimiser fallback."""
+        planned = self.plan_screw(analysis, side)
+        if planned is not None:
+            planned.warnings.append(OPTIMIZER_FALLBACK_WARNING)
+        return planned
+
+    @staticmethod
+    def _stamp_rod_misalignment(screws: List[PlannedScrew]) -> None:
+        """Record each side's head-to-rod-line RMS deviation on its screws."""
+        for side in ("left", "right"):
+            on_side = [s for s in screws if s.side == side]
+            if not on_side:
+                continue
+            deviation = rod_misalignment_mm(
+                np.asarray([s.entry_lps for s in on_side], dtype=np.float64)
+            )
+            for screw in on_side:
+                screw.metrics["rod_misalignment_mm"] = deviation
 
     # =====================================================================
     # Entry / target point finding

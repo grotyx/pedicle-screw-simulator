@@ -474,6 +474,25 @@ class MainWindow(QMainWindow):
 
         planner_defaults = PlannerConfig()
 
+        self.plan_mode_combo = QComboBox()
+        self.plan_mode_combo.addItem("Optimizer", "optimizer")
+        self.plan_mode_combo.addItem("Legacy", "legacy")
+        self.plan_mode_combo.setToolTip(
+            "Optimizer ranks a dense candidate grid; Legacy uses the original "
+            "greedy entry/target search"
+        )
+        params_layout.addWidget(QLabel("Planner"), 0, 0)
+        params_layout.addWidget(self.plan_mode_combo, 0, 1, 1, 2)
+
+        self.plan_trajectory_combo = QComboBox()
+        self.plan_trajectory_combo.addItem("Traditional", "traditional")
+        self.plan_trajectory_combo.addItem("Cortical bone trajectory", "cbt")
+        self.plan_trajectory_combo.setToolTip(
+            "Trajectory family the planner aims for"
+        )
+        params_layout.addWidget(QLabel("Trajectory"), 1, 0)
+        params_layout.addWidget(self.plan_trajectory_combo, 1, 1, 1, 2)
+
         self.plan_fill_ratio_spin = QDoubleSpinBox()
         self.plan_fill_ratio_spin.setRange(0.50, 1.00)
         self.plan_fill_ratio_spin.setSingleStep(0.05)
@@ -482,8 +501,8 @@ class MainWindow(QMainWindow):
         self.plan_fill_ratio_spin.setToolTip(
             "Screw diameter as a fraction of the narrowest pedicle width"
         )
-        params_layout.addWidget(QLabel("Pedicle fill"), 0, 0)
-        params_layout.addWidget(self.plan_fill_ratio_spin, 0, 1)
+        params_layout.addWidget(QLabel("Pedicle fill"), 2, 0)
+        params_layout.addWidget(self.plan_fill_ratio_spin, 2, 1, 1, 2)
 
         self.plan_wall_clearance_spin = QDoubleSpinBox()
         self.plan_wall_clearance_spin.setRange(0.0, 3.0)
@@ -494,8 +513,8 @@ class MainWindow(QMainWindow):
         self.plan_wall_clearance_spin.setToolTip(
             "Minimum distance kept between the screw and the cortical wall"
         )
-        params_layout.addWidget(QLabel("Wall clearance"), 1, 0)
-        params_layout.addWidget(self.plan_wall_clearance_spin, 1, 1)
+        params_layout.addWidget(QLabel("Wall clearance"), 3, 0)
+        params_layout.addWidget(self.plan_wall_clearance_spin, 3, 1, 1, 2)
 
         self.plan_anterior_margin_spin = QDoubleSpinBox()
         self.plan_anterior_margin_spin.setRange(0.0, 15.0)
@@ -508,8 +527,8 @@ class MainWindow(QMainWindow):
         self.plan_anterior_margin_spin.setToolTip(
             "Safety margin kept behind the anterior vertebral body cortex"
         )
-        params_layout.addWidget(QLabel("Anterior margin"), 2, 0)
-        params_layout.addWidget(self.plan_anterior_margin_spin, 2, 1)
+        params_layout.addWidget(QLabel("Anterior margin"), 4, 0)
+        params_layout.addWidget(self.plan_anterior_margin_spin, 4, 1, 1, 2)
 
         self.plan_max_convergence_spin = QDoubleSpinBox()
         self.plan_max_convergence_spin.setRange(5.0, 60.0)
@@ -522,8 +541,8 @@ class MainWindow(QMainWindow):
         self.plan_max_convergence_spin.setToolTip(
             "Largest medial convergence angle the planner may use"
         )
-        params_layout.addWidget(QLabel("Max convergence"), 3, 0)
-        params_layout.addWidget(self.plan_max_convergence_spin, 3, 1)
+        params_layout.addWidget(QLabel("Max convergence"), 5, 0)
+        params_layout.addWidget(self.plan_max_convergence_spin, 5, 1, 1, 2)
 
         self.plan_hu_threshold_spin = QDoubleSpinBox()
         self.plan_hu_threshold_spin.setRange(50.0, 300.0)
@@ -536,11 +555,37 @@ class MainWindow(QMainWindow):
         self.plan_hu_threshold_spin.setToolTip(
             "Trajectory HU below which loosening risk is flagged"
         )
-        params_layout.addWidget(QLabel("HU threshold"), 4, 0)
-        params_layout.addWidget(self.plan_hu_threshold_spin, 4, 1)
+        params_layout.addWidget(QLabel("HU threshold"), 6, 0)
+        params_layout.addWidget(self.plan_hu_threshold_spin, 6, 1, 1, 2)
+
+        weight_rows = (
+            ("Safety weight", "plan_weight_safety", 100,
+             "Importance of cortical wall clearance"),
+            ("Density weight", "plan_weight_density", 50,
+             "Importance of dense bone along the trajectory"),
+            ("Rod weight", "plan_weight_rod", 30,
+             "Importance of lining up the screw heads for the rod"),
+        )
+        self._planner_weight_value_labels = {}
+        for row, (caption, attribute, default, tip) in enumerate(weight_rows, start=7):
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 300)
+            slider.setSingleStep(5)
+            slider.setPageStep(25)
+            slider.setValue(default)
+            slider.setToolTip(f"{tip} (percent of the nominal weight)")
+            setattr(self, attribute, slider)
+            value_label = QLabel()
+            value_label.setMinimumWidth(34)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._planner_weight_value_labels[attribute] = value_label
+            params_layout.addWidget(QLabel(caption), row, 0)
+            params_layout.addWidget(slider, row, 1)
+            params_layout.addWidget(value_label, row, 2)
+        self._refresh_planner_weight_labels()
 
         self.plan_reset_defaults_btn = QPushButton("Reset Defaults")
-        params_layout.addWidget(self.plan_reset_defaults_btn, 5, 0, 1, 2)
+        params_layout.addWidget(self.plan_reset_defaults_btn, 10, 0, 1, 3)
 
         plan_params_group.set_content_layout(params_layout)
         layout.addWidget(plan_params_group)
@@ -1031,6 +1076,10 @@ class MainWindow(QMainWindow):
         # Planning parameters
         for spin_box in self._planner_spin_boxes().values():
             spin_box.valueChanged.connect(self._on_planner_parameter_changed)
+        for combo in self._planner_choice_combos().values():
+            combo.currentIndexChanged.connect(self._on_planner_parameter_changed)
+        for slider in self._planner_weight_sliders().values():
+            slider.valueChanged.connect(self._on_planner_weight_changed)
         self.plan_reset_defaults_btn.clicked.connect(
             self.reset_planner_settings
         )
@@ -1509,21 +1558,53 @@ class MainWindow(QMainWindow):
             "trajectory_hu_threshold": self.plan_hu_threshold_spin,
         }
 
+    def _planner_choice_combos(self) -> dict:
+        """Map PlannerConfig enum field names to their combo boxes."""
+        return {
+            "mode": self.plan_mode_combo,
+            "trajectory": self.plan_trajectory_combo,
+        }
+
+    def _planner_weight_sliders(self) -> dict:
+        """Map OptimizerWeights field names to their percent sliders."""
+        return {
+            "safety": self.plan_weight_safety,
+            "density": self.plan_weight_density,
+            "rod": self.plan_weight_rod,
+        }
+
+    def _refresh_planner_weight_labels(self) -> None:
+        """Show each weight slider's value as the weight the planner receives."""
+        for name, slider in self._planner_weight_sliders().items():
+            label = self._planner_weight_value_labels[f"plan_weight_{name}"]
+            label.setText(f"{slider.value() / 100.0:.2f}")
+
     def planner_config(self) -> PlannerConfig:
         """Return the planner configuration currently shown in the panel."""
-        return PlannerConfig.from_mapping(
-            {
-                key: spin_box.value()
-                for key, spin_box in self._planner_spin_boxes().items()
-            }
-        )
+        data = {
+            key: spin_box.value()
+            for key, spin_box in self._planner_spin_boxes().items()
+        }
+        for key, combo in self._planner_choice_combos().items():
+            data[key] = combo.currentData()
+        # Sliders hold percents; the optimiser wants plain multipliers.
+        data["weights"] = {
+            name: slider.value() / 100.0
+            for name, slider in self._planner_weight_sliders().items()
+        }
+        return PlannerConfig.from_mapping(data)
 
     def save_planner_settings(self) -> None:
         """Persist the panel's planner parameters for the next session."""
         settings = self._planner_settings()
         for key, value in self.planner_config().to_mapping().items():
-            if not isinstance(value, list):
-                settings.setValue(key, value)
+            if isinstance(value, list):
+                continue        # implant catalogues are not user-editable
+            if isinstance(value, dict):
+                for name, weight in value.items():
+                    settings.setValue(f"{key}/{name}", weight)
+                continue
+            settings.setValue(key, value)
         settings.endGroup()
         settings.sync()
 
@@ -1542,6 +1623,19 @@ class MainWindow(QMainWindow):
                 )
                 stored = {}
                 break
+        for key in self._planner_choice_combos():
+            stored[key] = str(settings.value(key, defaults[key]) or defaults[key])
+        weights = {}
+        for name, default_weight in defaults["weights"].items():
+            raw = settings.value(f"weights/{name}", default_weight)
+            try:
+                weights[name] = float(raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring unreadable planner weight %s=%r", name, raw
+                )
+                weights[name] = float(default_weight)
+        stored["weights"] = weights
         settings.endGroup()
 
         try:
@@ -1561,15 +1655,34 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("Planning parameters reset to defaults")
 
     def _apply_planner_config(self, config: PlannerConfig) -> None:
-        """Write config values into the spin boxes without re-saving them."""
+        """Write config values into the panel widgets without re-saving them."""
         values = config.to_mapping()
         for key, spin_box in self._planner_spin_boxes().items():
             previous = spin_box.blockSignals(True)
             spin_box.setValue(float(values[key]))
             spin_box.blockSignals(previous)
+        for key, combo in self._planner_choice_combos().items():
+            index = combo.findData(values[key])
+            if index < 0:
+                logger.warning("Unknown planner %s %r; keeping the current choice",
+                               key, values[key])
+                continue
+            previous = combo.blockSignals(True)
+            combo.setCurrentIndex(index)
+            combo.blockSignals(previous)
+        for name, slider in self._planner_weight_sliders().items():
+            previous = slider.blockSignals(True)
+            slider.setValue(int(round(float(values["weights"][name]) * 100.0)))
+            slider.blockSignals(previous)
+        self._refresh_planner_weight_labels()
 
-    def _on_planner_parameter_changed(self, _value: float) -> None:
+    def _on_planner_parameter_changed(self, _value=None) -> None:
         """Persist planner parameters whenever the user edits one."""
+        self.save_planner_settings()
+
+    def _on_planner_weight_changed(self, _value=None) -> None:
+        """Refresh the weight readouts and persist the new objective weights."""
+        self._refresh_planner_weight_labels()
         self.save_planner_settings()
 
     # ------------------------------------------------------------------
