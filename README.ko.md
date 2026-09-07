@@ -200,7 +200,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 ## 참고문헌
 
-[사용설명서](docs/USER_GUIDE.ko.md)에서 설명하는 골질(HU) 임계값, breach·facet 분류, 계획 검증 지표는 아래 문헌을 근거로 합니다. 프로그램의 상수와 계산식은 이 문헌들을 공학적으로 근사한 것이며 문헌 자체를 대체하지 않습니다. 정확한 구현은 `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, `src/core/plan_metrics.py`를 참고하십시오.
+[사용설명서](docs/USER_GUIDE.ko.md)에서 설명하는 골질(HU) 임계값, breach·facet 분류, 계획 검증 지표는 아래 문헌을 근거로 합니다. '예정' 표시가 붙은 항목은 아직 개발 중인 기능의 근거 문헌입니다. 프로그램의 상수와 계산식은 이 문헌들을 공학적으로 근사한 것이며 문헌 자체를 대체하지 않습니다. 정확한 구현은 `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, `src/core/plan_metrics.py`를 참고하십시오.
 
 - Götschi et al. (2026), *Journal of Spine Surgery* — 척추경 나사못 크기 결정 여유값(pedicle fill ratio, 피질골 여유거리, anterior margin).
 - Yamamoto et al. (2025), *Asian Spine Journal* — 나사못 이완(loosening) 위험과 관련된 궤적 HU 기준값.
@@ -215,8 +215,8 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - Da Mutten et al. (2026), *Journal of Imaging Informatics in Medicine* — 흉요추 세부영역(pedicle/corpus/lamina/spinous/transverse/articular)을 자동 분할하는 nnU-Net 모델로, 선택적 척추경 세부영역 모델에서 사용합니다.
 - Massalimova et al. (2025), *Scientific Reports* — 자동 나사못 궤적 평가를 위한 척추경 중심 오프셋(pedicle-centre offset) 지표.
 - Herkner et al. (2026), *Journal of Clinical Medicine* — 자동 산출 임플란트 치수와 술자 선택 치수의 Bland-Altman 비교.
-- Zhang et al. (2024), *Asian Spine Journal* — cortical bone trajectory(CBT) 나사못 적응증에 대한 Delphi 합의.
-- Zeng et al. (2024), *Orthopaedic Surgery* — CT 기반 cortical bone trajectory(CBT) 나사못 궤적 파라미터.
+- Zhang et al. (2024), *Asian Spine Journal* — cortical bone trajectory(CBT) 나사못 적응증에 대한 Delphi 합의 — (예정) cortical bone trajectory(CBT) 계획 모드의 근거 문헌이며, 이 모드는 아직 이번 버전에 포함되지 않은 예정된 기능입니다.
+- Zeng et al. (2024), *Orthopaedic Surgery* — CT 기반 cortical bone trajectory(CBT) 나사못 궤적 파라미터 — (예정) cortical bone trajectory(CBT) 계획 모드의 근거 문헌이며, 이 모드는 아직 이번 버전에 포함되지 않은 예정된 기능입니다.
 
 ## 라이선스
 

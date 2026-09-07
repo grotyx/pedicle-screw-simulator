@@ -200,7 +200,7 @@ A peer-reviewed software-paper DOI can be added as the preferred citation after 
 
 ## References
 
-The bone-quality thresholds, breach/facet classifications, and plan-validation measures documented in the [User Guide](docs/USER_GUIDE.md) draw on the following literature. The application's constants and formulas are engineering approximations of these sources, not a substitute for them; see `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, and `src/core/plan_metrics.py` for the exact implementation.
+The bone-quality thresholds, breach/facet classifications, and plan-validation measures documented in the [User Guide](docs/USER_GUIDE.md) draw on the following literature; entries marked as planned inform features still in development. The application's constants and formulas are engineering approximations of these sources, not a substitute for them; see `src/utils/constants.py`, `src/core/bone_quality.py`, `src/core/breach_classification.py`, and `src/core/plan_metrics.py` for the exact implementation.
 
 - Götschi et al. (2026), *Journal of Spine Surgery* — pedicle screw sizing margins (pedicle fill ratio, cortical wall clearance, anterior safety margin).
 - Yamamoto et al. (2025), *Asian Spine Journal* — trajectory HU cutoff associated with screw loosening risk.
@@ -215,8 +215,8 @@ The bone-quality thresholds, breach/facet classifications, and plan-validation m
 - Da Mutten et al. (2026), *Journal of Imaging Informatics in Medicine* — automated nnU-Net segmentation of thoracolumbar spine subregions (pedicle/corpus/lamina/spinous/transverse/articular), used by the optional pedicle subregion model.
 - Massalimova et al. (2025), *Scientific Reports* — pedicle-centre offset metric for automated screw trajectory evaluation.
 - Herkner et al. (2026), *Journal of Clinical Medicine* — Bland-Altman comparison of automated versus surgeon-selected implant dimensions.
-- Zhang et al. (2024), *Asian Spine Journal* — Delphi consensus on cortical bone trajectory (CBT) screw indications.
-- Zeng et al. (2024), *Orthopaedic Surgery* — CT-based cortical bone trajectory (CBT) screw trajectory parameters.
+- Zhang et al. (2024), *Asian Spine Journal* — Delphi consensus on cortical bone trajectory (CBT) screw indications — basis for the cortical bone trajectory (CBT) planning mode, which is planned and not yet available in this version.
+- Zeng et al. (2024), *Orthopaedic Surgery* — CT-based cortical bone trajectory (CBT) screw trajectory parameters — basis for the cortical bone trajectory (CBT) planning mode, which is planned and not yet available in this version.
 
 ## License
 
