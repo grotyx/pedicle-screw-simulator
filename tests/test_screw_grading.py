@@ -379,3 +379,36 @@ class TestEvaluateBatch:
             single = grader.grade(entries[i], targets[i], 4.0, label=28)
             assert batch.breach_mm[i] == pytest.approx(single.breach_mm, abs=0.51)
             assert batch.min_wall_mm[i] == pytest.approx(single.min_wall_mm, abs=0.51)
+
+    def test_short_candidates_are_unrankable(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array([[30.0, 44.0, 30.0], [30.0, 30.0, 30.0], [30.0, 30.0, 30.0]])
+        targets = np.array([[30.0, 14.0, 30.0], [30.0, 30.0, 30.0], [30.0, 30.5, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+
+        for degenerate in (1, 2):                     # 0.0 mm and 0.5 mm long
+            assert batch.breach_mm[degenerate] == grader.crop_margin_mm
+            assert batch.min_wall_mm[degenerate] == 0.0
+            assert np.isnan(batch.mean_hu[degenerate])
+            assert np.isnan(batch.min_hu[degenerate])
+
+        single = grader.grade(entries[0], targets[0], 6.0, label=28)   # 30 mm neighbour
+        assert batch.breach_mm[0] == pytest.approx(single.breach_mm, abs=0.51)
+        assert batch.min_wall_mm[0] == pytest.approx(single.min_wall_mm, abs=0.51)
+        assert np.isfinite(batch.mean_hu[0])
+
+    def test_mean_hu_matches_single_evaluation_on_a_hu_gradient(self):
+        mask = _cube_mask()
+        y_index = np.arange(60, dtype=np.int16)[None, :, None]
+        ct = sitk.GetImageFromArray(np.broadcast_to(y_index * 10, (60, 60, 60)).astype(np.int16))
+        ct.CopyInformation(mask)
+        grader = ScrewGrader(mask, ct)
+        # The long second candidate forces a denser shared sample count on the
+        # first, so the two HU means come from different sample positions.
+        entries = np.array([[30.0, 37.3, 30.0], [30.0, 45.0, 30.0]])
+        targets = np.array([[30.0, 22.1, 30.0], [30.0, 15.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        for i in range(2):
+            single = grader.grade(entries[i], targets[i], 6.0, label=28)
+            assert batch.mean_hu[i] == pytest.approx(single.mean_hu, rel=0.01)

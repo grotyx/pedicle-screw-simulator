@@ -26,6 +26,13 @@ _IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 #: stays bounded no matter how many candidates an optimiser throws at it.
 MAX_BATCH_SAMPLE_POINTS = 2_000_000
 
+#: Shortest candidate ``evaluate_batch`` will rank. A shorter trajectory has no
+#: well-defined direction, so its cylinder collapses towards a single point that
+#: sits comfortably inside the vertebra and scores as a flawless screw — the one
+#: thing an optimiser must never be handed. Such candidates are reported as
+#: unrankable instead (see :meth:`ScrewGrader.evaluate_batch`).
+MIN_BATCH_CANDIDATE_LENGTH_MM = 1.0
+
 
 @dataclass
 class BatchResult:
@@ -33,7 +40,8 @@ class BatchResult:
 
     Every array is ``(C,)`` and indexed by candidate. ``min_wall_mm`` is 0 for a
     candidate that breaches, and the HU arrays are ``NaN`` for a candidate with
-    no sample inside the CT (including every candidate when there is no CT).
+    no sample inside the CT (including every candidate when there is no CT) and
+    for a candidate too short to rank.
     """
 
     breach_mm: np.ndarray
@@ -275,6 +283,11 @@ class ScrewGrader:
         within roughly the sampling step. Unlike :meth:`grade` this never
         returns ``None``: a candidate whose samples all miss the label's cropped
         neighbourhood simply scores ``crop_margin_mm`` of breach.
+
+        A candidate shorter than ``MIN_BATCH_CANDIDATE_LENGTH_MM`` is unrankable
+        and is reported as the worst possible screw — ``crop_margin_mm`` of
+        breach, no wall, ``NaN`` HU — rather than as the flawless one its
+        collapsed cylinder would otherwise measure as.
         """
         starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
         ends = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -292,7 +305,8 @@ class ScrewGrader:
         per_step = 1 + max(0, self._radial)
 
         # Unit trajectories, with degenerate (zero-length) candidates left at
-        # zero: they get a zero radial frame and collapse to their entry point.
+        # zero so the frame construction stays branch-free; whatever they sample
+        # is discarded by the unrankable override below.
         directions = np.zeros_like(deltas)
         movable = lengths > 1e-12
         directions[movable] = deltas[movable] / lengths[movable, None]
@@ -305,7 +319,15 @@ class ScrewGrader:
             )
             for lo in range(0, count, chunk)
         ]
-        return BatchResult(*(np.concatenate(values) for values in zip(*parts)))
+        result = BatchResult(*(np.concatenate(values) for values in zip(*parts)))
+
+        unrankable = lengths < MIN_BATCH_CANDIDATE_LENGTH_MM
+        if unrankable.any():
+            result.breach_mm[unrankable] = self._crop_margin
+            result.min_wall_mm[unrankable] = 0.0
+            result.mean_hu[unrankable] = np.nan
+            result.min_hu[unrankable] = np.nan
+        return result
 
     def _batch_radial_offsets(self, directions: np.ndarray, radius: float) -> np.ndarray:
         """``(C, radial_samples, 3)`` perpendicular offsets, one frame per direction.
