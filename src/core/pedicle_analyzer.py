@@ -74,8 +74,16 @@ class PedicleAnalyzer:
     MAX_LATERAL_MM: float = 40.0
     # Tolerance on the vertebra z-range when accepting a candidate.
     Z_RANGE_MARGIN_MM: float = 5.0
-    # Below this |Y| the PCA axis is considered unreliable.
+    # Below this |Y| the fitted axis is considered unreliable.
     MIN_AXIS_AP_COMPONENT: float = 0.3
+    # A record still counts as pedicle (rather than flaring lamina) while its
+    # area stays within this multiple of the isthmus area.  The pedicle/lamina
+    # step is large (the anatomical phantom jumps 73 -> 106 mm2 the moment the
+    # arch joins), so a quarter over the isthmus separates them with margin
+    # while still spanning a real pedicle's gentle funnel.
+    PEDICLE_WINDOW_AREA_RATIO: float = 1.25
+    # Fewest window records needed to fit an axis through their centroids.
+    MIN_AXIS_WINDOW_RECORDS: int = 3
 
     def __init__(
         self,
@@ -259,6 +267,9 @@ class PedicleAnalyzer:
             )
 
         # --- Primary: coronal cross-section isthmus search ------------------
+        # Held back rather than recorded immediately: if the axial fallback
+        # then succeeds these would only mislead the UI.
+        coronal_warnings: List[str] = []
         coronal_found = False
         if body_center_ijk is not None:
             for side in ("left", "right"):
@@ -269,7 +280,7 @@ class PedicleAnalyzer:
                     side,
                 )
                 if found is None:
-                    result.warnings.append(
+                    coronal_warnings.append(
                         f"No {side} pedicle found by coronal isthmus search"
                     )
                     continue
@@ -285,6 +296,7 @@ class PedicleAnalyzer:
                     result.right_pedicle_width = found["width_mm"]
                     result.right_pedicle_height = found["height_mm"]
         if coronal_found:
+            result.warnings.extend(coronal_warnings)
             result.method = "coronal_isthmus"
             result.success = True
             return result
@@ -405,6 +417,8 @@ class PedicleAnalyzer:
         if result.left_pedicle_center is not None or result.right_pedicle_center is not None:
             result.method = "axial_components"
             result.success = True
+        else:
+            result.warnings.extend(coronal_warnings)
 
         return result
 
@@ -417,11 +431,23 @@ class PedicleAnalyzer:
     ) -> Optional[Dict[str, object]]:
         """Locate one pedicle by scanning coronal cross-sections.
 
-        Walking posteriorly from the vertebral body centre, coronal
-        slices first cut the body, then the *pedicle zone* where the two
-        pedicles are the only structures and nothing reaches the
-        midline, and finally the lamina.  The narrowest cross-section
-        inside that zone is the pedicle isthmus.
+        The scan walks posteriorly from the vertebral body centre.  It
+        leaves the body at the first slice behind the posterior body
+        wall where nothing reaches the midline, and stops at the
+        spinolaminar junction — the first slice after that where
+        something reaches the midline again.  Everything in between is
+        recorded, which is the pedicle *and*, while the laminae stay
+        clear of the midline, the anterior part of the laminar arch:
+        the recorded run is not pedicle-only.
+
+        The two measurements are taken from different subsets of it:
+
+        * the **isthmus** is the single narrowest recorded slice, and
+          supplies the centre, width and height;
+        * the **axis** is fitted only over the contiguous run of records
+          around the isthmus whose area stays within
+          ``PEDICLE_WINDOW_AREA_RATIO`` of the minimum, which drops the
+          laminar slices as soon as the cross-section starts to flare.
 
         Parameters
         ----------
@@ -438,8 +464,10 @@ class PedicleAnalyzer:
         -------
         dict or None
             Keys ``center_lps``, ``axis_lps`` (posterior-oriented),
-            ``width_mm``, ``height_mm`` and ``isthmus_j``; ``None`` when
-            fewer than two pedicle cross-sections were found.
+            ``width_mm``, ``height_mm``, ``isthmus_j`` and
+            ``isthmus_window_j`` (the inclusive ``(j_lo, j_hi)`` slice
+            range the axis was fitted over); ``None`` when fewer than
+            two pedicle cross-sections were found.
         """
         sx, _, sz = self._spacing
         cx = float(body_center_ijk[0])
@@ -457,8 +485,9 @@ class PedicleAnalyzer:
                 continue
 
             labeled, n_components = ndi.label(coronal)
-            lo = max(0, int(cx) - band)
-            hi = min(coronal.shape[1], int(cx) + band + 1)
+            band_center = int(round(cx))
+            lo = max(0, band_center - band)
+            hi = min(coronal.shape[1], band_center + band + 1)
             midline_ids = set(np.unique(labeled[:, lo:hi])) - {0}
             if not body_ended:
                 if midline_ids:
@@ -490,11 +519,15 @@ class PedicleAnalyzer:
             return None
 
         # Isthmus = narrowest cross-section.  A corridor of uniform calibre
-        # ties across many slices, so take the middle of the narrowest run.
+        # ties across several slices, so take the middle of the tied
+        # minimum-area records (which need not be contiguous).
         min_area = min(area for _, area, _ in records)
-        tied = [record for record in records if record[1] == min_area]
-        isthmus_j, _, coords = tied[len(tied) // 2]
+        tied_indices = [i for i, record in enumerate(records) if record[1] == min_area]
+        isthmus_index = tied_indices[len(tied_indices) // 2]
+        isthmus_j, _, coords = records[isthmus_index]
 
+        # Extents are outer voxel-boundary extents (max - min + 1 voxels), so
+        # they over-read the underlying continuous extent by one voxel.
         width_mm = float(coords[:, 1].max() - coords[:, 1].min() + 1) * sx
         height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
         center = self._continuous_ijk_to_lps(
@@ -503,25 +536,27 @@ class PedicleAnalyzer:
             float(coords[:, 0].mean()),
         )
 
-        all_zyx = np.vstack([
-            np.column_stack(
-                [
-                    rec_coords[:, 0],
-                    np.full(rec_coords.shape[0], rec_j),
-                    rec_coords[:, 1],
-                ]
-            )
-            for rec_j, _, rec_coords in records
-        ])
-        axis = self._compute_pedicle_axis(all_zyx)
-        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
-            # PCA follows the widest spread, which for a short corridor is
-            # not the AP direction — use body centre -> isthmus instead.
+        # Pedicle window: the contiguous run of records around the isthmus
+        # whose cross-section has not yet flared into the laminar arch.
+        area_limit = min_area * self.PEDICLE_WINDOW_AREA_RATIO
+        lo_index = isthmus_index
+        while lo_index > 0 and records[lo_index - 1][1] <= area_limit:
+            lo_index -= 1
+        hi_index = isthmus_index
+        while hi_index + 1 < len(records) and records[hi_index + 1][1] <= area_limit:
+            hi_index += 1
+        window = records[lo_index:hi_index + 1]
+
+        axis = self._fit_axis_through_centroids(window)
+        if axis is None:
+            # Too few slices, or a corridor whose centroids do not track the
+            # AP direction — fall back on body centre -> isthmus.
             body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
             fallback = center - body_center_lps
             norm = float(np.linalg.norm(fallback))
-            if norm > 1e-9:
-                axis = fallback / norm
+            axis = (
+                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            )
         if axis[1] < 0:
             axis = -axis
 
@@ -531,7 +566,46 @@ class PedicleAnalyzer:
             "width_mm": width_mm,
             "height_mm": height_mm,
             "isthmus_j": int(isthmus_j),
+            "isthmus_window_j": (int(records[lo_index][0]), int(records[hi_index][0])),
         }
+
+    def _fit_axis_through_centroids(
+        self,
+        window: List[Tuple[int, float, np.ndarray]],
+    ) -> Optional[np.ndarray]:
+        """Fit the pedicle axis to the per-slice centroids of *window*.
+
+        The centroid track follows the corridor's own AP course, unlike a
+        PCA over the voxel cloud, which is dominated by whichever axis of
+        the cross-section happens to be widest.  Returns ``None`` when the
+        window is too short or the fitted direction is not AP enough to
+        trust.
+        """
+        if len(window) < self.MIN_AXIS_WINDOW_RECORDS:
+            return None
+
+        centroids_zyx = np.array(
+            [
+                [
+                    float(rec_coords[:, 0].mean()),
+                    float(rec_j),
+                    float(rec_coords[:, 1].mean()),
+                ]
+                for rec_j, _, rec_coords in window
+            ],
+            dtype=np.float64,
+        )
+        points = self._indices_to_lps(centroids_zyx)
+        centred = points - points.mean(axis=0)
+        _, _, vh = np.linalg.svd(centred, full_matrices=False)
+        axis = vh[0]
+        norm = float(np.linalg.norm(axis))
+        if norm <= 1e-12:
+            return None
+        axis = axis / norm
+        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
+            return None
+        return axis
 
     def analyze_all(
         self, labels: Optional[List[int]] = None

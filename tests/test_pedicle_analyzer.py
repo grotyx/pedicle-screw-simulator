@@ -110,16 +110,18 @@ def _make_connected_vertebra_mask(label: int = 27) -> sitk.Image:
 def _make_anatomical_phantom(label: int = 28) -> sitk.Image:
     """Body ellipse + two 8 mm pedicles + posterior arch, 1 mm isotropic, LPS identity.
 
-    The laminar arch starts at ``yy >= 60`` so that it joins the pedicles from
-    behind and leaves the spinal canal hollow, instead of filling the canal
-    with bone anterior to the laminae.
+    The pedicles start at ``yy >= 44`` so that they actually merge with the
+    body ellipse, whose posterior wall has already fallen back to y = 44.9 by
+    the time it reaches their x = 60 axis, and the laminar arch starts at
+    ``yy >= 60`` so that it joins them from behind and leaves the spinal canal
+    hollow instead of filling it with bone anterior to the laminae.
     """
     Z, Y, X = 60, 90, 90
     zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
     body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 15) & (zz < 45)
     ped = np.zeros_like(body)
     for cx in (30, 60):
-        ped |= (((xx - cx) / 4.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1) & (yy >= 48) & (yy < 62)
+        ped |= (((xx - cx) / 4.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1) & (yy >= 44) & (yy < 62)
     arch = ((((xx - 45) / 22.0) ** 2 + ((yy - 66) / 10.0) ** 2 <= 1)
             & ~(((xx - 45) / 14.0) ** 2 + ((yy - 64) / 6.0) ** 2 <= 1)
             & (yy >= 60) & (zz >= 26) & (zz < 40))
@@ -450,6 +452,32 @@ class TestCoronalIsthmus:
         assert 7.0 <= result.left_pedicle_width <= 9.0
         assert 11.0 <= result.left_pedicle_height <= 13.0
         assert result.left_pedicle_axis[1] > 0.7  # posterior-oriented, mostly AP
+
+    def test_axis_window_excludes_laminar_arch_slices(self):
+        """The arch starts at y = 60; the axis window must stop short of it."""
+        mask = _make_anatomical_phantom()
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        indices_zyx = np.argwhere(binary)
+        body_center = analyzer._estimate_body_center(binary, indices_zyx)
+        body_center_ijk = mask.TransformPhysicalPointToContinuousIndex(
+            tuple(float(v) for v in body_center)
+        )
+        z_indices = np.where(binary.any(axis=(1, 2)))[0]
+
+        found = analyzer._find_pedicle_coronal(
+            binary,
+            body_center_ijk,
+            (int(z_indices.min()), int(z_indices.max())),
+            "left",
+        )
+
+        assert found is not None
+        j_lo, j_hi = found["isthmus_window_j"]
+        assert j_lo <= found["isthmus_j"] <= j_hi
+        assert j_hi < 60, "axis window must exclude the laminar arch slices"
+        assert found["axis_lps"][1] > 0.7
 
     def test_phantom_yields_two_planned_screws_through_pedicles(self):
         from src.core.auto_screw_planner import AutoScrewPlanner
