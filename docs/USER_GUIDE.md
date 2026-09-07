@@ -261,3 +261,22 @@ Open **Help → About Pedicle Screw Simulator** to view the installed version, c
 - Academic affiliation: Seoul National University College of Medicine
 - Website: [https://sangmin.me](https://sangmin.me)
 - Citation: see [`CITATION.cff`](../CITATION.cff)
+
+## 12. Validating Plans
+
+`scripts/validate_plans.py` compares a predicted plan (automatic planner output, a trainee plan, ...) against a reference plan (an expert plan, ground truth) using the deviation measures reported in the pedicle-screw planning literature: entry- and tip-point mean absolute deviation (MAD), the 3D angle between screw axes, convergence and craniocaudal angle deltas, diameter and length agreement (Bland-Altman bias and limits of agreement), pedicle-centre offset, and screw-volume Dice overlap.
+
+Run it from the repository root, outside the desktop app, with two saved plan JSON files:
+
+```bash
+python scripts/validate_plans.py --pred pred_plan.json --ref ref_plan.json --out report
+```
+
+This prints the cohort summary (`key: value` lines) to the console and writes:
+
+- `report.csv` — one row per matched screw, with `level, side, head_mad_mm, tip_mad_mm, axis_angle_deg, convergence_delta_deg, craniocaudal_delta_deg, diameter_delta_mm, length_delta_mm, pedicle_center_offset_mm, dice`.
+- `report.json` — the cohort summary (matched/unmatched counts, MAD and axis-angle mean/SD, diameter and length bias with 95% limits of agreement, mean Dice).
+
+Screws are matched between the two plans by vertebra level and side; use `--voxel-mm` to change the rasterisation grid used for the Dice computation (default `0.5` mm; coarser grids run faster but slightly underestimate overlap for very long or thin screws).
+
+**Interpreting the numbers.** There is no universal pass/fail threshold — read the summary against the spread reported for human raters. In the inter-rater agreement literature (Scherer 2022), independent expert planners on the same cases differ by a mean of about 4.9 mm at the entry point and 4.4 mm at the tip, with a mean axis-angle difference of about 5.3°. A predicted plan that falls within roughly this range of a reference plan is consistent with inter-observer variability; deviations well beyond it warrant closer review of the planner output or the reference plan itself.

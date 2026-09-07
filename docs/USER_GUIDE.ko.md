@@ -261,3 +261,22 @@ tail -100 logs/app.log
 - 학술 소속: 서울대학교 의과대학
 - 홈페이지: [https://sangmin.me](https://sangmin.me)
 - 학술 인용: [`CITATION.cff`](../CITATION.cff) 참고
+
+## 12. 계획 검증
+
+`scripts/validate_plans.py`는 예측 계획(자동 플래너 결과 또는 수련의 계획 등)을 기준 계획(전문가 계획, ground truth)과 비교하여, 척추경 나사못 계획 문헌에서 사용하는 편차 지표를 산출합니다: 진입점·팁점 평균절대편차(MAD), 두 나사못 축 사이의 3차원 각도, 수렴각(convergence)과 두미측각(craniocaudal) 차이, 직경·길이 일치도(Bland-Altman 편향 및 95% 일치한계), 척추경 중심 오프셋, 나사못 부피 Dice 중첩도입니다.
+
+저장소 루트에서, 데스크톱 앱 밖에서 저장된 두 계획 JSON 파일로 실행합니다.
+
+```bash
+python scripts/validate_plans.py --pred pred_plan.json --ref ref_plan.json --out report
+```
+
+콘솔에 전체 코호트 요약(`key: value` 형식)을 출력하고 다음 파일을 생성합니다.
+
+- `report.csv` — 매칭된 나사못마다 한 행씩, `level, side, head_mad_mm, tip_mad_mm, axis_angle_deg, convergence_delta_deg, craniocaudal_delta_deg, diameter_delta_mm, length_delta_mm, pedicle_center_offset_mm, dice` 열을 포함합니다.
+- `report.json` — 코호트 요약(매칭/비매칭 개수, MAD 및 축 각도 평균·표준편차, 직경·길이 편향과 95% 일치한계, 평균 Dice)입니다.
+
+두 계획의 나사못은 척추 레벨과 방향(side)으로 매칭됩니다. Dice 계산에 사용하는 래스터화 격자 크기는 `--voxel-mm`으로 조절할 수 있으며(기본값 `0.5` mm), 격자를 성기게 하면 계산은 빨라지지만 길거나 가는 나사못에서는 중첩도가 약간 과소평가될 수 있습니다.
+
+**수치 해석.** 절대적인 합격/불합격 기준은 없으며, 사람 평가자들 사이의 편차 범위와 비교해 판단해야 합니다. 평가자 간 일치도 문헌(Scherer 2022)에 따르면, 동일 증례를 독립적으로 계획한 전문가들 사이에서도 진입점은 평균 약 4.9 mm, 팁점은 평균 약 4.4 mm 차이가 나며, 축 각도 차이는 평균 약 5.3°입니다. 예측 계획이 기준 계획과 대략 이 범위 내에서 차이 난다면 평가자 간 변동성과 부합하는 수준이며, 이를 크게 벗어나는 편차는 플래너 결과나 기준 계획 자체를 다시 검토할 필요가 있음을 시사합니다.

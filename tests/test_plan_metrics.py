@@ -241,3 +241,19 @@ def test_compare_plans_accepts_minimal_v1_payload():
     assert summary.n_matched == 1
     assert comparisons[0].head_mad_mm == pytest.approx(1.0)
     assert comparisons[0].pedicle_center_offset_mm is not None
+
+
+# --- CLI ------------------------------------------------------------------
+
+
+def test_cli_writes_csv_and_json(tmp_path):
+    import json, subprocess, sys
+    from src.utils.planning_io import serialize_plan
+    a = _s((20, 30, 0), (10, -8, 0)); b = _s((22, 30, 0), (12, -8, 0))
+    (tmp_path / "pred.json").write_text(json.dumps(serialize_plan("s", [a], [], [])))
+    (tmp_path / "ref.json").write_text(json.dumps(serialize_plan("s", [b], [], [])))
+    out = subprocess.run([sys.executable, "scripts/validate_plans.py", "--pred", str(tmp_path / "pred.json"),
+                          "--ref", str(tmp_path / "ref.json"), "--out", str(tmp_path / "report")],
+                         capture_output=True, text=True, check=True)
+    assert "head_mad_mean" in out.stdout
+    assert (tmp_path / "report.csv").exists() and (tmp_path / "report.json").exists()
