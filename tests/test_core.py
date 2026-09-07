@@ -178,3 +178,30 @@ class TestCoreModule:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestScrewGeometry:
+    def test_medial_angle_for_left_screw_is_signed_convergence(self):
+        from src.models.screw import Screw
+        screw = Screw(entry_point=(20.0, 30.0, 0.0),
+                      target_point=(20.0 - 40 * 0.2079, 30.0 - 40 * 0.9781, 0.0),
+                      side="left")
+        assert screw.medial_angle == pytest.approx(12.0, abs=0.05)
+
+    def test_insertion_angle_horizontal_screw_is_zero(self):
+        from src.models.screw import Screw
+        screw = Screw(entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 0.0))
+        assert screw.insertion_angle == pytest.approx(0.0)
+
+    def test_insertion_angle_cranial_positive(self):
+        from src.models.screw import Screw
+        screw = Screw(entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 10.0))
+        assert screw.insertion_angle > 0.0
+
+    def test_metadata_defaults(self):
+        from src.models.screw import Screw
+        screw = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, 0.0, 30.0))
+        assert screw.mean_hu is None
+        assert screw.min_hu is None
+        assert screw.warnings == []
+        assert screw.source == "manual"
