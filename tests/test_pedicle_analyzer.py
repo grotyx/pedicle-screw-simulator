@@ -106,7 +106,7 @@ def _make_connected_vertebra_mask(label: int = 27) -> sitk.Image:
 
 
 
-def _make_anatomical_phantom(label: int = 28) -> sitk.Image:
+def _make_anatomical_phantom(label: int = 28, with_arch: bool = True) -> sitk.Image:
     """Body ellipse + two 8 mm pedicles + posterior arch, 1 mm isotropic, LPS identity.
 
     The pedicles start at ``yy >= 44`` so that they actually merge with the
@@ -114,6 +114,12 @@ def _make_anatomical_phantom(label: int = 28) -> sitk.Image:
     the time it reaches their x = 60 axis, and the laminar arch starts at
     ``yy >= 60`` so that it joins them from behind and leaves the spinal canal
     hollow instead of filling it with bone anterior to the laminae.
+
+    The arch ellipse only touches the pedicles at ``x = 60`` and is separated
+    from them by air everywhere else, so a posterior ray-cast entry point lands
+    inside the lamina with no drillable bone behind it.  ``with_arch=False``
+    drops the arch, leaving the pedicle's own posterior cortex as the entry
+    surface; the trajectory optimiser tests use that variant.
     """
     Z, Y, X = 60, 90, 90
     zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
@@ -121,9 +127,11 @@ def _make_anatomical_phantom(label: int = 28) -> sitk.Image:
     ped = np.zeros_like(body)
     for cx in (30, 60):
         ped |= (((xx - cx) / 4.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1) & (yy >= 44) & (yy < 62)
-    arch = ((((xx - 45) / 22.0) ** 2 + ((yy - 66) / 10.0) ** 2 <= 1)
-            & ~(((xx - 45) / 14.0) ** 2 + ((yy - 64) / 6.0) ** 2 <= 1)
-            & (yy >= 60) & (zz >= 26) & (zz < 40))
+    arch = np.zeros_like(body)
+    if with_arch:
+        arch = ((((xx - 45) / 22.0) ** 2 + ((yy - 66) / 10.0) ** 2 <= 1)
+                & ~(((xx - 45) / 14.0) ** 2 + ((yy - 64) / 6.0) ** 2 <= 1)
+                & (yy >= 60) & (zz >= 26) & (zz < 40))
     arr = np.zeros((Z, Y, X), dtype=np.uint8)
     arr[body | ped | arch] = label
     return sitk.GetImageFromArray(arr)

@@ -1,7 +1,9 @@
 """Tests for the candidate-based multi-objective trajectory optimiser."""
 
+import math
 import os
 import sys
+import time
 
 import numpy as np
 import pytest
@@ -11,13 +13,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
-from src.core.screw_grading import ScrewGrader
-from src.core.trajectory_optimizer import OptimizerWeights, generate_candidates, optimize_screw
+from src.core.screw_grading import BatchResult, ScrewGrader
+from src.core.trajectory_optimizer import (
+    MAX_DIAMETER_STEPS,
+    MAX_ENTRY_SHORTFALL_MM,
+    TIP_SEGMENT_MM,
+    OptimizerWeights,
+    _seat_entries,
+    generate_candidates,
+    make_planner,
+    optimize_screw,
+    score_candidates,
+)
 from tests.test_pedicle_analyzer import _make_anatomical_phantom
 
+LABEL = 28
 
-def _setup(hu_gradient=False):
-    mask = _make_anatomical_phantom()
+
+def _setup(hu_gradient=False, with_arch=False):
+    """Phantom + matching CT + pedicle analysis.
+
+    The optimiser tests default to ``with_arch=False``: the phantom's laminar
+    arch only touches the pedicles at their x axis and is separated from them by
+    air elsewhere, so the posterior ray-cast entry lands inside the lamina with
+    no drillable bone behind it -- an artefact of the phantom, which the
+    reachability check correctly rejects (see
+    ``test_buried_entry_on_arch_phantom_is_rejected``).
+    """
+    mask = _make_anatomical_phantom(with_arch=with_arch)
     arr = sitk.GetArrayFromImage(mask)
     hu = np.where(arr > 0, 300, -50).astype(np.int16)
     if hu_gradient:   # denser bone on the cranial half of the body
@@ -77,3 +100,133 @@ def test_construct_prefers_aligned_heads_within_score_tolerance():
            ("L5", "left"): [cand([20, 30, 0], 1.00)]}
     chosen = optimize_construct(per, OptimizerWeights(rod=1.0))
     assert chosen[("L4", "left")].entry[0] == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------- reachability
+def test_seated_entry_lies_on_corridor_surface():
+    """The seated entry is the *last* point on the ray whose cross-section fits."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    center = np.asarray(analysis.left_pedicle_center, dtype=np.float64)
+    direction = np.array([[0.0, -1.0, 0.0]])            # straight anterior
+    radius = 3.0
+    entries, travel = _seat_entries(
+        grader, center[None, :], direction, np.array([20.0]), LABEL, radius
+    )
+    entry = entries[0]
+    assert travel[0] == pytest.approx(float(np.linalg.norm(entry - center)))
+    probe = np.array([entry, entry - direction[0] * 0.5])   # here, and 0.5 mm further back
+    d_out, d_in = grader.distances_at_points(probe, LABEL)
+    assert d_out[0] == 0.0 and d_in[0] >= radius            # the screw fits at the entry
+    assert d_out[1] > 0.0 or d_in[1] < radius               # ...and not one step behind it
+
+
+def test_buried_entry_on_arch_phantom_is_rejected():
+    """The arch phantom's entry is 12+ mm inside the lamina, so nothing is reachable."""
+    ct, mask, analysis = _setup(with_arch=True)
+    grader = ScrewGrader(mask, ct)
+    diagnostics = {}
+    entries, _targets, _lengths = generate_candidates(
+        grader, analysis, "left", PlannerConfig(), diagnostics=diagnostics
+    )
+    assert entries.shape[0] > 100
+    assert diagnostics["surface_shortfall_mm"].min() > MAX_ENTRY_SHORTFALL_MM
+    assert optimize_screw(grader, analysis, "left", PlannerConfig()) == []
+
+
+def test_best_candidate_reaches_the_posterior_cortex():
+    ct, mask, analysis = _setup()
+    best = optimize_screw(ScrewGrader(mask, ct), analysis, "left", PlannerConfig())[0]
+    assert best.surface_shortfall_mm <= MAX_ENTRY_SHORTFALL_MM
+
+
+# --------------------------------------------------------------- runtime bound
+def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
+    """An impossible anterior margin must fail fast, not walk the whole catalogue."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    tried = []
+    graded = grader.evaluate_batch
+
+    def counting(entries, targets, diameter, label):
+        tried.append(diameter)
+        return graded(entries, targets, diameter, label)
+
+    grader.evaluate_batch = counting
+    started = time.perf_counter()
+    result = optimize_screw(grader, analysis, "left", PlannerConfig(anterior_margin_mm=15.0))
+    elapsed = time.perf_counter() - started
+
+    assert result == []
+    assert elapsed <= 5.0, f"optimize_screw took {elapsed:.2f} s"
+    assert len(set(tried)) == MAX_DIAMETER_STEPS + 1
+    assert sorted(set(tried), reverse=True) == [6.5, 6.0, 5.5]
+
+
+def test_tip_margin_rejects_trajectories_without_anterior_clearance():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    entries, targets = best.entry[None, :], best.target[None, :]
+    lengths = np.array([best.length])
+    direction = (best.target - best.entry) / best.length
+    batch = grader.evaluate_batch(entries, targets, best.diameter, LABEL)
+    tip = grader.evaluate_batch(
+        targets - direction * TIP_SEGMENT_MM, targets, best.diameter, LABEL
+    )
+    args = (batch, entries, targets, lengths, best.diameter, analysis, "left")
+    assert score_candidates(*args, PlannerConfig(), OptimizerWeights(), tip_batch=tip)
+    assert score_candidates(
+        *args, PlannerConfig(anterior_margin_mm=15.0), OptimizerWeights(), tip_batch=tip
+    ) == []
+
+
+# ------------------------------------------------------------------- behaviour
+def test_diameter_steps_down_when_recommendation_does_not_fit():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    planner = make_planner(grader, PlannerConfig())
+    recommended = planner._compute_diameter(analysis.left_pedicle_width, analysis.vertebra.name)
+    assert recommended == 6.5
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    assert best.diameter == 6.0
+    assert "Diameter reduced from 6.5 to 6.0 mm for cortical containment" in best.warnings
+
+
+def test_right_side_convergence_is_mirrored():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    left = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    right = optimize_screw(grader, analysis, "right", PlannerConfig())[0]
+    assert left.convergence_deg > 0.0 and right.convergence_deg > 0.0
+    assert right.convergence_deg == pytest.approx(left.convergence_deg)
+    assert left.target[0] - left.entry[0] < 0.0     # left pedicle aims toward -X
+    assert right.target[0] - right.entry[0] > 0.0   # right pedicle aims toward +X
+
+
+def test_density_weight_reorders_scored_candidates():
+    """Score ordering on a synthetic batch: denser but shorter can outrank longer."""
+    ct, mask, analysis = _setup()
+    entries = np.array([[60.0, 58.0, 32.0], [60.0, 58.0, 32.0]])
+    targets = np.array([[60.0, 28.0, 32.0], [60.0, 33.0, 32.0]])
+    lengths = np.array([30.0, 25.0])                    # long/sparse, then short/dense
+    batch = BatchResult(
+        breach_mm=np.zeros(2),
+        min_wall_mm=np.array([2.0, 2.0]),
+        mean_hu=np.array([200.0, 600.0]),
+        min_hu=np.array([200.0, 600.0]),
+    )
+    args = (batch, entries, targets, lengths, 6.0, analysis, "left", PlannerConfig())
+    ignored = score_candidates(*args, OptimizerWeights(density=0.0))
+    weighted = score_candidates(*args, OptimizerWeights(density=3.0))
+    assert [c.length for c in ignored] == [30.0, 25.0]   # length alone decides
+    assert [c.length for c in weighted] == [25.0, 30.0]  # density overturns it
+    assert weighted[0].mean_hu == 600.0
+
+
+def test_grader_without_ct_still_yields_candidates():
+    _ct, mask, analysis = _setup()
+    ranked = optimize_screw(ScrewGrader(mask), analysis, "left", PlannerConfig())
+    assert ranked
+    assert math.isnan(ranked[0].mean_hu)
+    assert ranked[0].components["density"] == 0.0

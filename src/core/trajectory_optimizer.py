@@ -14,6 +14,7 @@ insertion direction is their negation.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -22,9 +23,10 @@ import numpy as np
 import SimpleITK as sitk
 
 from .planner_config import PlannerConfig
-from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import BatchResult, ScrewGrader
 from .vertebra import PedicleAnalysisResult
+
+logger = logging.getLogger(__name__)
 
 #: Wall distance at which the safety objective saturates (mm).
 SAFETY_CAP_MM = 3.0
@@ -38,6 +40,16 @@ ENDPLATE_TOLERANCE_DEG = 15.0
 
 #: Length of the distal segment the anterior-margin check is measured over (mm).
 TIP_SEGMENT_MM = 4.0
+
+#: How far the seated entry may sit anterior of the posterior cortex before the
+#: trajectory counts as unreachable.  A pedicle is continuous with the lamina, so
+#: a few millimetres of countersinking is normal; more than this means a drill
+#: would have to cross air (or another structure) to reach the corridor.
+MAX_ENTRY_SHORTFALL_MM = 3.0
+
+#: How many catalogue steps below the recommended diameter the search may go
+#: before giving up.  Bounds the worst-case runtime of :func:`optimize_screw`.
+MAX_DIAMETER_STEPS = 2
 
 #: Head-misalignment (mm) at which the rod objective costs a full unit of score.
 ROD_TOLERANCE_MM = 3.0
@@ -88,7 +100,11 @@ class Candidate:
     convergence_deg: float
     craniocaudal_deg: float
     score: float
+    #: How far anterior of the posterior cortex the entry had to be seated, in
+    #: mm along the trajectory; 0 when the entry sits on the cortex itself.
+    surface_shortfall_mm: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
+    warnings: List[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------- helpers
@@ -104,11 +120,49 @@ def _rotate(v: np.ndarray, axis: np.ndarray, deg: float) -> np.ndarray:
     )
 
 
+#: Guard for the "grader has no CT" warning, which is a property of the loaded
+#: study rather than of any one candidate and would otherwise repeat per scoring
+#: pass.
+_missing_ct_warned = False
+
+
+def _warn_missing_ct() -> None:
+    global _missing_ct_warned
+    if not _missing_ct_warned:
+        _missing_ct_warned = True
+        logger.warning(
+            "Grader has no CT: trajectory HU is unavailable, scoring every candidate "
+            "with a density component of 0"
+        )
+
+
 def _unit(v: np.ndarray) -> np.ndarray:
     norm = float(np.linalg.norm(v))
     if norm <= 1e-12:
         return np.zeros(3, dtype=np.float64)
     return np.asarray(v, dtype=np.float64) / norm
+
+
+def _trajectory_angles(
+    deltas: np.ndarray, side: str
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Vectorised ``screw_geometry`` convergence and craniocaudal angles (degrees).
+
+    Closed form over ``(C, 3)`` entry->target deltas, matching
+    :func:`~src.core.screw_geometry.convergence_angle_deg` and
+    :func:`~src.core.screw_geometry.craniocaudal_angle_deg` exactly, including
+    their degenerate cases.  Positive convergence is medial for ``side``;
+    positive craniocaudal points the tip superiorly.
+    """
+    dx, dy, dz = deltas[:, 0], deltas[:, 1], deltas[:, 2]
+    horizontal = np.hypot(dx, dy)
+    magnitude = np.degrees(np.arctan2(np.abs(dx), np.abs(dy)))
+    medial = dx <= 0.0 if side == "left" else dx >= 0.0
+    convergence = np.where(horizontal <= 1e-9, 0.0, np.where(medial, magnitude, -magnitude))
+    craniocaudal = np.where(
+        (horizontal <= 1e-9) & (np.abs(dz) <= 1e-9), 0.0, np.degrees(np.arctan2(dz, horizontal))
+    )
+    return convergence, craniocaudal
 
 
 def _side_data(
@@ -132,8 +186,11 @@ def _side_data(
 def make_planner(grader: ScrewGrader, config: PlannerConfig):
     """An :class:`AutoScrewPlanner` over the grader's own volumes.
 
-    Only its entry-point search and diameter rules are reused, so a grader built
-    without a CT gets a zero-filled stand-in (HU comes from the grader itself).
+    Only its entry-point search and diameter rules are reused.
+    :class:`AutoScrewPlanner` still requires a CT to construct (it sizes and
+    caches its own array), so a grader built without one gets a zero-filled
+    stand-in; every HU the optimiser reports comes from the grader, never from
+    this image.
     """
     from .auto_screw_planner import AutoScrewPlanner  # local import: avoids a cycle
 
@@ -162,7 +219,7 @@ def _seat_entries(
     limits: np.ndarray,
     label: int,
     radius_mm: float,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     """Back each seed out to the posterior surface of the screw corridor.
 
     Marching posteriorly from inside the pedicle, the last point whose
@@ -171,8 +228,15 @@ def _seat_entries(
     surface.  ``limits`` (mm, per seed) caps the march at the posterior cortex
     reported by :meth:`AutoScrewPlanner._find_entry_point`, so on a wide corridor
     the scan simply stops at the cortex.
+
+    Returns ``(entries, travel_mm)``; ``limits - travel_mm`` is how far short of
+    the cortex each entry had to stop.
     """
-    steps = np.arange(0.0, _ANCHOR_MAX_MM + 1e-9, _ANCHOR_STEP_MM)
+    # Never scan past the furthest cortex any seed reported: the march exists to
+    # find a surface at most that far back, so a fixed 40 mm sweep would be
+    # mostly wasted lookups.
+    reach_mm = float(np.clip(limits.max(initial=0.0), 0.0, _ANCHOR_MAX_MM))
+    steps = np.arange(0.0, reach_mm + 1e-9, _ANCHOR_STEP_MM)
     points = seeds[:, None, :] - directions[:, None, :] * steps[None, :, None]
     d_out, d_in = grader.distances_at_points(points.reshape(-1, 3), label)
     ok = ((d_out <= 0.0) & (d_in >= radius_mm)).reshape(seeds.shape[0], steps.size)
@@ -181,7 +245,7 @@ def _seat_entries(
     # whose own cross-section does not fit stays put (run length 0).
     reach = np.logical_and.accumulate(ok, axis=1).sum(axis=1)
     travel = np.where(reach > 0, steps[np.maximum(reach - 1, 0)], 0.0)
-    return seeds - directions * travel[:, None]
+    return seeds - directions * travel[:, None], travel
 
 
 # ------------------------------------------------------------------ generation
@@ -196,6 +260,7 @@ def generate_candidates(
     craniocaudal_step_deg: float = 5.0,
     corridor_radius_mm: Optional[float] = None,
     planner=None,
+    diagnostics: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Enumerate straight trajectories for one pedicle.
 
@@ -208,8 +273,12 @@ def generate_candidates(
     direction, so each direction gets the most posterior start that can still
     hold the screw.
 
-    Feasibility (containment, wall clearance, anterior margin) is *not* checked
-    here -- :func:`score_candidates` does that from the batch grading.
+    Feasibility (containment, wall clearance, anterior margin, reachability) is
+    *not* checked here -- :func:`score_candidates` does that from the batch
+    grading.  Pass a dict as ``diagnostics`` to receive per-candidate arrays
+    aligned with the return value; it currently carries
+    ``"surface_shortfall_mm"``, how far anterior of the posterior cortex each
+    entry had to be seated.
     """
     empty = (np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
     center, axis, width = _side_data(analysis, side)
@@ -266,7 +335,7 @@ def generate_candidates(
 
     # One ray per direction, seated from the isthmus centre where the corridor
     # is widest; the tangential grid then spreads entry points over that surface.
-    anchors = _seat_entries(
+    anchors, travel = _seat_entries(
         grader,
         np.repeat(center[None, :], directions.shape[0], axis=0),
         directions,
@@ -274,21 +343,29 @@ def generate_candidates(
         label,
         radius,
     )
+    shortfall_per_direction = np.maximum(surface_reach - travel, 0.0)
 
     entries = []
     entry_directions = []
-    for anchor, direction in zip(anchors, directions, strict=True):
+    shortfall = []
+    for anchor, direction, short in zip(anchors, directions, shortfall_per_direction, strict=True):
+        # ``lateral_axis`` is deliberately *not* rotated with the direction: it is
+        # a fixed patient-frame axis, so the "a" offsets are a stable mediolateral
+        # slide across the entry surface for every candidate angle.  Only the
+        # second tangent follows the direction, keeping the pair perpendicular.
         tangent = _unit(np.cross(direction, lateral_axis))
         for a in offsets:
             for b in offsets:
                 entries.append(anchor + a * lateral_axis + b * tangent)
                 entry_directions.append(direction)
+                shortfall.append(short)
     entry_count = len(entries)
     per_entry = lengths_catalogue.size
     entries = np.repeat(np.asarray(entries, dtype=np.float64), per_entry, axis=0)
     entry_directions = np.repeat(
         np.asarray(entry_directions, dtype=np.float64), per_entry, axis=0
     )
+    shortfall = np.repeat(np.asarray(shortfall, dtype=np.float64), per_entry)
     lengths = np.tile(lengths_catalogue, entry_count)
     targets = entries + entry_directions * lengths[:, None]
 
@@ -296,6 +373,8 @@ def generate_candidates(
     entry_out, _ = grader.distances_at_points(entries, label)
     tip_out, _ = grader.distances_at_points(targets, label)
     keep = (entry_out <= 0.0) & (tip_out <= 0.0)
+    if diagnostics is not None:
+        diagnostics["surface_shortfall_mm"] = shortfall[keep]
     return entries[keep], targets[keep], lengths[keep]
 
 
@@ -311,11 +390,21 @@ def score_candidates(
     config: PlannerConfig,
     weights: OptimizerWeights,
     tip_batch: Optional[BatchResult] = None,
+    surface_shortfall_mm: Optional[np.ndarray] = None,
 ) -> List[Candidate]:
     """Filter graded candidates to the feasible ones and rank them.
 
     ``tip_batch`` is the grading of each candidate's distal
     :data:`TIP_SEGMENT_MM`; when given it enforces the anterior safety margin.
+    ``surface_shortfall_mm`` (from ``generate_candidates(..., diagnostics=...)``)
+    rejects entries buried more than :data:`MAX_ENTRY_SHORTFALL_MM` inside the
+    posterior cortex.
+
+    A grader with no CT reports ``NaN`` HU for *every* candidate; that is a
+    missing measurement, not an unrankable trajectory, so the density objective
+    drops to 0 instead of failing the whole batch.  Individual ``NaN`` values in
+    an otherwise-sampled batch still mean the candidate could not be measured
+    and stay infeasible.
     """
     entries = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -339,17 +428,17 @@ def score_candidates(
     movable = norms > 1e-12
     directions[movable] = deltas[movable] / norms[movable, None]
 
-    convergence = np.array(
-        [convergence_angle_deg(e, t, side) for e, t in zip(entries, targets, strict=True)]
-    )
-    craniocaudal = np.array(
-        [craniocaudal_angle_deg(e, t) for e, t in zip(entries, targets, strict=True)]
-    )
+    convergence, craniocaudal = _trajectory_angles(deltas, side)
+
+    sampled_hu = np.isfinite(batch.mean_hu)
+    without_ct = not sampled_hu.any()
+    if without_ct:
+        _warn_missing_ct()
 
     feasible = (
         (batch.breach_mm <= 0.0)
         & (batch.min_wall_mm >= config.wall_clearance_mm)
-        & np.isfinite(batch.mean_hu)
+        & (sampled_hu | without_ct)
         & movable
         & (convergence >= config.min_convergence_deg - 1e-6)
         & (convergence <= config.max_convergence_deg + 1e-6)
@@ -357,12 +446,17 @@ def score_candidates(
     if tip_batch is not None:
         tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
+    if surface_shortfall_mm is not None:
+        shortfall = np.asarray(surface_shortfall_mm, dtype=np.float64).reshape(-1)
+        feasible &= shortfall <= MAX_ENTRY_SHORTFALL_MM + 1e-9
+    else:
+        shortfall = np.zeros(count)
     if not feasible.any():
         return []
 
     safety = np.clip(np.minimum(batch.min_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
     density = np.clip(
-        (np.nan_to_num(batch.mean_hu, nan=DENSITY_LOW_HU) - DENSITY_LOW_HU)
+        (np.where(sampled_hu, batch.mean_hu, DENSITY_LOW_HU) - DENSITY_LOW_HU)
         / (DENSITY_HIGH_HU - DENSITY_LOW_HU),
         0.0,
         1.0,
@@ -402,6 +496,7 @@ def score_candidates(
             convergence_deg=float(convergence[i]),
             craniocaudal_deg=float(craniocaudal[i]),
             score=float(total[i]),
+            surface_shortfall_mm=float(shortfall[i]),
             components={
                 "safety": float(safety[i]),
                 "density": float(density[i]),
@@ -429,8 +524,10 @@ def optimize_screw(
 
     The diameter starts at the level/pedicle recommendation and steps down the
     catalogue until some candidate is feasible, mirroring
-    :meth:`AutoScrewPlanner.plan_screw`.  Returns ``[]`` when no diameter admits
-    a contained screw.
+    :meth:`AutoScrewPlanner.plan_screw`, but at most
+    :data:`MAX_DIAMETER_STEPS` steps: past that the screw is too small to be a
+    sensible answer and the extra passes only cost runtime.  Returns ``[]`` when
+    no diameter in that window admits a reachable, contained screw.
     """
     center, _axis, width = _side_data(analysis, side)
     if center is None or not analysis.success:
@@ -444,8 +541,9 @@ def optimize_screw(
 
     catalogue = sorted(
         (d for d in config.implant_diameters_mm if d <= recommended + 1e-9), reverse=True
-    )
+    )[: MAX_DIAMETER_STEPS + 1]
     for diameter in catalogue:
+        diagnostics: Dict[str, np.ndarray] = {}
         entries, targets, lengths = generate_candidates(
             grader,
             analysis,
@@ -453,6 +551,7 @@ def optimize_screw(
             config,
             corridor_radius_mm=diameter / 2.0,
             planner=planner,
+            diagnostics=diagnostics,
         )
         if entries.shape[0] == 0:
             continue
@@ -467,8 +566,16 @@ def optimize_screw(
         ranked = score_candidates(
             batch, entries, targets, lengths, diameter, analysis, side, config, weights,
             tip_batch=tip_batch,
+            surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
         )
         if ranked:
+            if diameter < recommended:
+                warning = (
+                    f"Diameter reduced from {recommended:.1f} to {diameter:.1f} mm "
+                    "for cortical containment"
+                )
+                for candidate in ranked:
+                    candidate.warnings.append(warning)
             return ranked[:top_k]
     return []
 
