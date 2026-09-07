@@ -548,6 +548,38 @@ class TestSubregionLabelPath:
         assert 7.0 <= result.right_pedicle_width <= 9.0
         assert np.linalg.norm(result.right_pedicle_center - np.array([30.0, 55.0, 32.0])) <= 2.0
 
+    def test_label_touching_the_volume_edge_measures_the_same(self):
+        """Cropping to the side's bounding box must not move any measurement.
+
+        The corridor is flush against the z = 0 and x = X-1 faces, so its
+        bounding box is clamped by the volume on two sides, and a detached
+        speck sits far enough away to pull the box wide open.  Every returned
+        value is asserted against the corridor's own geometry, which is what
+        a full-volume labelling would have produced.
+        """
+        Z, Y, X = 30, 40, 40
+        arr = np.full((Z, Y, X), 28, dtype=np.uint8)
+        mask = sitk.GetImageFromArray(arr)
+
+        pedicle = np.zeros((Z, Y, X), bool)
+        pedicle[0:5, 10:20, 34:40] = True   # corridor, on the z=0 and x=39 faces
+        pedicle[20:22, 30:33, 20:24] = True  # detached speck, 24 voxels
+
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        binary = (sitk.GetArrayFromImage(mask) == 28).astype(np.uint8)
+        voxels = np.argwhere(binary.astype(bool) & pedicle)
+        found = analyzer._find_pedicle_from_label(voxels, (19.5, 15.0, 15.0), "left")
+
+        assert found is not None
+        # Corridor only — the speck is large enough to clear the voxel-count
+        # guard on its own, so it is the component step that must drop it.
+        assert found["width_mm"] == pytest.approx(6.0)    # x 34..39
+        assert found["height_mm"] == pytest.approx(5.0)   # z 0..4
+        assert found["isthmus_j"] == 15                   # middle of the tied y 11..18
+        assert found["isthmus_window_j"] == (10, 19)
+        assert found["center_lps"] == pytest.approx(np.array([36.5, 15.0, 2.0]))
+        assert found["axis_lps"] == pytest.approx(np.array([0.0, 1.0, 0.0]), abs=1e-6)
+
     def test_no_label_keeps_the_coronal_path(self):
         analyzer = PedicleAnalyzer(_make_anatomical_phantom(), pedicle_mask=None)
         result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])

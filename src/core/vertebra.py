@@ -82,8 +82,9 @@ class PedicleAnalysisResult:
     left_pedicle_height: float = 0.0
     right_pedicle_height: float = 0.0
 
-    # Which detection path produced the pedicle data
-    # ("coronal_isthmus" or "axial_components"; empty when none succeeded).
+    # Which detection path produced the pedicle data ("subregion_label",
+    # "subregion_label+coronal_isthmus", "coronal_isthmus" or
+    # "axial_components"; empty when none succeeded).
     method: str = ""
 
     # Anterior vertebral body centre (LPS)

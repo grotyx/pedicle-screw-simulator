@@ -119,6 +119,12 @@ class PedicleAnalyzer:
                 )
             pedicle_mask = pedicle_mask.astype(bool, copy=False)
         self._pedicle_mask: Optional[np.ndarray] = pedicle_mask
+        # Index list of the label, resolved once: intersecting it with a
+        # vertebra is then a gather over the labelled voxels alone, never a
+        # full-volume boolean temporary per vertebra.
+        self._pedicle_voxels: Optional[np.ndarray] = (
+            None if pedicle_mask is None else np.argwhere(pedicle_mask)
+        )
 
     # ------------------------------------------------------------------
     # Index <-> physical helpers
@@ -299,8 +305,14 @@ class PedicleAnalyzer:
         label_warnings: List[str] = []
         label_sides: List[str] = []
         if body_center_ijk is not None and self._pedicle_mask is not None:
+            # Intersect the label with this vertebra once, not once per side.
+            all_pedicle = self._pedicle_voxels
+            inside = binary[all_pedicle[:, 0], all_pedicle[:, 1], all_pedicle[:, 2]] != 0
+            pedicle_voxels = all_pedicle[inside]
             for side in ("left", "right"):
-                found = self._find_pedicle_from_label(binary, body_center_ijk, side)
+                found = self._find_pedicle_from_label(
+                    pedicle_voxels, body_center_ijk, side
+                )
                 if found is None:
                     label_warnings.append(
                         f"No {side} pedicle found in the pedicle subregion label"
@@ -485,7 +497,7 @@ class PedicleAnalyzer:
 
     def _find_pedicle_from_label(
         self,
-        binary: np.ndarray,
+        pedicle_voxels: np.ndarray,
         body_center_ijk: Tuple[float, float, float],
         side: str,
     ) -> Optional[Dict[str, object]]:
@@ -493,10 +505,10 @@ class PedicleAnalyzer:
 
         The label already says which voxels are pedicle, so there is no
         posterior-wall / spinolaminar bracketing to do: the labelled
-        corridor is intersected with this vertebra, split at the body
-        centre, reduced to its largest connected component on this side
-        (which drops leakage specks), and its narrowest coronal slice is
-        the isthmus.
+        corridor (already intersected with this vertebra by the caller) is
+        split at the body centre, reduced to its largest connected
+        component on this side (which drops leakage specks), and its
+        narrowest coronal slice is the isthmus.
 
         The two end slices are ignored when picking that isthmus — they
         taper into the body and the lamina, so they are routinely the
@@ -507,8 +519,9 @@ class PedicleAnalyzer:
 
         Parameters
         ----------
-        binary:
-            Vertebra mask as a ``(z, y, x)`` array.
+        pedicle_voxels:
+            ``(N, 3)`` array of ``(z, y, x)`` indices where the pedicle
+            label and this vertebra's mask overlap.
         body_center_ijk:
             Vertebral body centre as a continuous ``(i, j, k)`` index.
         side:
@@ -518,31 +531,33 @@ class PedicleAnalyzer:
         -------
         dict or None
             The same keys as :meth:`_find_pedicle_coronal`.  ``None``
-            when no label was supplied, or when this side holds too few
-            labelled voxels to measure.
+            when this side holds too few labelled voxels to measure.
         """
-        if self._pedicle_mask is None:
+        if pedicle_voxels.shape[0] == 0:
             return None
 
         sx, _, sz = self._spacing
         cx = float(body_center_ijk[0])
-        voxels = np.argwhere(binary.astype(bool) & self._pedicle_mask)  # z, y, x
-        if voxels.shape[0] == 0:
-            return None
 
-        lateral = (voxels[:, 2] - cx) * (1.0 if side == "left" else -1.0)
-        side_voxels = voxels[lateral > 0]
+        lateral = (pedicle_voxels[:, 2] - cx) * (1.0 if side == "left" else -1.0)
+        side_voxels = pedicle_voxels[lateral > 0]
         if side_voxels.shape[0] < self.MIN_LABEL_SIDE_VOXELS:
             return None
 
         # Largest connected component on this side (drops stray voxels).
-        sub = np.zeros(binary.shape, dtype=bool)
-        sub[side_voxels[:, 0], side_voxels[:, 1], side_voxels[:, 2]] = True
+        # Labelled inside the side's own bounding box rather than a
+        # full-volume array: a whole-CT boolean would be hundreds of MB per
+        # side per vertebra, and a tight crop holds every labelled voxel with
+        # its neighbourhood intact, so the components come out identical.
+        crop_lo = side_voxels.min(axis=0)
+        local = side_voxels - crop_lo
+        sub = np.zeros(tuple(int(n) for n in local.max(axis=0) + 1), dtype=bool)
+        sub[local[:, 0], local[:, 1], local[:, 2]] = True
         labeled, n_components = ndi.label(sub)
         if n_components > 1:
             sizes = ndi.sum(sub, labeled, index=range(1, n_components + 1))
-            sub = labeled == (int(np.argmax(sizes)) + 1)
-            side_voxels = np.argwhere(sub)
+            largest = labeled == (int(np.argmax(sizes)) + 1)
+            side_voxels = np.argwhere(largest) + crop_lo
             if side_voxels.shape[0] < self.MIN_LABEL_SIDE_VOXELS:
                 return None
 
@@ -573,8 +588,9 @@ class PedicleAnalyzer:
             body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
             fallback = center - body_center_lps
             norm = float(np.linalg.norm(fallback))
-            if norm > 1e-9:
-                axis = fallback / norm
+            axis = (
+                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            )
         if axis[1] < 0:
             axis = -axis
 
