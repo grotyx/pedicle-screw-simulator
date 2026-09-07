@@ -18,6 +18,12 @@ The application uses TotalSegmentator's openly available `total` CT task. Model 
 
 The Windows desktop package installs PyTorch's CUDA-enabled wheels (`cu128` index) to accelerate the bundled AI segmentation runtime. These wheels redistribute NVIDIA CUDA runtime libraries (for example `cudart`, `cublas`, and `cudnn`). Those components are proprietary and are redistributed under NVIDIA's CUDA End User License Agreement (EULA) redistribution terms, not an open-source license. See https://docs.nvidia.com/cuda/eula/index.html for the applicable terms. The macOS build does not include CUDA and is unaffected.
 
+### Optional pedicle subregion model (source installs only)
+
+- **Spine_Subregions nnU-Net model** (Da Mutten et al., *J Imaging Inform Med* 2026) — https://github.com/MICN-Lab/Spine_Subregions — licence: see upstream repository (the repository has no `LICENSE` file and its README states no licence terms as of this writing).
+
+This model is optional, not bundled with the application or its standalone packages, and is never downloaded automatically. A user who wants pedicle-subregion-refined isthmus detection downloads the trained weights separately from the project's GitHub Releases page and points the application at them; see [Desktop Build Guide](docs/BUILDING_DESKTOP.md) and [User Guide](docs/USER_GUIDE.md). It runs on the `nnunetv2` runtime already listed above and requires a non-frozen Python environment — the standalone packages refuse it.
+
 ## Desktop and imaging runtime
 
 - **PyQt6 / Qt 6** — GPL v3 or a commercial Riverbank/Qt license

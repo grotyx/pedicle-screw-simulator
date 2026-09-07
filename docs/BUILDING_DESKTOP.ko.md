@@ -60,6 +60,24 @@ dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
 .\dist\PedicleScrewSimulator\PedicleScrewSimulator.exe --self-check
 ```
 
+## 척추경 세부영역(Subregion) 모델(선택 사항)
+
+프로그램은 선택적으로 척추를 pedicle/corpus/lamina/spinous/transverse/articular 세부영역으로 분할하는 로컬 nnU-Net 모델([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026)로 척추경 탐지를 정밀화할 수 있습니다. 이 기능은 소스 설치 전용입니다. TotalSegmentator와 달리 이 단계는 항상 `nnUNetv2_predict`를 별도 프로세스로 실행하는데, frozen 빌드에는 그 실행을 대신할 Python 인터프리터가 없으므로 macOS·Windows standalone 패키지는 이 기능을 아예 거부합니다.
+
+소스 설치에서 사용하는 방법:
+
+1. [Spine_Subregions Releases 페이지](https://github.com/MICN-Lab/Spine_Subregions/releases)에서 학습된 가중치를 내려받습니다.
+2. 표준 nnU-Net v2 results 폴더 구조로 배치합니다. 예:
+   ```
+   <root>/Dataset501_SpineSubregions/nnUNetTrainer__nnUNetPlans__3d_fullres/
+       dataset.json
+       fold_0/checkpoint_final.pth
+   ```
+3. 프로그램을 실행하는 것과 동일한 환경에 `nnunetv2`를 설치합니다(`nnUNetv2_predict`가 인터프리터의 `Scripts`/`bin` 폴더 옆에서 실행 가능해야 합니다).
+4. Segmentation → Advanced의 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 `.../nnUNetTrainer__nnUNetPlans__3d_fullres` 폴더를 가리키도록 설정한 뒤 **Use pedicle subregion model**을 켭니다.
+
+라벨은 하드코딩하지 않고 모델 자체의 `dataset.json`에서 실행 시점에 읽어오므로, 세부영역 이름을 알아볼 수 있는 nnU-Net 체크포인트라면 어떤 것이든 올바르게 인식됩니다. 메모리 요구량은 TotalSegmentator의 `3d_fullres` 설정과 비슷하며 GPU를 권장합니다. 2단계 실패는 기존 TotalSegmentator 결과를 막지 않습니다. 라이선스는 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)를 참고하십시오.
+
 ## 로그 위치
 
 - macOS: `~/Library/Logs/PedicleScrewSimulator/app.log`

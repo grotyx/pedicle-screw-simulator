@@ -60,6 +60,24 @@ dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
 .\dist\PedicleScrewSimulator\PedicleScrewSimulator.exe --self-check
 ```
 
+## Optional pedicle subregion model
+
+The application can optionally refine pedicle detection with a locally installed nnU-Net model that segments a vertebra into pedicle/corpus/lamina/spinous/transverse/articular subregions ([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026). This is a source-install feature only: unlike TotalSegmentator, this stage always shells out to `nnUNetv2_predict`, and a frozen build has no Python interpreter to fall back to, so the standalone macOS and Windows packages refuse it outright.
+
+To use it from a source install:
+
+1. Download the trained weights from the [Spine_Subregions Releases page](https://github.com/MICN-Lab/Spine_Subregions/releases).
+2. Arrange them in the standard nnU-Net v2 results layout, e.g.:
+   ```
+   <root>/Dataset501_SpineSubregions/nnUNetTrainer__nnUNetPlans__3d_fullres/
+       dataset.json
+       fold_0/checkpoint_final.pth
+   ```
+3. Install `nnunetv2` in the same environment running the app (`nnUNetv2_predict` must resolve next to the interpreter's `Scripts`/`bin` folder).
+4. Point the app at the `.../nnUNetTrainer__nnUNetPlans__3d_fullres` folder with the **Model directory** field under Segmentation → Advanced, or the `PSS_SUBREGION_MODEL_DIR` environment variable, then enable **Use pedicle subregion model**.
+
+Labels are read from the model's own `dataset.json` at runtime rather than hard-coded, so any nnU-Net checkpoint using recognizable subregion names resolves correctly. Memory needs are similar to TotalSegmentator's `3d_fullres` configuration; a GPU is recommended. A stage-2 failure never blocks the underlying TotalSegmentator result. License: see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
 ## Runtime files
 
 Packaged logs are written to a user-writable location:

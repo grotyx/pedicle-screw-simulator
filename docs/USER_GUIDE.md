@@ -178,6 +178,14 @@ The panel and export also warn when a measurement crosses a literature threshold
 
 These bone-quality warnings are generated only for automatically planned screws; a manually placed screw still receives the full metric bundle but not the bone-quality warnings. Re-grading a plan — after running segmentation again or on plan load, whenever a segmentation is already available — regenerates the breach-distance and cortical-clearance warnings for every screw.
 
+### 5.9 Optional Pedicle Subregion Model
+
+Segmentation → Advanced offers **Use pedicle subregion model**, off by default. When enabled, the app looks for a locally installed nnU-Net model that segments a vertebra into pedicle/corpus/lamina/spinous/transverse/articular subregions ([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026), located either through the **Model directory** field or the `PSS_SUBREGION_MODEL_DIR` environment variable. Both must point at an nnU-Net results folder containing `dataset.json` and `fold_*/checkpoint_final.pth`.
+
+This is a source-install feature: it requires a non-frozen Python environment with `nnunetv2` installed, and its memory needs are similar to TotalSegmentator's `3d_fullres` configuration (a GPU is recommended). The standalone macOS and Windows packages do not support it — see [Desktop Build Guide](BUILDING_DESKTOP.md).
+
+When the model runs successfully, each side's pedicle isthmus is measured from its label first, falling back to the coronal cross-section search only for a side the label does not resolve. The segmentation status line reports "· pedicle model used", or "· pedicle model unavailable: <reason>" when it could not run — a stage-2 failure never blocks the TotalSegmentator result underneath it.
+
 ## 6. Edit Screws
 
 ### 6.1 Direct Editing

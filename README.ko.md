@@ -22,6 +22,7 @@ DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR
 - Axial, Sagittal, Coronal MPR 동기화
 - VTK 기반 CPU 볼륨 렌더링 및 척추별 3D 메시 표시
 - GPU 우선 TotalSegmentator 연동 및 CPU 재시도
+- 로컬에 설치한 척추경 세부영역(subregion) nnU-Net 모델을 이용한 선택적 isthmus 라벨 정밀화(소스 설치 전용)
 - 여러 척추 레벨 선택과 자동 스크류 제안
 - 기본 MPR 및 스크류 방향에 정렬된 oblique MPR
 - MPR과 3D에서 entry, tip, 전체 스크류 직접 수정
@@ -185,6 +186,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - 척추경 협부(isthmus) 탐지는 기하학적 방식(TotalSegmentator mask의 coronal 단면 최소 면적 탐색)이며 변형 척추에서는 검증되지 않았습니다.
 - Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공하며 Intel macOS와 Linux 패키지는 제공하지 않습니다.
 - Standalone에 TotalSegmentator가 포함되지만 모델은 최초 사용 시 내려받으며 많은 메모리와 저장공간이 필요할 수 있습니다.
+- 선택적 척추경 세부영역(subregion) 모델(nnU-Net 기반 pedicle/corpus/lamina 라벨 정밀화)은 `nnunetv2`가 설치된 소스 환경이 필요하며, standalone 패키지에서는 지원하지 않습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.
 
 ## 학술 인용

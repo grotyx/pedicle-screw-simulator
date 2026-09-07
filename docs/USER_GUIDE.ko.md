@@ -178,6 +178,14 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 
 이러한 골질 관련 경고는 자동 계획된 스크류에서만 생성됩니다. 수동으로 배치한 스크류도 전체 지표 모음은 제공받지만 골질 경고는 받지 않습니다. Segmentation을 다시 실행하거나 계획을 불러올 때(이미 segmentation이 있는 경우) 계획을 다시 등급 매기면 모든 스크류의 breach distance·피질골 여유 경고가 다시 생성됩니다.
 
+### 5.9 척추경 세부영역(Subregion) 모델(선택 사항)
+
+Segmentation → Advanced에는 기본적으로 꺼져 있는 **Use pedicle subregion model** 옵션이 있습니다. 이를 켜면 척추를 pedicle/corpus/lamina/spinous/transverse/articular 세부영역으로 분할하는 로컬 nnU-Net 모델([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026)을 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 가리키는 경로에서 찾습니다. 이 경로는 `dataset.json`과 `fold_*/checkpoint_final.pth`가 있는 nnU-Net results 폴더여야 합니다.
+
+이 기능은 소스 설치 전용입니다. `nnunetv2`가 설치된 non-frozen Python 환경이 필요하며, 메모리 요구량은 TotalSegmentator의 `3d_fullres` 설정과 비슷합니다(GPU 권장). macOS·Windows standalone 패키지는 이 기능을 지원하지 않습니다. [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
+
+모델이 정상적으로 실행되면 각 방향의 척추경 협부(isthmus)를 먼저 해당 label에서 측정하고, label이 그 방향을 찾지 못한 경우에만 coronal 단면 탐색으로 대체합니다. Segmentation 상태 표시줄에는 "· pedicle model used"가 표시되거나, 실행되지 못했을 때는 이유와 함께 "· pedicle model unavailable: <reason>"이 표시됩니다 — 2단계 실패가 그 아래 TotalSegmentator 결과 자체를 막지는 않습니다.
+
 ## 6. 스크류 수정
 
 ### 6.1 직접 수정

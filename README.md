@@ -22,6 +22,7 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 - Synchronized axial, sagittal, and coronal MPR
 - CPU-based VTK volume rendering and selectable vertebral meshes
 - Optional GPU-first TotalSegmentator integration with CPU retry
+- Optional locally installed pedicle subregion nnU-Net for label-based isthmus refinement (source installs only)
 - Multi-level vertebra selection and automatic screw proposals
 - Standard and screw-aligned oblique MPR review
 - Direct entry, tip, and whole-screw editing in MPR and 3D
@@ -185,6 +186,7 @@ data/README.md   local-data privacy instructions; no clinical data
 - Pedicle isthmus detection is geometric (coronal cross-section minimum on the TotalSegmentator mask) and not validated on deformity.
 - Standalone builds are provided for Apple Silicon macOS and Windows x64; Intel macOS and Linux packages are not provided.
 - TotalSegmentator is bundled in standalone builds, but its model weights are downloaded on first use and require substantial memory and disk space.
+- The optional pedicle subregion model (nnU-Net pedicle/corpus/lamina label refinement) requires a source install with `nnunetv2`; standalone packages refuse it.
 - Clinical accuracy, inter-observer agreement, and prospective outcomes have not been established.
 
 ## Citation
