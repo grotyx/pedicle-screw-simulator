@@ -26,6 +26,7 @@ from ..utils.constants import (
     MAX_SCREW_LENGTH,
     MIN_SCREW_DIAMETER,
     MIN_SCREW_LENGTH,
+    TRAJECTORY_BODY_HU_RATIO_THRESHOLD,
 )
 
 #: Warning prefixes the grader owns: they are regenerated on every evaluation so
@@ -63,6 +64,23 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     "pedicle_mean_hu",
     "body_mean_hu",
     "trajectory_body_ratio",
+)
+
+#: The metrics this tool measures from the trajectory in front of it, and so
+#: the only ones an ungradable screw has to give up.  ``pedicle_mean_hu`` and
+#: ``body_mean_hu`` are excluded for the same reason the merge protects them:
+#: they came from a pedicle analysis this tool cannot repeat, so dropping them
+#: would be permanent.  ``trajectory_body_ratio`` *is* dropped, because it is
+#: derived from the ``trajectory_mean_hu`` that is going away; the merge
+#: rebuilds it from the preserved body HU on the next gradable evaluation.
+_GRADER_MEASURED_METRIC_KEYS = (
+    "trajectory_mean_hu",
+    "trajectory_min_hu",
+    "trajectory_body_ratio",
+    "min_wall_mm",
+    "heary_direction",
+    "facet_grade",
+    "facet_text",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold
@@ -332,6 +350,7 @@ class ScrewTool:
             screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
 
         screw.warnings.extend(derived_warnings)
+        screw.warnings.extend(self._ratio_warnings(screw.metrics, measured))
         if result.breach_mm > 0:
             screw.warnings.append(
                 f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
@@ -349,12 +368,27 @@ class ScrewTool:
 
     @staticmethod
     def _clear_grading(screw: Screw) -> None:
-        """Drop every grader-derived value from an ungradable screw."""
+        """Drop what this trajectory disproves, keep what the plan still knows.
+
+        ``ScrewEditController._apply_points`` re-evaluates on every frame of a
+        drag, so a screw briefly pulled outside the mask and back passes
+        through here mid-gesture.  Emptying the bundle would make that single
+        frame permanent: the optimiser's ``score``/``score_components``, the
+        construct's ``rod_misalignment_mm``, the ``trajectory_type`` marking a
+        CBT screw and the pedicle-analysis HU would all be gone by the time the
+        screw was back inside the vertebra, with nothing left to restore them.
+        Only the metrics measured from the trajectory itself are cleared.
+        """
         screw.grade = "N/A"
         screw.breach_distance = 0.0
         screw.mean_hu = None
         screw.min_hu = None
-        screw.metrics = {}
+        metrics = screw.metrics if isinstance(screw.metrics, dict) else {}
+        screw.metrics = {
+            key: value
+            for key, value in metrics.items()
+            if key not in _GRADER_MEASURED_METRIC_KEYS
+        }
 
     def _compute_metrics(
         self, screw: Screw, result: "GradeResult"
@@ -405,6 +439,31 @@ class ScrewTool:
                 f"High convergence angle {screw.medial_angle:.1f}° — verify on CT"
             )
         return metrics, warnings
+
+    @staticmethod
+    def _ratio_warnings(merged: Dict[str, Any], measured: Dict[str, Any]) -> List[str]:
+        """Re-raise the trajectory/body HU ratio note for a merged bundle.
+
+        ``assess_bone_quality`` only emits this note when it measured the ratio
+        itself, which needs a vertebral-body centre this tool never has — so
+        for an edited auto screw it never fires.  The ratio is nonetheless
+        rebuilt by :meth:`_merge_metrics` from the new trajectory HU against
+        the preserved body HU, and the note is stripped as derived.  Without
+        this the warning would be deleted on every drag and every plan load
+        while the number it describes stayed on screen.  The text must match
+        :mod:`src.core.bone_quality` verbatim.
+        """
+        if measured.get("trajectory_body_ratio") is not None:
+            return []                    # bone_quality already spoke for itself
+        ratio = merged.get("trajectory_body_ratio")
+        if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+            return []
+        if float(ratio) >= TRAJECTORY_BODY_HU_RATIO_THRESHOLD:
+            return []
+        return [
+            f"Trajectory/body HU ratio {float(ratio):.2f} below "
+            f"{TRAJECTORY_BODY_HU_RATIO_THRESHOLD:.1f}"
+        ]
 
     @staticmethod
     def _merge_metrics(existing: Any, measured: Dict[str, Any]) -> Dict[str, Any]:

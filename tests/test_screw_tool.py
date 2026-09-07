@@ -225,8 +225,12 @@ def test_diameter_change_keeps_planner_metrics():
     assert updated.metrics["body_mean_hu"] == pytest.approx(150.0)
 
 
-def test_ungradable_screw_still_drops_every_metric():
-    """A trajectory that misses every vertebra keeps nothing at all."""
+def test_ungradable_screw_drops_only_what_it_measured():
+    """A trajectory that misses every vertebra gives up its measurements only.
+
+    ``ScrewEditController._apply_points`` re-evaluates on every drag frame, so
+    emptying the bundle here would make one out-of-mask frame permanent.
+    """
     tool = _split_density_tool()
     tool.add_screw(_planner_screw((2.0, 2.0, 2.0), (2.0, 10.0, 2.0)))
 
@@ -234,5 +238,83 @@ def test_ungradable_screw_still_drops_every_metric():
 
     screw = tool.get_screws()[0]
     assert screw.grade == "N/A"
-    assert screw.metrics == {}
+    assert screw.mean_hu is None and screw.min_hu is None
     assert any(w.startswith("Not graded") for w in screw.warnings)
+    # Measured off the (missing) trajectory: gone.
+    for key in ("trajectory_mean_hu", "trajectory_min_hu", "trajectory_body_ratio",
+                "min_wall_mm", "heary_direction", "facet_grade", "facet_text"):
+        assert key not in screw.metrics
+    # Everything the plan still knows: kept.
+    assert screw.metrics["score"] == pytest.approx(1.9)
+    assert screw.metrics["score_components"] == {"safety": 0.9, "density": 0.4}
+    assert screw.metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+    assert screw.metrics["trajectory_type"] == "cbt"
+    assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
+    assert screw.metrics["pedicle_mean_hu"] == pytest.approx(210.0)
+    assert screw.metrics["body_mean_hu"] == pytest.approx(150.0)
+
+
+def test_a_drag_through_open_space_and_back_restores_the_full_bundle():
+    """One ungradable frame mid-gesture must not cost the plan anything."""
+    tool = _split_density_tool()
+    tool.add_screw(_planner_screw((34.0, 38.0, 30.0), (34.0, 22.0, 30.0)))
+
+    # Frame 1: the user has dragged the screw clear of every labelled vertebra.
+    outside = tool.replace_screw(
+        0, entry_point=(2.0, 2.0, 2.0), target_point=(2.0, 10.0, 2.0)
+    )
+    assert outside.grade == "N/A"
+
+    # Frame 2: released back inside the vertebra.
+    inside = tool.replace_screw(
+        0, entry_point=(34.0, 38.0, 30.0), target_point=(34.0, 22.0, 30.0)
+    )
+
+    assert inside.grade == "A"
+    assert inside.metrics["score"] == pytest.approx(1.9)
+    assert inside.metrics["score_components"] == {"safety": 0.9, "density": 0.4}
+    assert inside.metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+    assert inside.metrics["trajectory_type"] == "cbt"
+    assert inside.metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
+    assert inside.metrics["body_mean_hu"] == pytest.approx(150.0)
+    assert inside.metrics["pedicle_mean_hu"] == pytest.approx(210.0)
+    # The measurements come back too, rebuilt from the trajectory it now has.
+    assert inside.metrics["trajectory_mean_hu"] == pytest.approx(400.0)
+    assert inside.metrics["trajectory_body_ratio"] == pytest.approx(400.0 / 150.0)
+
+
+def test_a_low_ratio_warning_is_regenerated_not_silently_dropped():
+    """The ratio note is stripped as derived, so it has to be re-raised.
+
+    ``assess_bone_quality`` cannot produce it here (no vertebral-body centre),
+    but ``_merge_metrics`` does recompute the ratio itself — so without an
+    explicit regeneration every drag and every plan load would delete the
+    warning while leaving the number it describes on screen.
+    """
+    tool = _split_density_tool()
+    screw = _planner_screw(
+        (34.0, 38.0, 30.0),
+        (34.0, 22.0, 30.0),
+        metrics={"trajectory_mean_hu": 400.0, "trajectory_body_ratio": 400.0 / 150.0},
+    )
+    screw.warnings = [CBT_CONTRAINDICATION_NOTE]
+    tool.add_screw(screw)
+
+    # Dragged into the osteoporotic half: 80 / 150 = 0.53, below the 1.0 ratio.
+    moved = tool.replace_screw(
+        0, entry_point=(24.0, 38.0, 30.0), target_point=(24.0, 22.0, 30.0)
+    )
+
+    assert moved.metrics["trajectory_body_ratio"] == pytest.approx(80.0 / 150.0)
+    assert "Trajectory/body HU ratio 0.53 below 1.0" in moved.warnings
+    assert CBT_CONTRAINDICATION_NOTE in moved.warnings
+    # Exactly one copy, no matter how many times the screw is re-evaluated.
+    tool.regrade_all()
+    regraded = tool.get_screws()[0]
+    assert regraded.warnings.count("Trajectory/body HU ratio 0.53 below 1.0") == 1
+
+    # Dragged back into dense bone: 2.67, so the note goes away again.
+    back = tool.replace_screw(
+        0, entry_point=(34.0, 38.0, 30.0), target_point=(34.0, 22.0, 30.0)
+    )
+    assert not any(w.startswith("Trajectory/body HU ratio") for w in back.warnings)
