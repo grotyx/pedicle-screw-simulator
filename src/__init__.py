@@ -12,8 +12,26 @@ Main Features:
 - Screw placement simulation
 """
 
+import sys
+from pathlib import Path
+
+
+def _read_version() -> str:
+    """Read the single-sourced version from the repository-root VERSION file.
+
+    In a frozen (PyInstaller) build, the file is bundled next to the
+    executable and extracted under ``sys._MEIPASS``; otherwise it lives two
+    directories above this file (the repository root).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        version_path = Path(sys._MEIPASS) / "VERSION"
+    else:
+        version_path = Path(__file__).resolve().parent.parent / "VERSION"
+    return version_path.read_text(encoding="utf-8").strip()
+
+
 __title__ = "Pedicle Screw Simulator"
-__version__ = "0.1.0"
+__version__ = _read_version()
 __author__ = "Sang-Min Park, MD, Ph.D."
 __department__ = "Spine Center and Department of Orthopaedic Surgery"
 __organization__ = "Seoul National University Bundang Hospital"

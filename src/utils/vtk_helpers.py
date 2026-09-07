@@ -4,8 +4,9 @@ VTK helper functions for coordinate transforms and data conversion
 
 from __future__ import annotations
 
+from typing import Optional, Tuple
+
 import numpy as np
-from typing import Tuple, Optional
 
 try:
     import vtk
@@ -18,8 +19,6 @@ try:
     import SimpleITK as sitk
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     sitk = None
-
-from .constants import LPS_TO_RAS_MATRIX
 
 
 def sitk_to_vtk(sitk_image: sitk.Image) -> vtk.vtkImageData:
@@ -219,7 +218,7 @@ def create_reslice_axes(
     from .constants import (
         AXIAL_DIRECTION_COSINES,
         CORONAL_DIRECTION_COSINES,
-        SAGITTAL_DIRECTION_COSINES
+        SAGITTAL_DIRECTION_COSINES,
     )
 
     axes = vtk.vtkMatrix4x4()

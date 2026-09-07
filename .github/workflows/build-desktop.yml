@@ -36,6 +36,16 @@ jobs:
             requirements-dev.txt
             requirements-desktop.txt
 
+      - name: Export application version
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+
+          version = Path("VERSION").read_text(encoding="utf-8").strip()
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"APP_VERSION={version}\n")
+
       - name: Install build dependencies
         if: runner.os != 'Windows'
         run: python -m pip install -r requirements-desktop.txt
@@ -66,7 +76,7 @@ jobs:
       - name: Upload desktop package
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ matrix.artifact }}-v0.1.0
+          name: ${{ matrix.artifact }}-v${{ env.APP_VERSION }}
           path: release/*.zip
           if-no-files-found: error
           compression-level: 0

@@ -2,16 +2,17 @@
 Tests for core module (DicomLoader, VolumeManager, CoordinateSystem)
 """
 
-import pytest
-import numpy as np
 import importlib
-
-import sys
 import os
+import sys
+
+import numpy as np
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.coordinate_system import CoordinateSystem
-from src.utils.vtk_helpers import world_to_volume_index, volume_index_to_world
+from src.utils.vtk_helpers import volume_index_to_world, world_to_volume_index
 
 
 class TestCoordinateSystem:
@@ -110,10 +111,10 @@ class TestVTKHelpers:
     def test_constants_exist(self):
         """Test that constants are defined."""
         from src.utils.constants import (
-            LPS_TO_RAS_MATRIX,
-            HU_BONE_OPTIMAL,
             DEFAULT_WINDOW_CENTER,
-            DEFAULT_WINDOW_WIDTH
+            DEFAULT_WINDOW_WIDTH,
+            HU_BONE_OPTIMAL,
+            LPS_TO_RAS_MATRIX,
         )
 
         assert LPS_TO_RAS_MATRIX is not None

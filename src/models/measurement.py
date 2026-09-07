@@ -2,8 +2,8 @@
 Measurement data model for surgical planning.
 """
 
-from typing import Optional, Tuple, List
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 
 @dataclass

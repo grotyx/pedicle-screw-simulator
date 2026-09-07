@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 from pathlib import Path
 import shutil
@@ -13,10 +14,34 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "packaging" / "PedicleScrewSimulator.spec"
+WINDOWS_VERSION_TEMPLATE = ROOT / "packaging" / "windows_version_info.template.txt"
+BUILD_DIR = ROOT / "build"
 DIST = ROOT / "dist"
 RELEASE = ROOT / "release"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 PRODUCT = "PedicleScrewSimulator"
+
+
+def _render_windows_version_file() -> Path:
+    """Render the Windows version-resource template for the current VERSION.
+
+    PyInstaller's ``version=`` argument needs a file with literal integer
+    version components, so the template's ``{major}``/``{minor}``/``{patch}``
+    placeholders are filled in from VERSION and the result is written under
+    ``build/`` (not tracked in git).
+    """
+    version_parts = VERSION.split(".")
+    major = version_parts[0] if len(version_parts) > 0 else "0"
+    minor = version_parts[1] if len(version_parts) > 1 else "0"
+    patch = version_parts[2] if len(version_parts) > 2 else "0"
+
+    rendered = WINDOWS_VERSION_TEMPLATE.read_text(encoding="utf-8").format(
+        major=major, minor=minor, patch=patch, version=VERSION
+    )
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    output = BUILD_DIR / "windows_version_info.txt"
+    output.write_text(rendered, encoding="utf-8")
+    return output
 
 
 def _copy_metadata(destination: Path) -> None:
@@ -41,6 +66,9 @@ def _copy_metadata(destination: Path) -> None:
 
 
 def _build() -> None:
+    env = os.environ.copy()
+    if sys.platform.startswith("win"):
+        env["PSS_VERSION_FILE"] = str(_render_windows_version_file())
     subprocess.run(
         [
             sys.executable,
@@ -52,6 +80,7 @@ def _build() -> None:
         ],
         cwd=ROOT,
         check=True,
+        env=env,
     )
 
 

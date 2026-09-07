@@ -2,16 +2,17 @@
 Tests for interactive tools (ScrewTool, MeasurementTool).
 """
 
+import os
+import sys
+
 import pytest
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.models.screw import Screw
 from src.models.measurement import Measurement
-from src.tools.screw_tool import ScrewTool
+from src.models.screw import Screw
 from src.tools.measurement_tool import MeasurementTool
+from src.tools.screw_tool import ScrewTool
 
 
 class FakeVolumeManager:
@@ -69,6 +70,7 @@ class TestScrewTool:
     def test_with_grader_uses_mask_containment(self):
         import numpy as np
         import SimpleITK as sitk
+
         from src.core.screw_grading import ScrewGrader
         arr = np.zeros((60, 60, 60), dtype=np.uint8)
         arr[20:40, 20:40, 20:40] = 28
@@ -84,6 +86,7 @@ class TestScrewTool:
     def test_regrade_all_grades_screws_placed_before_segmentation(self):
         import numpy as np
         import SimpleITK as sitk
+
         from src.core.screw_grading import ScrewGrader
 
         tool = ScrewTool(FakeVolumeManager())

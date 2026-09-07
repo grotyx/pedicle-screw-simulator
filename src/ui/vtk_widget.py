@@ -16,9 +16,9 @@ Infinite repaint loop fix:
   _render_needed is True. safe_render() and resizeEvent set the flag.
 """
 
-import time
 import logging
-from PyQt6.QtCore import QSize
+import time
+
 from PyQt6.QtWidgets import QSizePolicy
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 

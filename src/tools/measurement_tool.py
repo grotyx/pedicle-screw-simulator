@@ -8,7 +8,7 @@ Provides:
 """
 
 import math
-from typing import Optional, Tuple, List, Callable
+from typing import Callable, List, Optional, Tuple
 
 from src.models.measurement import Measurement
 

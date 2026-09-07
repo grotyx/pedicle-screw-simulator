@@ -15,12 +15,11 @@ import SimpleITK as sitk
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.core.vertebra import PedicleAnalysisResult, Vertebra
 from src.core.pedicle_analyzer import (
     VERTEBRA_LABELS,
     PedicleAnalyzer,
 )
-
+from src.core.vertebra import PedicleAnalysisResult, Vertebra
 
 # ---------------------------------------------------------------------------
 # Helpers for building synthetic masks

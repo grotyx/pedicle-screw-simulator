@@ -102,12 +102,17 @@ class TestPlanningIO:
         except ValueError as exc:
             assert "Invalid measurement plane" in str(exc)
             return
-        assert False, "Expected ValueError for invalid plane"
+        raise AssertionError("Expected ValueError for invalid plane")
 
 
 def test_v2_roundtrip_preserves_metadata(tmp_path):
     from src.models.screw import Screw
-    from src.utils.planning_io import serialize_plan, deserialize_plan, save_plan_json, load_plan_json
+    from src.utils.planning_io import (
+        deserialize_plan,
+        load_plan_json,
+        save_plan_json,
+        serialize_plan,
+    )
     screw = Screw(entry_point=(1.0, 2.0, 3.0), target_point=(1.0, -30.0, 3.0), diameter=6.0,
                   vertebra_level="L4", side="left", grade="B", breach_distance=0.8,
                   mean_hu=210.0, min_hu=90.0, warnings=["note"], source="auto")
@@ -178,6 +183,7 @@ def test_payload_angles_are_recomputed_from_geometry():
 def test_plan_payload_contains_no_patient_identifiers():
     """Plan JSON must carry only geometry/grading data, never DICOM PHI."""
     import json
+
     from src.models.screw import Screw
     from src.utils.planning_io import serialize_plan
 

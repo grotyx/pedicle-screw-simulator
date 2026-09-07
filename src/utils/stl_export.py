@@ -6,7 +6,6 @@ It is for export only, NOT for interactive 3D viewing.
 """
 
 import vtk
-from typing import Optional
 
 
 def export_bone_stl(

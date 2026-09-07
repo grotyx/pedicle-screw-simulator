@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 import SimpleITK as sitk
 
 from src.core.dicom_loader import normalize_orientation

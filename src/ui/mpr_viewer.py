@@ -11,7 +11,10 @@ Provides axial, sagittal, and coronal slice views with:
 import logging
 import math
 import time
+from typing import Callable, Dict, List, Optional, Tuple
+
 import vtk
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -22,8 +25,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from typing import Callable, Optional, Tuple, Dict, List
 
 from ..core.mpr_geometry import (
     project_screw_to_slice,
@@ -32,11 +33,14 @@ from ..core.mpr_geometry import (
 )
 from ..core.volume_manager import VolumeManager
 from ..utils.constants import (
-    COLOR_AXIAL, COLOR_SAGITTAL, COLOR_CORONAL,
-    DEFAULT_WINDOW_CENTER, DEFAULT_WINDOW_WIDTH
+    COLOR_AXIAL,
+    COLOR_CORONAL,
+    COLOR_SAGITTAL,
+    DEFAULT_WINDOW_CENTER,
+    DEFAULT_WINDOW_WIDTH,
 )
-from .vtk_widget import create_vtk_widget
 from .click_detector import DoubleClickDetector
+from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
 

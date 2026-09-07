@@ -7,15 +7,15 @@ Tests the refactored VolumeManager that:
 - Preserves all coordinate/geometry APIs
 """
 
-import pytest
-import numpy as np
-import sys
 import os
+import sys
+
+import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import SimpleITK as sitk
-import vtk
 
 from src.core.volume_manager import VolumeManager
 from src.utils.constants import TRANSFER_FUNCTION_PRESETS

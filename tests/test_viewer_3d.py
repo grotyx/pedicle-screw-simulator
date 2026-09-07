@@ -8,10 +8,12 @@ Verifies:
 - Screw/measurement methods still exist
 """
 
-import pytest
-import sys
 import os
+import sys
 from types import SimpleNamespace
+
+import pytest
+
 from src.ui.click_detector import DoubleClickDetector
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -21,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 def viewer_3d_with_volume():
     """A Viewer3D with a loaded-volume rendering pipeline (no Qt/VTK widget)."""
     import vtk
+
     from src.ui.viewer_3d import Viewer3D
     from src.utils.constants import TRANSFER_FUNCTION_PRESETS
 
@@ -48,6 +51,7 @@ class TestNoSurfaceThread:
     def test_no_surface_thread_import(self):
         """Module should not reference SurfaceGenerationThread anywhere."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SurfaceGenerationThread" not in source
@@ -55,6 +59,7 @@ class TestNoSurfaceThread:
     def test_no_qthread_import(self):
         """Viewer3D module should not import QThread."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "QThread" not in source
@@ -161,6 +166,7 @@ class TestViewer3DInterface:
         self, qtbot, monkeypatch
     ):
         from PyQt6.QtWidgets import QWidget
+
         from src.ui import viewer_3d
 
         monkeypatch.setattr(
@@ -203,6 +209,7 @@ class TestViewer3DInterface:
 
     def test_plane_visibility_toggle_controls_every_3d_plane(self):
         import vtk
+
         from src.ui.viewer_3d import Viewer3D
 
         viewer = Viewer3D.__new__(Viewer3D)
@@ -274,8 +281,9 @@ class TestScrewVisualGeometry:
         ) == "tip"
 
     def test_focus_on_world_point_recenters_and_zooms_camera(self):
-        from src.ui.viewer_3d import Viewer3D
         import vtk
+
+        from src.ui.viewer_3d import Viewer3D
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._renderer = vtk.vtkRenderer()
@@ -291,8 +299,9 @@ class TestScrewVisualGeometry:
         assert camera.GetPosition() == pytest.approx((10.0, 20.0, 80.0))
 
     def test_reset_to_initial_view_restores_sagittal_orientation_and_fits(self):
-        from src.ui.viewer_3d import Viewer3D
         import vtk
+
+        from src.ui.viewer_3d import Viewer3D
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._renderer = vtk.vtkRenderer()
@@ -320,8 +329,9 @@ class TestScrewVisualGeometry:
         assert render_calls == [True]
 
     def test_model_opacity_scales_anatomy_without_changing_screw(self):
-        from src.ui.viewer_3d import Viewer3D, create_screw_visual
         import vtk
+
+        from src.ui.viewer_3d import Viewer3D, create_screw_visual
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._renderer = vtk.vtkRenderer()
@@ -356,8 +366,9 @@ class TestScrewVisualGeometry:
         assert render_calls == [True]
 
     def test_vertebral_transparency_reveals_interior_without_changing_volume(self):
-        from src.ui.viewer_3d import Viewer3D, create_screw_visual
         import vtk
+
+        from src.ui.viewer_3d import Viewer3D, create_screw_visual
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._renderer = vtk.vtkRenderer()
@@ -402,8 +413,9 @@ class TestScrewVisualGeometry:
         assert viewer._vertebral_mesh_actor.GetProperty().GetOpacity() == pytest.approx(1.0)
 
     def test_selected_screw_focus_preserves_user_vertebral_transparency(self):
-        from src.ui.viewer_3d import Viewer3D
         import vtk
+
+        from src.ui.viewer_3d import Viewer3D
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._vertebral_mesh_actor = vtk.vtkActor()
@@ -495,6 +507,7 @@ class TestScrewVisualGeometry:
 class TestSegmentationSurfaceSmoothing:
     def test_raw_segmentation_pipeline_smooths_image_mesh_and_normals(self):
         import inspect
+
         from src.ui.viewer_3d import Viewer3D
 
         source = inspect.getsource(Viewer3D._render_segmentation_actor)
@@ -513,6 +526,7 @@ class TestSegmentationSurfaceSmoothing:
 
     def test_3d_viewport_uses_flat_neutral_charcoal_background(self):
         import inspect
+
         from src.ui import viewer_3d
 
         assert viewer_3d.VIEWPORT_BACKGROUND == pytest.approx(
@@ -529,6 +543,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_uses_cpu_mapper(self):
         """Must use vtkFixedPointVolumeRayCastMapper (CPU) — NOT vtkGPUVolumeRayCastMapper."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "vtkFixedPointVolumeRayCastMapper" in source
@@ -538,6 +553,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_has_auto_adjust_sample_distances(self):
         """Mapper must enable AutoAdjustSampleDistances."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetAutoAdjustSampleDistances" in source
@@ -545,6 +561,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_has_interactive_sample_distance(self):
         """CPU mapper must set InteractiveSampleDistance for responsive interaction."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetInteractiveSampleDistance" in source
@@ -552,6 +569,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_has_sample_distance(self):
         """update_volume must set SampleDistance per volume tier."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetSampleDistance" in source
@@ -560,6 +578,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_sets_sample_distance_for_all_tiers(self):
         """All volume tiers must get explicit sample distance with absolute floor."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "else:" in source
@@ -569,13 +588,16 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_has_desired_update_rate(self):
         """Interactor must set DesiredUpdateRate for LOD during interaction."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetDesiredUpdateRate" in source
 
     def test_source_has_reasonable_still_update_rate(self):
         """StillUpdateRate must NOT be 0.001 (=1000s/frame hang). Need >= 0.1."""
-        import inspect, re
+        import inspect
+        import re
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetStillUpdateRate" in source
@@ -587,6 +609,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_has_two_phase_rendering(self):
         """update_volume must use deferred two-phase rendering for fast first frame."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "_target_sample_dist" in source
@@ -598,6 +621,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_uses_downsampled_volume(self):
         """Must use downsampled volume (vtkImageShrink3D) for faster CPU ray casting."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "downsample_vtk_image" in source
@@ -606,6 +630,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_never_gives_full_res_to_mapper(self):
         """Phase 2 (in render guard callback) must NOT swap to full-resolution volume."""
         import inspect
+
         from src.ui import viewer_3d
         callback_src = inspect.getsource(viewer_3d.Viewer3D._render_guard_callback)
         assert "SetInputData" not in callback_src
@@ -613,6 +638,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_disables_multisampling(self):
         """Render window must disable MSAA for performance."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "SetMultiSamples" in source
@@ -620,6 +646,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_source_disables_lock_to_input_spacing(self):
         """Lock must be OFF — input-spacing-derived distance is too fine (~0.67mm)."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "LockSampleDistanceToInputSpacingOff" in source
@@ -627,6 +654,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_render_guard_aborts_during_setup(self):
         """Render guard aborts renders when state is GUARD."""
         import inspect
+
         from src.ui import viewer_3d
         callback_src = inspect.getsource(viewer_3d.Viewer3D._render_guard_callback)
         assert "SetAbortRender(1)" in callback_src
@@ -635,6 +663,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_request_render_calls_safe_render(self):
         """_request_render must call safe_render or Render()."""
         import inspect
+
         from src.ui import viewer_3d
         method_src = inspect.getsource(viewer_3d.Viewer3D._request_render)
         assert "safe_render" in method_src
@@ -642,6 +671,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_phase2_uses_qtimer(self):
         """Phase 2 must be scheduled via QTimer (no threading.Timer needed)."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "QTimer.singleShot" in source
@@ -652,6 +682,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_interaction_coarsens_sampling(self):
         """_on_interaction_start must use coarse sampling for responsiveness."""
         import inspect
+
         from src.ui import viewer_3d
         start_src = inspect.getsource(viewer_3d.Viewer3D._on_interaction_start)
         assert "_target_sample_dist" in start_src
@@ -660,6 +691,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_phase1_enables_widget_updates(self):
         """Phase 1 must enable widget updates before rendering."""
         import inspect
+
         from src.ui import viewer_3d
         phase1_src = inspect.getsource(viewer_3d.Viewer3D._deferred_render_phase1)
         assert "setUpdatesEnabled(True)" in phase1_src
@@ -668,6 +700,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_no_process_events_in_update_volume(self):
         """update_volume must NOT call processEvents — it triggers implicit renders that hang."""
         import inspect
+
         from src.ui import viewer_3d
         method_source = inspect.getsource(viewer_3d.Viewer3D.update_volume)
         assert "processEvents" not in method_source
@@ -675,6 +708,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_no_render_in_update_volume(self):
         """update_volume must NOT call Render() — deferred to QTimer Phase 1."""
         import inspect
+
         from src.ui import viewer_3d
         method_source = inspect.getsource(viewer_3d.Viewer3D.update_volume)
         assert "GetRenderWindow().Render()" not in method_source
@@ -682,6 +716,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_has_render_guard(self):
         """Must have VTK-level render guard to block macOS drawRect callbacks."""
         import inspect
+
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "_render_guard_active" in source
@@ -691,6 +726,7 @@ class TestVolumeMapperPerformanceConfig:
     def test_widget_updates_disabled_during_setup(self):
         """update_volume disables widget updates; Phase 1 re-enables before render."""
         import inspect
+
         from src.ui import viewer_3d
         update_src = inspect.getsource(viewer_3d.Viewer3D.update_volume)
         phase1_src = inspect.getsource(viewer_3d.Viewer3D._deferred_render_phase1)
@@ -728,9 +764,10 @@ class TestTransferFunctionPresets:
         assert len(TRANSFER_FUNCTION_PRESETS) == 4
 
     def test_preset_change_preserves_model_opacity_scale(self):
+        import vtk
+
         from src.ui.viewer_3d import Viewer3D
         from src.utils.constants import TRANSFER_FUNCTION_PRESETS
-        import vtk
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._color_tf = vtk.vtkColorTransferFunction()

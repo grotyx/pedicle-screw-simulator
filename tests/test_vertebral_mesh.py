@@ -9,14 +9,14 @@ Verifies:
 - Viewer3D API presence for vertebral mesh methods
 """
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import vtk
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,7 +74,7 @@ class TestVertebralColors:
     """Verify the low-saturation warm ivory anatomy palette."""
 
     def test_all_labels_produce_valid_rgb(self):
-        from src.core.vertebral_mesh import generate_vertebra_color, VERTEBRA_LABELS
+        from src.core.vertebral_mesh import VERTEBRA_LABELS, generate_vertebra_color
 
         for label in VERTEBRA_LABELS:
             r, g, b = generate_vertebra_color(label)
@@ -115,7 +115,7 @@ class TestVertebralColors:
         assert r == g == b, "Unknown label should return neutral gray"
 
     def test_get_vertebra_colors_returns_all(self):
-        from src.core.vertebral_mesh import get_vertebra_colors, VERTEBRA_LABELS
+        from src.core.vertebral_mesh import VERTEBRA_LABELS, get_vertebra_colors
 
         color_map = get_vertebra_colors()
         assert set(color_map.keys()) == set(VERTEBRA_LABELS.keys())
@@ -310,6 +310,7 @@ class TestMeshExtraction:
         """Surface fairing should retain shape and avoid excessive decimation."""
         import numpy as np
         from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+
         from src.core.vertebral_mesh import extract_vertebral_mesh
 
         dims = (32, 32, 20)
@@ -354,6 +355,7 @@ class TestMeshExtraction:
     def test_mesh_uses_spacing_aware_gaussian_before_flying_edges(self):
         """Gaussian sigma must be physical-mm based, not a fixed voxel value."""
         import inspect
+
         from src.core.vertebral_mesh import extract_vertebral_mesh
 
         source = inspect.getsource(extract_vertebral_mesh)
@@ -366,6 +368,7 @@ class TestMeshExtraction:
         """Model TotalSegmentator's coarse labels resampled onto a fine CT grid."""
         import numpy as np
         from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+
         from src.core.vertebral_mesh import extract_vertebral_mesh
 
         coarse_dims = (24, 24, 24)
@@ -422,7 +425,7 @@ class TestModuleConstants:
     """Verify module-level constants."""
 
     def test_label_range(self):
-        from src.core.vertebral_mesh import VERTEBRA_LABEL_MIN, VERTEBRA_LABEL_MAX
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_MAX, VERTEBRA_LABEL_MIN
 
         assert VERTEBRA_LABEL_MIN == 25
         assert VERTEBRA_LABEL_MAX == 43
@@ -552,8 +555,9 @@ class TestCreateVertebralOnlyVolume:
         return ct, mask
 
     def test_vertebral_voxels_preserved(self):
-        from src.core.vertebral_mesh import create_vertebral_only_volume
         from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.core.vertebral_mesh import create_vertebral_only_volume
 
         ct, mask = self._make_ct_and_mask()
         result = create_vertebral_only_volume(ct, mask, smooth_sigma=0)
@@ -563,8 +567,9 @@ class TestCreateVertebralOnlyVolume:
         assert (result_arr[:500] == 500).all()
 
     def test_non_vertebral_voxels_set_to_air(self):
-        from src.core.vertebral_mesh import create_vertebral_only_volume
         from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.core.vertebral_mesh import create_vertebral_only_volume
 
         ct, mask = self._make_ct_and_mask()
         result = create_vertebral_only_volume(ct, mask, smooth_sigma=0)
@@ -585,9 +590,10 @@ class TestCreateVertebralOnlyVolume:
 
     def test_smoothing_blurs_boundary(self):
         """Gaussian smoothing should produce intermediate values at boundary."""
-        from src.core.vertebral_mesh import create_vertebral_only_volume
-        from vtk.util.numpy_support import vtk_to_numpy
         import numpy as np
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.core.vertebral_mesh import create_vertebral_only_volume
 
         ct, mask = self._make_ct_and_mask()
         result = create_vertebral_only_volume(ct, mask, smooth_sigma=0.7)

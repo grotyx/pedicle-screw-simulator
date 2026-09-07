@@ -5,13 +5,13 @@ Click the group header to expand/collapse content with smooth animation.
 Uses QPropertyAnimation for height transitions.
 """
 
-from PyQt6.QtWidgets import QWidget, QLayout, QVBoxLayout, QToolButton, QSizePolicy
 from PyQt6.QtCore import (
-    Qt,
-    QPropertyAnimation,
-    QParallelAnimationGroup,
     QAbstractAnimation,
+    QParallelAnimationGroup,
+    QPropertyAnimation,
+    Qt,
 )
+from PyQt6.QtWidgets import QLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 
 class CollapsibleGroupBox(QWidget):
@@ -94,7 +94,6 @@ class CollapsibleGroupBox(QWidget):
                     widget.deleteLater()
 
         self._content_area.setLayout(layout)
-        collapsed_height = 0
         content_height = layout.sizeHint().height()
 
         # Start expanded

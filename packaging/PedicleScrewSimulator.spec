@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 import sys
 
@@ -7,7 +8,8 @@ from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 
 project_root = Path(SPECPATH).resolve().parent
-windows_version_file = project_root / "packaging" / "windows_version_info.txt"
+version = (project_root / "VERSION").read_text(encoding="utf-8").strip()
+windows_version_file = os.environ.get("PSS_VERSION_FILE")
 
 datas = [
     (str(project_root / "LICENSE"), "."),
@@ -75,8 +77,8 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     version=(
-        str(windows_version_file)
-        if sys.platform.startswith("win")
+        windows_version_file
+        if sys.platform.startswith("win") and windows_version_file
         else None
     ),
 )
@@ -97,12 +99,12 @@ if sys.platform == "darwin":
         name="PedicleScrewSimulator.app",
         icon=None,
         bundle_identifier="me.sangmin.pedicle-screw-simulator",
-        version="0.1.0",
+        version=version,
         info_plist={
             "CFBundleName": "Pedicle Screw Simulator",
             "CFBundleDisplayName": "Pedicle Screw Simulator",
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "0.1.0",
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
         },

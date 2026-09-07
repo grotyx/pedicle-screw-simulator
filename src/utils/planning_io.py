@@ -126,7 +126,7 @@ def serialize_plan(
         raise ValueError("Measurement plane count must match measurements")
 
     measurement_items = []
-    for measurement, plane in zip(measurements, planes):
+    for measurement, plane in zip(measurements, planes, strict=True):
         item = measurement_to_dict(measurement)
         if plane is not None and plane not in VALID_PLANES:
             raise ValueError(f"Invalid measurement plane: {plane}")

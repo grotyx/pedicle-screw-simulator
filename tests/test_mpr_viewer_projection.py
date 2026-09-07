@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import pytest
 import vtk
 
-from src.ui.mpr_viewer import MPRViewer
 from src.core.mpr_geometry import build_screw_mpr_axes
-from src.utils.vtk_helpers import create_reslice_axes
 from src.ui.click_detector import DoubleClickDetector
+from src.ui.mpr_viewer import MPRViewer
+from src.utils.vtk_helpers import create_reslice_axes
 
 
 class _VolumeManager:

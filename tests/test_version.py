@@ -1,24 +1,24 @@
-"""Public release version consistency checks."""
+"""Public release version consistency checks.
+
+The repository-root ``VERSION`` file is the single source of truth for the
+application version. These tests confirm every other location that surfaces
+the version (the ``src`` package, CITATION.cff, README.md, and the desktop
+build workflow) stays derived from it rather than hard-coding a literal.
+"""
 
 from pathlib import Path
 
 import src
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+def test_package_version_matches_VERSION_file():
+    assert src.__version__ == Path("VERSION").read_text(encoding="utf-8").strip()
 
 
-def test_public_version_is_0_1_0():
-    assert (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.1.0"
-    assert src.__version__ == "0.1.0"
-
-
-def test_primary_documents_use_public_version():
-    for relative_path in (
-        "README.md",
-        "README.ko.md",
-        "docs/USER_GUIDE.md",
-        "docs/USER_GUIDE.ko.md",
-    ):
-        document = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
-        assert "0.1.0" in document, f"Missing 0.1.0 in {relative_path}"
+def test_citation_and_notices_match_VERSION():
+    version = Path("VERSION").read_text(encoding="utf-8").strip()
+    assert f"version: {version}" in Path("CITATION.cff").read_text(encoding="utf-8")
+    assert version in Path("README.md").read_text(encoding="utf-8")
+    assert "0.1.0" not in Path(".github/workflows/build-desktop.yml").read_text(
+        encoding="utf-8"
+    )

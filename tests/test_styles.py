@@ -8,7 +8,6 @@ from src.ui.styles import (
     load_stylesheet,
 )
 
-
 REQUIRED_TOKENS = {
     "bg_primary",
     "bg_secondary",

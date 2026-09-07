@@ -19,23 +19,24 @@ Why CPU, not GPU?
   a 2D result image to screen (~1 MB), completely bypassing the GPU hang.
 """
 
+import logging
 import math
 import time
-import logging
-import vtk
 from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Tuple
+
+import vtk
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
     QSlider,
     QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import QTimer, QSize, Qt
-from typing import Callable, Optional, List, Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -240,8 +241,8 @@ from ..utils.constants import (
     TRANSFER_FUNCTION_PRESETS,
 )
 from ..utils.vtk_helpers import downsample_vtk_image
-from .vtk_widget import create_vtk_widget
 from .click_detector import DoubleClickDetector
+from .vtk_widget import create_vtk_widget
 
 
 class Viewer3D(QWidget):

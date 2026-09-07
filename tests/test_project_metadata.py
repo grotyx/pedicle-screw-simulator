@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_public_creator_metadata_is_complete():
-    assert src.__version__ == "0.1.0"
+    assert src.__version__ == (PROJECT_ROOT / "VERSION").read_text(
+        encoding="utf-8"
+    ).strip()
     assert src.__author__ == "Sang-Min Park, MD, Ph.D."
     assert src.__organization__ == "Seoul National University Bundang Hospital"
     assert src.__email__ == "psmini@snu.ac.kr"
@@ -26,9 +28,10 @@ def test_mit_license_preserves_creator_credit():
 
 
 def test_citation_file_contains_academic_metadata():
+    version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
     for expected in (
-        'version: "0.1.0"',
+        f"version: {version}",
         'family-names: "Park"',
         'given-names: "Sang-Min"',
         'email: "psmini@snu.ac.kr"',
@@ -40,9 +43,10 @@ def test_citation_file_contains_academic_metadata():
 
 
 def test_about_html_exposes_version_creator_and_contact():
+    version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     about_html = main_window_module.build_about_html()
     for expected in (
-        "0.1.0",
+        version,
         "Sang-Min Park, MD, Ph.D.",
         "Seoul National University Bundang Hospital",
         "psmini@snu.ac.kr",

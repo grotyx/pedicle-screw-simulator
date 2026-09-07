@@ -6,16 +6,16 @@ the function. All tests should pass with both the current implementation
 and the optimized (2-copy) implementation.
 """
 
-import pytest
-import numpy as np
-import sys
 import os
+import sys
+
+import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import SimpleITK as sitk
 import vtk
-from vtk.util import numpy_support
 
 from src.utils.vtk_helpers import sitk_to_vtk
 
@@ -257,6 +257,7 @@ class TestDownsampleVtkImage:
     def test_source_has_vtkImageShrink3D(self):
         """downsample_vtk_image must use vtkImageShrink3D internally."""
         import inspect
+
         from src.utils import vtk_helpers
         source = inspect.getsource(vtk_helpers)
         assert "vtkImageShrink3D" in source
