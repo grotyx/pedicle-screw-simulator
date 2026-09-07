@@ -107,7 +107,9 @@ class MPRViewer(QWidget):
         self._measurement_select_callback: Optional[Callable] = None
         self._measurement_drag_callback: Optional[Callable] = None
         self._mask_reslice: Optional[vtk.vtkImageReslice] = None
-        self._mask_threshold: Optional[vtk.vtkImageThreshold] = None
+        # Either vtkImageBinaryThreshold or vtkImageThreshold, whichever the
+        # running VTK provides (see _build_segmentation_overlay).
+        self._mask_threshold: Optional[vtk.vtkImageAlgorithm] = None
         self._mask_color_map: Optional[vtk.vtkImageMapToColors] = None
         self._mask_actor: Optional[vtk.vtkImageActor] = None
         self._mask_actor_added = False
@@ -772,18 +774,30 @@ class MPRViewer(QWidget):
 
         self._update_reslice_position()
 
-        threshold = vtk.vtkImageThreshold()
-        threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
+        # vtkImageBinaryThreshold (VTK >= 9.7) replaces the deprecated
+        # vtkImageThreshold.ThresholdBetween(); see the same fallback in
+        # extract_vertebral_mesh (src/core/vertebral_mesh.py).
         if self._segmentation_label_value <= 0:
-            threshold.ThresholdBetween(1, 1000000)
+            lower, upper = 1, 1000000
         else:
-            threshold.ThresholdBetween(
-                self._segmentation_label_value,
-                self._segmentation_label_value,
-            )
-        threshold.SetInValue(1)
-        threshold.SetOutValue(0)
-        threshold.SetOutputScalarTypeToUnsignedChar()
+            lower = upper = self._segmentation_label_value
+        if hasattr(vtk, "vtkImageBinaryThreshold"):
+            threshold = vtk.vtkImageBinaryThreshold()
+            threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
+            threshold.SetLowerThreshold(lower)
+            threshold.SetUpperThreshold(upper)
+            threshold.SetInValue(1)
+            threshold.SetOutValue(0)
+            threshold.SetReplaceIn(True)
+            threshold.SetReplaceOut(True)
+            threshold.SetOutputScalarTypeToUnsignedChar()
+        else:
+            threshold = vtk.vtkImageThreshold()
+            threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
+            threshold.ThresholdBetween(lower, upper)
+            threshold.SetInValue(1)
+            threshold.SetOutValue(0)
+            threshold.SetOutputScalarTypeToUnsignedChar()
         threshold.Update()
         self._mask_threshold = threshold
 
