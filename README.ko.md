@@ -187,6 +187,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공하며 Intel macOS와 Linux 패키지는 제공하지 않습니다.
 - Standalone에 TotalSegmentator가 포함되지만 모델은 최초 사용 시 내려받으며 많은 메모리와 저장공간이 필요할 수 있습니다.
 - 선택적 척추경 세부영역(subregion) 모델(nnU-Net 기반 pedicle/corpus/lamina 라벨 정밀화)은 `nnunetv2`가 설치된 소스 환경이 필요하며, standalone 패키지에서는 지원하지 않습니다.
+- 현재 공개된 Spine_Subregions release는 이 프로그램이 기대하는 nnU-Net v2 폴더 구조가 아니라 nnU-Net v1 방식의 폴더 구조를 사용하므로, 가중치가 nnU-Net v2용으로 재출력되기 전까지는 model directory가 인식되지 않습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.
 
 ## 학술 인용
