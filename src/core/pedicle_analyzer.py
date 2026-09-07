@@ -122,9 +122,7 @@ class PedicleAnalyzer:
             ``np.argwhere`` on the sitk array.
         """
         mean_zyx = indices_zyx.mean(axis=0)
-        # Convert to ijk (x, y, z) for sitk
-        x, y, z = mean_zyx[2], mean_zyx[1], mean_zyx[0]
-        return self._ijk_to_lps(int(round(x)), int(round(y)), int(round(z)))
+        return self._continuous_ijk_to_lps(mean_zyx[2], mean_zyx[1], mean_zyx[0])
 
     def _indices_to_lps(self, indices_zyx: np.ndarray) -> np.ndarray:
         """Convert an array of z-y-x indices to physical LPS coordinates."""

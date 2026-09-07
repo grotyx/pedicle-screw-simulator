@@ -280,13 +280,11 @@ class TestGetAvailableVertebrae:
         assert len(vertebrae) == 1
         v = vertebrae[0]
 
-        # The mean index in z,y,x is approximately (9.5, 9.5, 9.5).
-        # With spacing=2 and origin=0, the LPS physical centroid should be
-        # near (9.5*2, 9.5*2, 9.5*2) = (19, 19, 19).
-        # Because we round to int before TransformIndexToPhysicalPoint,
-        # the centroid is at index 10 -> 10*2 = 20 for each axis.
-        expected_approx = np.array([20.0, 20.0, 20.0])
-        np.testing.assert_allclose(v.centroid_lps, expected_approx, atol=2.1)
+        # The mean index in z,y,x is exactly (9.5, 9.5, 9.5) (block indices
+        # 5..14 inclusive).  With spacing=2 and origin=0, the sub-voxel LPS
+        # physical centroid is (9.5*2, 9.5*2, 9.5*2) = (19, 19, 19).
+        expected = np.array([19.0, 19.0, 19.0])
+        assert v.centroid_lps == pytest.approx(expected)
 
     def test_volume_mm3(self):
         """Volume should equal voxel_count * voxel_volume."""
@@ -562,13 +560,23 @@ class TestCustomGeometry:
         analyzer = PedicleAnalyzer(img)
         v = analyzer.get_available_vertebrae()[0]
 
-        # Mean index ~9.5 for each axis.  Physical coords:
-        # x = round(9.5)*sx = 10*0.5 = 5.0 (sitk spacing is reversed from numpy shape)
+        # Mean index is exactly 9.5 for each axis (sub-voxel, no rounding).
         # The spacing in _make_mask is reversed to match sitk (x,y,z) order,
         # so sitk spacing = (2.0, 0.5, 0.5) -> x:2.0, y:0.5, z:0.5
-        # With origin=(0,0,0), centroid x ~ 10*2.0 = 20.0, y ~ 10*0.5 = 5.0, z ~ 10*0.5 = 5.0
+        # With origin=(0,0,0), centroid x = 9.5*2.0 = 19.0, y = 9.5*0.5 = 4.75,
+        # z = 9.5*0.5 = 4.75.
         # Verify that centroid is not zero and has plausible magnitude.
         assert np.linalg.norm(v.centroid_lps) > 0
+
+
+class TestSubvoxelCentroid:
+    """_indices_centroid_lps should not round to the nearest voxel."""
+
+    def test_centroid_is_subvoxel_accurate(self):
+        img = _make_mask(shape=(10, 10, 10))
+        analyzer = PedicleAnalyzer(img)
+        indices = np.array([[0, 0, 0], [0, 0, 1]])  # z, y, x -> mean x = 0.5
+        assert analyzer._indices_centroid_lps(indices)[0] == pytest.approx(0.5)
 
 
 if __name__ == "__main__":
