@@ -130,9 +130,42 @@ The collapsible **Planning parameters** group below **Planning** exposes the set
 | Max convergence | 35° | Largest medial convergence angle the planner may use |
 | HU threshold | 123 HU | Trajectory HU below which the loosening-risk warning is flagged |
 
-Select **Reset Defaults** to restore these five built-in values and save them immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
+Select **Reset Defaults** to restore these five built-in values, along with the planner mode, trajectory family, and objective weights described below, and save them all immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
 
-### 5.6 Review in Screw MPR
+### 5.6 Trajectory Optimizer
+
+The **Planner** combo in Planning Parameters selects between two back-ends for **Plan Screws**:
+
+- **Optimizer** (default) — enumerates a dense grid of straight candidate trajectories per pedicle (entry offset × convergence angle × craniocaudal angle × catalogue length), grades every candidate in a single pass, discards infeasible ones, and ranks the rest by a weighted sum of five normalised objectives (each 0–1):
+  - **Safety** — minimum cortical wall clearance, saturating at 3 mm.
+  - **Density** — mean trajectory HU, normalised over 100–600 HU.
+  - **Length** — screw length as a fraction of the longest catalogue length.
+  - **Endplate** — how parallel the trajectory is to the upper endplate, within a 15° tolerance.
+  - **Centering** — how close the trajectory passes to the pedicle isthmus centre, relative to the isthmus half-width.
+- **Legacy** — the original greedy entry/target search used before the optimizer was added.
+
+Default weights (shown as a percentage of the nominal weight, 0–300%, in the panel): Safety 100% (1.0), Density 50% (0.5), Length 20% (0.2), Endplate 30% (0.3), Centering 30% (0.3). A sixth weight, **Rod** (default 30% / 0.3), does not affect single-screw scoring; it only governs how much a multi-screw plan may trade an individual screw's score to line up the screw heads on the same side (see below). Only the Safety, Density, and Rod weights are exposed as sliders in the panel; Length, Endplate, and Centering stay at their defaults in this version.
+
+A candidate is feasible only when it has zero cortical breach, keeps at least the configured wall clearance, keeps its convergence angle within the configured range, and keeps the configured anterior margin over its distal 4 mm segment. An entry point that would have to be seated more than 3 mm inside the posterior cortex to fit the screw's cross-section is also rejected as unreachable, since a real drill cannot pass through that much bone to reach the corridor. If no diameter within two catalogue steps below the pedicle's recommended diameter admits a feasible trajectory, the pedicle is planned by the legacy method instead and the screw's warnings include "Optimizer found no feasible trajectory; legacy planner used." In testing, Optimizer-mode screws never score a worse Gertzbein grade or meaningfully less wall clearance than the same case planned in Legacy mode.
+
+When more than one screw is planned on the same side, the optimizer re-ranks each pedicle's top candidates so the screw heads line up along a common line — a proxy for how much the rod has to be bent. It may trade away at most 10% of a screw's own best score to reduce this misalignment, weighted by the Rod slider. After planning, the status bar and the auto-screw status line report the result as "Rod misalignment L *x* mm / R *y* mm," and each screw's metrics carry `score`, `score_components`, and `rod_misalignment_mm`.
+
+Runtime is approximately 2–3 seconds per pedicle on a typical CT; multi-level cases take proportionally longer because pedicles are planned one at a time. There is currently no per-level progress indicator during planning — only the three coarse status messages "Analyzing vertebral pedicles...", "Analyzed N vertebrae, M with pedicle data. Planning screws...", and "Planned N screw trajectories."
+
+### 5.7 Cortical Bone Trajectory (CBT) Mode
+
+The **Trajectory** combo in Planning Parameters selects the trajectory family **Plan Screws** aims for:
+
+- **Traditional** (default) — a convergent pedicle screw following the pedicle axis, planned by either back-end above.
+- **Cortical bone trajectory** — a short, narrow screw that starts at the pars/lamina junction, just inferior and medial to the pedicle isthmus, and runs cranially and laterally into the vertebral body: the mirror image of a traditional screw. It gains its pull-out strength from cortical bone contact along the way rather than from filling the pedicle, which is the technique's advantage in osteoporotic bone. Selecting CBT replaces the trajectory search entirely — neither the optimizer's candidate grid nor the legacy planner's medial search is used — regardless of the Planner mode selected.
+
+Starting angles follow the CBT literature: cranial angle ≈25° and lateral angle ≈12°, each swept ±5° in 2.5° steps to find the best-scoring direction. The implant catalogue is 5.0/5.5/6.0 mm diameters and 30/35/40 mm lengths — narrower and shorter than the traditional catalogue. Candidates are ranked by safety and density in equal proportion (cortical purchase is the point of the technique), and must have zero breach and the configured wall clearance to be feasible; ties favor the longer, then the wider, screw.
+
+Every planned CBT screw carries a fixed warning reminding the reviewer to rule out the technique's contraindications on the CT, since the planner has no way to detect them automatically: "CBT consensus contraindications: spondylolisthesis grade >= 3, pars defect, absent lamina/isthmus, rotational deformity > 2° (Zhang 2024)." A side that has no feasible CBT trajectory is dropped rather than silently substituted with a traditional trajectory, since the two techniques place their heads in different locations and mixing them would break the construct.
+
+CBT screws are graded through the exact same finalization path as traditional screws — the same mask-based Gertzbein-Robbins breach and wall-clearance logic, HU statistics, bone-quality warnings, and facet/Heary classification described in sections 5.9 and 5.10 — so a CBT screw's grade and metrics are directly comparable to a traditional one in the Selected Screw panel and in exports. Starting angles are from Zeng et al. (2024, *Orthopaedic Surgery*, CT-based CBT trajectory morphometry); the contraindication note is from Zhang et al. (2024, *Asian Spine Journal*, Delphi consensus on CBT indications).
+
+### 5.8 Review in Screw MPR
 
 1. Select a screw from the list, MPR, or 3D.
 2. Select **Screw MPR**.
@@ -142,7 +175,7 @@ Select **Reset Defaults** to restore these five built-in values and save them im
 
 Screw MPR shows the selected screw. Standard MPR shows screws intersecting the current slice.
 
-### 5.7 Screw Metrics and Grading
+### 5.9 Screw Metrics and Grading
 
 The **Selected Screw** panel reports:
 
@@ -154,7 +187,7 @@ Automatic sizing keeps the diameter at or below 80% of the measured pedicle isth
 
 Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
 
-### 5.8 Screw Quality Metrics
+### 5.10 Screw Quality Metrics
 
 Once a screw is graded against a segmentation, the **Selected Screw** panel (Body HU, Wall margin, Facet, Heary rows) and the CSV/JSON export report a bundle of literature-based bone-quality and safety measurements:
 
@@ -178,7 +211,7 @@ The panel and export also warn when a measurement crosses a literature threshold
 
 These bone-quality warnings are generated only for automatically planned screws; a manually placed screw still receives the full metric bundle but not the bone-quality warnings. Re-grading a plan — after running segmentation again or on plan load, whenever a segmentation is already available — regenerates the breach-distance and cortical-clearance warnings for every screw.
 
-### 5.9 Optional Pedicle Subregion Model
+### 5.11 Optional Pedicle Subregion Model
 
 Segmentation → Advanced offers **Use pedicle subregion model**, off by default. When enabled, the app looks for a locally installed nnU-Net model that segments a vertebra into pedicle/corpus/lamina/spinous/transverse/articular subregions ([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026), located either through the **Model directory** field or the `PSS_SUBREGION_MODEL_DIR` environment variable. Both must point at an nnU-Net results folder containing `dataset.json` and `fold_*/checkpoint_final.pth`.
 
@@ -268,7 +301,7 @@ Measurements belong to the cut where they were created. They hide on another cut
 - Export supported planning tables as CSV.
 - Export supported bone surfaces as STL.
 
-Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.8, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, and the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`.
+Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, and the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`.
 
 Planning files, screenshots, and meshes may still be identifiable derivatives. Review them before sharing.
 

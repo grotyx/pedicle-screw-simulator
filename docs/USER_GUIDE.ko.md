@@ -130,9 +130,42 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 | Max convergence | 35° | 플래너가 사용할 수 있는 최대 medial 수렴각 |
 | HU threshold | 123 HU | 이완(loosening) 위험 경고가 표시되는 궤적 HU 기준값 |
 
-**Reset Defaults**를 선택하면 이 다섯 개 값이 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
+**Reset Defaults**를 선택하면 이 다섯 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
 
-### 5.6 Screw MPR 검토
+### 5.6 궤적 최적화기(Trajectory Optimizer)
+
+Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 두 가지 백엔드 중 하나를 선택합니다.
+
+- **Optimizer(기본값)** — 척추경 하나마다 entry 오프셋 × 수렴각(convergence) × 두미측각(craniocaudal) × 카탈로그 길이로 이루어진 촘촘한 직선 궤적 후보 그리드를 만들고, 모든 후보를 한 번에 채점한 뒤 실현 불가능한 후보를 제외하고, 다섯 개의 정규화된(0–1) 목적함수의 가중합으로 나머지를 순위 매깁니다.
+  - **Safety(안전성)** — 최소 피질골 여유거리이며 3 mm에서 포화됩니다.
+  - **Density(밀도)** — 궤적 평균 HU를 100–600 HU 범위로 정규화한 값입니다.
+  - **Length(길이)** — 카탈로그의 가장 긴 길이 대비 스크류 길이의 비율입니다.
+  - **Endplate(종판)** — 상위 종판(upper endplate)과 궤적이 얼마나 평행한지를 15° 허용오차 안에서 나타낸 값입니다.
+  - **Centering(중심성)** — 궤적이 척추경 협부(isthmus) 중심에 얼마나 가깝게 지나가는지를 협부 반폭 대비로 나타낸 값입니다.
+- **Legacy** — 최적화기가 추가되기 전부터 사용하던 원래의 탐욕적(greedy) entry/target 탐색 방식입니다.
+
+기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Rod**(기본값 30% / 0.3)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Rod 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
+
+어떤 후보가 실현 가능하려면 피질골 천공이 전혀 없어야 하고, 설정된 최소 벽 여유거리를 유지해야 하며, 수렴각이 설정 범위 안에 있어야 하고, 원위(팁 쪽) 4 mm 구간에서 설정된 anterior margin을 확보해야 합니다. 스크류 단면이 들어가려면 posterior cortex 안쪽으로 3 mm 넘게 entry를 밀어 넣어야 하는 경우에도 실제 드릴이 그만큼의 뼈를 통과할 수 없으므로 도달 불가능한 것으로 보고 제외합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
+
+같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이도록 조정합니다 — 이는 로드를 얼마나 구부려야 하는지를 대신 나타내는 값입니다. 이때 Rod 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Rod misalignment L *x* mm / R *y* mm" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`이 함께 기록됩니다.
+
+실행 시간은 일반적인 CT 기준 척추경 한 개당 약 2–3초이며, 다중 레벨 증례는 척추경을 하나씩 순서대로 계획하기 때문에 그만큼 더 걸립니다. 현재 버전에는 계획 중 레벨별 진행 표시가 없으며, "Analyzing vertebral pedicles...", "Analyzed N vertebrae, M with pedicle data. Planning screws...", "Planned N screw trajectories." 세 개의 큰 단계 메시지만 표시됩니다.
+
+### 5.7 피질골 궤적(Cortical Bone Trajectory, CBT) 모드
+
+Planning Parameters의 **Trajectory** 콤보박스는 **Plan Screws**가 목표로 하는 궤적 방식을 선택합니다.
+
+- **Traditional(기본값)** — 척추경 축을 따라가는 수렴형(convergent) 척추경 나사못이며, 위의 두 백엔드 중 어느 쪽으로도 계획할 수 있습니다.
+- **Cortical bone trajectory** — pars/lamina 접합부, 즉 척추경 협부(isthmus)보다 약간 inferior·medial 지점에서 시작해 cranial·lateral 방향으로 척추체 안쪽으로 들어가는 짧고 가는 나사못으로, traditional 궤적과 정반대 방향입니다. 척추경을 가득 채우는 대신 지나가는 경로 상의 피질골 접촉에서 뽑힘 강도(pull-out strength)를 얻으며, 이 점이 골다공증 뼈에서 이 술식이 갖는 장점입니다. CBT를 선택하면 Planner 모드 설정과 무관하게 궤적 탐색 자체가 완전히 바뀌며, 최적화기의 후보 그리드도 legacy 플래너의 medial 탐색도 사용되지 않습니다.
+
+시작 각도는 CBT 문헌을 따릅니다: cranial 각도 ≈25°, lateral 각도 ≈12°이며, 각각 ±5° 범위를 2.5° 간격으로 훑어 가장 점수가 높은 방향을 찾습니다. 임플란트 카탈로그는 직경 5.0/5.5/6.0 mm, 길이 30/35/40 mm로 traditional 카탈로그보다 가늘고 짧습니다. 후보는 safety와 density를 동일한 비중으로 채점해 순위를 매기며(피질골과의 접촉이 이 술식의 핵심이기 때문입니다), 실현 가능하려면 천공이 전혀 없고 설정된 벽 여유거리를 만족해야 합니다. 동점일 경우 더 긴 스크류, 그다음 더 굵은 스크류를 우선합니다.
+
+계획된 모든 CBT 스크류에는 다음과 같은 고정 경고가 함께 표시되어, CT에서 이 술식의 금기사항을 직접 확인하도록 안내합니다. 플래너 스스로는 이를 자동으로 판별할 수 없기 때문입니다: "CBT consensus contraindications: spondylolisthesis grade >= 3, pars defect, absent lamina/isthmus, rotational deformity > 2° (Zhang 2024)". 실현 가능한 CBT 궤적이 없는 방향(side)은 traditional 궤적으로 대체되지 않고 그대로 제외됩니다. 두 술식은 헤드 위치가 서로 다르므로 섞어 쓰면 구조물(construct) 전체가 어긋나기 때문입니다.
+
+CBT 스크류도 traditional 스크류와 완전히 동일한 마무리 경로를 거쳐 등급이 매겨집니다 — 5.9절과 5.10절에서 설명한 것과 같은 mask 기반 Gertzbein-Robbins 천공·벽 여유거리 판정, HU 통계, 골질 경고, facet/Heary 분류를 그대로 사용하므로, CBT 스크류의 등급과 지표는 **Selected Screw** 패널과 내보내기에서 traditional 스크류와 직접 비교할 수 있습니다. 시작 각도의 근거는 Zeng 등(2024, *Orthopaedic Surgery*, CT 기반 CBT 궤적 형태계측 연구)이며, 금기사항 안내문의 근거는 Zhang 등(2024, *Asian Spine Journal*, CBT 적응증에 대한 Delphi 합의)입니다.
+
+### 5.8 Screw MPR 검토
 
 1. 목록, MPR 또는 3D에서 스크류를 선택합니다.
 2. **Screw MPR**을 선택합니다.
@@ -142,7 +175,7 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 
 Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현재 단면과 만나는 스크류가 표시됩니다.
 
-### 5.7 스크류 측정값과 등급
+### 5.9 스크류 측정값과 등급
 
 **Selected Screw** 패널에는 다음 값이 표시됩니다.
 
@@ -154,7 +187,7 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 
 불러온 volume은 표시 전에 LPS(identity 방향)로 재정렬됩니다. Oblique 방식으로 촬영된 volume은 identity 방향 격자로 resampling되며, 이 경우 정보 패널에 "(oblique volume resampled)"가 표시됩니다.
 
-### 5.8 스크류 골질(骨質) 지표(Screw Quality Metrics)
+### 5.10 스크류 골질(骨質) 지표(Screw Quality Metrics)
 
 스크류가 segmentation을 기준으로 등급이 매겨지면, **Selected Screw** 패널(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
 
@@ -178,7 +211,7 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 
 이러한 골질 관련 경고는 자동 계획된 스크류에서만 생성됩니다. 수동으로 배치한 스크류도 전체 지표 모음은 제공받지만 골질 경고는 받지 않습니다. Segmentation을 다시 실행하거나 계획을 불러올 때(이미 segmentation이 있는 경우) 계획을 다시 등급 매기면 모든 스크류의 breach distance·피질골 여유 경고가 다시 생성됩니다.
 
-### 5.9 척추경 세부영역(Subregion) 모델(선택 사항)
+### 5.11 척추경 세부영역(Subregion) 모델(선택 사항)
 
 Segmentation → Advanced에는 기본적으로 꺼져 있는 **Use pedicle subregion model** 옵션이 있습니다. 이를 켜면 척추를 pedicle/corpus/lamina/spinous/transverse/articular 세부영역으로 분할하는 로컬 nnU-Net 모델([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026)을 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 가리키는 경로에서 찾습니다. 이 경로는 `dataset.json`과 `fold_*/checkpoint_final.pth`가 있는 nnU-Net results 폴더여야 합니다.
 
@@ -268,7 +301,7 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 - 지원되는 계획 표를 CSV로 내보냅니다.
 - 지원되는 골 표면을 STL로 내보냅니다.
 
-계획 파일은 schema version 3을 사용하며, 각 스크류에 5.8절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열과 함께 schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`가 포함됩니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열과 함께 schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`가 포함됩니다.
 
 계획 파일, 스크린샷과 3D 메시는 DICOM 헤더가 없어도 환자와 연결될 수 있으므로 공유 전에 확인하십시오.
 
