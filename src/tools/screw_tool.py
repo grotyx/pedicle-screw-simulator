@@ -22,6 +22,7 @@ from ..utils.constants import (
 
 if TYPE_CHECKING:
     from ..core.volume_manager import VolumeManager
+    from ..core.screw_grading import ScrewGrader
 
 
 class ScrewTool:
@@ -57,6 +58,9 @@ class ScrewTool:
         # Placed screws
         self._screws: List[Screw] = []
 
+        # Segmentation-based grader (None until a mask is available)
+        self._grader: Optional["ScrewGrader"] = None
+
         # Callbacks
         self._on_screw_placed: Optional[Callable[[Screw], None]] = None
         self._on_state_changed: Optional[Callable[[str], None]] = None
@@ -73,6 +77,14 @@ class ScrewTool:
 
         self._mode = mode
         self._reset_state()
+
+    def set_grader(self, grader: Optional["ScrewGrader"]) -> None:
+        """Attach (or detach) the segmentation-based grader."""
+        self._grader = grader
+
+    @property
+    def grader(self) -> Optional["ScrewGrader"]:
+        return self._grader
 
     def set_screw_parameters(
         self,
@@ -200,30 +212,27 @@ class ScrewTool:
         medial_angle: float
     ) -> Tuple[float, float, float]:
         """
-        Calculate target point from entry point and angles.
+        Calculate target point from entry point and angles, in LPS millimetres.
+
+        Entry-angle mode is a legacy convenience mode: it assumes the volume
+        midline sits near x = 0, so the entry point's sign decides which side
+        "medial" points towards.
 
         Args:
-            entry: Entry point coordinates
+            entry: Entry point coordinates (LPS mm)
             length: Screw length
-            insertion_angle: Angle from vertical (degrees)
-            medial_angle: Angle from midline (degrees)
+            insertion_angle: Craniocaudal angle, cranial positive (degrees)
+            medial_angle: Axial convergence towards the midline (degrees)
 
         Returns:
             Target point coordinates
         """
-        # Convert to radians
-        ins_rad = math.radians(insertion_angle)
-        med_rad = math.radians(medial_angle)
-
-        # Calculate direction components
-        # Coordinate convention used here:
-        # - Z: anterior/depth direction
-        # - Y: superior/inferior direction
-        # - X: medial/lateral direction
-        # The direction vector is normalized so actual screw length matches input.
-        dx = -math.cos(ins_rad) * math.sin(med_rad)
-        dy = -math.sin(ins_rad)
-        dz = -math.cos(ins_rad) * math.cos(med_rad)
+        ins_rad = math.radians(insertion_angle)   # cranial positive
+        med_rad = math.radians(medial_angle)      # medial positive; entry assumed left of midline when x > 0
+        lateral_sign = 1.0 if entry[0] >= 0.0 else -1.0
+        dx = -lateral_sign * math.sin(med_rad) * math.cos(ins_rad)
+        dy = -math.cos(med_rad) * math.cos(ins_rad)
+        dz = math.sin(ins_rad)
 
         return (
             entry[0] + length * dx,
@@ -232,47 +241,27 @@ class ScrewTool:
         )
 
     def _evaluate_screw(self, screw: Screw):
-        """
-        Evaluate screw placement using Gertzbein-Robbins grading.
-
-        Checks for cortical breach by sampling HU values along trajectory.
-        """
-        if self.volume_manager.get_vtk_image() is None:
-            screw.grade = "A"  # Can't evaluate without volume
+        """Grade with the segmentation mask; mark N/A when no mask exists."""
+        note = "Not graded: run segmentation first"
+        screw.warnings = [w for w in screw.warnings if w != note]
+        if self._grader is None:
+            screw.grade = "N/A"
+            screw.breach_distance = 0.0
+            screw.warnings.append(note)
             return
-
-        # Sample points along screw trajectory
-        num_samples = int(screw.length / 0.5)  # Sample every 0.5mm
-        max_breach = 0.0
-
-        for i in range(num_samples):
-            t = i / num_samples
-            x = screw.entry_point[0] + t * (screw.target_point[0] - screw.entry_point[0])
-            y = screw.entry_point[1] + t * (screw.target_point[1] - screw.entry_point[1])
-            z = screw.entry_point[2] + t * (screw.target_point[2] - screw.entry_point[2])
-
-            # Sample perpendicular points (at screw radius)
-            # Simplified: just check the trajectory itself
-            hu_value = self.volume_manager.get_voxel_value(x, y, z)
-
-            # If HU is below bone threshold, we're outside bone (breach)
-            if hu_value < 200:  # Soft tissue threshold
-                # Estimate breach distance (simplified)
-                max_breach = max(max_breach, screw.diameter / 2)
-
-        # Assign grade based on breach
-        if max_breach == 0:
-            screw.grade = "A"
-        elif max_breach < 2:
-            screw.grade = "B"
-        elif max_breach < 4:
-            screw.grade = "C"
-        elif max_breach < 6:
-            screw.grade = "D"
-        else:
-            screw.grade = "E"
-
-        screw.breach_distance = max_breach
+        result = self._grader.grade(screw.entry_point, screw.target_point, screw.diameter)
+        if result is None:
+            screw.grade = "N/A"
+            screw.breach_distance = 0.0
+            screw.warnings.append("Not graded: trajectory does not pass through a segmented vertebra")
+            return
+        screw.grade = result.grade
+        screw.breach_distance = result.breach_mm
+        screw.mean_hu = result.mean_hu
+        screw.min_hu = result.min_hu
+        if not screw.vertebra_level:
+            from ..core.pedicle_analyzer import VERTEBRA_LABELS
+            screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
 
     def _reset_state(self):
         """Reset tool state."""
@@ -314,6 +303,8 @@ class ScrewTool:
             diameter=original.diameter,
             vertebra_level=original.vertebra_level,
             side=original.side,
+            source=original.source,
+            warnings=[w for w in original.warnings if not w.startswith("Not graded")],
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated
@@ -337,6 +328,8 @@ class ScrewTool:
             diameter=diameter,
             vertebra_level=original.vertebra_level,
             side=original.side,
+            source=original.source,
+            warnings=[w for w in original.warnings if not w.startswith("Not graded")],
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated

@@ -385,5 +385,9 @@ def planned_screw_to_screw(ps: PlannedScrew) -> Screw:
         vertebra_level=ps.vertebra_name,
         side=ps.side,
         grade=ps.gertzbein_grade,
-        breach_distance=0.0,
+        breach_distance=float(ps.breach_mm),
+        mean_hu=float(ps.mean_bone_density),
+        min_hu=float(ps.min_bone_density),
+        warnings=list(ps.warnings),
+        source="auto",
     )

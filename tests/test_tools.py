@@ -58,15 +58,38 @@ class TestScrewTool:
         assert pytest.approx(result.length, rel=1e-6) == 45.0
         assert len(tool.get_screws()) == 1
 
-    def test_low_hu_marks_breach_grade(self):
+    def test_without_grader_grade_is_not_available(self):
         tool = ScrewTool(FakeVolumeManager(hu_value=50.0))
-
         tool.on_click(0.0, 0.0, 0.0, plane="axial")
         screw = tool.on_click(0.0, 0.0, 30.0, plane="axial")
+        assert screw.grade == "N/A"
+        assert screw.breach_distance == 0.0
+        assert any("segmentation" in w.lower() for w in screw.warnings)
 
-        assert screw is not None
-        assert screw.grade in {"C", "D", "E"}
-        assert screw.breach_distance > 0
+    def test_with_grader_uses_mask_containment(self):
+        import numpy as np
+        import SimpleITK as sitk
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))  # osteoporotic HU
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask, ct))
+        tool.on_click(30.0, 38.0, 30.0, plane="axial")
+        screw = tool.on_click(30.0, 22.0, 30.0, plane="axial")
+        assert screw.grade == "A"          # low HU must not be called a breach
+        assert screw.mean_hu == pytest.approx(80.0)
+
+    def test_replace_screw_keeps_metadata(self):
+        tool = ScrewTool(FakeVolumeManager())
+        original = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, 0.0, 40.0),
+                         diameter=6.5, vertebra_level="L3", side="left",
+                         source="auto", warnings=["planner note"])
+        tool.add_screw(original)
+        updated = tool.replace_screw(0, entry_point=(10.0, 0.0, 0.0), target_point=(10.0, 0.0, 30.0))
+        assert updated.source == "auto"
+        assert "planner note" in updated.warnings
 
     def test_add_existing_screw(self):
         tool = ScrewTool(FakeVolumeManager())
@@ -108,7 +131,7 @@ class TestScrewTool:
         assert updated.diameter == 6.5
         assert updated.vertebra_level == "L3"
         assert updated.side == "left"
-        assert updated.grade == "A"
+        assert updated.grade == "N/A"
 
     def test_update_screw_diameter_rebuilds_safety_data_and_limits_maximum(self):
         tool = ScrewTool(FakeVolumeManager())
@@ -128,6 +151,7 @@ class TestScrewTool:
         assert updated.diameter == pytest.approx(7.5)
         assert updated.vertebra_level == "L3"
         assert updated.side == "left"
+        assert updated.grade == "N/A"
         with pytest.raises(ValueError, match="4.0.*7.5"):
             tool.update_screw_diameter(0, 8.0)
 

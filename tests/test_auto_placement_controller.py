@@ -546,3 +546,21 @@ class TestAutoPlacementControllerUnit:
         ctrl.reject_selected()
         assert len(ctrl.planned_screws) == 1
         assert ctrl.planned_screws[0].side == "right"
+
+
+def test_planned_screw_to_screw_copies_metadata():
+    import numpy as np
+    from src.core.auto_screw_planner import PlannedScrew
+    from src.controllers.auto_placement_controller import planned_screw_to_screw
+    ps = PlannedScrew(vertebra_name="L4", side="left", entry_lps=np.array([1.0, 2.0, 3.0]),
+                      target_lps=np.array([1.0, -30.0, 3.0]), length_mm=32.0, diameter_mm=6.0,
+                      convergence_angle=10.0, craniocaudal_angle=0.0, mean_bone_density=210.0,
+                      min_bone_density=90.0, gertzbein_grade="B", confidence=0.7,
+                      warnings=["Breach distance 0.8 mm (grade B)"], breach_mm=0.8, min_wall_mm=0.0)
+    screw = planned_screw_to_screw(ps)
+    assert screw.grade == "B"
+    assert screw.breach_distance == pytest.approx(0.8)
+    assert screw.mean_hu == pytest.approx(210.0)
+    assert screw.min_hu == pytest.approx(90.0)
+    assert screw.source == "auto"
+    assert screw.warnings == ["Breach distance 0.8 mm (grade B)"]

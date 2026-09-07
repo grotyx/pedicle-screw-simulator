@@ -215,6 +215,19 @@ class SegmentationController:
             )
             self._window.viewer_3d.set_vertebral_mesh(vtk_mask, labels=detected)
             self._last_segmentation_mask_path = result.mask_path
+            from src.core.screw_grading import ScrewGrader
+            if result.method == "totalsegmentator":
+                try:
+                    grader = ScrewGrader(mask_image, self._vm.get_sitk_image())
+                except ValueError:
+                    logger.warning(
+                        "Mask and CT grids differ; manual screws will not be graded.",
+                        exc_info=True,
+                    )
+                    grader = None
+                self._window._tool_ctrl.screw_tool.set_grader(grader)
+            else:
+                self._window._tool_ctrl.screw_tool.set_grader(None)
             self._window.update_vertebra_level_checks(detected)
 
             self.update_visibility()
@@ -536,6 +549,8 @@ class SegmentationController:
         self._last_segmentation_method = "totalsegmentator"
         self._last_vtk_mask = None
         self._detected_vertebra_labels = []
+        if hasattr(self._window, "_tool_ctrl"):
+            self._window._tool_ctrl.screw_tool.set_grader(None)
         self._window.clear_vertebra_display_options()
         self._window.seg_status_label.setText("Ready for automatic segmentation")
         self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
