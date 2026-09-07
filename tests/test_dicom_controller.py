@@ -1,6 +1,8 @@
 """Lifecycle tests for DICOM loading and application shutdown."""
 
-from src.controllers.dicom_controller import DicomController
+import logging
+
+from src.controllers.dicom_controller import DicomController, DicomLoadThread
 from src.core.dicom_loader import DicomLoader
 from src.ui.main_window import MainWindow
 
@@ -132,3 +134,41 @@ def test_series_picker_prioritizes_largest_ct_series(monkeypatch):
     assert selected == "CT-VOLUME"
     assert "537 slices" in captured["options"][0]
     assert captured["current"] == 0
+
+
+def test_load_error_is_logged_not_printed(caplog, capsys, qapp):
+    thread = DicomLoadThread(directory="Z:/does/not/exist")
+    errors = []
+    thread.error.connect(errors.append)
+    with caplog.at_level(logging.ERROR, logger="src.controllers.dicom_controller"):
+        thread.run()
+    assert errors
+    assert "DICOM Load Error" not in capsys.readouterr().out
+
+
+def test_load_error_from_a_raised_exception_is_logged_not_printed(
+    monkeypatch, caplog, capsys, qapp
+):
+    """DicomLoadThread.run() must route unexpected exceptions through the
+    logger (with the traceback at debug level) instead of printing to
+    stdout, so patient-bearing tracebacks never land in shipped logs
+    unfiltered."""
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(DicomLoader, "scan_directory", _raise)
+
+    thread = DicomLoadThread(directory="Z:/does/not/exist")
+    errors = []
+    thread.error.connect(errors.append)
+    with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
+        thread.run()
+
+    assert errors == ["boom"]
+    out = capsys.readouterr().out
+    assert "DICOM Load Error" not in out
+    assert "boom" not in out
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("DICOM load failed" in message and "boom" in message for message in messages)
+    assert any("Traceback" in message for message in messages)

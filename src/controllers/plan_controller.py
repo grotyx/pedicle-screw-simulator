@@ -228,6 +228,13 @@ class PlanController:
 
         tool_ctrl._refresh_measurement_list()
 
+        # Plans saved by an older HU-heuristic grader (or saved before a
+        # grader was ever attached) carry stale grades. Re-grade now that
+        # the screws are attached to the tool controller so the inspector
+        # and overlays reflect the current segmentation-based grader.
+        if tool_ctrl.screw_tool.grader is not None:
+            tool_ctrl.regrade_all()
+
     @staticmethod
     def _build_measurement_planes(entries, count: int) -> List[Optional[str]]:
         """Build per-measurement plane list aligned to measurement order."""

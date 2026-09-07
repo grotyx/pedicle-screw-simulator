@@ -67,8 +67,8 @@ class DicomLoadThread(QThread):
 
         except Exception as e:
             import traceback
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            print(f"DICOM Load Error: {error_msg}")  # Console output for debugging
+            logger.error("DICOM load failed: %s", e)
+            logger.debug("Traceback:\n%s", traceback.format_exc())
             self.error.emit(str(e))
 
 

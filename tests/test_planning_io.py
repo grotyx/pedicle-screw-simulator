@@ -173,3 +173,20 @@ def test_payload_angles_are_recomputed_from_geometry():
     expected_medial_right = convergence_angle_deg(entry, target, "right")
     assert screw_right.medial_angle == pytest.approx(expected_medial_right)
     assert expected_medial_right == pytest.approx(-expected_medial_left)
+
+
+def test_plan_payload_contains_no_patient_identifiers():
+    """Plan JSON must carry only geometry/grading data, never DICOM PHI."""
+    import json
+    from src.models.screw import Screw
+    from src.utils.planning_io import serialize_plan
+
+    payload = serialize_plan(
+        "1.2.3",
+        [Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))],
+        [],
+        [],
+    )
+    text = json.dumps(payload).lower()
+    for token in ("patient", "birth", "studydate", "accession"):
+        assert token not in text
