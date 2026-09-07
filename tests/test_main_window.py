@@ -38,6 +38,9 @@ def isolated_qsettings(tmp_path, monkeypatch):
         return QSettings(str(path), QSettings.Format.IniFormat)
 
     monkeypatch.setattr(main_window_module, "QSettings", factory)
+    # app_settings() only checks the legacy scope once per process; reset
+    # that guard so each test's migration behavior is independent.
+    monkeypatch.setattr(main_window_module, "_migrated", False)
     return factory
 
 
@@ -179,6 +182,27 @@ def test_app_settings_helper_targets_the_unified_org_and_app(
     main_window_module.app_settings()
 
     assert ("SNUBH", "PedicleScrewSimulator") in calls
+
+
+def test_app_settings_only_checks_the_legacy_scope_once_per_process(
+    monkeypatch, isolated_qsettings
+):
+    """The migration guard must stop app_settings() from re-opening the
+    legacy scope on every call until a theme happens to get written."""
+    calls = []
+
+    def spy(*args):
+        calls.append(args)
+        return isolated_qsettings(*args)
+
+    monkeypatch.setattr(main_window_module, "QSettings", spy)
+
+    main_window_module.app_settings()
+    main_window_module.app_settings()
+    main_window_module.app_settings()
+
+    legacy_calls = [c for c in calls if c == ("ScrewFixation", "PedicleScrewPlanner")]
+    assert len(legacy_calls) == 1
 
 
 def test_theme_and_planner_settings_share_one_scope(ui_main_window, isolated_qsettings):

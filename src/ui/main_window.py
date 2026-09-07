@@ -85,6 +85,10 @@ _APP_SETTINGS_SCOPE = ("SNUBH", "PedicleScrewSimulator")
 #: Keys copied out of the legacy scope on first use of the unified scope.
 _MIGRATED_SETTINGS_KEYS = ("appearance/theme", "geometry", "windowState")
 
+#: Set once the legacy-scope migration check has run for this process, so
+#: app_settings() only ever opens the legacy scope once, not on every call.
+_migrated = False
+
 
 def app_settings() -> QSettings:
     """Return the single QSettings scope every part of the app should use.
@@ -93,19 +97,24 @@ def app_settings() -> QSettings:
     (theme, window geometry) and ``SNUBH/PedicleScrewSimulator`` (planner,
     segmentation), so "reset the app's settings" meant clearing two
     registry/plist locations. This unifies on the latter scope and, the
-    first time it is used on a machine that only has legacy settings,
-    migrates ``appearance/theme`` and the window-geometry keys over so
-    existing users keep their preferences.
+    first time it is called in this process, migrates ``appearance/theme``
+    and the window-geometry keys out of the legacy scope (if present) so
+    existing users keep their preferences. That check runs at most once per
+    process, guarded by a module-level flag, rather than re-opening the
+    legacy scope on every call until the migration happens to succeed.
     """
+    global _migrated
     settings = QSettings(*_APP_SETTINGS_SCOPE)
-    if settings.value("appearance/theme") is None:
-        legacy = QSettings(*_LEGACY_SETTINGS_SCOPE)
-        if legacy.value("appearance/theme") is not None:
-            for key in _MIGRATED_SETTINGS_KEYS:
-                value = legacy.value(key)
-                if value is not None:
-                    settings.setValue(key, value)
-            settings.sync()
+    if not _migrated:
+        _migrated = True
+        if settings.value("appearance/theme") is None:
+            legacy = QSettings(*_LEGACY_SETTINGS_SCOPE)
+            if legacy.value("appearance/theme") is not None:
+                for key in _MIGRATED_SETTINGS_KEYS:
+                    value = legacy.value(key)
+                    if value is not None:
+                        settings.setValue(key, value)
+                settings.sync()
     return settings
 
 

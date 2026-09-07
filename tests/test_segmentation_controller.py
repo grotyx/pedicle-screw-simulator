@@ -37,6 +37,9 @@ def isolated_qsettings(tmp_path, monkeypatch):
         return QSettings(str(path), QSettings.Format.IniFormat)
 
     monkeypatch.setattr(main_window_module, "QSettings", factory)
+    # app_settings() only checks the legacy scope once per process; reset
+    # that guard so each test's migration behavior is independent.
+    monkeypatch.setattr(main_window_module, "_migrated", False)
     return factory
 
 

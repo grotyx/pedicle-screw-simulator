@@ -340,6 +340,7 @@ class SegmentationController:
             self._window.viewer_3d.set_vertebral_mesh(vtk_mask, labels=detected)
             self._last_segmentation_mask_path = result.mask_path
             self._window.statusbar.showMessage("Resampling pedicle mask…")
+            QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
                 self._last_pedicle_mask = self._load_pedicle_mask(result, mask_image)
@@ -357,6 +358,7 @@ class SegmentationController:
                     grader = None
                 self._window._tool_ctrl.screw_tool.set_grader(grader)
                 self._window.statusbar.showMessage("Re-grading screws…")
+                QApplication.processEvents()
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                 try:
                     self._window._tool_ctrl.regrade_all()
