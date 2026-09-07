@@ -163,6 +163,7 @@ data/README.md   local-data privacy instructions; no clinical data
 - Automatic planning is geometric research software, not clinically validated navigation.
 - Results depend on DICOM geometry and segmentation quality.
 - Deformity, fracture, implants, artifacts, transitional anatomy, and poor segmentation may invalidate proposals.
+- Pedicle isthmus detection is geometric (coronal cross-section minimum on the TotalSegmentator mask) and not validated on deformity.
 - Standalone builds are provided for Apple Silicon macOS and Windows x64; Intel macOS and Linux packages are not provided.
 - TotalSegmentator is bundled in standalone builds, but its model weights are downloaded on first use and require substantial memory and disk space.
 - Clinical accuracy, inter-observer agreement, and prospective outcomes have not been established.

@@ -111,6 +111,18 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 
 Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현재 단면과 만나는 스크류가 표시됩니다.
 
+### 5.6 스크류 측정값과 등급
+
+**Selected Screw** 패널에는 다음 값이 표시됩니다.
+
+- **Convergence(수렴각):** 정중선 방향으로의 axial 각도이며 부호가 있습니다. 양수는 medial(팁이 정중선을 향함), 음수는 lateral을 의미합니다.
+- **Craniocaudal(두미측각):** axial 평면 위로의 궤적 상승각이며 부호가 있습니다. 양수는 cranial입니다. 스크류가 수렴하는 경우 이 값은 sagittal 투영각과 약간 다를 수 있습니다.
+- **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급이며, HU만으로 계산하지 않습니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
+
+자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하이면서 각 방향으로 최소 1 mm의 피질골 여유를 확보하도록 설정하고, 팁을 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
+
+불러온 volume은 표시 전에 LPS(identity 방향)로 재정렬됩니다. Oblique 방식으로 촬영된 volume은 identity 방향 격자로 resampling되며, 이 경우 정보 패널에 "(oblique volume resampled)"가 표시됩니다.
+
 ## 6. 스크류 수정
 
 ### 6.1 직접 수정
@@ -192,6 +204,8 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 - 계획을 JSON 형식으로 저장하고 불러옵니다.
 - 지원되는 계획 표를 CSV로 내보냅니다.
 - 지원되는 골 표면을 STL로 내보냅니다.
+
+계획 파일은 schema version 2를 사용하며 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열과 함께 `mean_hu`, `min_hu`, `source`, `warnings` 열이 포함됩니다.
 
 계획 파일, 스크린샷과 3D 메시는 DICOM 헤더가 없어도 환자와 연결될 수 있으므로 공유 전에 확인하십시오.
 

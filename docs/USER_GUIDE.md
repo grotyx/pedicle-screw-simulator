@@ -111,6 +111,18 @@ These values are workflow presets, not universal clinical recommendations.
 
 Screw MPR shows the selected screw. Standard MPR shows screws intersecting the current slice.
 
+### 5.6 Screw Metrics and Grading
+
+The **Selected Screw** panel reports:
+
+- **Convergence:** the signed axial angle toward the midline. Positive is medial (tip toward the midline); negative is lateral.
+- **Craniocaudal:** the signed elevation of the trajectory above the axial plane. Positive is cranial. For a converging screw this differs slightly from a sagittal-projection angle.
+- **Safety (grade):** a Gertzbein-Robbins grade computed from the cylinder-surface distance to the vertebra boundary on the TotalSegmentator mask, never from HU alone. The grade reads `N/A` until a TotalSegmentator mask exists for the screw's vertebra.
+
+Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width with at least 1 mm of cortical clearance on each side, keeps the tip at least 4 mm behind the anterior cortex, and selects lengths from the 25-55 mm catalogue in 5 mm steps. These values are workflow presets, not universal clinical recommendations.
+
+Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
+
 ## 6. Edit Screws
 
 ### 6.1 Direct Editing
@@ -192,6 +204,8 @@ Measurements belong to the cut where they were created. They hide on another cut
 - Save and load planning data in JSON format.
 - Export supported planning tables as CSV.
 - Export supported bone surfaces as STL.
+
+Plan files use schema version 2, which adds `mean_hu`, `min_hu`, `warnings`, and `source` for each screw; plan files saved by earlier versions still load. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns plus `mean_hu`, `min_hu`, `source`, and `warnings`.
 
 Planning files, screenshots, and meshes may still be identifiable derivatives. Review them before sharing.
 
