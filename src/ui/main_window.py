@@ -4,7 +4,7 @@ import sys
 import logging
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
-    QPushButton, QToolBar, QLabel, QSlider, QSpinBox,
+    QPushButton, QToolBar, QLabel, QSlider, QSpinBox, QDoubleSpinBox,
     QStatusBar, QMessageBox, QApplication, QComboBox, QListWidget,
     QCheckBox, QScrollArea,
     QSplitter, QSizePolicy, QListWidgetItem, QAbstractItemView,
@@ -25,6 +25,7 @@ from .. import (
     __version__,
     __website__,
 )
+from ..core.planner_config import PlannerConfig
 from ..core.volume_manager import VolumeManager
 from .collapsible_group import CollapsibleGroupBox
 from .mpr_viewer import MPRViewer
@@ -145,6 +146,7 @@ class MainWindow(QMainWindow):
 
         # Build UI (widgets only, no signal connections to controllers)
         self._setup_ui()
+        self.load_planner_settings()
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_statusbar()
@@ -443,6 +445,87 @@ class MainWindow(QMainWindow):
         auto_screw_group.set_content_layout(auto_layout)
         layout.addWidget(auto_screw_group)
 
+        # ── Planning parameters (persisted between sessions) ──
+        plan_params_group = CollapsibleGroupBox("Planning parameters")
+        self.planning_params_group = plan_params_group
+        params_layout = QGridLayout()
+        params_layout.setContentsMargins(6, 2, 6, 4)
+        params_layout.setHorizontalSpacing(8)
+        params_layout.setVerticalSpacing(4)
+
+        planner_defaults = PlannerConfig()
+
+        self.plan_fill_ratio_spin = QDoubleSpinBox()
+        self.plan_fill_ratio_spin.setRange(0.50, 1.00)
+        self.plan_fill_ratio_spin.setSingleStep(0.05)
+        self.plan_fill_ratio_spin.setDecimals(2)
+        self.plan_fill_ratio_spin.setValue(planner_defaults.pedicle_fill_ratio)
+        self.plan_fill_ratio_spin.setToolTip(
+            "Screw diameter as a fraction of the narrowest pedicle width"
+        )
+        params_layout.addWidget(QLabel("Pedicle fill"), 0, 0)
+        params_layout.addWidget(self.plan_fill_ratio_spin, 0, 1)
+
+        self.plan_wall_clearance_spin = QDoubleSpinBox()
+        self.plan_wall_clearance_spin.setRange(0.0, 3.0)
+        self.plan_wall_clearance_spin.setSingleStep(0.1)
+        self.plan_wall_clearance_spin.setDecimals(1)
+        self.plan_wall_clearance_spin.setSuffix(" mm")
+        self.plan_wall_clearance_spin.setValue(planner_defaults.wall_clearance_mm)
+        self.plan_wall_clearance_spin.setToolTip(
+            "Minimum distance kept between the screw and the cortical wall"
+        )
+        params_layout.addWidget(QLabel("Wall clearance"), 1, 0)
+        params_layout.addWidget(self.plan_wall_clearance_spin, 1, 1)
+
+        self.plan_anterior_margin_spin = QDoubleSpinBox()
+        self.plan_anterior_margin_spin.setRange(0.0, 15.0)
+        self.plan_anterior_margin_spin.setSingleStep(0.5)
+        self.plan_anterior_margin_spin.setDecimals(1)
+        self.plan_anterior_margin_spin.setSuffix(" mm")
+        self.plan_anterior_margin_spin.setValue(
+            planner_defaults.anterior_margin_mm
+        )
+        self.plan_anterior_margin_spin.setToolTip(
+            "Safety margin kept behind the anterior vertebral body cortex"
+        )
+        params_layout.addWidget(QLabel("Anterior margin"), 2, 0)
+        params_layout.addWidget(self.plan_anterior_margin_spin, 2, 1)
+
+        self.plan_max_convergence_spin = QDoubleSpinBox()
+        self.plan_max_convergence_spin.setRange(5.0, 60.0)
+        self.plan_max_convergence_spin.setSingleStep(1.0)
+        self.plan_max_convergence_spin.setDecimals(1)
+        self.plan_max_convergence_spin.setSuffix(" °")
+        self.plan_max_convergence_spin.setValue(
+            planner_defaults.max_convergence_deg
+        )
+        self.plan_max_convergence_spin.setToolTip(
+            "Largest medial convergence angle the planner may use"
+        )
+        params_layout.addWidget(QLabel("Max convergence"), 3, 0)
+        params_layout.addWidget(self.plan_max_convergence_spin, 3, 1)
+
+        self.plan_hu_threshold_spin = QDoubleSpinBox()
+        self.plan_hu_threshold_spin.setRange(50.0, 300.0)
+        self.plan_hu_threshold_spin.setSingleStep(5.0)
+        self.plan_hu_threshold_spin.setDecimals(0)
+        self.plan_hu_threshold_spin.setSuffix(" HU")
+        self.plan_hu_threshold_spin.setValue(
+            planner_defaults.trajectory_hu_threshold
+        )
+        self.plan_hu_threshold_spin.setToolTip(
+            "Trajectory HU below which loosening risk is flagged"
+        )
+        params_layout.addWidget(QLabel("HU threshold"), 4, 0)
+        params_layout.addWidget(self.plan_hu_threshold_spin, 4, 1)
+
+        self.plan_reset_defaults_btn = QPushButton("Reset Defaults")
+        params_layout.addWidget(self.plan_reset_defaults_btn, 5, 0, 1, 2)
+
+        plan_params_group.set_content_layout(params_layout)
+        layout.addWidget(plan_params_group)
+
         # ── Remaining groups (collapsed by default) ──
 
         # DICOM info group
@@ -608,6 +691,19 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Source"), 4, 0)
         self.selected_screw_source = QLabel("--")
         selected_screw_details.addWidget(self.selected_screw_source, 4, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Body HU"), 5, 0)
+        self.selected_screw_body_hu = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_body_hu, 5, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Wall margin"), 6, 0)
+        self.selected_screw_wall = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_wall, 6, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Facet"), 7, 0)
+        self.selected_screw_facet = QLabel("--")
+        self.selected_screw_facet.setWordWrap(True)
+        selected_screw_details.addWidget(self.selected_screw_facet, 7, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Heary"), 8, 0)
+        self.selected_screw_heary = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_heary, 8, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         screw_list_layout.addWidget(self.selected_screw_metrics)
 
@@ -716,6 +812,7 @@ class MainWindow(QMainWindow):
 
         self.secondary_control_groups = (
             info_group,
+            plan_params_group,
             wl_group,
             screw_group,
             measure_group,
@@ -748,6 +845,7 @@ class MainWindow(QMainWindow):
             info_group,
             seg_group,
             auto_screw_group,
+            plan_params_group,
             screw_list_group,
             view_group,
         ):
@@ -758,6 +856,7 @@ class MainWindow(QMainWindow):
                 screw_list_group,
                 seg_group,
                 auto_screw_group,
+                plan_params_group,
                 view_group,
             )
         ):
@@ -770,6 +869,7 @@ class MainWindow(QMainWindow):
 
         # Keep the main planning stages visible and secondary tools collapsed.
         info_group.collapse()
+        plan_params_group.collapse()
         wl_group.collapse()
         screw_group.collapse()
         measure_group.collapse()
@@ -898,6 +998,13 @@ class MainWindow(QMainWindow):
         # Auto Pedicle Screw
         self.auto_screw_plan_btn.clicked.connect(
             self._auto_placement_ctrl.run_planning
+        )
+
+        # Planning parameters
+        for spin_box in self._planner_spin_boxes().values():
+            spin_box.valueChanged.connect(self._on_planner_parameter_changed)
+        self.plan_reset_defaults_btn.clicked.connect(
+            self.reset_planner_settings
         )
         # Transfer function preset
         self.tf_preset_combo.currentTextChanged.connect(
@@ -1293,6 +1400,139 @@ class MainWindow(QMainWindow):
                 f"Theme changed to {THEME_LABELS[theme_name]}"
             )
 
+    # ------------------------------------------------------------------
+    # Planning parameters
+    # ------------------------------------------------------------------
+
+    PLANNER_SETTINGS_KEYS = (
+        "pedicle_fill_ratio",
+        "wall_clearance_mm",
+        "anterior_margin_mm",
+        "max_convergence_deg",
+        "min_convergence_deg",
+        "trajectory_hu_threshold",
+    )
+
+    @staticmethod
+    def _planner_settings() -> QSettings:
+        """Return QSettings positioned inside the persisted planner group."""
+        settings = QSettings("SNUBH", "PedicleScrewSimulator")
+        settings.beginGroup("planner")
+        return settings
+
+    def _planner_spin_boxes(self) -> dict:
+        """Map PlannerConfig field names to their editing spin boxes."""
+        return {
+            "pedicle_fill_ratio": self.plan_fill_ratio_spin,
+            "wall_clearance_mm": self.plan_wall_clearance_spin,
+            "anterior_margin_mm": self.plan_anterior_margin_spin,
+            "max_convergence_deg": self.plan_max_convergence_spin,
+            "trajectory_hu_threshold": self.plan_hu_threshold_spin,
+        }
+
+    def planner_config(self) -> PlannerConfig:
+        """Return the planner configuration currently shown in the panel."""
+        return PlannerConfig.from_mapping(
+            {
+                key: spin_box.value()
+                for key, spin_box in self._planner_spin_boxes().items()
+            }
+        )
+
+    def save_planner_settings(self) -> None:
+        """Persist the panel's planner parameters for the next session."""
+        settings = self._planner_settings()
+        for key, value in self.planner_config().to_mapping().items():
+            if not isinstance(value, list):
+                settings.setValue(key, value)
+        settings.endGroup()
+        settings.sync()
+
+    def load_planner_settings(self) -> None:
+        """Restore persisted planner parameters, falling back to defaults."""
+        settings = self._planner_settings()
+        defaults = PlannerConfig().to_mapping()
+        stored = {}
+        for key in self.PLANNER_SETTINGS_KEYS:
+            raw = settings.value(key, defaults[key])
+            try:
+                stored[key] = float(raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring unreadable planner setting %s=%r", key, raw
+                )
+                stored = {}
+                break
+        settings.endGroup()
+
+        try:
+            config = PlannerConfig.from_mapping(stored)
+        except ValueError as exc:
+            logger.warning(
+                "Stored planner settings are invalid (%s); using defaults", exc
+            )
+            config = PlannerConfig()
+        self._apply_planner_config(config)
+
+    def reset_planner_settings(self) -> None:
+        """Restore the built-in planner defaults and persist them."""
+        self._apply_planner_config(PlannerConfig())
+        self.save_planner_settings()
+        if hasattr(self, "statusbar"):
+            self.statusbar.showMessage("Planning parameters reset to defaults")
+
+    def _apply_planner_config(self, config: PlannerConfig) -> None:
+        """Write config values into the spin boxes without re-saving them."""
+        values = config.to_mapping()
+        for key, spin_box in self._planner_spin_boxes().items():
+            previous = spin_box.blockSignals(True)
+            spin_box.setValue(float(values[key]))
+            spin_box.blockSignals(previous)
+
+    def _on_planner_parameter_changed(self, _value: float) -> None:
+        """Persist planner parameters whenever the user edits one."""
+        self.save_planner_settings()
+
+    # ------------------------------------------------------------------
+    # Screw inspector
+    # ------------------------------------------------------------------
+
+    def _clear_screw_metric_rows(self) -> None:
+        """Reset the clinical metric rows of the screw inspector."""
+        for label in (
+            self.selected_screw_body_hu,
+            self.selected_screw_wall,
+            self.selected_screw_facet,
+            self.selected_screw_heary,
+        ):
+            label.setText("--")
+
+    def _update_screw_metric_rows(self, metrics: dict) -> None:
+        """Fill the clinical metric rows from a screw's metric bundle."""
+        self._clear_screw_metric_rows()
+
+        body_hu = metrics.get("body_mean_hu")
+        if body_hu is not None:
+            self.selected_screw_body_hu.setText(f"{float(body_hu):.0f} HU")
+
+        min_wall = metrics.get("min_wall_mm")
+        if min_wall is not None:
+            self.selected_screw_wall.setText(f"{float(min_wall):.1f} mm")
+
+        facet_grade = metrics.get("facet_grade")
+        facet_text = str(metrics.get("facet_text") or "").strip()
+        if facet_grade is not None:
+            facet = f"Grade {int(facet_grade)}"
+            if facet_text:
+                facet = f"{facet} — {facet_text}"
+            self.selected_screw_facet.setText(facet)
+        elif facet_text:
+            self.selected_screw_facet.setText(facet_text)
+
+        heary = str(metrics.get("heary_direction") or "").strip()
+        if heary:
+            self.selected_screw_heary.setText(heary)
+
     def update_selected_screw_inspector(
         self,
         index: int,
@@ -1320,6 +1560,7 @@ class MainWindow(QMainWindow):
             self.selected_screw_grade.setText("Grade --")
             self.selected_screw_hu.setText("--")
             self.selected_screw_source.setText("--")
+            self._clear_screw_metric_rows()
             self.selected_screw_warning.setText(
                 "Select a screw to inspect its trajectory."
             )
@@ -1369,6 +1610,7 @@ class MainWindow(QMainWindow):
             if getattr(screw, "source", "manual") == "auto"
             else "Manual"
         )
+        self._update_screw_metric_rows(getattr(screw, "metrics", None) or {})
 
         breach_distance = float(getattr(screw, "breach_distance", 0.0))
         lines = list(getattr(screw, "warnings", []) or [])

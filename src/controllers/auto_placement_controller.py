@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
 
 if TYPE_CHECKING:
@@ -29,11 +30,18 @@ class _PlanningThread(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, mask_image, ct_image, labels: List[int]):
+    def __init__(
+        self,
+        mask_image,
+        ct_image,
+        labels: List[int],
+        config: Optional[PlannerConfig] = None,
+    ):
         super().__init__()
         self._mask = mask_image
         self._ct = ct_image
         self._labels = labels
+        self._config = config
 
     def run(self):
         try:
@@ -47,7 +55,7 @@ class _PlanningThread(QThread):
                 f"{len(successful)} with pedicle data. Planning screws..."
             )
 
-            planner = AutoScrewPlanner(self._ct, self._mask)
+            planner = AutoScrewPlanner(self._ct, self._mask, config=self._config)
             planned = planner.plan_all(analyses, sides="both")
 
             self.progress.emit(
@@ -141,7 +149,12 @@ class AutoPlacementController:
         self._window.auto_screw_status.setText("Planning...")
         self._window.statusbar.showMessage("Auto screw planning started")
 
-        self._thread = _PlanningThread(mask_image, ct_image, selected_labels)
+        self._thread = _PlanningThread(
+            mask_image,
+            ct_image,
+            selected_labels,
+            config=self._window.planner_config(),
+        )
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_finished)
         self._thread.error.connect(self._on_error)

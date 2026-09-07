@@ -280,7 +280,27 @@ def _write_mask(image, path):
 
 
 @pytest.fixture
-def ui_main_window(monkeypatch, qtbot):
+def isolated_qsettings(tmp_path, monkeypatch):
+    """Redirect MainWindow's QSettings into temp INI files.
+
+    Returns the factory the window uses, so tests can read back the very
+    same store without touching the developer's real settings.
+    """
+    from PyQt6.QtCore import QSettings
+
+    directory = tmp_path / "qsettings"
+    directory.mkdir(parents=True, exist_ok=True)
+
+    def factory(organization="Default", application="App", *_args, **_kwargs):
+        path = directory / f"{organization}-{application}.ini"
+        return QSettings(str(path), QSettings.Format.IniFormat)
+
+    monkeypatch.setattr(main_window_module, "QSettings", factory)
+    return factory
+
+
+@pytest.fixture
+def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
     """Build MainWindow with lightweight viewer stubs."""
     monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
     monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
@@ -1716,3 +1736,157 @@ def test_normal_finish_does_not_request_cancel(ui_main_window, monkeypatch, tmp_
 
     assert cancel_calls == []
     assert ctrl._segmentation_progress is None
+
+
+# ---------------------------------------------------------------------------
+# Planning parameter panel + inspector metric rows
+# ---------------------------------------------------------------------------
+
+
+def _planner_settings(isolated_qsettings):
+    settings = isolated_qsettings("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("planner")
+    return settings
+
+
+def test_planner_config_from_panel_and_persistence(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_fill_ratio_spin.setValue(0.7)
+    window.plan_anterior_margin_spin.setValue(5.0)
+    window.plan_wall_clearance_spin.setValue(1.5)
+    window.plan_max_convergence_spin.setValue(40.0)
+    window.plan_hu_threshold_spin.setValue(120.0)
+
+    cfg = window.planner_config()
+
+    assert cfg.pedicle_fill_ratio == pytest.approx(0.7)
+    assert cfg.anterior_margin_mm == pytest.approx(5.0)
+    assert cfg.wall_clearance_mm == pytest.approx(1.5)
+    assert cfg.max_convergence_deg == pytest.approx(40.0)
+    assert cfg.trajectory_hu_threshold == pytest.approx(120.0)
+
+    window.save_planner_settings()
+    settings = _planner_settings(isolated_qsettings)
+    assert float(settings.value("pedicle_fill_ratio")) == pytest.approx(0.7)
+    assert float(settings.value("anterior_margin_mm")) == pytest.approx(5.0)
+    assert float(settings.value("trajectory_hu_threshold")) == pytest.approx(120.0)
+
+
+def test_planner_spin_boxes_use_specified_ranges(ui_main_window):
+    window = ui_main_window
+
+    assert window.plan_fill_ratio_spin.minimum() == pytest.approx(0.50)
+    assert window.plan_fill_ratio_spin.maximum() == pytest.approx(1.00)
+    assert window.plan_fill_ratio_spin.singleStep() == pytest.approx(0.05)
+    assert (window.plan_wall_clearance_spin.minimum(),
+            window.plan_wall_clearance_spin.maximum()) == (0.0, 3.0)
+    assert (window.plan_anterior_margin_spin.minimum(),
+            window.plan_anterior_margin_spin.maximum()) == (0.0, 15.0)
+    assert (window.plan_max_convergence_spin.minimum(),
+            window.plan_max_convergence_spin.maximum()) == (5.0, 60.0)
+    assert (window.plan_hu_threshold_spin.minimum(),
+            window.plan_hu_threshold_spin.maximum()) == (50.0, 300.0)
+
+
+def test_planner_settings_persist_into_a_new_window(ui_main_window):
+    window = ui_main_window
+    window.plan_fill_ratio_spin.setValue(0.65)
+    window.plan_anterior_margin_spin.setValue(7.0)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_fill_ratio_spin.value() == pytest.approx(0.65)
+        assert reopened.plan_anterior_margin_spin.value() == pytest.approx(7.0)
+        assert reopened.planner_config().pedicle_fill_ratio == pytest.approx(0.65)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_planner_reset_defaults_restores_and_persists_defaults(
+    ui_main_window, isolated_qsettings
+):
+    from src.core.planner_config import PlannerConfig
+
+    window = ui_main_window
+    defaults = PlannerConfig()
+    window.plan_fill_ratio_spin.setValue(0.9)
+    window.plan_anterior_margin_spin.setValue(12.0)
+
+    window.plan_reset_defaults_btn.click()
+
+    assert window.plan_fill_ratio_spin.value() == pytest.approx(
+        defaults.pedicle_fill_ratio
+    )
+    assert window.plan_anterior_margin_spin.value() == pytest.approx(
+        defaults.anterior_margin_mm
+    )
+    settings = _planner_settings(isolated_qsettings)
+    assert float(settings.value("pedicle_fill_ratio")) == pytest.approx(
+        defaults.pedicle_fill_ratio
+    )
+
+
+def test_corrupt_planner_settings_fall_back_to_defaults(
+    ui_main_window, isolated_qsettings
+):
+    from src.core.planner_config import PlannerConfig
+
+    settings = _planner_settings(isolated_qsettings)
+    settings.setValue("pedicle_fill_ratio", "not-a-number")
+    settings.setValue("anterior_margin_mm", 999.0)
+    settings.sync()
+
+    reopened = main_window_module.MainWindow()
+    try:
+        defaults = PlannerConfig()
+        assert reopened.plan_fill_ratio_spin.value() == pytest.approx(
+            defaults.pedicle_fill_ratio
+        )
+        assert reopened.plan_anterior_margin_spin.value() == pytest.approx(
+            defaults.anterior_margin_mm
+        )
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_inspector_shows_metric_rows(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0, 30, 0), target_point=(0, -10, 0), grade="B",
+        breach_distance=0.5,
+        metrics={
+            "body_mean_hu": 128.0,
+            "min_wall_mm": 0.0,
+            "facet_grade": 1,
+            "facet_text": "screw abuts the cephalad facet",
+            "heary_direction": "medial",
+        },
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert "128" in window.selected_screw_body_hu.text()
+    assert "0.0" in window.selected_screw_wall.text()
+    assert "1" in window.selected_screw_facet.text()
+    assert "medial" in window.selected_screw_heary.text()
+
+
+def test_inspector_metric_rows_default_to_dashes(ui_main_window):
+    window = ui_main_window
+    screw = Screw(entry_point=(0, 30, 0), target_point=(0, -10, 0))
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert window.selected_screw_body_hu.text() == "--"
+    assert window.selected_screw_wall.text() == "--"
+    assert window.selected_screw_facet.text() == "--"
+    assert window.selected_screw_heary.text() == "--"
+
+    window.update_selected_screw_inspector(-1, None, False)
+
+    assert window.selected_screw_body_hu.text() == "--"
+    assert window.selected_screw_wall.text() == "--"
+    assert window.selected_screw_facet.text() == "--"
+    assert window.selected_screw_heary.text() == "--"

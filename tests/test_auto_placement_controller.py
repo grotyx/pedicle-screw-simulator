@@ -245,6 +245,15 @@ class _DummyWindow:
             _DummyMPRViewer("coronal"),
         ]
 
+        self.planner_config_value = None
+
+    def planner_config(self):
+        from src.core.planner_config import PlannerConfig
+
+        if self.planner_config_value is None:
+            self.planner_config_value = PlannerConfig()
+        return self.planner_config_value
+
     def _get_mpr_viewers(self):
         return self._mpr_viewers
 
@@ -377,7 +386,7 @@ class TestAutoPlacementControllerUnit:
                 return None
 
         class _Thread:
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 self.progress = _Signal()
                 self.finished = _Signal()
                 self.error = _Signal()
@@ -515,3 +524,101 @@ def test_planned_screw_to_screw_copies_metadata():
     assert screw.min_hu == pytest.approx(90.0)
     assert screw.source == "auto"
     assert screw.warnings == ["Breach distance 0.8 mm (grade B)"]
+
+
+# ---------------------------------------------------------------------------
+# Planner configuration plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_run_planning_passes_window_planner_config_to_thread(
+    monkeypatch, tmp_path
+):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+    from src.core.planner_config import PlannerConfig
+
+    window = _DummyWindow()
+    window.planner_config_value = PlannerConfig(pedicle_fill_ratio=0.65)
+    from src.core.volume_manager import VolumeManager
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+
+    captured = {}
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+
+    ctrl.run_planning()
+
+    config = captured["kwargs"].get("config")
+    assert config is window.planner_config_value
+
+
+def test_planning_thread_forwards_config_to_planner(monkeypatch):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+    from src.core.planner_config import PlannerConfig
+
+    config = PlannerConfig(anterior_margin_mm=9.0)
+    captured = {}
+
+    class _Analyzer:
+        def __init__(self, *_args):
+            pass
+
+        def analyze_all(self, labels=None):
+            return []
+
+    class _Planner:
+        def __init__(self, _ct, _mask, grader=None, config=None):
+            captured["config"] = config
+
+        def plan_all(self, _analyses, sides="both"):
+            return []
+
+    monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
+    monkeypatch.setattr(module, "AutoScrewPlanner", _Planner)
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+        config=config,
+    )
+    thread.run()
+
+    assert captured["config"] is config
+
+
+def test_planning_thread_config_defaults_to_none(monkeypatch):
+    import SimpleITK as sitk
+    import src.controllers.auto_placement_controller as module
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+    )
+
+    assert thread._config is None
