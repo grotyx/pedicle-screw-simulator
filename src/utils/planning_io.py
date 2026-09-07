@@ -4,13 +4,14 @@ Planning I/O helpers for saving/loading simulation plans.
 
 import csv
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.models.measurement import Measurement
 from src.models.screw import Screw
 
-PLAN_VERSION = 2
+PLAN_VERSION = 3
 VALID_PLANES = {"axial", "sagittal", "coronal"}
 
 
@@ -19,6 +20,46 @@ def _parse_point3(value: Any, field_name: str) -> Tuple[float, float, float]:
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError(f"Invalid {field_name}: expected 3 numeric values")
     return (float(value[0]), float(value[1]), float(value[2]))
+
+
+def _jsonable_metric(value: Any) -> Any:
+    """Coerce one metric value to something ``json.dump`` can write.
+
+    Metric values are floats, ints, strings or ``None``; numpy scalars reach
+    here from the graders, and a non-finite float would otherwise be written as
+    the non-standard ``NaN``/``Infinity`` literal, so both are normalised.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+    if hasattr(value, "__index__"):          # numpy integer
+        return int(value)
+    try:                                     # numpy float / anything float-like
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return as_float if math.isfinite(as_float) else None
+
+
+def metrics_to_dict(metrics: Any) -> Dict[str, Any]:
+    """JSON-safe copy of a screw's metric bundle (``{}`` when absent)."""
+    if not isinstance(metrics, dict):
+        return {}
+    return {str(key): _jsonable_metric(value) for key, value in metrics.items()}
+
+
+def _metric_number(metrics: Dict[str, Any], key: str) -> str:
+    """Format one numeric metric for CSV; empty when missing or unmeasurable."""
+    value = metrics.get(key)
+    if value is None or isinstance(value, (bool, str)):
+        return ""
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return ""
 
 
 def screw_to_dict(screw: Screw) -> Dict[str, Any]:
@@ -39,6 +80,7 @@ def screw_to_dict(screw: Screw) -> Dict[str, Any]:
         "min_hu": None if screw.min_hu is None else float(screw.min_hu),
         "warnings": list(screw.warnings),
         "source": screw.source,
+        "metrics": metrics_to_dict(screw.metrics),
     }
 
 
@@ -69,6 +111,8 @@ def screw_from_dict(data: Dict[str, Any]) -> Screw:
     raw_warnings = data.get("warnings", [])
     screw.warnings = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
     screw.source = str(data.get("source", "manual"))
+    # Absent in v1/v2 payloads; an empty bundle simply means "not measured".
+    screw.metrics = metrics_to_dict(data.get("metrics"))
 
     if "trajectory" in data:
         screw.trajectory = _parse_point3(data["trajectory"], "trajectory")
@@ -198,10 +242,13 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "index", "vertebra_level", "side", "source", "length_mm", "diameter_mm",
             "grade", "breach_distance_mm", "mean_hu", "min_hu",
             "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
-            "convergence_angle_deg", "craniocaudal_angle_deg", "warnings",
+            "convergence_angle_deg", "craniocaudal_angle_deg",
+            "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
+            "min_wall_mm", "heary_direction", "facet_grade", "warnings",
         ])
 
         for index, screw in enumerate(screws, start=1):
+            metrics = screw.metrics if isinstance(screw.metrics, dict) else {}
             writer.writerow([
                 index,
                 screw.vertebra_level,
@@ -221,5 +268,12 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 f"{screw.target_point[2]:.3f}",
                 f"{screw.medial_angle:.3f}",
                 f"{screw.insertion_angle:.3f}",
+                _metric_number(metrics, "trajectory_mean_hu"),
+                _metric_number(metrics, "pedicle_mean_hu"),
+                _metric_number(metrics, "body_mean_hu"),
+                _metric_number(metrics, "trajectory_body_ratio"),
+                _metric_number(metrics, "min_wall_mm"),
+                "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
+                "" if metrics.get("facet_grade") is None else f"{int(metrics['facet_grade'])}",
                 "|".join(screw.warnings),
             ])

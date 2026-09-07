@@ -108,6 +108,7 @@ class TestPlanningIO:
 def test_v2_roundtrip_preserves_metadata(tmp_path):
     from src.models.screw import Screw
     from src.utils.planning_io import (
+        PLAN_VERSION,
         deserialize_plan,
         load_plan_json,
         save_plan_json,
@@ -117,13 +118,99 @@ def test_v2_roundtrip_preserves_metadata(tmp_path):
                   vertebra_level="L4", side="left", grade="B", breach_distance=0.8,
                   mean_hu=210.0, min_hu=90.0, warnings=["note"], source="auto")
     payload = serialize_plan("series", [screw], [], [])
-    assert payload["version"] == 2
+    assert payload["version"] == PLAN_VERSION
     path = tmp_path / "plan.json"
     save_plan_json(str(path), payload)
     parsed = deserialize_plan(load_plan_json(str(path)))
     loaded = parsed["screws"][0]
     assert loaded.mean_hu == 210.0 and loaded.min_hu == 90.0
     assert loaded.warnings == ["note"] and loaded.source == "auto"
+
+
+def test_v3_roundtrip_metrics(tmp_path):
+    from src.models.screw import Screw
+    from src.utils.planning_io import (
+        deserialize_plan,
+        load_plan_json,
+        save_plan_json,
+        serialize_plan,
+    )
+    screw = Screw(entry_point=(1.0, 2.0, 3.0), target_point=(1.0, -30.0, 3.0), diameter=6.0,
+                  vertebra_level="L4", side="left", grade="B", breach_distance=0.8,
+                  mean_hu=210.0, min_hu=90.0, warnings=["note"], source="auto",
+                  metrics={"facet_grade": 1, "heary_direction": "medial",
+                           "trajectory_mean_hu": 180.5})
+    payload = serialize_plan("series", [screw], [], [])
+    assert payload["version"] == 3
+    path = tmp_path / "plan.json"
+    save_plan_json(str(path), payload)
+    parsed = deserialize_plan(load_plan_json(str(path)))
+    loaded = parsed["screws"][0]
+    assert loaded.metrics == {"facet_grade": 1, "heary_direction": "medial",
+                              "trajectory_mean_hu": 180.5}
+
+
+def test_v2_payload_without_metrics_loads_empty_dict():
+    from src.utils.planning_io import deserialize_plan
+    payload = {"version": 2, "series_id": None, "measurements": [], "screws": [
+        {"entry_point": [0, 0, 0], "target_point": [0, 0, 30], "length": 30, "diameter": 6.5,
+         "vertebra_level": "L4", "side": "left", "grade": "A", "breach_distance": 0.0,
+         "mean_hu": 300.0, "min_hu": 120.0, "warnings": [], "source": "auto"}]}
+    parsed = deserialize_plan(payload)
+    assert parsed["screws"][0].metrics == {}
+
+
+def test_metrics_serialisation_is_json_safe():
+    """Non-finite and non-scalar metric values must not reach the JSON file."""
+    import json
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import screw_from_dict, screw_to_dict
+
+    screw = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, 0.0, 30.0))
+    screw.metrics = {
+        "trajectory_mean_hu": float("nan"),
+        "body_mean_hu": float("inf"),
+        "facet_grade": 2,
+        "facet_text": "no facet contact",
+        "pedicle_mean_hu": None,
+    }
+    data = screw_to_dict(screw)
+    encoded = json.dumps(data, allow_nan=False)   # raises if NaN/inf survived
+    restored = screw_from_dict(json.loads(encoded))
+    assert restored.metrics["trajectory_mean_hu"] is None
+    assert restored.metrics["body_mean_hu"] is None
+    assert restored.metrics["facet_grade"] == 2
+    assert restored.metrics["facet_text"] == "no facet contact"
+    assert restored.metrics["pedicle_mean_hu"] is None
+
+
+def test_csv_has_metric_columns(tmp_path):
+    import csv as _csv
+
+    from src.models.screw import Screw
+    from src.utils.planning_io import export_screws_csv
+    screw = Screw(entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+                  metrics={"trajectory_mean_hu": 180.5, "pedicle_mean_hu": 210.0,
+                           "body_mean_hu": 150.0, "trajectory_body_ratio": 1.203,
+                           "min_wall_mm": 1.25, "heary_direction": "medial",
+                           "facet_grade": 2})
+    path = tmp_path / "s.csv"
+    export_screws_csv(str(path), [screw, Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))])
+    with path.open("r", encoding="utf-8") as handle:
+        rows = list(_csv.reader(handle))
+    header = rows[0]
+    for column in ("trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
+                   "min_wall_mm", "heary_direction", "facet_grade"):
+        assert column in header
+    row = dict(zip(header, rows[1], strict=True))
+    assert row["trajectory_mean_hu"] == "180.500"
+    assert row["hu_ratio"] == "1.203"
+    assert row["heary_direction"] == "medial"
+    assert row["facet_grade"] == "2"
+    # A screw with no metrics leaves the columns empty rather than shifting them.
+    blank = dict(zip(header, rows[2], strict=True))
+    assert blank["trajectory_mean_hu"] == "" and blank["facet_grade"] == ""
 
 
 def test_v1_payload_without_metadata_loads():

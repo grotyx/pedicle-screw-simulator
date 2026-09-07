@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import SimpleITK as sitk
 
+from .bone_quality import assess_bone_quality
+from .breach_classification import facet_violation_grade, heary_direction
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
 from .screw_grading import ScrewGrader
@@ -55,6 +57,8 @@ class PlannedScrew:
     breach_mm: float = 0.0      # Maximum cortical breach depth (mm)
     min_wall_mm: float = 0.0    # Thinnest cortical wall clearance (mm)
     warnings: List[str] = field(default_factory=list)
+    #: Clinical metric bundle; see :attr:`src.models.screw.Screw.metrics`.
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.entry_lps = np.asarray(self.entry_lps, dtype=np.float64)
@@ -302,7 +306,42 @@ class AutoScrewPlanner:
             mean_hu = result.mean_hu if result.mean_hu is not None else 0.0
             min_hu = result.min_hu if result.min_hu is not None else 0.0
 
-        # 7. Calculate angles.
+        # 7. Clinical metrics: bone quality, breach direction, facet violation.
+        quality = assess_bone_quality(
+            self._grader,
+            entry,
+            target,
+            diameter,
+            vertebra.label,
+            body_center_lps=body_center,
+            isthmus_center_lps=pedicle_center,
+            trajectory_threshold=self.config.trajectory_hu_threshold,
+        )
+        facet_grade, facet_text = facet_violation_grade(
+            self._grader, entry, target, diameter, vertebra.label
+        )
+        if result is not None and result.breach_point_lps is not None:
+            heary = heary_direction(
+                result.breach_point_lps, result.breach_centre_lps, side
+            )
+        else:
+            heary = "none"
+        metrics: Dict[str, Any] = {
+            "trajectory_mean_hu": quality.trajectory_mean_hu,
+            "trajectory_min_hu": quality.trajectory_min_hu,
+            "pedicle_mean_hu": quality.pedicle_mean_hu,
+            "body_mean_hu": quality.body_mean_hu,
+            "trajectory_body_ratio": quality.trajectory_body_ratio,
+            "min_wall_mm": min_wall,
+            "heary_direction": heary,
+            "facet_grade": facet_grade,
+            "facet_text": facet_text,
+        }
+        warnings.extend(quality.warnings)
+        if facet_grade >= 2:
+            warnings.append(f"Facet violation grade {facet_grade}: {facet_text}")
+
+        # 8. Calculate angles.
         convergence_angle = self._compute_convergence_angle(entry, target, side)
         craniocaudal_angle = self._compute_craniocaudal_angle(entry, target)
 
@@ -311,7 +350,7 @@ class AutoScrewPlanner:
                 f"High convergence angle {convergence_angle:.1f}° — verify on CT"
             )
 
-        # 8. Calculate confidence score.
+        # 9. Calculate confidence score.
         confidence = self._calculate_confidence(grade, mean_hu, pedicle_width, diameter)
 
         if breach_dist > 0:
@@ -339,6 +378,7 @@ class AutoScrewPlanner:
             breach_mm=breach_dist,
             min_wall_mm=min_wall,
             warnings=warnings,
+            metrics=metrics,
         )
 
     def plan_all(

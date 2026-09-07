@@ -3,7 +3,7 @@ Screw data model for pedicle screw placement.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.screw_geometry import (
     convergence_angle_deg,
@@ -33,6 +33,12 @@ class Screw:
         mean_hu / min_hu: Trajectory HU statistics when a CT was available.
         warnings: Planner or grader notes shown in the inspector.
         source: "manual" or "auto".
+        metrics: Clinical metric bundle for this trajectory. Keys, when
+            measurable: ``trajectory_mean_hu``, ``trajectory_min_hu``,
+            ``pedicle_mean_hu``, ``body_mean_hu``, ``trajectory_body_ratio``,
+            ``min_wall_mm``, ``heary_direction``, ``facet_grade``,
+            ``facet_text``. Empty when the screw has not been graded against a
+            segmentation; individual values are ``None`` when unmeasurable.
     """
     entry_point: Tuple[float, float, float]
     target_point: Tuple[float, float, float]
@@ -49,6 +55,7 @@ class Screw:
     min_hu: Optional[float] = None
     warnings: List[str] = field(default_factory=list)
     source: str = "manual"
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         self.entry_point = tuple(float(v) for v in self.entry_point)

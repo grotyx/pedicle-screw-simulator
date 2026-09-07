@@ -251,4 +251,5 @@ def planned_screw_to_screw(ps: PlannedScrew) -> Screw:
         min_hu=float(ps.min_bone_density),
         warnings=list(ps.warnings),
         source="auto",
+        metrics=dict(ps.metrics),
     )

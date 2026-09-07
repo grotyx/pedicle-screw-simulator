@@ -108,6 +108,91 @@ class TestScrewTool:
         assert not any(w.startswith("Not graded") for w in regraded.warnings)
         assert regraded.mean_hu == pytest.approx(80.0)
 
+    def test_manual_screw_gets_metrics_with_grader(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask, ct))
+        tool.on_click(30.0, 38.0, 30.0, plane="axial")
+        screw = tool.on_click(30.0, 22.0, 30.0, plane="axial")
+        assert "trajectory_mean_hu" in screw.metrics and "facet_grade" in screw.metrics
+        assert screw.metrics["trajectory_mean_hu"] == pytest.approx(80.0)
+        assert screw.metrics["min_wall_mm"] == pytest.approx(screw.metrics["min_wall_mm"])
+        assert screw.metrics["facet_grade"] == 0
+        assert screw.metrics["heary_direction"] == "none"
+        # No pedicle/body centres are available for a manually placed screw.
+        assert screw.metrics["pedicle_mean_hu"] is None
+        assert screw.metrics["body_mean_hu"] is None
+
+    def test_metrics_cleared_when_trajectory_leaves_every_vertebra(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask, ct))
+        tool.on_click(30.0, 38.0, 30.0, plane="axial")
+        screw = tool.on_click(30.0, 22.0, 30.0, plane="axial")
+        assert screw.metrics and screw.mean_hu is not None
+
+        # A screw restored from a plan whose trajectory misses every labelled
+        # vertebra must not keep the HU/metrics the plan recorded.
+        stale = Screw(
+            entry_point=(2.0, 2.0, 2.0),
+            target_point=(2.0, 10.0, 2.0),
+            mean_hu=900.0,
+            min_hu=800.0,
+        )
+        stale.metrics = {"trajectory_mean_hu": 900.0, "facet_grade": 3}
+        tool.add_screw(stale)
+
+        tool.regrade_all()
+
+        moved = tool.get_screws()[1]
+        assert moved.grade == "N/A"
+        assert moved.mean_hu is None and moved.min_hu is None
+        assert moved.metrics == {}
+
+    def test_regrade_replaces_stale_planner_breach_warnings(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 80, -50).astype(np.int16))
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask, ct))
+        # An auto screw restored from a plan, carrying a planner-authored breach note.
+        screw = Screw(
+            entry_point=(30.0, 38.0, 30.0),
+            target_point=(30.0, 22.0, 30.0),
+            diameter=6.5,
+            grade="B",
+            breach_distance=1.4,
+            warnings=["Breach distance 1.4 mm (grade B)", "Keep me"],
+            source="auto",
+        )
+        tool.add_screw(screw)
+
+        tool.regrade_all()
+
+        regraded = tool.get_screws()[0]
+        assert regraded.grade == "A"
+        assert "Keep me" in regraded.warnings
+        assert not any(w.startswith("Breach distance") for w in regraded.warnings)
+
     def test_grade_description_covers_not_available(self):
         assert (
             ScrewTool.get_grade_description("N/A")

@@ -1194,5 +1194,38 @@ class TestPlannerConfig:
         assert short._select_standard_length(29.0) is None
 
 
+class TestScrewMetrics:
+    """Every planned screw carries the clinical metric bundle."""
+
+    def test_planned_screw_metrics_populated(self):
+        from src.core.pedicle_analyzer import PedicleAnalyzer
+        from tests.test_pedicle_analyzer import _make_anatomical_phantom
+
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
+        ct.CopyInformation(mask)
+        analyzer = PedicleAnalyzer(mask)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        screws = AutoScrewPlanner(ct, mask).plan_all([result])
+        assert screws
+        keys = {
+            "trajectory_mean_hu", "trajectory_min_hu", "pedicle_mean_hu", "body_mean_hu",
+            "trajectory_body_ratio", "min_wall_mm", "heary_direction",
+            "facet_grade", "facet_text",
+        }
+        assert keys <= set(screws[0].metrics)
+        assert screws[0].metrics["facet_grade"] == 0
+        assert screws[0].metrics["trajectory_mean_hu"] == pytest.approx(300.0, abs=50.0)
+        assert screws[0].metrics["min_wall_mm"] == pytest.approx(screws[0].min_wall_mm)
+        # A breach direction is reported exactly when there is a breach.
+        heary = screws[0].metrics["heary_direction"]
+        if screws[0].breach_mm > 0:
+            assert heary in {"medial", "lateral", "anterior", "posterior",
+                             "superior", "inferior"}
+        else:
+            assert heary == "none"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

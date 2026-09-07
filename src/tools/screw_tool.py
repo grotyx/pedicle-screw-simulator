@@ -13,12 +13,17 @@ from typing import Optional, Tuple, List, Callable, TYPE_CHECKING
 
 from src.models.screw import Screw
 from ..utils.constants import (
+    CORTICAL_WALL_CLEARANCE_MM,
     DEFAULT_SCREW_LENGTH, DEFAULT_SCREW_DIAMETER,
     MIN_SCREW_LENGTH, MAX_SCREW_LENGTH,
     MIN_SCREW_DIAMETER, MAX_SCREW_DIAMETER,
     GRADE_A_DESCRIPTION, GRADE_B_DESCRIPTION,
     GRADE_C_DESCRIPTION, GRADE_D_DESCRIPTION, GRADE_E_DESCRIPTION
 )
+
+#: Warning prefixes the grader owns: they are regenerated on every evaluation so
+#: a re-graded screw can never keep a note that contradicts its current grade.
+_DERIVED_WARNING_PREFIXES = ("Not graded", "Breach distance", "Cortical clearance")
 
 if TYPE_CHECKING:
     from ..core.volume_manager import VolumeManager
@@ -241,29 +246,93 @@ class ScrewTool:
         )
 
     def _evaluate_screw(self, screw: Screw):
-        """Grade with the segmentation mask; mark N/A when no mask exists."""
-        note = "Not graded: run segmentation first"
+        """Grade with the segmentation mask; mark N/A when no mask exists.
+
+        Every grader-derived field is rewritten from scratch, including the
+        metric bundle and the breach/clearance warnings, so that re-grading an
+        edited or restored screw can never leave a stale value (or a note
+        contradicting the grade now displayed) behind.
+        """
         screw.warnings = [
-            w for w in screw.warnings if not w.startswith("Not graded")
+            w for w in screw.warnings
+            if not w.startswith(_DERIVED_WARNING_PREFIXES)
         ]
         if self._grader is None:
-            screw.grade = "N/A"
-            screw.breach_distance = 0.0
-            screw.warnings.append(note)
+            self._clear_grading(screw)
+            screw.warnings.append("Not graded: run segmentation first")
             return
         result = self._grader.grade(screw.entry_point, screw.target_point, screw.diameter)
         if result is None:
-            screw.grade = "N/A"
-            screw.breach_distance = 0.0
-            screw.warnings.append("Not graded: trajectory does not pass through a segmented vertebra")
+            self._clear_grading(screw)
+            screw.warnings.append(
+                "Not graded: trajectory does not pass through a segmented vertebra"
+            )
             return
         screw.grade = result.grade
         screw.breach_distance = result.breach_mm
         screw.mean_hu = result.mean_hu
         screw.min_hu = result.min_hu
+        screw.metrics = self._compute_metrics(screw, result)
         if not screw.vertebra_level:
             from ..core.pedicle_analyzer import VERTEBRA_LABELS
             screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
+
+        if result.breach_mm > 0:
+            screw.warnings.append(
+                f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
+            )
+        if 0 < result.min_wall_mm < CORTICAL_WALL_CLEARANCE_MM:
+            screw.warnings.append(
+                f"Cortical clearance {result.min_wall_mm:.1f} mm below "
+                f"{CORTICAL_WALL_CLEARANCE_MM:.0f} mm"
+            )
+
+    @staticmethod
+    def _clear_grading(screw: Screw) -> None:
+        """Drop every grader-derived value from an ungradable screw."""
+        screw.grade = "N/A"
+        screw.breach_distance = 0.0
+        screw.mean_hu = None
+        screw.min_hu = None
+        screw.metrics = {}
+
+    def _compute_metrics(self, screw: Screw, result) -> dict:
+        """Bone-quality, breach-direction and facet metrics for one screw.
+
+        A manually placed screw has no pedicle analysis behind it, so the
+        isthmus and vertebral-body centres are unknown and the metrics that
+        depend on them come back ``None``.
+        """
+        from ..core.bone_quality import assess_bone_quality
+        from ..core.breach_classification import facet_violation_grade, heary_direction
+
+        quality = assess_bone_quality(
+            self._grader,
+            screw.entry_point,
+            screw.target_point,
+            screw.diameter,
+            result.label,
+        )
+        facet_grade, facet_text = facet_violation_grade(
+            self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
+        )
+        if result.breach_point_lps is not None:
+            heary = heary_direction(
+                result.breach_point_lps, result.breach_centre_lps, screw.side
+            )
+        else:
+            heary = "none"
+        return {
+            "trajectory_mean_hu": quality.trajectory_mean_hu,
+            "trajectory_min_hu": quality.trajectory_min_hu,
+            "pedicle_mean_hu": quality.pedicle_mean_hu,
+            "body_mean_hu": quality.body_mean_hu,
+            "trajectory_body_ratio": quality.trajectory_body_ratio,
+            "min_wall_mm": result.min_wall_mm,
+            "heary_direction": heary,
+            "facet_grade": facet_grade,
+            "facet_text": facet_text,
+        }
 
     def _reset_state(self):
         """Reset tool state."""

@@ -56,6 +56,21 @@ class TestPlannedScrewToScrew:
         screw = planned_screw_to_screw(ps)
         assert screw.vertebra_level == "T12"
 
+    def test_metrics_copied(self):
+        metrics = {"trajectory_mean_hu": 320.0, "facet_grade": 1,
+                   "facet_text": "screw abuts the cephalad facet",
+                   "heary_direction": "medial"}
+        ps = self._make_planned(metrics=metrics)
+        screw = planned_screw_to_screw(ps)
+        assert screw.metrics == metrics
+        # A copy, so editing the screw cannot mutate the planner result.
+        screw.metrics["facet_grade"] = 3
+        assert ps.metrics["facet_grade"] == 1
+
+    def test_metrics_default_to_empty_dict(self):
+        screw = planned_screw_to_screw(self._make_planned())
+        assert screw.metrics == {}
+
     def test_side_set(self):
         ps = self._make_planned(side="right")
         screw = planned_screw_to_screw(ps)
