@@ -21,6 +21,7 @@ import SimpleITK as sitk
 from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 
+import src.controllers.segmentation_controller as seg_controller_module
 import src.ui.main_window as main_window_module
 from src.core.totalseg_integration import SegmentationRunResult
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
@@ -197,3 +198,117 @@ def test_finished_shows_wait_cursor_and_status_during_resample_and_regrade(
     # a "set" is always immediately paired with a "restore" before the next.
     for index in range(0, len(cursor_events), 2):
         assert cursor_events[index : index + 2] == ["set", "restore"]
+
+
+# ---------------------------------------------------------------------------
+# F4 -- a 60 s heartbeat keeps this instance's workspace off the stale purge
+# ---------------------------------------------------------------------------
+
+
+def test_running_a_segmentation_starts_a_60s_workspace_heartbeat(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """TotalSegmentator emits nothing for the whole subprocess run.
+
+    Without a timer the lock's last heartbeat is the "Running TotalSegmentator"
+    message, so a CPU run longer than the purge threshold lets the next
+    instance's startup delete the directory it is writing into.
+    """
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": "SERIES-HEARTBEAT", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+
+    class _NoopThread:
+        def __init__(self, **_kwargs):
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+            self.cancelled = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+        def request_cancel(self):
+            return None
+
+    monkeypatch.setattr(
+        seg_controller_module, "AutoSegmentationThread", _NoopThread
+    )
+
+    try:
+        ctrl.run()
+
+        timer = ctrl._heartbeat_timer
+        assert timer is not None and timer.isActive()
+        assert timer.interval() == 60_000
+        assert ctrl.HEARTBEAT_INTERVAL_MS == 60_000
+    finally:
+        ctrl._segmentation_thread = None
+        ctrl._close_progress_dialog()
+
+
+class _Signal:
+    """Minimal signal stand-in: connect only, never emitted in these tests."""
+
+    def connect(self, _slot):
+        return None
+
+
+def test_heartbeat_refreshes_the_lock_of_every_live_workspace(
+    ui_main_window, tmp_path
+):
+    from pathlib import Path
+
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    ctrl = ui_main_window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    created = ctrl.workspace.create()
+    lock = Path(created) / SegmentationWorkspace.LOCK_NAME
+    old = os.path.getmtime(lock) - 500
+    os.utime(lock, (old, old))
+
+    ctrl._start_heartbeat()
+    try:
+        ctrl._on_heartbeat()
+        assert os.path.getmtime(lock) > old
+        assert ctrl._heartbeat_timer.isActive()
+    finally:
+        ctrl._stop_heartbeat()
+
+
+def test_heartbeat_stops_once_no_workspace_is_left(ui_main_window, tmp_path):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    ctrl = ui_main_window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    ctrl.workspace.create()
+    ctrl._start_heartbeat()
+
+    ctrl.workspace.purge()
+    ctrl._on_heartbeat()
+
+    assert ctrl._heartbeat_timer is None or not ctrl._heartbeat_timer.isActive()
+
+
+def test_reset_state_stops_the_heartbeat(ui_main_window, tmp_path):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    ctrl = ui_main_window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    ctrl.workspace.create()
+    ctrl._start_heartbeat()
+
+    ctrl.reset_state()
+
+    assert ctrl._heartbeat_timer is None or not ctrl._heartbeat_timer.isActive()

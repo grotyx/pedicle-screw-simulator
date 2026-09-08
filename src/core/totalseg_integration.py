@@ -83,7 +83,7 @@ class SegmentationWorkspace:
     def create(self) -> str:
         path = tempfile.mkdtemp(prefix=self.PREFIX, dir=self._root)
         self._dirs.append(path)
-        (Path(path) / self.LOCK_NAME).touch()
+        self.touch(path)
         return path
 
     def remove(self, path: Optional[str]) -> None:
@@ -106,15 +106,104 @@ class SegmentationWorkspace:
             shutil.rmtree(self._dirs.pop(), ignore_errors=True)
 
     @classmethod
-    def touch(cls, path: str) -> None:
-        """Update the heartbeat lock file's mtime to keep `path` alive."""
+    def touch(cls, path: str) -> bool:
+        """Refresh the heartbeat lock of `path`, restamping the owning PID.
+
+        Written by the process that owns the directory, so the PID recorded is
+        always the one whose liveness :meth:`purge_stale` should be asking
+        about. Returns whether the heartbeat landed.
+        """
         lock_path = Path(path) / cls.LOCK_NAME
         try:
-            lock_path.touch(exist_ok=True)
-            os.utime(lock_path, None)
+            lock_path.write_text(str(os.getpid()), encoding="utf-8")
         except OSError:
             # Best effort only; a missed heartbeat just risks a stale purge.
-            pass
+            return False
+        return True
+
+    def touch_all(self) -> int:
+        """Refresh every workspace this instance still owns; return the count.
+
+        The controller calls this on a timer: TotalSegmentator emits nothing
+        between spawning the subprocess and collecting its output, and the
+        finished mask keeps being read out of the directory long after the run,
+        so progress messages alone leave hours-long gaps in the heartbeat.
+        """
+        return sum(1 for path in list(self._dirs) if self.touch(path))
+
+    #: ``PROCESS_QUERY_LIMITED_INFORMATION`` — the least privilege that still
+    #: answers "is this process running?", and one every same-session process
+    #: can be opened with.
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _STILL_ACTIVE = 259          # GetExitCodeProcess for a running process
+    _ERROR_ACCESS_DENIED = 5
+
+    @classmethod
+    def _pid_is_alive(cls, pid: int) -> bool:
+        """Whether `pid` is a process that is still running.
+
+        Errs towards "alive": a PID we cannot interrogate must not cost another
+        instance its live workspace.  Windows goes through ``OpenProcess`` +
+        ``GetExitCodeProcess`` because ``os.kill(pid, 0)`` *terminates* the
+        target there rather than probing it.
+        """
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            return cls._windows_pid_is_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # Someone else's process: it exists, which is all we asked.
+            return True
+        except OSError:
+            return False
+        return True
+
+    @classmethod
+    def _windows_pid_is_alive(cls, pid: int) -> bool:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)
+        ]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.OpenProcess(
+            cls._PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            # Access denied means the process is there but not ours to inspect.
+            return ctypes.get_last_error() == cls._ERROR_ACCESS_DENIED
+        try:
+            exit_code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == cls._STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+
+    @classmethod
+    def _lock_owner_pid(cls, lock_path: Path) -> Optional[int]:
+        """PID recorded in a lock file, or None for a legacy/unreadable lock."""
+        try:
+            text = lock_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
 
     @classmethod
     def purge_stale(cls, root: Optional[str] = None, older_than_seconds: float = 0.0) -> int:
@@ -128,9 +217,16 @@ class SegmentationWorkspace:
                 continue
             age_mtime = entry.stat().st_mtime
             lock_path = entry / cls.LOCK_NAME
+            owner_pid: Optional[int] = None
             if lock_path.exists():
                 age_mtime = max(age_mtime, lock_path.stat().st_mtime)
+                owner_pid = cls._lock_owner_pid(lock_path)
             if now - age_mtime < older_than_seconds:
+                continue
+            if owner_pid is not None and cls._pid_is_alive(owner_pid):
+                # Another instance is still working in here (a CPU run can
+                # easily outlive any age threshold); its data is not ours
+                # to delete.
                 continue
             shutil.rmtree(entry, ignore_errors=True)
             removed += 1

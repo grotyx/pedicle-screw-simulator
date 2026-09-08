@@ -827,3 +827,125 @@ def test_no_subregion_model_leaves_fields_empty(monkeypatch, tmp_path):
     assert result.subregion_mask_path is None
     assert result.subregion_labels == {}
     assert result.subregion_message == ""
+
+
+# ---------------------------------------------------------------------------
+# F4 -- a workspace owned by a live process survives another instance's purge
+# ---------------------------------------------------------------------------
+
+
+def _dead_pid() -> int:
+    """A PID that is certainly not running any more.
+
+    A child we spawned and reaped: on POSIX the PID is free, and on Windows the
+    still-open process handle keeps the id from being recycled while the object
+    itself reports its exit code.
+    """
+    import subprocess
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def test_workspace_create_records_the_owning_pid(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    created = ws.create()
+    lock = Path(created) / SegmentationWorkspace.LOCK_NAME
+    assert lock.read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_workspace_touch_keeps_the_owning_pid(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    created = ws.create()
+    SegmentationWorkspace.touch(created)
+    lock = Path(created) / SegmentationWorkspace.LOCK_NAME
+    assert lock.read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_pid_is_alive_for_the_current_process():
+    assert SegmentationWorkspace._pid_is_alive(os.getpid()) is True
+
+
+def test_pid_is_alive_is_false_for_a_finished_process():
+    assert SegmentationWorkspace._pid_is_alive(_dead_pid()) is False
+
+
+def test_pid_is_alive_rejects_nonsense_pids():
+    assert SegmentationWorkspace._pid_is_alive(0) is False
+    assert SegmentationWorkspace._pid_is_alive(-1) is False
+
+
+def test_purge_stale_keeps_a_workspace_owned_by_a_live_process(tmp_path):
+    """A long CPU run in another instance must survive this instance's startup."""
+    live = tmp_path / (SegmentationWorkspace.PREFIX + "live")
+    live.mkdir()
+    lock = live / SegmentationWorkspace.LOCK_NAME
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    old = time.time() - 7200
+    os.utime(lock, (old, old))
+    os.utime(live, (old, old))
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=3600
+    )
+
+    assert removed == 0
+    assert live.exists()
+
+
+def test_purge_stale_removes_a_workspace_whose_owner_is_gone(tmp_path):
+    abandoned = tmp_path / (SegmentationWorkspace.PREFIX + "abandoned")
+    abandoned.mkdir()
+    lock = abandoned / SegmentationWorkspace.LOCK_NAME
+    lock.write_text(str(_dead_pid()), encoding="utf-8")
+    old = time.time() - 7200
+    os.utime(lock, (old, old))
+    os.utime(abandoned, (old, old))
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=3600
+    )
+
+    assert removed == 1
+    assert not abandoned.exists()
+
+
+def test_purge_stale_falls_back_to_mtime_for_an_unreadable_lock(tmp_path):
+    """A lock from an older build (no PID) still ages out normally."""
+    legacy = tmp_path / (SegmentationWorkspace.PREFIX + "legacy")
+    legacy.mkdir()
+    lock = legacy / SegmentationWorkspace.LOCK_NAME
+    lock.write_text("not-a-pid", encoding="utf-8")
+    old = time.time() - 7200
+    os.utime(lock, (old, old))
+    os.utime(legacy, (old, old))
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=3600
+    )
+
+    assert removed == 1
+
+
+def test_touch_all_refreshes_every_tracked_workspace(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    first = ws.create()
+    second = ws.create()
+    old = time.time() - 500
+    for path in (first, second):
+        lock = Path(path) / SegmentationWorkspace.LOCK_NAME
+        os.utime(lock, (old, old))
+
+    assert ws.touch_all() == 2
+
+    for path in (first, second):
+        lock = Path(path) / SegmentationWorkspace.LOCK_NAME
+        assert lock.stat().st_mtime > old
+
+
+def test_touch_all_ignores_directories_that_are_already_gone(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    created = ws.create()
+    ws.remove(created)
+    assert ws.touch_all() == 0

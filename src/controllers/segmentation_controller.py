@@ -13,7 +13,7 @@ import traceback
 from typing import Dict, Optional
 
 import numpy as np
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from src.core.subregion_segmentation import (
@@ -97,6 +97,11 @@ class AutoSegmentationThread(QThread):
 class SegmentationController:
     """Manages auto-segmentation workflow and overlay rendering."""
 
+    #: How often the workspace lock is restamped while a run directory exists.
+    #: Comfortably below any purge threshold (startup uses one hour), and cheap
+    #: enough that touching a handful of files costs nothing on the GUI thread.
+    HEARTBEAT_INTERVAL_MS = 60_000
+
     def __init__(self, volume_manager, main_window):
         self._vm = volume_manager
         self._window = main_window
@@ -104,6 +109,9 @@ class SegmentationController:
         self._segmentation_thread: Optional[AutoSegmentationThread] = None
         self._segmentation_progress: Optional[QProgressDialog] = None
         self._active_work_dir: Optional[str] = None
+        # Keeps the workspace lock fresh for as long as this instance owns a
+        # run directory, so another instance's startup purge leaves it alone.
+        self._heartbeat_timer: Optional[QTimer] = None
         self._last_segmentation_mask_path: Optional[str] = None
         self._last_segmentation_method: str = "totalsegmentator"
         self._segmentation_label_map: Dict[int, str] = {}
@@ -198,6 +206,7 @@ class SegmentationController:
         self._pending_subregion_message = ""
         work_dir = self.workspace.create()
         self._active_work_dir = work_dir
+        self._start_heartbeat()
         self._segmentation_thread = AutoSegmentationThread(
             sitk_image=sitk_image,
             task=task,
@@ -247,6 +256,39 @@ class SegmentationController:
                 f"no dataset.json found in {searched}"
             )
         return model
+
+    # ------------------------------------------------------------------
+    # Workspace heartbeat
+    # ------------------------------------------------------------------
+
+    def _start_heartbeat(self) -> None:
+        """Keep this instance's workspace lock fresh while a run dir exists.
+
+        The worker only touches the lock from progress callbacks, and
+        TotalSegmentator emits nothing between spawning its subprocess and
+        collecting the result — so a CPU run can go quiet for hours while the
+        finished mask is still read out of the directory afterwards. A timer
+        heartbeat closes both gaps, and the PID recorded in the lock covers the
+        window before the first tick.
+        """
+        if self._heartbeat_timer is None:
+            # Parented to the window so it dies with the UI it belongs to.
+            self._heartbeat_timer = QTimer(self._window)
+            self._heartbeat_timer.setInterval(self.HEARTBEAT_INTERVAL_MS)
+            self._heartbeat_timer.timeout.connect(self._on_heartbeat)
+        if not self._heartbeat_timer.isActive():
+            self._heartbeat_timer.start()
+        self._on_heartbeat()
+
+    def _on_heartbeat(self) -> None:
+        """Restamp every workspace still owned, and stop once none are left."""
+        if self.workspace.touch_all() == 0:
+            self._stop_heartbeat()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat timer (safe to call when it never started)."""
+        if self._heartbeat_timer is not None:
+            self._heartbeat_timer.stop()
 
     def _close_progress_dialog(self):
         """Close the progress dialog without re-entering the cancel path.
@@ -766,3 +808,5 @@ class SegmentationController:
         self._window.seg_show_3d_check.setChecked(True)
         self.refresh_label_options()
         self.workspace.purge()
+        # Nothing left to keep alive; the next run starts its own heartbeat.
+        self._stop_heartbeat()
