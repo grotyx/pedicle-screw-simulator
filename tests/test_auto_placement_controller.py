@@ -314,7 +314,7 @@ def test_on_finished_adds_editable_screws_and_keeps_last_planned(
 ):
     ctrl, window = controller_with_window
     ps = _planned("L4", "left")
-    ctrl._on_finished([ps])
+    ctrl._on_finished(_current_thread(ctrl), [ps])
     assert len(window._tool_ctrl.screw_tool.get_screws()) == 1
     assert ctrl.last_planned[0] is ps
     assert not hasattr(ctrl, "accept_all")
@@ -322,14 +322,14 @@ def test_on_finished_adds_editable_screws_and_keeps_last_planned(
 
 def test_last_planned_is_a_defensive_copy(controller_with_window):
     ctrl, _window = controller_with_window
-    ctrl._on_finished([_planned()])
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
     ctrl.last_planned.clear()
     assert len(ctrl.last_planned) == 1
 
 
 def test_reset_state_clears_last_planned(controller_with_window):
     ctrl, window = controller_with_window
-    ctrl._on_finished([_planned()])
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
     ctrl.reset_state()
     assert ctrl.last_planned == []
     assert window.auto_screw_status._text == "No auto plan"
@@ -444,7 +444,7 @@ class TestAutoPlacementControllerUnit:
                 gertzbein_grade="B", confidence=0.6,
             ),
         ]
-        ctrl._on_finished(planned)
+        ctrl._on_finished(_current_thread(ctrl), planned)
         assert len(window._tool_ctrl.screw_tool._screws) == 2
         assert [select for _screw, select in window._tool_ctrl.added] == [True, False]
         assert window.screw_list_widget.currentRow() == 0
@@ -471,7 +471,7 @@ class TestAutoPlacementControllerUnit:
             mean_bone_density=400, min_bone_density=200,
             gertzbein_grade="A", confidence=0.8,
         )
-        ctrl._on_finished([ps])
+        ctrl._on_finished(_current_thread(ctrl), [ps])
         assert len(window._tool_ctrl.screw_tool._screws) == 2
         assert window.screw_list_widget.currentRow() == 1
 
@@ -504,7 +504,7 @@ class TestAutoPlacementControllerUnit:
                 gertzbein_grade="A", confidence=0.8,
             ),
         ]
-        ctrl._on_finished(planned)
+        ctrl._on_finished(_current_thread(ctrl), planned)
         assert len(window._tool_ctrl.added) == 1
         assert window._tool_ctrl.added[0][0].vertebra_level == "L4"
         assert window._tool_ctrl.added[0][0].side == "left"
@@ -743,7 +743,7 @@ def test_planning_thread_pedicle_mask_defaults_to_none():
 
 def test_on_finished_reports_rod_misalignment(controller_with_window):
     ctrl, window = controller_with_window
-    ctrl._on_finished([
+    ctrl._on_finished(_current_thread(ctrl), [
         _planned("L4", "left", metrics={"rod_misalignment_mm": 1.24}),
         _planned("L4", "right", metrics={"rod_misalignment_mm": 2.75}),
     ])
@@ -752,14 +752,17 @@ def test_on_finished_reports_rod_misalignment(controller_with_window):
 
 def test_on_finished_omits_rod_misalignment_when_absent(controller_with_window):
     ctrl, window = controller_with_window
-    ctrl._on_finished([_planned("L4", "left")])
+    ctrl._on_finished(_current_thread(ctrl), [_planned("L4", "left")])
     assert "Rod misalignment" not in window.auto_screw_status._text
 
 
 def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
     """A side with no screws must not be reported as perfectly aligned."""
     ctrl, window = controller_with_window
-    ctrl._on_finished([_planned("L4", "left", metrics={"rod_misalignment_mm": 1.24})])
+    ctrl._on_finished(
+        _current_thread(ctrl),
+        [_planned("L4", "left", metrics={"rod_misalignment_mm": 1.24})],
+    )
     text = window.auto_screw_status._text
     assert text.endswith("Rod misalignment L 1.2 mm")
     assert "R 0.0 mm" not in text
@@ -773,15 +776,23 @@ def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
 class _FinishedThread:
     """Stand-in for a finished ``_PlanningThread``."""
 
-    def __init__(self, cancelled=False, skipped_sides=(), generation=None):
+    def __init__(self, cancelled=False, skipped_sides=(), generation=0):
         self.cancelled = cancelled
         self.skipped_sides = list(skipped_sides)
         self.cancel_requested = False
-        if generation is not None:
-            self.generation = generation
+        # A fresh controller sits at generation 0, so the default matches the
+        # run a test that never called ``run_planning`` is standing in for.
+        self.generation = generation
 
     def request_cancel(self):
         self.cancel_requested = True
+
+
+def _current_thread(ctrl, **kwargs):
+    """Install a stub thread stamped for ``ctrl``'s current run generation."""
+    thread = _FinishedThread(generation=ctrl._run_generation, **kwargs)
+    ctrl._thread = thread
+    return thread
 
 
 def _thread_for(mask_size=2):
@@ -867,7 +878,7 @@ def test_on_finished_closes_the_dialog_without_re_entering_cancel(
     dialog.canceled.connect(ctrl._on_cancel_requested)
     ctrl._progress_dialog = dialog
 
-    ctrl._on_finished([_planned()])
+    ctrl._on_finished(thread, [_planned()])
 
     assert ctrl._progress_dialog is None
     assert not dialog.isVisible()
@@ -884,7 +895,7 @@ def test_on_error_closes_the_dialog(controller_with_window, monkeypatch):
     dialog.canceled.connect(ctrl._on_cancel_requested)
     ctrl._progress_dialog = dialog
 
-    ctrl._on_error("boom")
+    ctrl._on_error(_current_thread(ctrl), "boom")
 
     assert ctrl._progress_dialog is None
     assert not dialog.isVisible()
@@ -896,7 +907,7 @@ def test_on_finished_reports_a_cancelled_run_instead_of_success(
     ctrl, window = controller_with_window
     ctrl._thread = _FinishedThread(cancelled=True)
 
-    ctrl._on_finished([_planned("L4", "left"), _planned("L4", "right")])
+    ctrl._on_finished(ctrl._thread, [_planned("L4", "left"), _planned("L4", "right")])
 
     assert window.auto_screw_status._text == "Planning cancelled — 2 screws kept"
     # The partial construct is still added, so the surgeon keeps what was planned.
@@ -906,7 +917,7 @@ def test_on_finished_reports_a_cancelled_run_instead_of_success(
 def test_on_finished_reports_a_cancelled_run_with_no_screws(controller_with_window):
     ctrl, window = controller_with_window
     ctrl._thread = _FinishedThread(cancelled=True)
-    ctrl._on_finished([])
+    ctrl._on_finished(ctrl._thread, [])
     assert window.auto_screw_status._text == "Planning cancelled — 0 screws kept"
 
 
@@ -921,10 +932,10 @@ def test_on_finished_names_sides_with_no_feasible_cbt_trajectory(
         ]
     )
 
-    ctrl._on_finished([_planned()])
+    ctrl._on_finished(ctrl._thread, [_planned()])
 
     assert (
-        "No feasible CBT trajectory: L2 right, L3 right"
+        "No screw planned: L2 right, L3 right"
         in window.auto_screw_status._text
     )
 
@@ -932,8 +943,8 @@ def test_on_finished_names_sides_with_no_feasible_cbt_trajectory(
 def test_on_finished_names_dropped_sides_even_with_no_screws(controller_with_window):
     ctrl, window = controller_with_window
     ctrl._thread = _FinishedThread(skipped_sides=[("L2", "right", "no corner")])
-    ctrl._on_finished([])
-    assert "No feasible CBT trajectory: L2 right" in window.auto_screw_status._text
+    ctrl._on_finished(ctrl._thread, [])
+    assert "No screw planned: L2 right" in window.auto_screw_status._text
 
 
 def test_run_planning_shows_a_cancellable_progress_dialog(monkeypatch, tmp_path):
@@ -1016,7 +1027,7 @@ def test_a_late_result_from_the_previous_study_is_dropped(controller_with_window
     thread, _dialog = _running_run(ctrl)
     ctrl.reset_state()
 
-    ctrl._on_finished([_planned("L4", "left")])
+    ctrl._on_finished(thread, [_planned("L4", "left")])
 
     assert window._tool_ctrl.screw_tool.get_screws() == []
     assert window._tool_ctrl.added == []
@@ -1034,10 +1045,10 @@ def test_a_late_error_from_the_previous_study_is_dropped(
         "src.controllers.auto_placement_controller.QMessageBox.critical",
         lambda *a, **k: shown.append(a),
     )
-    _running_run(ctrl)
+    thread, _dialog = _running_run(ctrl)
     ctrl.reset_state()
 
-    ctrl._on_error("boom")
+    ctrl._on_error(thread, "boom")
 
     assert shown == []
     assert window.auto_screw_status._text == "No auto plan"
@@ -1046,9 +1057,9 @@ def test_a_late_error_from_the_previous_study_is_dropped(
 
 def test_a_result_from_the_current_study_is_kept(controller_with_window):
     ctrl, window = controller_with_window
-    _running_run(ctrl)
+    thread, _dialog = _running_run(ctrl)
 
-    ctrl._on_finished([_planned("L4", "left")])
+    ctrl._on_finished(thread, [_planned("L4", "left")])
 
     assert len(window._tool_ctrl.screw_tool.get_screws()) == 1
 
@@ -1060,13 +1071,13 @@ def test_a_result_from_the_current_study_is_kept(controller_with_window):
 
 def test_progress_does_not_overwrite_the_cancelling_label(controller_with_window):
     ctrl, window = controller_with_window
-    _running_run(ctrl)
+    thread, _dialog = _running_run(ctrl)
 
     ctrl._on_cancel_requested()
     assert window.auto_screw_status._text == "Cancelling planning..."
 
     # A message the worker had already queued before it saw the cancel.
-    ctrl._on_progress("Planning L4 right (2/10)…")
+    ctrl._on_progress(thread, "Planning L4 right (2/10)…")
 
     assert window.auto_screw_status._text == "Cancelling planning..."
     # The status bar still tracks the run winding down.
@@ -1112,6 +1123,167 @@ def test_a_new_run_clears_the_cancelling_label(monkeypatch, tmp_path):
 
     assert ctrl._cancel_requested is False
     assert ctrl._thread.generation == ctrl._run_generation
-    ctrl._on_progress("Planning L4 left (1/2)…")
+    ctrl._on_progress(ctrl._thread, "Planning L4 left (1/2)…")
     assert window.auto_screw_status._text == "Planning L4 left (1/2)…"
     ctrl._close_progress_dialog()
+
+
+# ---------------------------------------------------------------------------
+# F2 -- a result is attributed to the run that produced it, not to `_thread`
+# ---------------------------------------------------------------------------
+
+
+def test_a_result_from_a_superseded_run_is_dropped(controller_with_window):
+    """Thread A finishes after a second Plan click already installed thread B.
+
+    ``finished`` is emitted before ``isRunning()`` goes False, so B can be in
+    place by the time A's queued slot runs.  A's screws must not be added, and
+    B must stay the tracked run with its dialog intact.
+    """
+    ctrl, window = controller_with_window
+    thread_a = _current_thread(ctrl)
+    ctrl._run_generation += 1                     # the second run_planning
+    thread_b = _current_thread(ctrl)
+    dialog = QProgressDialog("Planning screw trajectories...", "Cancel", 0, 0, None)
+    dialog.canceled.connect(ctrl._on_cancel_requested)
+    ctrl._progress_dialog = dialog
+
+    ctrl._on_finished(thread_a, [_planned("L4", "left")])
+
+    assert window._tool_ctrl.screw_tool.get_screws() == []
+    assert ctrl.last_planned == []
+    assert ctrl._thread is thread_b               # B is still the tracked run
+    assert ctrl._progress_dialog is dialog        # ... and keeps its dialog
+    ctrl._close_progress_dialog()
+
+
+def test_an_error_from_a_superseded_run_is_dropped(
+    controller_with_window, monkeypatch
+):
+    ctrl, window = controller_with_window
+    shown = []
+    monkeypatch.setattr(
+        "src.controllers.auto_placement_controller.QMessageBox.critical",
+        lambda *a, **k: shown.append(a),
+    )
+    thread_a = _current_thread(ctrl)
+    ctrl._run_generation += 1
+    thread_b = _current_thread(ctrl)
+
+    ctrl._on_error(thread_a, "boom")
+
+    assert shown == []
+    assert window.auto_screw_status._text == "No auto plan"
+    assert ctrl._thread is thread_b
+
+
+def test_a_result_from_an_unknown_emitter_is_dropped(controller_with_window):
+    ctrl, window = controller_with_window
+    _current_thread(ctrl)
+
+    ctrl._on_finished(None, [_planned("L4", "left")])
+
+    assert window._tool_ctrl.screw_tool.get_screws() == []
+
+
+def test_progress_from_a_superseded_run_leaves_the_new_run_alone(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    thread_a = _current_thread(ctrl)
+    ctrl._run_generation += 1
+    _current_thread(ctrl)
+    window.auto_screw_status.setText("Planning...")
+    window.statusbar.showMessage("Auto screw planning started")
+
+    ctrl._on_progress(thread_a, "Planning L4 right (2/10)…")
+
+    assert window.auto_screw_status._text == "Planning..."
+    assert window.statusbar.message == "Auto screw planning started"
+
+
+def test_progress_after_reset_state_does_not_touch_the_new_studys_labels(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    thread, _dialog = _running_run(ctrl)
+    ctrl.reset_state()
+
+    ctrl._on_progress(thread, "Planning L4 right (2/10)…")
+
+    assert window.auto_screw_status._text == "No auto plan"
+    assert window.statusbar.message == ""
+
+
+def _prepare_run(window, ctrl, tmp_path):
+    """Give ``ctrl`` a CT volume and a readable mask so run_planning proceeds."""
+    import SimpleITK as sitk
+
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+    return mask_path
+
+
+def test_every_run_gets_a_fresh_generation(monkeypatch, tmp_path):
+    """Two runs must be distinguishable even without a study change."""
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    _prepare_run(window, ctrl, tmp_path)
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *_args, **_kwargs):
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+
+    ctrl.run_planning()
+    first = ctrl._thread.generation
+    ctrl._close_progress_dialog()
+    ctrl.run_planning()
+    second = ctrl._thread.generation
+
+    assert second != first
+    assert second == ctrl._run_generation
+    ctrl._close_progress_dialog()
+
+
+def test_run_planning_reports_an_unreadable_mask_instead_of_raising(
+    monkeypatch, tmp_path
+):
+    """The workspace can be purged by another instance between run and plan."""
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    mask_path = _prepare_run(window, ctrl, tmp_path)
+    mask_path.unlink()
+
+    shown = []
+    monkeypatch.setattr(
+        module.QMessageBox, "warning", lambda *a, **k: shown.append(a[2])
+    )
+
+    ctrl.run_planning()          # must not raise inside the Qt slot
+
+    assert shown and "could not be read" in shown[0]
+    assert str(mask_path) in shown[0]
+    assert ctrl._thread is None
+    assert ctrl._progress_dialog is None

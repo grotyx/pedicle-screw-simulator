@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from functools import partial
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -99,9 +100,10 @@ class AutoPlacementController:
         self._thread: Optional[_PlanningThread] = None
         self._last_planned: List[PlannedScrew] = []
         self._progress_dialog: Optional[QProgressDialog] = None
-        #: Bumped by :meth:`reset_state`.  A thread carries the generation it
-        #: was started for, so a result that arrives after the study changed can
-        #: be recognised and dropped instead of landing in the new plan.
+        #: Bumped by :meth:`run_planning` and :meth:`reset_state`.  A thread
+        #: carries the generation it was started for, so a result that arrives
+        #: after the study changed — or after a newer run replaced it — can be
+        #: recognised and dropped instead of landing in the current plan.
         self._run_generation = 0
         #: Set once the user has asked to cancel, so a progress message already
         #: queued from the worker cannot overwrite the "Cancelling" label.
@@ -173,7 +175,29 @@ class AutoPlacementController:
             return
 
         import SimpleITK as sitk
-        mask_image = sitk.ReadImage(mask_path)
+        try:
+            mask_image = sitk.ReadImage(mask_path)
+        except Exception as exc:
+            # The workspace holding the mask can disappear underneath us — a
+            # second instance's startup purge, a temp cleaner, a manual delete.
+            # Raising here would surface as an unhandled exception inside a Qt
+            # slot, so say what happened and what to do about it.
+            logger.warning(
+                "Could not read the segmentation mask %s", mask_path, exc_info=True
+            )
+            QMessageBox.warning(
+                self._window,
+                "Segmentation Mask Unavailable",
+                "The segmentation mask this plan needs could not be read:\n"
+                f"{mask_path}\n\n"
+                "Its temporary workspace may have been removed. Re-run auto "
+                "segmentation before planning screws.\n\n"
+                f"Details: {exc}",
+            )
+            self._window.statusbar.showMessage(
+                "Segmentation mask could not be read — re-run auto segmentation"
+            )
+            return
 
         self._window.auto_screw_plan_btn.setEnabled(False)
         self._window.auto_screw_status.setText("Planning...")
@@ -196,18 +220,25 @@ class AutoPlacementController:
         self._progress_dialog.canceled.connect(self._on_cancel_requested)
         self._progress_dialog.show()
 
-        self._thread = _PlanningThread(
+        # Every run gets its own token: `finished` is emitted (queued) before
+        # `isRunning()` goes False, so a second Plan click can install thread B
+        # while thread A's result is still in the event queue.  The token is
+        # bound into the connection, so each slot knows which run it is being
+        # handed a result for instead of trusting `self._thread`.
+        self._run_generation += 1
+        thread = _PlanningThread(
             mask_image,
             ct_image,
             selected_labels,
             config=self._window.planner_config(),
             pedicle_mask=getattr(seg_ctrl, "_last_pedicle_mask", None),
         )
-        self._thread.generation = self._run_generation
-        self._thread.progress.connect(self._on_progress)
-        self._thread.finished.connect(self._on_finished)
-        self._thread.error.connect(self._on_error)
-        self._thread.start()
+        thread.generation = self._run_generation
+        self._thread = thread
+        thread.progress.connect(partial(self._on_progress, thread))
+        thread.finished.connect(partial(self._on_finished, thread))
+        thread.error.connect(partial(self._on_error, thread))
+        thread.start()
 
     def request_cancel(self) -> None:
         """Ask a running planning run to stop at the next (level, side).
@@ -263,7 +294,11 @@ class AutoPlacementController:
         self._window.auto_screw_status.setText("Cancelling planning...")
         self._thread.request_cancel()
 
-    def _on_progress(self, message: str):
+    def _on_progress(self, thread, message: str):
+        # A superseded run keeps emitting until it notices the cancel; its
+        # messages must not paint over the new study's (or the new run's) UI.
+        if self._is_stale(thread):
+            return
         # Once a cancel is in, the label belongs to it: the worker finishes the
         # pedicle it is on and its already-queued message would otherwise put
         # "Planning L4 right…" back over "Cancelling planning...".  The status
@@ -273,8 +308,17 @@ class AutoPlacementController:
         self._window.statusbar.showMessage(message)
 
     def _is_stale(self, thread) -> bool:
-        """Whether ``thread``'s result belongs to a study that has been replaced."""
-        return getattr(thread, "generation", self._run_generation) != self._run_generation
+        """Whether ``thread`` is no longer the run this controller is waiting on.
+
+        Both halves matter: the generation catches a run whose study has been
+        replaced by :meth:`reset_state`, and the identity check catches a run
+        that a newer ``run_planning`` superseded.  An unknown emitter (``None``,
+        or a thread that was never stamped) is stale by construction — it can
+        never be proved to belong to the current run.
+        """
+        if thread is not self._thread:
+            return True
+        return getattr(thread, "generation", None) != self._run_generation
 
     def _discard_stale(self, thread, what: str) -> None:
         """Drop a result from a superseded run, leaving the new study's UI alone."""
@@ -283,8 +327,7 @@ class AutoPlacementController:
             self._thread = None
         self._refresh_plan_button()
 
-    def _on_finished(self, planned: List[PlannedScrew]):
-        thread = self._thread
+    def _on_finished(self, thread, planned: List[PlannedScrew]):
         if self._is_stale(thread):
             self._discard_stale(thread, f"{len(planned)} screws")
             return
@@ -350,8 +393,7 @@ class AutoPlacementController:
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)
 
-    def _on_error(self, error: str):
-        thread = self._thread
+    def _on_error(self, thread, error: str):
         if self._is_stale(thread):
             self._discard_stale(thread, f"error {error!r}")
             return
@@ -394,14 +436,15 @@ class AutoPlacementController:
 def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     """Name the sides the planner could not place a screw on.
 
-    Only the CBT path drops sides (the traditional paths always fall back to
-    *some* trajectory), and a shorter construct than the one that was requested
-    must never reach the surgeon unannounced.
+    Every planner path (legacy, optimiser, CBT) records the sides it dropped,
+    so this covers a missing pedicle or a rejected trajectory just as much as an
+    infeasible cortical-bone corridor.  A shorter construct than the one that
+    was requested must never reach the surgeon unannounced.
     """
     if not skipped:
         return ""
     sides = ", ".join(f"{name} {side}" for name, side, _reason in skipped)
-    return f" No feasible CBT trajectory: {sides}"
+    return f" No screw planned: {sides}"
 
 
 def _rod_misalignment_by_side(planned: List[PlannedScrew]) -> Dict[str, float]:
