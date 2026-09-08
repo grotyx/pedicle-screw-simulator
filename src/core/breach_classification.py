@@ -82,7 +82,7 @@ def facet_violation_grade(
     from .pedicle_analyzer import VERTEBRA_LABELS  # local import: avoids a cycle
 
     cephalad = int(label) + 1
-    if cephalad not in VERTEBRA_LABELS or not (grader.label_array() == cephalad).any():
+    if cephalad not in VERTEBRA_LABELS or not grader.has_label(cephalad):
         return _NO_CEPHALAD
 
     entry_arr = np.asarray(entry, dtype=np.float64)

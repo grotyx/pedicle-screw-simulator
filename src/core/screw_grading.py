@@ -146,6 +146,7 @@ class ScrewGrader:
         self._spacing = np.asarray(mask_image.GetSpacing(), dtype=np.float64)    # x, y, z
         self._size = np.asarray(mask_image.GetSize(), dtype=np.int64)            # x, y, z
         self._maps: Dict[int, Optional[_DistanceMaps]] = {}
+        self._present: Dict[int, bool] = {}
 
     @property
     def crop_margin_mm(self) -> float:
@@ -165,6 +166,21 @@ class ScrewGrader:
         view = self._mask_array.view()
         view.flags.writeable = False
         return view
+
+    def has_label(self, label: int) -> bool:
+        """Whether ``label`` appears anywhere in the segmentation.
+
+        Cached per label, on the same assumption the distance-map cache makes:
+        a grader's mask never changes, so a new segmentation means a new
+        grader.  Callers on the drag path ask this once per frame, and the
+        answer is otherwise a full-volume scan every time.
+        """
+        key = int(label)
+        present = self._present.get(key)
+        if present is None:
+            present = bool((self._mask_array == key).any())
+            self._present[key] = present
+        return present
 
     # ------------------------------------------------------------------ labels
     def detect_label(self, entry: Point3, target: Point3) -> Optional[int]:

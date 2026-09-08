@@ -155,6 +155,16 @@ class TestScrewGrader:
         grader = ScrewGrader(_cube_mask(), crop_margin_mm=8.0)
         assert grader.crop_margin_mm == 8.0
 
+    def test_has_label_reports_presence_and_caches_the_scan(self):
+        grader = ScrewGrader(_cube_mask())
+        assert grader.has_label(28) is True
+        assert grader.has_label(29) is False
+
+        # Cached on the same "a grader's mask never changes" assumption the
+        # distance maps make, so the answer survives a mutated array.
+        grader._mask_array = np.zeros_like(grader._mask_array)
+        assert grader.has_label(28) is True
+
 
 class TestGridsMatch:
     def test_identical_grids_match(self):
