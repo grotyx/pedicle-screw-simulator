@@ -22,6 +22,7 @@ import logging
 import multiprocessing
 import os
 import sys
+import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -100,6 +101,34 @@ def run_dependency_self_check() -> None:
         importlib.import_module(module_name)
 
 
+def run_self_check_cli() -> int:
+    """
+    Run the dependency self-check for the ``--self-check`` CLI entry point.
+
+    A frozen Windows build runs this via ``Start-Process -Wait`` against the
+    windowed (console=False) exe, so an unhandled exception here previously
+    surfaced only as an undismissable modal traceback dialog, hanging the CI
+    job to its timeout. Instead, catch any failure, write the traceback to a
+    file under the log directory (falling back to stderr-only if the log
+    directory itself can't be created or written), print it to stderr, and
+    return a non-zero exit code so the caller can detect and report failure
+    without a GUI.
+    """
+    try:
+        run_dependency_self_check()
+    except Exception:
+        tb_text = traceback.format_exc()
+        try:
+            log_dir = resolve_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "self_check_error.log").write_text(tb_text, encoding="utf-8")
+        except OSError:
+            pass
+        print(tb_text, file=sys.stderr)
+        return 1
+    return 0
+
+
 def run_application() -> None:
     """Import and launch the GUI after frozen-process setup is complete."""
     from src.core.totalseg_integration import SegmentationWorkspace
@@ -117,7 +146,6 @@ def run_application() -> None:
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     if "--self-check" in sys.argv:
-        run_dependency_self_check()
-        raise SystemExit(0)
+        raise SystemExit(run_self_check_cli())
     setup_logging()
     run_application()

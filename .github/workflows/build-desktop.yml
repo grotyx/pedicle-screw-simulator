@@ -13,6 +13,7 @@ jobs:
   build:
     name: ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -63,15 +64,42 @@ jobs:
         run: python scripts/build_desktop.py
 
       - name: Verify bundled AI runtime on macOS
+        id: self_check_macos
         if: runner.os == 'macOS'
+        timeout-minutes: 5
         run: dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
 
+      - name: Print self-check log on failure (macOS)
+        if: always() && steps.self_check_macos.outcome == 'failure'
+        run: |
+          log_path="$HOME/Library/Logs/PedicleScrewSimulator/self_check_error.log"
+          if [ -f "$log_path" ]; then
+            echo "--- self_check_error.log ---"
+            cat "$log_path"
+          else
+            echo "No self-check log found at $log_path"
+          fi
+
       - name: Verify bundled AI runtime on Windows
+        id: self_check_windows
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist\PedicleScrewSimulator\PedicleScrewSimulator.exe -ArgumentList '--self-check' -Wait -PassThru
           exit $p.ExitCode
+
+      - name: Print self-check log on failure (Windows)
+        if: always() && steps.self_check_windows.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $logPath = Join-Path $env:LOCALAPPDATA "PedicleScrewSimulator\logs\self_check_error.log"
+          if (Test-Path $logPath) {
+            Write-Host "--- self_check_error.log ---"
+            Get-Content $logPath
+          } else {
+            Write-Host "No self-check log found at $logPath"
+          }
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v5

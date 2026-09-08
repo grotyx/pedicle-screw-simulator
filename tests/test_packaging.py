@@ -127,6 +127,49 @@ def test_dependency_self_check_imports_ai_runtime(monkeypatch):
     assert setup_calls == [True]
 
 
+def test_self_check_cli_failure_writes_traceback_log_and_stderr(monkeypatch, tmp_path, capsys):
+    def boom():
+        raise RuntimeError("nnunetv2 missing")
+
+    monkeypatch.setattr(main, "run_dependency_self_check", boom)
+    monkeypatch.setattr(main, "resolve_log_dir", lambda: tmp_path)
+
+    exit_code = main.run_self_check_cli()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "RuntimeError: nnunetv2 missing" in captured.err
+
+    log_file = tmp_path / "self_check_error.log"
+    assert log_file.exists()
+    assert "RuntimeError: nnunetv2 missing" in log_file.read_text(encoding="utf-8")
+
+
+def test_self_check_cli_success_returns_zero_and_writes_no_log(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "run_dependency_self_check", lambda: None)
+    monkeypatch.setattr(main, "resolve_log_dir", lambda: tmp_path)
+
+    assert main.run_self_check_cli() == 0
+    assert not (tmp_path / "self_check_error.log").exists()
+
+
+def test_self_check_cli_tolerates_unwritable_log_dir(monkeypatch, capsys):
+    def boom():
+        raise RuntimeError("nnunetv2 missing")
+
+    def unwritable_log_dir():
+        raise OSError("cannot resolve log dir")
+
+    monkeypatch.setattr(main, "run_dependency_self_check", boom)
+    monkeypatch.setattr(main, "resolve_log_dir", unwritable_log_dir)
+
+    exit_code = main.run_self_check_cli()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "RuntimeError: nnunetv2 missing" in captured.err
+
+
 def test_windows_launcher_supports_same_flags_as_bash():
     from pathlib import Path
 
@@ -155,6 +198,32 @@ def test_pyinstaller_spec_disables_upx():
     ).read_text(encoding="utf-8")
     assert "upx=False" in spec
     assert "upx=True" not in spec
+
+
+def test_build_workflow_has_job_and_self_check_timeouts():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "build-desktop.yml"
+    ).read_text(encoding="utf-8")
+    # Job-level timeout guards against an unhandled self-check exception
+    # hanging a windowed exe's modal dialog to the 6h default limit.
+    assert "timeout-minutes: 90" in workflow
+    # Both platform self-check steps get their own short timeout.
+    assert workflow.count("timeout-minutes: 5") == 2
+
+
+def test_build_workflow_prints_self_check_log_on_failure():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "build-desktop.yml"
+    ).read_text(encoding="utf-8")
+    assert "self_check_error.log" in workflow
+    assert "steps.self_check_macos.outcome == 'failure'" in workflow
+    assert "steps.self_check_windows.outcome == 'failure'" in workflow
 
 
 def test_build_workflow_keeps_pip_cache_and_uses_start_process_self_check():
