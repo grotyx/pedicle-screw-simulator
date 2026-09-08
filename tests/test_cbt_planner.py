@@ -15,6 +15,7 @@ from src.core.cbt_planner import cbt_entry_point, plan_cbt_screw
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.core.screw_grading import ScrewGrader
+from src.core.trajectory_optimizer import TIP_SEGMENT_MM
 from src.utils.constants import CBT_CONTRAINDICATION_NOTE, CBT_DEFAULTS
 
 LABEL = 28  # L4
@@ -122,6 +123,27 @@ def test_cbt_entry_sits_inside_bone():
         assert d_out[0] == 0.0
 
 
+def test_cbt_entry_is_at_least_one_voxel_inside_the_cortex():
+    """A back-off smaller than a voxel would seat the entry in the surface layer.
+
+    The mask below has 2 mm ``y`` voxels, so the nominal 1 mm back-off lands in
+    the same voxel as the last bone sample; the entry must move a whole voxel.
+    """
+    arr = np.zeros((40, 40, 40), dtype=np.uint8)
+    arr[10:30, 5:16, 10:30] = LABEL          # y index 5..15 -> 10..30 mm
+    mask = sitk.GetImageFromArray(arr)
+    mask.SetSpacing((1.0, 2.0, 1.0))
+    analysis = _setup()[2]
+    analysis.left_pedicle_inferior_medial_lps = np.array([20.0, 12.0, 20.0])
+
+    entry = cbt_entry_point(ScrewGrader(mask), analysis, "left", LABEL)
+
+    assert entry is not None
+    i, j, k = mask.TransformPhysicalPointToIndex(tuple(float(v) for v in entry))
+    assert arr[k, j, i] == LABEL             # inside bone…
+    assert arr[k, j + 1, i] == LABEL         # …and not in the outermost layer
+
+
 def test_cbt_entry_without_a_corner_returns_none():
     ct, mask, analysis = _setup()
     analysis.left_pedicle_inferior_medial_lps = None
@@ -156,6 +178,44 @@ def test_cbt_screw_diverges_laterally_on_both_sides():
         assert lateral_sign * travel[0] > 0.0     # tip lands lateral to the entry
         assert travel[1] < 0.0                    # advancing anteriorly
         assert travel[2] > 0.0                    # advancing cranially
+
+
+def test_planned_cbt_tip_clears_the_anterior_margin():
+    """The tip, not just the shaft, has to respect ``anterior_margin_mm``."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(trajectory="cbt")        # 4 mm anterior margin
+
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, config)
+
+    assert screw is not None
+    direction = screw.target_lps - screw.entry_lps
+    direction /= np.linalg.norm(direction)
+    tip = grader.evaluate_batch(
+        (screw.target_lps - direction * TIP_SEGMENT_MM)[None, :],
+        screw.target_lps[None, :],
+        screw.diameter_mm,
+        LABEL,
+    )
+    assert tip.breach_mm[0] <= 0.0
+    assert tip.min_wall_mm[0] >= config.anterior_margin_mm - config.wall_clearance_mm
+
+
+def test_an_unreachable_anterior_margin_rejects_every_candidate():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+
+    lax = plan_cbt_screw(
+        grader, analysis, "left", LABEL,
+        PlannerConfig(trajectory="cbt", anterior_margin_mm=0.0),
+    )
+    strict = plan_cbt_screw(
+        grader, analysis, "left", LABEL,
+        PlannerConfig(trajectory="cbt", anterior_margin_mm=15.0),
+    )
+
+    assert lax is not None
+    assert strict is None       # no tip in this phantom is 14 mm off every wall
 
 
 # --------------------------------------------------------------- plan_all wiring

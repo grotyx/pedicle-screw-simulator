@@ -33,6 +33,7 @@ from .trajectory_optimizer import (
     DENSITY_HIGH_HU,
     DENSITY_LOW_HU,
     SAFETY_CAP_MM,
+    TIP_SEGMENT_MM,
     RunProgress,
 )
 from .vertebra import PedicleAnalysisResult
@@ -48,7 +49,9 @@ logger = logging.getLogger(__name__)
 ENTRY_INFERIOR_MM = 3.0
 ENTRY_MEDIAL_MM = 2.0
 
-#: How far back inside the posterior cortex the entry is seated (mm).
+#: How far back inside the posterior cortex the entry is seated (mm).  The
+#: actual back-off is at least one voxel of the mask's ``y`` spacing, so that a
+#: coarse volume cannot leave the entry in the outermost bone voxel.
 ENTRY_BACKOFF_MM = 1.0
 
 #: Step and reach of the posterior ray-cast that finds the entry surface (mm).
@@ -123,7 +126,8 @@ def cbt_entry_point(
     right-hand twin), steps :data:`ENTRY_INFERIOR_MM` inferior and
     :data:`ENTRY_MEDIAL_MM` medial to clear the pedicle itself, then casts
     posteriorly (``+Y``) to the last ``label`` voxel on that ray — the pars /
-    lamina junction — and backs off :data:`ENTRY_BACKOFF_MM` inside the bone.
+    lamina junction — and backs off :data:`ENTRY_BACKOFF_MM` (or one voxel,
+    whichever is deeper) inside the bone.
 
     Returns ``None`` when the analysis has no isthmus corner for this side (the
     axial fallback never produces one) or when the ray finds no bone behind the
@@ -155,8 +159,14 @@ def _cbt_entry_point(
     if inside.size == 0:
         return None, "no bone posterior to the isthmus corner"
 
+    # ``inside[-1]`` is the last sample still in bone, i.e. the outermost bone
+    # voxel on the ray.  Backing off by less than one voxel would leave the entry
+    # in that same voxel, where the cylinder's widest samples immediately breach;
+    # on a volume with sub-millimetre spacing the nominal back-off is deeper
+    # still, so take whichever is larger.
+    spacing_y = float(grader.mask_image().GetSpacing()[1])
     surface = seed + np.array([0.0, float(steps[inside[-1]]), 0.0])
-    entry = surface - np.array([0.0, ENTRY_BACKOFF_MM, 0.0])
+    entry = surface - np.array([0.0, max(ENTRY_BACKOFF_MM, spacing_y), 0.0])
     entry_out, _ = grader.distances_at_points(entry.reshape(1, 3), int(label))
     if entry_out[0] > 0.0:
         # A shell thinner than the back-off; there is nothing to start a screw in.
@@ -208,8 +218,11 @@ def plan_cbt_screw(
     Every combination of swept direction (:func:`cbt_directions`) and CBT
     catalogue diameter and length is graded in one
     :meth:`ScrewGrader.evaluate_batch` pass per diameter.  A candidate is
-    feasible when it is fully contained (breach 0) and keeps
-    ``config.wall_clearance_mm`` of cortical wall, and is ranked by
+    feasible when it is fully contained (breach 0), keeps
+    ``config.wall_clearance_mm`` of cortical wall, and clears
+    ``config.anterior_margin_mm`` at the tip — the last measured over its distal
+    :data:`~src.core.trajectory_optimizer.TIP_SEGMENT_MM` exactly as the
+    optimiser measures it.  Feasible candidates are ranked by
     ``safety + density`` — the optimiser's two bone-contact objectives, with
     density at full weight because cortical purchase is the whole point of CBT.
     Ties go to the longer screw, then the wider one.
@@ -265,16 +278,29 @@ def _plan_cbt_screw(
 
     # Ranked by (score, length, diameter): ties on the objective go to the
     # longer screw, then the wider one.
+    # The anterior safety margin is a property of the *tip*, not of the whole
+    # screw: a trajectory can keep a millimetre of wall along its shaft and still
+    # end a millimetre behind the anterior cortex.  Measured over the distal
+    # TIP_SEGMENT_MM exactly as the optimiser measures it, so a CBT screw and a
+    # traditional one are held to the same anterior rule.
+    tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
+    tip_entries = targets - dirs * TIP_SEGMENT_MM
+
     best_key: Optional[Tuple[float, float, float]] = None
     best_pick: Optional[Tuple[int, float, float, float]] = None
     for diameter in sorted(CBT_DEFAULTS["diameter_mm"], reverse=True):
         batch = grader.evaluate_batch(entries, targets, float(diameter), int(label))
         sampled = np.isfinite(batch.mean_hu)
         without_ct = not sampled.any()
+        tip_batch = grader.evaluate_batch(
+            tip_entries, targets, float(diameter), int(label)
+        )
         feasible = (
             (batch.breach_mm <= 0.0)
             & (batch.min_wall_mm >= config.wall_clearance_mm - _CLEARANCE_EPS)
             & (sampled | without_ct)
+            & (tip_batch.breach_mm <= 0.0)
+            & (tip_batch.min_wall_mm >= tip_margin)
         )
         if not feasible.any():
             continue
