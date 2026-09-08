@@ -15,8 +15,9 @@ optional: without it, only the cohort summary is printed to stdout and no
 files are written. Screw level and side strings are case/whitespace-
 normalised before matching, so plans from other tools ("l4"/"L4",
 "Left"/"left") still pair up correctly. Exits with status 2 (and writes no
-report) when no screws matched between the two plans, or when either plan
-file cannot be read or parsed.
+report) when no screws matched between the two plans, when either plan
+file cannot be read or parsed, or when a plan file is valid JSON but has
+the wrong structure (missing/malformed fields).
 
 This script is Qt-free and can be run standalone or from CI.
 """
@@ -118,7 +119,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: could not load plan file: {exc}", file=sys.stderr)
         return 2
 
-    comparisons, summary = compare_plans(pred_payload, ref_payload, voxel_mm=args.voxel_mm)
+    try:
+        comparisons, summary = compare_plans(pred_payload, ref_payload, voxel_mm=args.voxel_mm)
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"error: invalid plan structure: {exc}", file=sys.stderr)
+        return 2
 
     if summary.n_matched == 0:
         print(

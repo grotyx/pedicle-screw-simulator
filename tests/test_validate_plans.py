@@ -84,6 +84,66 @@ def test_malformed_json_exits_cleanly_without_traceback(tmp_path, capsys):
     assert "Traceback" not in captured.err
 
 
+def test_structurally_invalid_json_exits_cleanly_with_status_2(tmp_path, capsys):
+    """Valid JSON, wrong shape (screws is not a list) should not traceback."""
+    pred = tmp_path / "pred.json"
+    pred.write_text(json.dumps({"screws": "not-a-list"}), encoding="utf-8")
+    ref = tmp_path / "ref.json"
+    _write_plan(ref, [])
+
+    exit_code = main(["--pred", str(pred), "--ref", str(ref)])
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_plan_with_malformed_screw_fields_exits_cleanly_with_status_2(tmp_path, capsys):
+    """Valid JSON, a screw entry missing required fields (ValueError deep in
+    deserialisation) should also exit 2, not traceback."""
+    pred = tmp_path / "pred.json"
+    pred.write_text(json.dumps({"screws": [{"vertebra_level": "L4"}]}), encoding="utf-8")
+    ref = tmp_path / "ref.json"
+    _write_plan(ref, [])
+
+    exit_code = main(["--pred", str(pred), "--ref", str(ref)])
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_plan_with_wrong_field_types_exits_cleanly_with_status_2(tmp_path, capsys):
+    """Valid JSON, a screw field of the wrong type (TypeError from float())
+    should also exit 2, not traceback."""
+    pred = tmp_path / "pred.json"
+    pred.write_text(
+        json.dumps(
+            {
+                "screws": [
+                    {
+                        "entry_point": [0, 0, 0],
+                        "target_point": [1, 1, 1],
+                        "diameter": {"bad": 1},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ref = tmp_path / "ref.json"
+    _write_plan(ref, [])
+
+    exit_code = main(["--pred", str(pred), "--ref", str(ref)])
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_out_argument_is_not_required_by_the_parser():
     """Regression for M8: the roadmap's acceptance command omits --out."""
     from scripts.validate_plans import parse_args
