@@ -562,6 +562,7 @@ def optimize_screw(
     config: PlannerConfig,
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
     top_k: int = 10,
+    planner=None,
 ) -> List[Candidate]:
     """Best ``top_k`` trajectories for one pedicle, highest score first.
 
@@ -571,12 +572,18 @@ def optimize_screw(
     :data:`MAX_DIAMETER_STEPS` steps: past that the screw is too small to be a
     sensible answer and the extra passes only cost runtime.  Returns ``[]`` when
     no diameter in that window admits a reachable, contained screw.
+
+    ``planner`` reuses a caller's :class:`AutoScrewPlanner` instead of building
+    one per pedicle, which copies the whole CT and mask each time.  Only its
+    entry-point search and diameter rules are used, so a substitute is
+    equivalent exactly when it holds this ``grader``'s mask and this ``config``;
+    :func:`make_planner` builds that planner when none is given.
     """
     center, _axis, width = _side_data(analysis, side)
     if center is None or not analysis.success:
         return []
 
-    planner = make_planner(grader, config)
+    planner = planner if planner is not None else make_planner(grader, config)
     recommended = planner._compute_diameter(width, analysis.vertebra.name)
     if recommended is None:
         return []

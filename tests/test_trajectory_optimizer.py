@@ -249,3 +249,42 @@ def test_missing_ct_is_warned_once_per_grader(caplog):
 
     warned = [r for r in caplog.records if "has no CT" in r.getMessage()]
     assert len(warned) == 3
+
+
+def test_a_prebuilt_planner_gives_the_same_ranking():
+    """Reusing a planner must save the volume copy, not change the answer."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig()
+
+    fresh = optimize_screw(grader, analysis, "left", config)
+    reused = optimize_screw(
+        grader, analysis, "left", config, planner=make_planner(grader, config)
+    )
+
+    assert fresh and len(fresh) == len(reused)
+    for a, b in zip(fresh, reused, strict=True):
+        assert a.score == b.score
+        assert a.diameter == b.diameter
+        np.testing.assert_array_equal(a.entry, b.entry)
+        np.testing.assert_array_equal(a.target, b.target)
+
+
+def test_plan_all_optimized_does_not_build_a_planner_per_pedicle(monkeypatch):
+    from src.core import trajectory_optimizer
+    from src.core.auto_screw_planner import AutoScrewPlanner
+
+    ct, mask, analysis = _setup()
+    built = []
+    real = trajectory_optimizer.make_planner
+    monkeypatch.setattr(
+        trajectory_optimizer,
+        "make_planner",
+        lambda *args, **kwargs: (built.append(1), real(*args, **kwargs))[1],
+    )
+
+    planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer"))
+    screws = planner.plan_all([analysis])
+
+    assert screws
+    assert built == []      # the planner lent itself to every pedicle

@@ -572,6 +572,17 @@ class AutoScrewPlanner:
         keys: Dict[Tuple[int, str], Tuple[str, str]] = {}
         visited: List[Tuple[PedicleAnalysisResult, str]] = []
 
+        # `optimize_screw` otherwise builds itself an AutoScrewPlanner per
+        # pedicle, each copying the whole CT and mask.  Ours is interchangeable
+        # with that one exactly when the grader holds our own volumes -- which
+        # it does not when the caller supplied a grader over a different pair.
+        reusable = (
+            self
+            if self._grader.mask_image() is self._mask
+            and self._grader.ct_image() is self._ct
+            else None
+        )
+
         for analysis in analyses:
             vertebra = analysis.vertebra
             for side in side_list:
@@ -589,6 +600,7 @@ class AutoScrewPlanner:
                         self.config,
                         self.config.weights,
                         top_k=_CONSTRUCT_TOP_K,
+                        planner=reusable,
                     )
                 except Exception:   # pragma: no cover - defensive
                     logger.exception(
