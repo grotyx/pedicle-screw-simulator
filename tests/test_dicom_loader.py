@@ -88,6 +88,35 @@ def test_tilted_sagittal_direction_permutes_spacing_by_dominant_axis():
         assert out_size[a] == expected_size
 
 
+def test_45_degree_z_rotation_produces_valid_axis_permutation():
+    # A 45-degree rotation about Z makes image axes 0 and 1 EQUALLY dominant
+    # on world axis 0 (and world axis 1): independent per-column argmax maps
+    # both to the same world axis, leaving another world axis with spacing
+    # 0.0 and raising OverflowError computing new_size. The assignment must
+    # instead be a genuine permutation so every world axis gets spacing.
+    c = s = np.cos(np.radians(45))
+    direction = (c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0)
+    size = (4, 5, 6)
+    spacing = (0.5, 0.6, 0.7)
+    img = sitk.Image(size, sitk.sitkInt16)
+    img.SetSpacing(spacing)
+    img.SetOrigin((0.0, 0.0, 0.0))
+    img.SetDirection(direction)
+
+    out, info = normalize_orientation(img)
+
+    assert info["resampled"] is True
+    assert np.allclose(out.GetDirection(), (1, 0, 0, 0, 1, 0, 0, 0, 1))
+
+    out_spacing = out.GetSpacing()
+    out_size = out.GetSize()
+    assert all(v > 0 and np.isfinite(v) for v in out_spacing)
+    assert all(v > 0 for v in out_size)
+    # Each world axis must receive exactly one of the input spacing values
+    # (a permutation), not a 0.0 default from an unclaimed axis.
+    assert sorted(round(v, 6) for v in out_spacing) == sorted(round(v, 6) for v in spacing)
+
+
 def test_transform_direction_left_multiplies_only():
     from src.core.coordinate_system import CoordinateSystem
     d = (1, 0, 0, 0, 0, -1, 0, 1, 0)

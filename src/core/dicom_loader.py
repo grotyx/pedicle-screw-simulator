@@ -51,8 +51,30 @@ def normalize_orientation(image: sitk.Image) -> Tuple[sitk.Image, Dict[str, Any]
     # Each image axis j is not necessarily aligned with world axis j: assign
     # its spacing (and voxel count) to whichever world axis its direction
     # column is dominant on, so the output grid isn't oversampled/undersampled
-    # along the wrong world axis.
-    dominant_world_axis = [int(np.argmax(np.abs(matrix[:, j]))) for j in range(3)]
+    # along the wrong world axis. An independent per-column argmax is NOT
+    # guaranteed to produce a permutation: e.g. a 45-degree rotation about Z
+    # has two columns both dominant on world axis 0, leaving another world
+    # axis with no assigned spacing (0.0) and an OverflowError computing
+    # new_size below. Assign greedily instead: repeatedly claim the largest
+    # remaining |matrix[i][j]| whose image axis j and world axis i are both
+    # still unclaimed. Since every (world axis, image axis) pair is in the
+    # candidate list, this always terminates in a full permutation.
+    candidate_pairs = sorted(
+        ((abs(matrix[world_axis, image_axis]), world_axis, image_axis)
+         for world_axis in range(3) for image_axis in range(3)),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    dominant_world_axis: List[Optional[int]] = [None, None, None]
+    claimed_world_axes: set = set()
+    claimed_image_axes: set = set()
+    for _magnitude, world_axis, image_axis in candidate_pairs:
+        if world_axis in claimed_world_axes or image_axis in claimed_image_axes:
+            continue
+        dominant_world_axis[image_axis] = world_axis
+        claimed_world_axes.add(world_axis)
+        claimed_image_axes.add(image_axis)
+
     out_spacing = [0.0, 0.0, 0.0]
     for j in range(3):
         out_spacing[dominant_world_axis[j]] = float(spacing[j])
