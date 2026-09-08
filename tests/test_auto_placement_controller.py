@@ -1251,6 +1251,9 @@ def test_every_run_gets_a_fresh_generation(monkeypatch, tmp_path):
         def isRunning(self):
             return False
 
+        def request_cancel(self):
+            return None
+
     monkeypatch.setattr(module, "_PlanningThread", _Thread)
 
     ctrl.run_planning()
@@ -1287,3 +1290,88 @@ def test_run_planning_reports_an_unreadable_mask_instead_of_raising(
     assert str(mask_path) in shown[0]
     assert ctrl._thread is None
     assert ctrl._progress_dialog is None
+
+
+# ---------------------------------------------------------------------------
+# Residual round -- a replaced run is told to stop, and long notes are truncated
+# ---------------------------------------------------------------------------
+
+
+def test_starting_a_run_cancels_the_thread_it_replaces(monkeypatch, tmp_path):
+    """The previous thread may still be grinding through pedicles.
+
+    Dropping the reference without asking it to stop leaves it competing for
+    the CPU with the run that replaced it, and its result untracked.
+    """
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    _prepare_run(window, ctrl, tmp_path)
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Thread:
+        def __init__(self, *_args, **_kwargs):
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+            self.cancel_requested = False
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False        # emitted `finished` already; not yet reaped
+
+        def request_cancel(self):
+            self.cancel_requested = True
+
+    monkeypatch.setattr(module, "_PlanningThread", _Thread)
+
+    ctrl.run_planning()
+    first = ctrl._thread
+    ctrl._close_progress_dialog()
+
+    ctrl.run_planning()
+
+    assert ctrl._thread is not first
+    assert first.cancel_requested is True
+    ctrl._close_progress_dialog()
+
+
+def _skipped(count):
+    return [(f"L{index}", "right", "no corner") for index in range(1, count + 1)]
+
+
+def test_dropped_sides_note_lists_up_to_four_sides_in_full():
+    import src.controllers.auto_placement_controller as module
+
+    note = module._dropped_sides_note(_skipped(4))
+
+    assert note == " No screw planned: L1 right, L2 right, L3 right, L4 right"
+    assert "more" not in note
+
+
+def test_dropped_sides_note_truncates_a_long_list(controller_with_window):
+    """A whole-spine run can drop a dozen sides; the label has to stay readable."""
+    ctrl, window = controller_with_window
+    ctrl._thread = _FinishedThread(skipped_sides=_skipped(7))
+
+    ctrl._on_finished(ctrl._thread, [_planned()])
+
+    status = window.auto_screw_status._text
+    assert (
+        "No screw planned: L1 right, L2 right, L3 right, L4 right and 3 more"
+        in status
+    )
+    assert "L5 right" not in status
+
+
+def test_dropped_sides_note_says_one_more_for_a_single_extra():
+    import src.controllers.auto_placement_controller as module
+
+    assert module._dropped_sides_note(_skipped(5)).endswith("and 1 more")

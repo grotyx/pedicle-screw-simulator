@@ -75,6 +75,11 @@ class SegmentationWorkspace:
 
     PREFIX = "screwfix_totalseg_"
     LOCK_NAME = ".lock"
+    #: Seven days, after which a directory is purged whatever its lock claims.
+    #: PIDs are recycled, so a lock left by a crashed instance can name a live
+    #: unrelated process and pin a dead workspace indefinitely; no real run —
+    #: nor any run whose heartbeat is still ticking — reaches this age.
+    MAX_AGE_SECONDS = 604800
 
     def __init__(self, root: Optional[str] = None) -> None:
         self._root = root or tempfile.gettempdir()
@@ -223,7 +228,12 @@ class SegmentationWorkspace:
                 owner_pid = cls._lock_owner_pid(lock_path)
             if now - age_mtime < older_than_seconds:
                 continue
-            if owner_pid is not None and cls._pid_is_alive(owner_pid):
+            past_ceiling = now - age_mtime >= cls.MAX_AGE_SECONDS
+            if (
+                not past_ceiling
+                and owner_pid is not None
+                and cls._pid_is_alive(owner_pid)
+            ):
                 # Another instance is still working in here (a CPU run can
                 # easily outlive any age threshold); its data is not ours
                 # to delete.

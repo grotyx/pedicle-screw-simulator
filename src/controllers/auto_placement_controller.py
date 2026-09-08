@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How many dropped sides the status note names before it starts counting.
+_MAX_NAMED_DROPPED_SIDES = 4
+
 
 class _PlanningThread(QThread):
     """Background thread for pedicle analysis + screw planning."""
@@ -226,6 +229,11 @@ class AutoPlacementController:
         # bound into the connection, so each slot knows which run it is being
         # handed a result for instead of trusting `self._thread`.
         self._run_generation += 1
+        # The thread being replaced may still be grinding through pedicles —
+        # `isRunning()` goes False the moment `run` returns, which is after the
+        # planner has finished but before Qt reaps it, and a discarded run must
+        # not keep competing with the one that replaced it for the CPU.
+        self.request_cancel()
         thread = _PlanningThread(
             mask_image,
             ct_image,
@@ -440,10 +448,19 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     so this covers a missing pedicle or a rejected trajectory just as much as an
     infeasible cortical-bone corridor.  A shorter construct than the one that
     was requested must never reach the surgeon unannounced.
+
+    A whole-spine run can drop a dozen sides, which would push the rest of the
+    status line off the label, so only the first
+    :data:`_MAX_NAMED_DROPPED_SIDES` are named and the remainder are counted.
+    The full list is logged by the caller either way.
     """
     if not skipped:
         return ""
-    sides = ", ".join(f"{name} {side}" for name, side, _reason in skipped)
+    named = skipped[:_MAX_NAMED_DROPPED_SIDES]
+    sides = ", ".join(f"{name} {side}" for name, side, _reason in named)
+    remaining = len(skipped) - len(named)
+    if remaining:
+        sides += f" and {remaining} more"
     return f" No screw planned: {sides}"
 
 

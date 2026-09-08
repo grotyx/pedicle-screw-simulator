@@ -949,3 +949,42 @@ def test_touch_all_ignores_directories_that_are_already_gone(tmp_path):
     created = ws.create()
     ws.remove(created)
     assert ws.touch_all() == 0
+
+
+def test_purge_stale_removes_a_workspace_past_the_absolute_age_ceiling(tmp_path):
+    """A recycled PID must not pin a dead workspace forever."""
+    pinned = tmp_path / (SegmentationWorkspace.PREFIX + "pinned")
+    pinned.mkdir()
+    lock = pinned / SegmentationWorkspace.LOCK_NAME
+    lock.write_text(str(os.getpid()), encoding="utf-8")   # a live PID
+    ancient = time.time() - (SegmentationWorkspace.MAX_AGE_SECONDS + 60)
+    os.utime(lock, (ancient, ancient))
+    os.utime(pinned, (ancient, ancient))
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=3600
+    )
+
+    assert removed == 1
+    assert not pinned.exists()
+
+
+def test_the_absolute_age_ceiling_is_seven_days():
+    assert SegmentationWorkspace.MAX_AGE_SECONDS == 604800
+
+
+def test_a_live_workspace_just_under_the_ceiling_is_still_kept(tmp_path):
+    live = tmp_path / (SegmentationWorkspace.PREFIX + "long_run")
+    live.mkdir()
+    lock = live / SegmentationWorkspace.LOCK_NAME
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    recent = time.time() - (SegmentationWorkspace.MAX_AGE_SECONDS - 600)
+    os.utime(lock, (recent, recent))
+    os.utime(live, (recent, recent))
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=3600
+    )
+
+    assert removed == 0
+    assert live.exists()
