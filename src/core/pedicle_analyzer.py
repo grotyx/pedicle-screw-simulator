@@ -249,10 +249,14 @@ class PedicleAnalyzer:
            the label did not supply.
         4. **Fallback** — axial connected-component search: label each
            axial slice and treat the smaller lateral components as
-           pedicles.  Used only when neither of the above finds a side
-           (no body centre, or a mask with no pedicle zone).
+           pedicles.  Runs for any side the two passes above still left
+           unmeasured, not only when they found nothing at all.
 
-        ``result.method`` records which path produced the pedicle data.
+        ``result.method`` records the paths that produced the pedicle
+        data, ``+``-joined in the order they ran.  ``result.success`` is
+        set once *either* side is measured; a side no path could find is
+        left ``None`` and named in ``result.warnings``, so a caller that
+        needs both must check the two sides rather than ``success``.
         """
         result = PedicleAnalysisResult(vertebra=vertebra)
 
@@ -299,10 +303,11 @@ class PedicleAnalyzer:
             )
 
         # --- Preferred: measure the pedicle subregion label directly --------
-        # Warnings from both searches are held back rather than recorded
-        # immediately: if the axial fallback then succeeds these would only
-        # mislead the UI.
-        label_warnings: List[str] = []
+        # Warnings from both searches are held back, tagged with the side they
+        # concern, rather than recorded immediately: a side a later pass finds
+        # anyway would only mislead the UI.  Only the ones still unresolved at
+        # the end are reported.
+        held_warnings: List[Tuple[str, str]] = []
         label_sides: List[str] = []
         if body_center_ijk is not None and self._pedicle_mask is not None:
             # Intersect the label with this vertebra once, not once per side.
@@ -314,15 +319,14 @@ class PedicleAnalyzer:
                     pedicle_voxels, body_center_ijk, side
                 )
                 if found is None:
-                    label_warnings.append(
-                        f"No {side} pedicle found in the pedicle subregion label"
+                    held_warnings.append(
+                        (side, f"No {side} pedicle found in the pedicle subregion label")
                     )
                     continue
                 label_sides.append(side)
                 self._record_side(result, side, found)
 
         # --- Primary: coronal cross-section isthmus search ------------------
-        coronal_warnings: List[str] = []
         coronal_found = False
         if body_center_ijk is not None:
             for side in ("left", "right"):
@@ -335,23 +339,31 @@ class PedicleAnalyzer:
                     side,
                 )
                 if found is None:
-                    coronal_warnings.append(
-                        f"No {side} pedicle found by coronal isthmus search"
+                    held_warnings.append(
+                        (side, f"No {side} pedicle found by coronal isthmus search")
                     )
                     continue
                 coronal_found = True
                 self._record_side(result, side, found)
 
-        if label_sides or coronal_found:
-            result.warnings.extend(label_warnings)
-            result.warnings.extend(coronal_warnings)
-            # Name the paths that actually produced the recorded geometry.
-            if not label_sides:
-                result.method = "coronal_isthmus"
-            elif coronal_found:
-                result.method = "subregion_label+coronal_isthmus"
-            else:
-                result.method = "subregion_label"
+        # Name the paths that actually produced the recorded geometry; the axial
+        # pass appends itself below if it contributes a side.
+        methods: List[str] = []
+        if label_sides:
+            methods.append("subregion_label")
+        if coronal_found:
+            methods.append("coronal_isthmus")
+
+        # A side neither path recorded still gets the axial search: half a
+        # construct is not an answer, and until now one recorded side ended the
+        # analysis for both.
+        missing_sides = [
+            side
+            for side in ("left", "right")
+            if self._recorded_center(result, side) is None
+        ]
+        if not missing_sides:
+            result.method = "+".join(methods)
             result.success = True
             return result
 
@@ -416,6 +428,7 @@ class PedicleAnalyzer:
         # Analyze each side independently.
         sx, sy, _ = self._spacing
         voxel_area_mm2 = sx * sy
+        axial_found = False
 
         for side, voxels_list, areas_dict, _set_center, _set_axis, _set_width in [
             ("left", left_voxels_zyx, left_areas,
@@ -423,9 +436,12 @@ class PedicleAnalyzer:
             ("right", right_voxels_zyx, right_areas,
              "_right_center", "_right_axis", "_right_width"),
         ]:
+            if side not in missing_sides:
+                continue        # already measured by the label or coronal path
             if not voxels_list:
-                result.warnings.append(f"No {side} pedicle detected")
+                held_warnings.append((side, f"No {side} pedicle detected"))
                 continue
+            axial_found = True
 
             all_voxels = np.vstack(voxels_list)  # (M, 3) z,y,x
 
@@ -466,15 +482,35 @@ class PedicleAnalyzer:
                 result.right_pedicle_axis = axis
                 result.right_pedicle_width = width
 
+        if axial_found:
+            methods.append("axial_components")
+
+        # Report only the misses no later pass repaired; a side every path
+        # failed on is named so the UI can say which half of the level is gone.
+        still_missing = {
+            side
+            for side in ("left", "right")
+            if self._recorded_center(result, side) is None
+        }
+        result.warnings.extend(
+            message for side, message in held_warnings if side in still_missing
+        )
+
         # Mark success when at least one pedicle was found.
-        if result.left_pedicle_center is not None or result.right_pedicle_center is not None:
-            result.method = "axial_components"
+        if len(still_missing) < 2:
+            result.method = "+".join(methods)
             result.success = True
-        else:
-            result.warnings.extend(label_warnings)
-            result.warnings.extend(coronal_warnings)
 
         return result
+
+    @staticmethod
+    def _recorded_center(
+        result: PedicleAnalysisResult, side: str
+    ) -> Optional[np.ndarray]:
+        """This side's isthmus centre, or ``None`` if no path has produced one."""
+        return (
+            result.left_pedicle_center if side == "left" else result.right_pedicle_center
+        )
 
     @staticmethod
     def _record_side(

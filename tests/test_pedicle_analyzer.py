@@ -137,6 +137,32 @@ def _make_anatomical_phantom(label: int = 28, with_arch: bool = True) -> sitk.Im
     return sitk.GetImageFromArray(arr)
 
 
+def _make_one_sided_coronal_phantom(label: int = 28, with_left: bool = True) -> sitk.Image:
+    """A vertebra the coronal isthmus search can only measure on one side.
+
+    The right pedicle is a solid 12 x 14 x 12 mm block joined to the body, so
+    the coronal scan records it normally.  The left one is a 3 x 3 mm sliver
+    running 19 mm posteriorly: every coronal cross-section of it is 9 mm²,
+    under :attr:`PedicleAnalyzer.MIN_PEDICLE_AREA_MM2`, so the coronal search
+    never records it — while in an axial slice it is a 57-voxel island clear of
+    the body, exactly what the axial connected-component pass looks for.
+
+    ``with_left=False`` drops the sliver entirely: no path can find that side.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (xx >= 25) & (xx < 66) & (yy >= 20) & (yy < 50) & (zz >= 10) & (zz < 50)
+    right = (xx >= 26) & (xx < 38) & (yy >= 48) & (yy < 62) & (zz >= 26) & (zz < 38)
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    shape = body | right
+    if with_left:
+        shape = shape | (
+            (xx >= 57) & (xx < 60) & (yy >= 52) & (yy < 71) & (zz >= 31) & (zz < 34)
+        )
+    arr[shape] = label
+    return sitk.GetImageFromArray(arr)
+
+
 # ---------------------------------------------------------------------------
 # Vertebra dataclass tests
 # ---------------------------------------------------------------------------
@@ -600,6 +626,37 @@ class TestSubregionLabelPath:
         result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
         assert result.method == "coronal_isthmus"
         assert result.success
+
+
+# ---------------------------------------------------------------------------
+# PedicleAnalyzer: per-side fall-through to the axial pass
+# ---------------------------------------------------------------------------
+
+class TestAxialFallThrough:
+    """A side the coronal/label paths miss still gets the axial search."""
+
+    def test_axial_pass_recovers_a_side_the_coronal_search_missed(self):
+        """A one-sided coronal miss must not end the search for that side."""
+        analyzer = PedicleAnalyzer(_make_one_sided_coronal_phantom())
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.success
+        assert result.method == "coronal_isthmus+axial_components"
+        # The right pedicle keeps the coronal measurement it already had…
+        assert result.right_pedicle_center == pytest.approx(np.array([31.5, 56.0, 31.5]))
+        # …and the left one, invisible to the coronal search, comes from axial.
+        assert result.left_pedicle_center is not None
+        assert result.left_pedicle_center[0] > result.vertebral_body_center[0]
+
+    def test_a_side_no_path_can_find_is_reported_but_does_not_fail_the_other(self):
+        mask = _make_one_sided_coronal_phantom(with_left=False)
+        analyzer = PedicleAnalyzer(mask)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.success                       # the right side is usable
+        assert result.left_pedicle_center is None
+        assert result.right_pedicle_center is not None
+        assert any("left" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------------------

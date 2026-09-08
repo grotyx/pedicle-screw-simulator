@@ -866,6 +866,61 @@ class TestPlanAll:
             planner.plan_all([], sides="invalid")
 
 
+class TestSkippedSides:
+    """Every path reports the sides it could not place a screw on."""
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_a_side_with_no_pedicle_data_is_reported(self, mode):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+        analysis = _make_analysis()
+        analysis.left_pedicle_center = None      # a one-sided coronal miss
+
+        results = planner.plan_all([analysis])
+
+        assert [r.side for r in results] == ["right"]
+        assert [(v, s) for v, s, _r in planner.skipped_sides] == [("L5", "left")]
+        assert "left" in planner.skipped_sides[0][2]
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_a_failed_analysis_reports_both_sides(self, mode):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+
+        planner.plan_all([_make_analysis(success=False)])
+
+        assert [(v, s) for v, s, _r in planner.skipped_sides] == [
+            ("L5", "left"), ("L5", "right"),
+        ]
+        assert all("analysis" in reason for _v, _s, reason in planner.skipped_sides)
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_the_sacrum_is_excluded_not_skipped(self, mode):
+        """Not planning the sacrum is the policy, not a failure to report."""
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder(label=25)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+
+        results = planner.plan_all([_make_analysis(label=25, name="S1")])
+
+        assert results == []
+        assert planner.skipped_sides == []
+
+    def test_a_successful_plan_reports_nothing(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        results = planner.plan_all([_make_analysis()])
+
+        assert len(results) == 2
+        assert planner.skipped_sides == []
+
+
 # ---------------------------------------------------------------------------
 # Helper method tests
 # ---------------------------------------------------------------------------

@@ -162,8 +162,9 @@ class AutoScrewPlanner:
         #: Whether the last :meth:`plan_all` stopped early on its ``cancel``.
         self.last_run_cancelled: bool = False
         #: ``(vertebra name, side, reason)`` per side the last :meth:`plan_all`
-        #: could not place a screw on.  Only the CBT path fills this in: the
-        #: optimiser and legacy paths always fall back to *some* trajectory.
+        #: could not place a screw on -- filled in by every path (legacy,
+        #: optimiser and CBT).  A side excluded by policy rather than by failure
+        #: (the sacrum) is not listed: not planning it is what was asked for.
         self.skipped_sides: List[Tuple[str, str, str]] = []
 
     # =====================================================================
@@ -180,6 +181,19 @@ class AutoScrewPlanner:
         Returns ``None`` if planning fails (e.g. no pedicle detected,
         sacrum, pedicle too narrow).
         """
+        return self._plan_screw(analysis, side)[0]
+
+    def _plan_screw(
+        self,
+        analysis: PedicleAnalysisResult,
+        side: str,
+    ) -> Tuple[Optional[PlannedScrew], Optional[str]]:
+        """:meth:`plan_screw` plus why it gave up, for the caller to report.
+
+        The second element is a short reason phrase when the side *failed*, and
+        ``None`` when it was excluded on purpose (the sacrum) -- the difference
+        between a construct the surgeon is missing and one they did not ask for.
+        """
         if side not in ("left", "right"):
             raise ValueError(f"side must be 'left' or 'right', got {side!r}")
 
@@ -188,22 +202,22 @@ class AutoScrewPlanner:
         # Sacrum is not suitable for pedicle screw placement.
         if vertebra.label == _SACRUM_LABEL:
             logger.info("Skipping sacrum (label %d) for screw planning", vertebra.label)
-            return None
+            return None, None
 
         if not analysis.success:
             logger.info("Skipping %s: pedicle analysis unsuccessful", vertebra.name)
-            return None
+            return None, "pedicle analysis unsuccessful"
 
         # Retrieve side-specific pedicle data.
         pedicle_center, pedicle_axis, pedicle_width = self._get_side_data(analysis, side)
         if pedicle_center is None or pedicle_axis is None:
             logger.info("No %s pedicle data for %s", side, vertebra.name)
-            return None
+            return None, f"no {side} pedicle measured"
 
         body_center = analysis.vertebral_body_center
         if body_center is None:
             logger.info("No vertebral body centre for %s", vertebra.name)
-            return None
+            return None, "no vertebral body centre"
 
         warnings: List[str] = []
         if analysis.upper_endplate_normal is None:
@@ -218,7 +232,7 @@ class AutoScrewPlanner:
                 "Pedicle too narrow for any screw (%s %s, width=%.1f mm)",
                 vertebra.name, side, pedicle_width,
             )
-            return None
+            return None, f"{side} pedicle too narrow ({pedicle_width:.1f} mm) for any screw"
 
         # 2. Orient pedicle axis so it points posteriorly (+Y in LPS).
         #    Validate that PCA axis is roughly AP-directed (>30% Y component).
@@ -239,7 +253,7 @@ class AutoScrewPlanner:
         )
         if entry is None:
             logger.info("Entry point search failed for %s %s", vertebra.name, side)
-            return None
+            return None, f"no {side} entry point on the posterior surface"
 
         # 4. Find target point in anterior vertebral body.
         target = self._find_best_target(
@@ -252,7 +266,7 @@ class AutoScrewPlanner:
         )
         if target is None:
             logger.info("Target point search failed for %s %s", vertebra.name, side)
-            return None
+            return None, f"no {side} target point in the vertebral body"
 
         # 5. Enforce length constraints.
         length = float(np.linalg.norm(target - entry))
@@ -263,7 +277,10 @@ class AutoScrewPlanner:
                 side,
                 length,
             )
-            return None
+            return None, (
+                f"{side} corridor is {length:.1f} mm, shorter than the "
+                f"{self.MIN_SCREW_LENGTH:.0f} mm minimum implant"
+            )
 
         if length > self.MAX_SCREW_LENGTH:
             direction = target - entry
@@ -286,7 +303,7 @@ class AutoScrewPlanner:
                     vertebra.name,
                     side,
                 )
-                return None
+                return None, f"no contained {side} screw diameter in the catalogue"
             diameter = smaller
             candidate = self._find_best_target(
                 entry,
@@ -297,7 +314,7 @@ class AutoScrewPlanner:
                 analysis.upper_endplate_normal,
             )
             if candidate is None:
-                return None
+                return None, f"no {side} target point at the reduced diameter"
             target = candidate
             length = float(np.linalg.norm(target - entry))
             grade, breach_dist = self._evaluate_gertzbein_grade(
@@ -312,7 +329,7 @@ class AutoScrewPlanner:
                 f"{diameter:.1f} mm for cortical containment"
             )
 
-        return self._finalise_screw(
+        planned = self._finalise_screw(
             vertebra,
             side,
             entry,
@@ -323,6 +340,7 @@ class AutoScrewPlanner:
             warnings,
             pedicle_width,
         )
+        return planned, None
 
     def _finalise_screw(
         self,
@@ -467,6 +485,10 @@ class AutoScrewPlanner:
         back-ends: a cortical bone trajectory has its own entry landmark, angle
         window and implant catalogue, so neither the optimiser's convergent
         candidate grid nor the legacy planner's medialising search applies.
+
+        Every path leaves :attr:`skipped_sides` holding one
+        ``(level, side, reason)`` entry per side that ended up with no screw, so
+        a half-planned level is reported rather than silently short.
         """
         if sides not in ("both", "left", "right"):
             raise ValueError(f"sides must be 'both', 'left', or 'right', got {sides!r}")
@@ -513,9 +535,11 @@ class AutoScrewPlanner:
                 for side in side_list:
                     if not reporter.start(analysis.vertebra.name, side):
                         break
-                    planned = self.plan_screw(analysis, side)
+                    planned, reason = self._plan_screw(analysis, side)
                     if planned is not None:
                         results.append(planned)
+                    else:
+                        self._record_skip(analysis.vertebra.name, side, reason)
                 if reporter.cancelled:
                     break
 
@@ -537,7 +561,8 @@ class AutoScrewPlanner:
         Each pedicle contributes its best :data:`_CONSTRUCT_TOP_K` trajectories;
         :func:`~src.core.trajectory_optimizer.optimize_construct` then picks one
         per screw so the heads of each side line up.  A pedicle the optimiser
-        cannot solve silently falls back to :meth:`plan_screw`.
+        cannot solve falls back to :meth:`plan_screw`; one neither can place is
+        appended to :attr:`skipped_sides` with the legacy planner's reason.
 
         ``reporter`` narrates and cancels the candidate search — the pass that
         actually costs the time.  A cancelled run assembles a construct from the
@@ -584,13 +609,15 @@ class AutoScrewPlanner:
         for analysis, side in visited:
             key = keys.get((analysis.vertebra.label, side))
             candidate = chosen.get(key) if key is not None else None
-            planned = (
+            planned, reason = (
                 self._screw_from_candidate(analysis, side, candidate)
                 if candidate is not None
                 else self._legacy_fallback(analysis, side)
             )
             if planned is not None:
                 results.append(planned)
+            else:
+                self._record_skip(analysis.vertebra.name, side, reason)
 
         self._stamp_rod_misalignment(results)
         return results
@@ -612,8 +639,12 @@ class AutoScrewPlanner:
         analysis: PedicleAnalysisResult,
         side: str,
         candidate: Candidate,
-    ) -> Optional[PlannedScrew]:
-        """Convert a chosen :class:`Candidate` into a fully graded screw."""
+    ) -> Tuple[Optional[PlannedScrew], Optional[str]]:
+        """Convert a chosen :class:`Candidate` into a fully graded screw.
+
+        Returns ``(screw, reason)`` like :meth:`_plan_screw`, so the caller can
+        report a side that ends up with no screw at all.
+        """
         vertebra = analysis.vertebra
         pedicle_center, _axis, pedicle_width = self._get_side_data(analysis, side)
         body_center = analysis.vertebral_body_center
@@ -645,18 +676,27 @@ class AutoScrewPlanner:
         )
         planned.metrics["score"] = float(candidate.score)
         planned.metrics["score_components"] = dict(candidate.components)
-        return planned
+        return planned, None
 
     def _legacy_fallback(
         self,
         analysis: PedicleAnalysisResult,
         side: str,
-    ) -> Optional[PlannedScrew]:
+    ) -> Tuple[Optional[PlannedScrew], Optional[str]]:
         """Plan one screw the legacy way and flag it as an optimiser fallback."""
-        planned = self.plan_screw(analysis, side)
+        planned, reason = self._plan_screw(analysis, side)
         if planned is not None:
             planned.warnings.append(OPTIMIZER_FALLBACK_WARNING)
-        return planned
+        return planned, reason
+
+    def _record_skip(self, name: str, side: str, reason: Optional[str]) -> None:
+        """Note a side that ended up with no screw, unless it was excluded by policy.
+
+        ``reason`` is ``None`` for a deliberate exclusion (the sacrum), which is
+        not a dropped side and must not be put in front of the surgeon as one.
+        """
+        if reason:
+            self.skipped_sides.append((name, side, reason))
 
     @staticmethod
     def _stamp_rod_misalignment(screws: List[PlannedScrew]) -> None:
