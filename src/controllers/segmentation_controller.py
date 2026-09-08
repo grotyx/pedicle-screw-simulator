@@ -380,7 +380,11 @@ class SegmentationController:
                 vtk_mask, label_value=label_value
             )
             self._window.viewer_3d.set_vertebral_mesh(vtk_mask, labels=detected)
+            # One fact, committed once: a mask path pointing at a threshold run
+            # while the method still reads "totalsegmentator" would let
+            # `run_planning` plan screws on a mask with no vertebra labels.
             self._last_segmentation_mask_path = result.mask_path
+            self._last_segmentation_method = result.method
             self._window.statusbar.showMessage("Resampling pedicle mask…")
             QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -398,20 +402,24 @@ class SegmentationController:
                         exc_info=True,
                     )
                     grader = None
-                self._window._tool_ctrl.screw_tool.set_grader(grader)
-                self._window.statusbar.showMessage("Re-grading screws…")
-                QApplication.processEvents()
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                try:
-                    self._window._tool_ctrl.regrade_all()
-                finally:
-                    QApplication.restoreOverrideCursor()
             else:
-                self._window._tool_ctrl.screw_tool.set_grader(None)
+                # A threshold fallback carries no vertebra labels, so nothing
+                # can be graded against it.
+                grader = None
+            # Re-grade on every path, grader or not: the viewers have just
+            # replaced the mask these screws were measured against, and grades
+            # taken from the previous one would be presented as current.
+            self._window._tool_ctrl.screw_tool.set_grader(grader)
+            self._window.statusbar.showMessage("Re-grading screws…")
+            QApplication.processEvents()
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                self._window._tool_ctrl.regrade_all()
+            finally:
+                QApplication.restoreOverrideCursor()
             self._window.update_vertebra_level_checks(detected)
 
             self.update_visibility()
-            self._last_segmentation_method = result.method
             self.refresh_label_options(method_override=result.method)
 
             if result.method != "totalsegmentator":

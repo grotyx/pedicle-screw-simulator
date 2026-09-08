@@ -312,3 +312,90 @@ def test_reset_state_stops_the_heartbeat(ui_main_window, tmp_path):
     ctrl.reset_state()
 
     assert ctrl._heartbeat_timer is None or not ctrl._heartbeat_timer.isActive()
+
+
+# ---------------------------------------------------------------------------
+# F7 -- the threshold fallback must re-grade too, and commit mask+method together
+# ---------------------------------------------------------------------------
+
+
+def _finish_run(window, ctrl, mask_path, method, monkeypatch):
+    """Drive `_on_finished` for one completed run with the dialogs silenced."""
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    ctrl._on_finished(
+        SegmentationRunResult(
+            success=True,
+            method=method,
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+
+def test_threshold_fallback_regrades_the_existing_screws(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """The viewers just swapped in a mask with no vertebra labels.
+
+    Leaving the old grades on screen would present measurements taken against
+    a mask that is no longer the one being displayed.
+    """
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-FALLBACK", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "fallback_mask.nii.gz"
+    _write_mask(image, mask_path)
+
+    regrades = []
+    monkeypatch.setattr(
+        window._tool_ctrl, "regrade_all", lambda: regrades.append(True)
+    )
+
+    _finish_run(window, ctrl, mask_path, "threshold_fallback", monkeypatch)
+
+    assert regrades == [True]
+    assert window._tool_ctrl.screw_tool.grader is None
+
+
+def test_a_failed_overlay_never_leaves_the_method_behind_the_mask_path(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Mask path and method are one fact; a half-applied result mis-routes planning.
+
+    With the mask path advanced to a threshold run but the method still reading
+    "totalsegmentator", `run_planning` would happily plan screws on a mask that
+    has no vertebra labels at all.
+    """
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-PARTIAL", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    first_mask = tmp_path / "first_mask.nii.gz"
+    _write_mask(image, first_mask)
+    _finish_run(window, ctrl, first_mask, "totalsegmentator", monkeypatch)
+    assert ctrl._last_segmentation_method == "totalsegmentator"
+
+    def _boom(_detected):
+        raise RuntimeError("overlay bookkeeping failed")
+
+    monkeypatch.setattr(window, "update_vertebra_level_checks", _boom)
+    fallback_mask = tmp_path / "second_mask.nii.gz"
+    _write_mask(image, fallback_mask)
+
+    _finish_run(window, ctrl, fallback_mask, "threshold_fallback", monkeypatch)
+
+    if ctrl._last_segmentation_mask_path == str(fallback_mask):
+        assert ctrl._last_segmentation_method == "threshold_fallback"
+    else:
+        assert ctrl._last_segmentation_method == "totalsegmentator"
