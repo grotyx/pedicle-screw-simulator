@@ -11,7 +11,7 @@ from scipy import ndimage as ndi
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.auto_screw_planner import AutoScrewPlanner
-from src.core.cbt_planner import cbt_entry_point, plan_cbt_screw
+from src.core.cbt_planner import cbt_directions, cbt_entry_point, plan_cbt_screw
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.core.screw_grading import ScrewGrader
@@ -199,6 +199,41 @@ def test_planned_cbt_tip_clears_the_anterior_margin():
     )
     assert tip.breach_mm[0] <= 0.0
     assert tip.min_wall_mm[0] >= config.anterior_margin_mm - config.wall_clearance_mm
+
+
+def test_the_chosen_cbt_trajectory_is_pinned():
+    """Pins the winner, so narrowing which rows are graded cannot move it."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, PlannerConfig(trajectory="cbt"))
+
+    assert screw is not None
+    assert screw.entry_lps == pytest.approx(np.array([54.0, 76.0, 18.0]))
+    assert screw.target_lps == pytest.approx(
+        np.array([60.20376069, 38.92778793, 31.68080573])
+    )
+    assert (screw.diameter_mm, screw.length_mm) == (6.0, 40.0)
+    assert screw.metrics["score"] == pytest.approx(0.6262872628726288)
+    assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(20.0)
+
+
+def test_the_tip_batch_only_grades_shaft_feasible_candidates():
+    """The anterior check must not double the cost of the whole sweep."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    graded = []
+    real = grader.evaluate_batch
+    grader.evaluate_batch = (                                   # type: ignore[method-assign]
+        lambda e, t, d, label: (graded.append(len(e)), real(e, t, d, label))[1]
+    )
+
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, PlannerConfig(trajectory="cbt"))
+
+    assert screw is not None
+    sweep = len(cbt_directions("left")[0]) * len(CBT_DEFAULTS["lengths_mm"])
+    assert max(graded) == sweep                       # the shaft pass sees them all
+    assert sum(graded) < 2 * sweep * len(CBT_DEFAULTS["diameter_mm"])
 
 
 def test_an_unreachable_anterior_margin_rejects_every_candidate():

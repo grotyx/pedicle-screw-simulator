@@ -6,6 +6,7 @@ expected centroids, bounding boxes, and pedicle properties can be
 verified analytically.
 """
 
+import logging
 import os
 import sys
 
@@ -581,6 +582,25 @@ class TestSubregionLabelPath:
         assert 5.0 <= result.left_pedicle_width <= 7.0
         assert 7.0 <= result.right_pedicle_width <= 9.0
         assert np.linalg.norm(result.right_pedicle_center - np.array([30.0, 55.0, 32.0])) <= 2.0
+
+    def test_a_repaired_label_miss_is_logged_rather_than_warned(self, caplog):
+        """A side the label missed but coronal found is provenance, not a warning."""
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        pedicle = _make_pedicle_label(arr.shape, centres=(60,))  # left only
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+
+        with caplog.at_level(logging.INFO, logger="src.core.pedicle_analyzer"):
+            result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.right_pedicle_center is not None
+        # Nothing the surgeon has to read: the side was measured after all…
+        assert not any("subregion label" in w for w in result.warnings)
+        # …but the label's gap is still on the record.
+        assert any(
+            "No right pedicle found in the pedicle subregion label" in record.getMessage()
+            for record in caplog.records
+        )
 
     def test_label_touching_the_volume_edge_measures_the_same(self):
         """Cropping to the side's bounding box must not move any measurement.

@@ -292,17 +292,28 @@ def _plan_cbt_screw(
         batch = grader.evaluate_batch(entries, targets, float(diameter), int(label))
         sampled = np.isfinite(batch.mean_hu)
         without_ct = not sampled.any()
-        tip_batch = grader.evaluate_batch(
-            tip_entries, targets, float(diameter), int(label)
-        )
-        feasible = (
+        shaft_feasible = (
             (batch.breach_mm <= 0.0)
             & (batch.min_wall_mm >= config.wall_clearance_mm - _CLEARANCE_EPS)
             & (sampled | without_ct)
-            & (tip_batch.breach_mm <= 0.0)
-            & (tip_batch.min_wall_mm >= tip_margin)
         )
-        if not feasible.any():
+        rows = np.flatnonzero(shaft_feasible)
+        if rows.size == 0:
+            continue
+
+        # Only the shaft-feasible rows are re-graded for the tip: the extra
+        # batch is the same cost as the first one, and a candidate the shaft
+        # already rejected cannot come back.  Every tip candidate spans exactly
+        # TIP_SEGMENT_MM, so the batch's sample count -- which it takes from the
+        # longest row -- does not depend on which rows are in it, and the
+        # surviving measurements are identical to grading the whole sweep.
+        tip_batch = grader.evaluate_batch(
+            tip_entries[rows], targets[rows], float(diameter), int(label)
+        )
+        rows = rows[
+            (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
+        ]
+        if rows.size == 0:
             continue
 
         safety = np.clip(np.minimum(batch.min_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
@@ -313,7 +324,7 @@ def _plan_cbt_screw(
             1.0,
         )
         score = SAFETY_WEIGHT * safety + DENSITY_WEIGHT * density
-        for i in np.flatnonzero(feasible):
+        for i in rows:
             key = (float(score[i]), float(span[i]), float(diameter))
             if best_key is None or key > best_key:
                 best_key = key

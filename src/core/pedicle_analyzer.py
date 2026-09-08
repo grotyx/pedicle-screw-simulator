@@ -10,7 +10,7 @@ DICOM **LPS** coordinate system.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -363,6 +363,7 @@ class PedicleAnalyzer:
             if self._recorded_center(result, side) is None
         ]
         if not missing_sides:
+            self._report_held_warnings(result, held_warnings)
             result.method = "+".join(methods)
             result.success = True
             return result
@@ -485,16 +486,7 @@ class PedicleAnalyzer:
         if axial_found:
             methods.append("axial_components")
 
-        # Report only the misses no later pass repaired; a side every path
-        # failed on is named so the UI can say which half of the level is gone.
-        still_missing = {
-            side
-            for side in ("left", "right")
-            if self._recorded_center(result, side) is None
-        }
-        result.warnings.extend(
-            message for side, message in held_warnings if side in still_missing
-        )
+        still_missing = self._report_held_warnings(result, held_warnings)
 
         # Mark success when at least one pedicle was found.
         if len(still_missing) < 2:
@@ -502,6 +494,38 @@ class PedicleAnalyzer:
             result.success = True
 
         return result
+
+    def _report_held_warnings(
+        self,
+        result: PedicleAnalysisResult,
+        held_warnings: List[Tuple[str, str]],
+    ) -> Set[str]:
+        """Split the held-back misses into UI warnings and log-only provenance.
+
+        A side every path failed on is named in ``result.warnings`` so the UI
+        can say which half of the level is gone.  A miss a *later* pass repaired
+        is not the surgeon's problem — warning about it would only mislead — but
+        it is still provenance: a pedicle absent from the subregion label says
+        something about the label, so it goes to the log rather than nowhere.
+
+        Returns the sides still unmeasured.
+        """
+        still_missing = {
+            side
+            for side in ("left", "right")
+            if self._recorded_center(result, side) is None
+        }
+        for side, message in held_warnings:
+            if side in still_missing:
+                result.warnings.append(message)
+            else:
+                logger.info(
+                    "%s: %s (a later pass measured the %s side anyway)",
+                    result.vertebra.name,
+                    message,
+                    side,
+                )
+        return still_missing
 
     @staticmethod
     def _recorded_center(
