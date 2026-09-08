@@ -399,3 +399,40 @@ def test_a_failed_overlay_never_leaves_the_method_behind_the_mask_path(
         assert ctrl._last_segmentation_method == "threshold_fallback"
     else:
         assert ctrl._last_segmentation_method == "totalsegmentator"
+
+
+# ---------------------------------------------------------------------------
+# F1 (controller side) -- a mask a fraction of a voxel off the CT still grades
+# ---------------------------------------------------------------------------
+
+
+def test_a_drifted_mask_is_resampled_onto_the_ct_grid_before_grading(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """A float32 NIfTI origin round-trip must not cost every screw its grade."""
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-DRIFT", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+
+    drifted = sitk.Cast(image > 0, sitk.sitkUInt8)
+    drifted.CopyInformation(image)
+    origin = list(image.GetOrigin())
+    origin[2] += 0.4 * image.GetSpacing()[2]      # well past any grid tolerance
+    drifted.SetOrigin(origin)
+    mask_path = tmp_path / "drifted_mask.nii.gz"
+    sitk.WriteImage(drifted, str(mask_path))
+
+    _finish_run(window, ctrl, mask_path, "totalsegmentator", monkeypatch)
+
+    assert window._tool_ctrl.screw_tool.grader is not None
+
+
+def test_grading_is_skipped_when_no_ct_is_loaded(ui_main_window, tmp_path):
+    ctrl = ui_main_window._seg_ctrl
+    mask = sitk.Cast(_create_test_image() > 0, sitk.sitkUInt8)
+    assert ctrl._build_grader(mask) is None

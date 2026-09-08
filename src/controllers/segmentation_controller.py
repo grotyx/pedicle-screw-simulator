@@ -392,16 +392,8 @@ class SegmentationController:
                 self._last_pedicle_mask = self._load_pedicle_mask(result, mask_image)
             finally:
                 QApplication.restoreOverrideCursor()
-            from src.core.screw_grading import ScrewGrader
             if result.method == "totalsegmentator":
-                try:
-                    grader = ScrewGrader(mask_image, self._vm.get_sitk_image())
-                except ValueError:
-                    logger.warning(
-                        "Mask and CT grids differ; manual screws will not be graded.",
-                        exc_info=True,
-                    )
-                    grader = None
+                grader = self._build_grader(mask_image)
             else:
                 # A threshold fallback carries no vertebra labels, so nothing
                 # can be graded against it.
@@ -468,6 +460,40 @@ class SegmentationController:
                 f"Segmentation output was generated but could not be "
                 f"rendered: {e}",
             )
+
+    def _build_grader(self, mask_image):
+        """Grader for the current CT, repairing a mask that drifted off its grid.
+
+        The grader samples the CT by mask index, so it refuses a mask that is
+        not voxel-aligned with it — and a NIfTI mask stores its geometry as
+        float32, which is enough for a CT positioned far from the scanner
+        origin to come back a fraction of a voxel out. Giving up there left
+        every manual screw reading N/A for a mask that is anatomically correct,
+        so a mismatch is repaired with one nearest-neighbour resample instead.
+
+        Returns ``None`` only when even the resampled mask cannot be graded;
+        the caller then marks the screws N/A rather than showing stale grades.
+        """
+        from src.core.screw_grading import ScrewGrader, resample_mask_to_ct
+
+        ct_image = self._vm.get_sitk_image()
+        if ct_image is None:
+            return None
+        try:
+            return ScrewGrader(mask_image, ct_image)
+        except ValueError:
+            logger.info(
+                "Segmentation mask is not on the CT grid; resampling it to grade."
+            )
+        try:
+            return ScrewGrader(resample_mask_to_ct(mask_image, ct_image), ct_image)
+        except Exception:
+            logger.warning(
+                "Mask could not be aligned to the CT; "
+                "manual screws will not be graded.",
+                exc_info=True,
+            )
+            return None
 
     PEDICLE_FAILURE_PREFIX = "Pedicle model unavailable: "
 
