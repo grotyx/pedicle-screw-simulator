@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 import pytest
@@ -52,12 +53,114 @@ def test_find_model_from_directory(tmp_path, monkeypatch):
     assert find_subregion_model().root == model_dir
 
 
-def test_build_predict_command_maps_gpu_to_cuda(tmp_path):
-    from src.core.subregion_segmentation import SubregionModel, build_predict_command
-    model = SubregionModel(root=tmp_path, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
-    cmd = build_predict_command(model, tmp_path / "in", tmp_path / "out", "gpu:0")
-    assert cmd[0].endswith("nnUNetv2_predict") or cmd[:2] == [sys.executable, "-m"]
+def test_build_predict_command_maps_gpu_to_cuda(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+    monkeypatch.setattr(ss, "_find_nnunet_predict_executable", lambda: None)
+    model = ss.SubregionModel(root=tmp_path, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "gpu:0")
+    assert cmd[:2] == [sys.executable, "-c"]
     assert "-d" in cmd and "Dataset501_X" in cmd and "-device" in cmd and "cuda" in cmd
+
+
+def test_build_predict_command_uses_executable_when_found(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+    monkeypatch.setattr(ss, "_find_nnunet_predict_executable", lambda: "/opt/venv/Scripts/nnUNetv2_predict.exe")
+    model = ss.SubregionModel(root=tmp_path, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "cpu")
+    assert cmd[0] == "/opt/venv/Scripts/nnUNetv2_predict.exe"
+
+
+def test_build_predict_command_module_fallback_uses_entry_point(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+    monkeypatch.setattr(ss, "_find_nnunet_predict_executable", lambda: None)
+    model = ss.SubregionModel(root=tmp_path, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "cpu")
+    assert cmd[0] == sys.executable
+    assert cmd[1] == "-c"
+    assert "predict_entry_point" in cmd[2]
+    assert "from nnunetv2.inference.predict_from_raw_data import predict_entry_point" in cmd[2]
+
+
+def test_build_predict_command_derives_folds_from_fold_dirs(tmp_path):
+    from src.core import subregion_segmentation as ss
+    model_root = tmp_path / "Dataset501_X" / "nnUNetTrainer__nnUNetPlans__3d_fullres"
+    for name in ("fold_0", "fold_1", "fold_3"):
+        (model_root / name).mkdir(parents=True)
+    model = ss.SubregionModel(root=model_root, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "cpu")
+    idx = cmd.index("-f")
+    # Everything up to the next flag is a fold token.
+    fold_args = []
+    for token in cmd[idx + 1:]:
+        if token.startswith("-"):
+            break
+        fold_args.append(token)
+    assert fold_args == ["0", "1", "3"]
+
+
+def test_build_predict_command_fold_all_directory_maps_to_all(tmp_path):
+    from src.core import subregion_segmentation as ss
+    model_root = tmp_path / "Dataset501_X" / "nnUNetTrainer__nnUNetPlans__3d_fullres"
+    (model_root / "fold_all").mkdir(parents=True)
+    model = ss.SubregionModel(root=model_root, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "cpu")
+    idx = cmd.index("-f")
+    assert cmd[idx + 1] == "all"
+    assert cmd[idx + 2] == "-device"
+
+
+def test_build_predict_command_no_fold_dirs_defaults_to_all(tmp_path):
+    from src.core import subregion_segmentation as ss
+    model_root = tmp_path / "Dataset501_X" / "nnUNetTrainer__nnUNetPlans__3d_fullres"
+    model_root.mkdir(parents=True)
+    model = ss.SubregionModel(root=model_root, dataset_id="Dataset501_X", configuration="3d_fullres", labels={"pedicle": 2})
+    cmd = ss.build_predict_command(model, tmp_path / "in", tmp_path / "out", "cpu")
+    idx = cmd.index("-f")
+    assert cmd[idx + 1] == "all"
+
+
+def test_find_nnunet_predict_executable_probes_sysconfig_scripts_dir(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+
+    exe_dir = tmp_path / "exe_dir"
+    exe_dir.mkdir()
+    scripts_dir = tmp_path / "scripts_dir"
+    scripts_dir.mkdir()
+    exe_name = "nnUNetv2_predict.exe" if os.name == "nt" else "nnUNetv2_predict"
+    target = scripts_dir / exe_name
+    target.write_text("")
+
+    monkeypatch.setattr(ss.sys, "executable", str(exe_dir / "python.exe"))
+    monkeypatch.setattr(ss.sysconfig, "get_path", lambda name: str(scripts_dir) if name == "scripts" else None)
+    monkeypatch.setattr(ss.shutil, "which", lambda name: None)
+
+    found = ss._find_nnunet_predict_executable()
+    assert found == str(target)
+
+
+def test_find_nnunet_predict_executable_falls_back_to_which(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+
+    exe_dir = tmp_path / "exe_dir"
+    exe_dir.mkdir()
+    monkeypatch.setattr(ss.sys, "executable", str(exe_dir / "python.exe"))
+    monkeypatch.setattr(ss.sysconfig, "get_path", lambda name: None)
+    monkeypatch.setattr(ss.shutil, "which", lambda name: "/usr/local/bin/nnUNetv2_predict")
+
+    found = ss._find_nnunet_predict_executable()
+    assert found == "/usr/local/bin/nnUNetv2_predict"
+
+
+def test_find_nnunet_predict_executable_returns_none_when_not_found(monkeypatch, tmp_path):
+    from src.core import subregion_segmentation as ss
+
+    exe_dir = tmp_path / "exe_dir"
+    exe_dir.mkdir()
+    monkeypatch.setattr(ss.sys, "executable", str(exe_dir / "python.exe"))
+    monkeypatch.setattr(ss.sysconfig, "get_path", lambda name: None)
+    monkeypatch.setattr(ss.shutil, "which", lambda name: None)
+
+    assert ss._find_nnunet_predict_executable() is None
 
 
 def test_resample_to_reference_matches_geometry():

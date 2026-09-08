@@ -16,8 +16,10 @@ original CT grid (``resample_to_reference``).
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -145,23 +147,69 @@ def find_subregion_model(explicit_dir: Optional[str] = None) -> Optional[Subregi
 
 def _find_nnunet_predict_executable() -> Optional[str]:
     """
-    Locate the ``nnUNetv2_predict`` console script installed alongside the
-    running interpreter.
+    Locate the ``nnUNetv2_predict`` console script for the running interpreter.
 
-    Deliberately does not use ``shutil.which`` against the process ``PATH``:
-    on a developer machine that can resolve to an unrelated Python
-    installation's console script (a different venv, or a system Python),
-    which would run against the wrong environment. The console script pip
-    installs for the *current* interpreter always lives next to
-    ``sys.executable`` (``Scripts/`` on Windows, ``bin/`` elsewhere).
+    Checked in order:
+
+    1. Next to ``sys.executable`` (``Scripts/`` on Windows, ``bin/``
+       elsewhere) — where pip installs a console script for the current
+       interpreter in the common case.
+    2. ``sysconfig.get_path("scripts")`` — covers interpreter layouts where
+       the scripts directory isn't literally ``sys.executable``'s parent
+       (e.g. a user-site install, or a venv reached through a symlinked
+       interpreter).
+    3. ``shutil.which`` against the process ``PATH``, as a last resort only.
+
+    The first two are tried first and preferred because a bare PATH lookup
+    can resolve to an unrelated Python installation's console script (a
+    different venv, or a system Python) and silently run against the wrong
+    environment; PATH is only consulted once both interpreter-adjacent
+    locations have come up empty, which beats falling back to the
+    argv-ignoring ``-m`` module invocation.
     """
-    scripts_dir = Path(sys.executable).parent
     names = ["nnUNetv2_predict.exe", "nnUNetv2_predict"] if os.name == "nt" else ["nnUNetv2_predict"]
-    for name in names:
-        candidate = scripts_dir / name
-        if candidate.is_file():
-            return str(candidate)
-    return None
+
+    search_dirs = [Path(sys.executable).parent]
+    scripts_dir = sysconfig.get_path("scripts")
+    if scripts_dir:
+        scripts_path = Path(scripts_dir)
+        if scripts_path not in search_dirs:
+            search_dirs.append(scripts_path)
+
+    for directory in search_dirs:
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+
+    return shutil.which("nnUNetv2_predict")
+
+
+def _resolve_predict_folds(model_root: Path) -> List[str]:
+    """
+    Determine the ``-f`` fold argument(s) for ``nnUNetv2_predict`` from the
+    ``fold_*`` directories actually present under ``model_root``, instead of
+    hard-coding ``all`` regardless of how the model was trained.
+
+    A ``fold_all`` directory (the model was trained once on the whole
+    dataset) maps to ``["all"]``. Otherwise every ``fold_<N>`` directory
+    present contributes its number, sorted ascending, so e.g. ``fold_0``,
+    ``fold_1``, ``fold_3`` on disk yields ``["0", "1", "3"]``. Falls back to
+    ``["all"]`` when ``model_root`` has no recognizable fold directory,
+    matching the previous unconditional default.
+    """
+    if not model_root.is_dir():
+        return ["all"]
+
+    fold_dirs = [p.name for p in model_root.iterdir() if p.is_dir() and p.name.startswith("fold_")]
+    if any(name == "fold_all" for name in fold_dirs):
+        return ["all"]
+
+    numbers = sorted(
+        (name[len("fold_") :] for name in fold_dirs if name[len("fold_") :].isdigit()),
+        key=int,
+    )
+    return numbers if numbers else ["all"]
 
 
 def build_predict_command(
@@ -171,23 +219,35 @@ def build_predict_command(
     Build the ``nnUNetv2_predict`` command line for ``model``.
 
     Prefers the console-script entry point installed alongside the running
-    interpreter, falling back to invoking the module directly with the
-    current interpreter. That fallback only works with a real Python
-    interpreter and an nnunetv2 install on its module path; it cannot run in
-    a frozen/packaged build, where ``sys.executable`` is the frozen app
-    itself rather than a Python interpreter (see the ``sys.frozen`` guard in
+    interpreter, falling back to invoking ``predict_entry_point()`` directly
+    via ``-c`` with the current interpreter (NOT ``-m
+    nnunetv2.inference.predict_from_raw_data``: that module's own
+    ``__main__`` guard runs an argv-ignoring demo, not the CLI). That
+    fallback only works with a real Python interpreter and an nnunetv2
+    install on its module path; it cannot run in a frozen/packaged build,
+    where ``sys.executable`` is the frozen app itself rather than a Python
+    interpreter (see the ``sys.frozen`` guard in
     ``run_subregion_segmentation``, which refuses to run there at all).
-    ``device`` values starting with "gpu" map to nnU-Net's "cuda" device;
-    anything else runs on "cpu".
+    ``-f`` is derived from the ``fold_*`` directories under ``model.root``
+    (see ``_resolve_predict_folds``). ``device`` values starting with "gpu"
+    map to nnU-Net's "cuda" device; anything else runs on "cpu".
     """
     executable = _find_nnunet_predict_executable()
-    base = [executable] if executable else [sys.executable, "-m", "nnunetv2.inference.predict_from_raw_data"]
+    base = (
+        [executable]
+        if executable
+        else [
+            sys.executable,
+            "-c",
+            "from nnunetv2.inference.predict_from_raw_data import predict_entry_point; predict_entry_point()",
+        ]
+    )
     return base + [
         "-i", str(input_dir),
         "-o", str(output_dir),
         "-d", model.dataset_id,
         "-c", model.configuration,
-        "-f", "all",
+        "-f", *_resolve_predict_folds(model.root),
         "-device", "cuda" if str(device).startswith("gpu") else "cpu",
         "--disable_tta",
     ]
