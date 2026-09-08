@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -21,18 +22,33 @@ VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 PRODUCT = "PedicleScrewSimulator"
 
 
+def _numeric_version_component(part: str) -> str:
+    """Return the leading run of digits in ``part``, or "0" if there is none.
+
+    A pre-release VERSION like "0.2.0rc1" or "0.2.0-beta" splits into parts
+    where the patch component ("0rc1"/"0-beta") is not a bare integer, but
+    the Windows version-resource tuple requires literal integers. Only the
+    numeric tuple is affected: the full pre-release string is still used
+    verbatim in the template's display fields (FileVersion/ProductVersion).
+    """
+    match = re.match(r"\d+", part)
+    return match.group(0) if match else "0"
+
+
 def _render_windows_version_file() -> Path:
     """Render the Windows version-resource template for the current VERSION.
 
     PyInstaller's ``version=`` argument needs a file with literal integer
     version components, so the template's ``{major}``/``{minor}``/``{patch}``
     placeholders are filled in from VERSION and the result is written under
-    ``build/`` (not tracked in git).
+    ``build/`` (not tracked in git). Each component is reduced to its
+    leading digits so a pre-release VERSION (e.g. "0.2.0rc1") still produces
+    a valid integer tuple instead of a syntax error in the generated file.
     """
     version_parts = VERSION.split(".")
-    major = version_parts[0] if len(version_parts) > 0 else "0"
-    minor = version_parts[1] if len(version_parts) > 1 else "0"
-    patch = version_parts[2] if len(version_parts) > 2 else "0"
+    major = _numeric_version_component(version_parts[0]) if len(version_parts) > 0 else "0"
+    minor = _numeric_version_component(version_parts[1]) if len(version_parts) > 1 else "0"
+    patch = _numeric_version_component(version_parts[2]) if len(version_parts) > 2 else "0"
 
     rendered = WINDOWS_VERSION_TEMPLATE.read_text(encoding="utf-8").format(
         major=major, minor=minor, patch=patch, version=VERSION

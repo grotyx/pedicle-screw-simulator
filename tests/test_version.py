@@ -54,3 +54,35 @@ def test_missing_version_file_falls_back_to_placeholder(monkeypatch, tmp_path):
     monkeypatch.setattr(src.sys, "frozen", True, raising=False)
     monkeypatch.setattr(src.sys, "_MEIPASS", str(tmp_path), raising=False)
     assert src._read_version() == "0.0.0+unknown"
+
+
+def test_windows_version_tuple_tolerates_prerelease_suffix(tmp_path, monkeypatch):
+    """A pre-release VERSION (e.g. "0.2.0rc1") must not break the Windows
+    version-info tuple, which requires literal integer components."""
+    import scripts.build_desktop as build_desktop
+
+    monkeypatch.setattr(build_desktop, "VERSION", "0.2.0rc1")
+    monkeypatch.setattr(build_desktop, "BUILD_DIR", tmp_path)
+
+    output = build_desktop._render_windows_version_file()
+    text = output.read_text(encoding="utf-8")
+
+    assert "filevers=(0, 2, 0, 0)" in text
+    assert "prodvers=(0, 2, 0, 0)" in text
+    # The full pre-release string is still preserved for the display fields.
+    assert "0.2.0rc1" in text
+
+
+def test_windows_version_tuple_handles_plain_release_version(tmp_path, monkeypatch):
+    """Regression guard: an ordinary release VERSION keeps working."""
+    import scripts.build_desktop as build_desktop
+
+    monkeypatch.setattr(build_desktop, "VERSION", "1.4.2")
+    monkeypatch.setattr(build_desktop, "BUILD_DIR", tmp_path)
+
+    output = build_desktop._render_windows_version_file()
+    text = output.read_text(encoding="utf-8")
+
+    assert "filevers=(1, 4, 2, 0)" in text
+    assert "prodvers=(1, 4, 2, 0)" in text
+    assert "1.4.2" in text
