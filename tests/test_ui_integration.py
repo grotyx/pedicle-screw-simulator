@@ -986,8 +986,12 @@ def test_loaded_plan_is_regraded_when_a_grader_is_attached(ui_main_window):
     assert regraded.mean_hu == pytest.approx(80.0)
 
 
-def test_loaded_plan_keeps_grade_when_no_grader_is_attached(ui_main_window):
-    """Without a grader, a loaded plan's grade must be left untouched."""
+def test_loaded_plan_shows_na_when_no_grader_is_attached(ui_main_window):
+    """Without a grader there is nothing behind a stored grade.
+
+    A plan saved by the removed HU heuristic would otherwise keep displaying
+    its "A" as a current measurement with no segmentation loaded at all.
+    """
     from src.utils.planning_io import screw_from_dict
 
     window = ui_main_window
@@ -1005,7 +1009,7 @@ def test_loaded_plan_keeps_grade_when_no_grader_is_attached(ui_main_window):
     window._plan_ctrl._apply_loaded_plan([screw], [], [])
 
     loaded = window._tool_ctrl.screw_tool.get_screws()[0]
-    assert loaded.grade == "A"
+    assert loaded.grade == "N/A"
 
 
 def test_refresh_screw_replaces_same_overlay_id_and_list_row(ui_main_window):
