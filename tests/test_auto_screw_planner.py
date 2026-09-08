@@ -1193,6 +1193,47 @@ class TestPlannerConfig:
         assert short._select_standard_length(60.0) == 35.0
         assert short._select_standard_length(29.0) is None
 
+    def test_diameter_step_down_walks_the_configured_catalogue(self):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = TestGrading()._cube()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(implant_diameters_mm=(4.5, 5.5, 6.5))
+        )
+        assert planner._next_smaller_diameter(6.5) == pytest.approx(5.5)
+        assert planner._next_smaller_diameter(5.5) == pytest.approx(4.5)
+        assert planner._next_smaller_diameter(4.5) is None
+        # A recommendation between catalogue entries steps to the next one below.
+        assert planner._next_smaller_diameter(6.0) == pytest.approx(5.5)
+
+
+class TestGridAlignment:
+    """A mask that drifted off the CT grid is resampled, not rejected."""
+
+    def _shifted(self, delta):
+        ct, mask = TestGrading()._cube()
+        origin = mask.GetOrigin()
+        mask.SetOrigin((origin[0], origin[1], origin[2] + delta))
+        return ct, mask
+
+    def test_geometry_drift_beyond_tolerance_is_resampled(self):
+        ct, mask = self._shifted(0.5)   # half a voxel: same size, different grid
+        planner = AutoScrewPlanner(ct, mask)
+        assert planner._mask.GetOrigin() == pytest.approx(ct.GetOrigin())
+        # The label survived the nearest-neighbour resample, one voxel down.
+        arr = sitk.GetArrayFromImage(planner._mask)
+        assert (arr == 28).any()
+
+    def test_float32_origin_drift_does_not_resample_or_raise(self):
+        ct, mask = TestGrading()._cube()
+        ct.SetOrigin((0.0, 0.0, -2300.00012))
+        mask.SetOrigin((0.0, 0.0, float(np.float32(-2300.00012))))
+        planner = AutoScrewPlanner(ct, mask)
+        assert planner._mask is mask   # nothing to repair
+        np.testing.assert_array_equal(
+            sitk.GetArrayFromImage(planner._mask), sitk.GetArrayFromImage(mask)
+        )
+
 
 class TestScrewMetrics:
     """Every planned screw carries the clinical metric bundle."""

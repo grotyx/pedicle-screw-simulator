@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-from src.core.screw_grading import GradeResult, ScrewGrader
+from src.core.screw_grading import GradeResult, ScrewGrader, resample_mask_to_ct
 
 
 def _cube_mask(label=28, size=60, lo=20, hi=40, spacing=(1.0, 1.0, 1.0)):
@@ -136,9 +136,81 @@ class TestScrewGrader:
         with pytest.raises(ValueError, match="same grid"):
             ScrewGrader(mask, resized)
 
+    def test_float32_origin_round_trip_still_counts_as_the_same_grid(self):
+        """A NIfTI mask stores its origin as float32; the CT keeps float64.
+
+        At |z| >= 2048 mm the two differ by up to 1.22e-4 mm — more than the old
+        fixed 1e-4 absolute tolerance, but a ten-thousandth of a voxel.
+        """
+        mask = _cube_mask()
+        mask.SetOrigin((0.0, 0.0, float(np.float32(-2300.00012))))
+        ct = _ct_like(mask)
+        ct.SetOrigin((0.0, 0.0, -2300.00012))
+        assert abs(ct.GetOrigin()[2] - mask.GetOrigin()[2]) > 1e-4
+
+        assert ScrewGrader.grids_match(ct, mask)
+        ScrewGrader(mask, ct)   # must not raise
+
     def test_crop_margin_mm_is_exposed(self):
         grader = ScrewGrader(_cube_mask(), crop_margin_mm=8.0)
         assert grader.crop_margin_mm == 8.0
+
+
+class TestGridsMatch:
+    def test_identical_grids_match(self):
+        mask = _cube_mask()
+        assert ScrewGrader.grids_match(_ct_like(mask), mask)
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda img: img.SetSpacing((1.0, 1.0, 2.0)),
+            lambda img: img.SetOrigin((3.0, 0.0, 0.0)),
+            lambda img: img.SetDirection((-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)),
+        ],
+    )
+    def test_geometry_differences_do_not_match(self, mutate):
+        mask = _cube_mask()
+        ct = _ct_like(mask)
+        mutate(ct)
+        assert not ScrewGrader.grids_match(ct, mask)
+
+    def test_size_difference_does_not_match(self):
+        mask = _cube_mask()
+        ct = sitk.GetImageFromArray(np.zeros((30, 60, 60), dtype=np.int16))
+        assert not ScrewGrader.grids_match(ct, mask)
+
+    def test_half_voxel_origin_shift_does_not_match(self):
+        """Half a voxel is a real misalignment, not float noise."""
+        mask = _cube_mask()
+        ct = _ct_like(mask)
+        ct.SetOrigin((0.5, 0.0, 0.0))
+        assert not ScrewGrader.grids_match(ct, mask)
+
+
+class TestResampleMaskToCt:
+    def test_shifted_mask_lands_on_the_ct_grid(self):
+        mask = _cube_mask()
+        ct = _ct_like(mask)
+        ct.SetOrigin((5.0, 0.0, 0.0))
+
+        moved = resample_mask_to_ct(mask, ct)
+
+        assert ScrewGrader.grids_match(ct, moved)
+        assert moved.GetPixelID() == mask.GetPixelID()
+        arr = sitk.GetArrayFromImage(moved)
+        # The label spanned x index 20..39 on the mask grid; a +5 mm CT origin
+        # shifts it 5 voxels down in CT index space.
+        xs = np.unique(np.argwhere(arr == 28)[:, 2])
+        assert (int(xs.min()), int(xs.max())) == (15, 34)
+        assert np.unique(arr).tolist() == [0, 28]   # nearest neighbour, no blending
+
+    def test_a_mask_already_on_the_grid_is_unchanged(self):
+        mask = _cube_mask()
+        moved = resample_mask_to_ct(mask, _ct_like(mask))
+        np.testing.assert_array_equal(
+            sitk.GetArrayFromImage(moved), sitk.GetArrayFromImage(mask)
+        )
 
 
 class TestBreachPoint:

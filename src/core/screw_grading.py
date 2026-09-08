@@ -33,6 +33,36 @@ MAX_BATCH_SAMPLE_POINTS = 2_000_000
 #: unrankable instead (see :meth:`ScrewGrader.evaluate_batch`).
 MIN_BATCH_CANDIDATE_LENGTH_MM = 1.0
 
+#: Grid-equality tolerances used by :meth:`ScrewGrader.grids_match`.
+#:
+#: An origin is compared against a *fraction of a voxel* rather than an absolute
+#: millimetre count: NIfTI stores the origin as float32, so a CT whose table
+#: position puts |z| past 2048 mm round-trips through a saved mask with up to
+#: 1.22e-4 mm of drift — real misalignment starts far above that, and a fixed
+#: absolute tolerance either rejects the round-trip or accepts a shifted grid on
+#: a fine volume.  Spacing is relative for the same reason; the direction cosines
+#: are already dimensionless.
+GRID_ORIGIN_VOXEL_FRACTION = 0.01
+GRID_SPACING_RTOL = 1e-3
+GRID_DIRECTION_ATOL = 1e-3
+
+
+def resample_mask_to_ct(mask_image: sitk.Image, ct_image: sitk.Image) -> sitk.Image:
+    """``mask_image`` resampled onto ``ct_image``'s grid, nearest neighbour.
+
+    Labels are categorical, so the interpolation must never blend them, and
+    voxels the mask does not reach become background (0).  The pixel type is
+    preserved so the result is still a label map.
+    """
+    return sitk.Resample(
+        mask_image,
+        ct_image,
+        sitk.Transform(),
+        sitk.sitkNearestNeighbor,
+        0,
+        mask_image.GetPixelID(),
+    )
+
 
 @dataclass
 class BatchResult:
@@ -410,15 +440,47 @@ class ScrewGrader:
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
-    def _require_same_grid(mask_image: sitk.Image, ct_image: sitk.Image, tolerance: float = 1e-4) -> None:
-        """Reject a CT that is not voxel-aligned with the mask (it is sampled by mask index)."""
-        matches = (
-            tuple(ct_image.GetSize()) == tuple(mask_image.GetSize())
-            and np.allclose(ct_image.GetSpacing(), mask_image.GetSpacing(), rtol=0.0, atol=tolerance)
-            and np.allclose(ct_image.GetOrigin(), mask_image.GetOrigin(), rtol=0.0, atol=tolerance)
-            and np.allclose(ct_image.GetDirection(), mask_image.GetDirection(), rtol=0.0, atol=tolerance)
+    def grids_match(ct_image: sitk.Image, mask_image: sitk.Image) -> bool:
+        """Whether the two volumes are voxel-aligned closely enough to share indices.
+
+        Sizes must be equal; spacing is compared relatively
+        (:data:`GRID_SPACING_RTOL`), the direction cosines absolutely
+        (:data:`GRID_DIRECTION_ATOL`), and the origins within
+        :data:`GRID_ORIGIN_VOXEL_FRACTION` of the *smaller* voxel — a
+        sub-hundredth-of-a-voxel offset cannot move a sample into a different
+        voxel, whereas an absolute millimetre tolerance is simultaneously too
+        tight for a float32 origin round-trip and too loose for a fine volume.
+
+        Callers that can repair a mismatch should resample the mask with
+        :func:`resample_mask_to_ct` rather than fail.
+        """
+        if tuple(ct_image.GetSize()) != tuple(mask_image.GetSize()):
+            return False
+        ct_spacing = np.asarray(ct_image.GetSpacing(), dtype=np.float64)
+        mask_spacing = np.asarray(mask_image.GetSpacing(), dtype=np.float64)
+        if not np.allclose(ct_spacing, mask_spacing, rtol=GRID_SPACING_RTOL, atol=0.0):
+            return False
+        if not np.allclose(
+            ct_image.GetDirection(),
+            mask_image.GetDirection(),
+            rtol=0.0,
+            atol=GRID_DIRECTION_ATOL,
+        ):
+            return False
+        voxel = float(min(mask_spacing.min(), ct_spacing.min()))
+        return bool(
+            np.allclose(
+                ct_image.GetOrigin(),
+                mask_image.GetOrigin(),
+                rtol=0.0,
+                atol=GRID_ORIGIN_VOXEL_FRACTION * voxel,
+            )
         )
-        if not matches:
+
+    @classmethod
+    def _require_same_grid(cls, mask_image: sitk.Image, ct_image: sitk.Image) -> None:
+        """Reject a CT that is not voxel-aligned with the mask (it is sampled by mask index)."""
+        if not cls.grids_match(ct_image, mask_image):
             raise ValueError("ct_image and mask_image must share the same grid")
 
     def _centreline(self, entry: Point3, target: Point3) -> List[np.ndarray]:

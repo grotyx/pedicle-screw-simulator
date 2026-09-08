@@ -30,7 +30,7 @@ from .breach_classification import facet_violation_grade, heary_direction
 from .cbt_planner import plan_cbt_screws
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
-from .screw_grading import ScrewGrader
+from .screw_grading import ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
     Candidate,
     RunProgress,
@@ -148,15 +148,12 @@ class AutoScrewPlanner:
         """
         self.config = config or PlannerConfig()
         self.config.validate()
-        if tuple(ct_image.GetSize()) != tuple(mask_image.GetSize()):
-            mask_image = sitk.Resample(
-                mask_image,
-                ct_image,
-                sitk.Transform(),
-                sitk.sitkNearestNeighbor,
-                0,
-                mask_image.GetPixelID(),
-            )
+        # The grader samples the CT by mask index, so the two must share a grid.
+        # Size equality is not enough: a mask saved as NIfTI comes back with a
+        # float32 origin, and a mask segmented on a resampled copy of the study
+        # can match in size while sitting half a voxel off.
+        if not ScrewGrader.grids_match(ct_image, mask_image):
+            mask_image = resample_mask_to_ct(mask_image, ct_image)
         self._ct = ct_image
         self._mask = mask_image
         self._ct_array: np.ndarray = sitk.GetArrayFromImage(ct_image)   # (z, y, x)
@@ -282,14 +279,15 @@ class AutoScrewPlanner:
             vertebra.label,
         )
         while grade not in {"A", "B"}:
-            diameter = round(diameter - 0.5, 1)
-            if diameter < self.MIN_SCREW_DIAMETER:
+            smaller = self._next_smaller_diameter(diameter)
+            if smaller is None:
                 logger.info(
                     "No contained screw diameter for %s %s",
                     vertebra.name,
                     side,
                 )
                 return None
+            diameter = smaller
             candidate = self._find_best_target(
                 entry,
                 oriented_axis,
@@ -1103,6 +1101,21 @@ class AutoScrewPlanner:
         if available >= preferred + self.DIAMETER_WIDE_HEADROOM:
             recommendation = min(preferred + 0.5, automatic_maximum)
         return min(available, recommendation)
+
+    def _next_smaller_diameter(self, diameter: float) -> Optional[float]:
+        """The largest catalogue diameter strictly below ``diameter``, or ``None``.
+
+        The step-down walks ``config.implant_diameters_mm`` rather than a fixed
+        0.5 mm decrement: a custom catalogue may be coarser or finer than the
+        default, and a decrement off it lands on a size that cannot be ordered.
+        A catalogue entry below :attr:`MIN_SCREW_DIAMETER` is still not offered.
+        """
+        smaller = [
+            float(d)
+            for d in self.config.implant_diameters_mm
+            if d < diameter - 1e-9 and d >= self.MIN_SCREW_DIAMETER
+        ]
+        return max(smaller) if smaller else None
 
     @staticmethod
     def _diameter_profile_for_level(vertebra_name: str) -> Tuple[float, float]:
