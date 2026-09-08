@@ -40,6 +40,54 @@ def test_oblique_direction_is_resampled():
     assert out.GetSpacing() == img.GetSpacing()
 
 
+def test_tilted_sagittal_direction_permutes_spacing_by_dominant_axis():
+    # Image axis 0 is dominantly world Z, axis 1 is dominantly world X,
+    # axis 2 is dominantly world Y (a slightly tilted sagittal acquisition).
+    col0 = np.array([0.0, 0.17, 0.98])
+    col1 = np.array([1.0, 0.0, 0.0])
+    col2 = np.array([0.0, 0.98, -0.17])
+    col0 = col0 / np.linalg.norm(col0)
+    col1 = col1 / np.linalg.norm(col1)
+    col2 = col2 / np.linalg.norm(col2)
+    direction = (
+        col0[0], col1[0], col2[0],
+        col0[1], col1[1], col2[1],
+        col0[2], col1[2], col2[2],
+    )
+    size = (4, 5, 6)
+    spacing = (0.5, 0.5, 3.0)
+    img = sitk.Image(size, sitk.sitkInt16)
+    img.SetSpacing(spacing)
+    img.SetOrigin((0.0, 0.0, 0.0))
+    img.SetDirection(direction)
+
+    out, info = normalize_orientation(img)
+
+    assert info["resampled"] is True
+    assert np.allclose(out.GetDirection(), (1, 0, 0, 0, 1, 0, 0, 0, 1))
+
+    # Dominant world axis per image axis: axis0->Z, axis1->X, axis2->Y.
+    out_spacing = out.GetSpacing()
+    assert np.isclose(out_spacing[0], spacing[1])  # world X <- image axis 1
+    assert np.isclose(out_spacing[1], spacing[2])  # world Y <- image axis 2
+    assert np.isclose(out_spacing[2], spacing[0])  # world Z <- image axis 0
+
+    # Output size must cover the true world-space bounding box of the input
+    # volume using the (correctly permuted) per-world-axis spacing, not be
+    # 6x oversampled/undersampled from using the wrong spacing on an axis.
+    out_size = out.GetSize()
+    corners = []
+    for i in (0, size[0] - 1):
+        for j in (0, size[1] - 1):
+            for k in (0, size[2] - 1):
+                corners.append(img.TransformContinuousIndexToPhysicalPoint((float(i), float(j), float(k))))
+    corners = np.asarray(corners)
+    lo, hi = corners.min(axis=0), corners.max(axis=0)
+    for a in range(3):
+        expected_size = int(np.ceil((hi[a] - lo[a]) / out_spacing[a])) + 1
+        assert out_size[a] == expected_size
+
+
 def test_transform_direction_left_multiplies_only():
     from src.core.coordinate_system import CoordinateSystem
     d = (1, 0, 0, 0, 0, -1, 0, 1, 0)

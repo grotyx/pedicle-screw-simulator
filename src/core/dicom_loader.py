@@ -47,10 +47,20 @@ def normalize_orientation(image: sitk.Image) -> Tuple[sitk.Image, Dict[str, Any]
                 corners.append(image.TransformContinuousIndexToPhysicalPoint((float(i), float(j), float(k))))
     corners = np.asarray(corners)
     lo, hi = corners.min(axis=0), corners.max(axis=0)
-    new_size = [int(np.ceil((hi[a] - lo[a]) / spacing[a])) + 1 for a in range(3)]
+
+    # Each image axis j is not necessarily aligned with world axis j: assign
+    # its spacing (and voxel count) to whichever world axis its direction
+    # column is dominant on, so the output grid isn't oversampled/undersampled
+    # along the wrong world axis.
+    dominant_world_axis = [int(np.argmax(np.abs(matrix[:, j]))) for j in range(3)]
+    out_spacing = [0.0, 0.0, 0.0]
+    for j in range(3):
+        out_spacing[dominant_world_axis[j]] = float(spacing[j])
+
+    new_size = [int(np.ceil((hi[a] - lo[a]) / out_spacing[a])) + 1 for a in range(3)]
     resampled = sitk.Resample(
         image, new_size, sitk.Transform(), sitk.sitkLinear,
-        tuple(float(v) for v in lo), tuple(float(v) for v in spacing), _IDENTITY,
+        tuple(float(v) for v in lo), tuple(out_spacing), _IDENTITY,
         -1000.0, image.GetPixelID(),
     )
     info["orientation_normalized"] = True
