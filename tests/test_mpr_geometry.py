@@ -40,7 +40,17 @@ def test_axial_slice_point_maps_to_dicom_world_center():
 
     world_point = slice_to_world((10.0, -20.0, 0.0), axes)
 
-    assert world_point == pytest.approx((3.0, 203.0, 503.0))
+    assert world_point == pytest.approx((3.0, 243.0, 503.0))
+
+
+def test_axial_point_10mm_anterior_of_centre_maps_to_positive_local_v():
+    axes = create_reslice_axes("axial", (-7.0, 223.0, 503.0))
+
+    anterior = world_to_slice((-7.0, 213.0, 503.0), axes)
+    posterior = world_to_slice((-7.0, 233.0, 503.0), axes)
+
+    assert anterior[1] == pytest.approx(10.0)
+    assert posterior[1] == pytest.approx(-10.0)
 
 
 def test_screw_projection_reports_centerline_intersection():

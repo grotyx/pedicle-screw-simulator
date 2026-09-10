@@ -268,9 +268,10 @@ class CoordinateSystem:
             (row_direction, column_direction) each as (x, y, z)
         """
         if plane == "axial":
-            # Looking down from head
-            # Row: left-right (L), Column: anterior-posterior (P)
-            return ((1, 0, 0), (0, 1, 0))
+            # Radiological axial, matching AXIAL_DIRECTION_COSINES:
+            # row = screen-right = +X (patient left),
+            # column = screen-up = -Y (anterior).
+            return ((1, 0, 0), (0, -1, 0))
 
         elif plane == "sagittal":
             # Looking from patient's left side

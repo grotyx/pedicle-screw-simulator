@@ -39,11 +39,13 @@ GRADE_D_DESCRIPTION = "Breach 4-6mm (unsafe)"
 GRADE_E_DESCRIPTION = "Breach >6mm (dangerous)"
 
 # MPR Plane Direction Cosines
-# Axial: Standard XY plane (looking down from head)
+# Axial: radiological convention (looking from the patient's feet).
+# Columns: horizontal=+X (patient left on the viewer's right),
+#          vertical=-Y (anterior at the top), normal=+Z (scroll unchanged).
 AXIAL_DIRECTION_COSINES = [
-    1, 0, 0,   # X axis (left-right)
-    0, 1, 0,   # Y axis (anterior-posterior)
-    0, 0, 1    # Z axis (head-feet, slice direction)
+    1,  0, 0,   # Row 0
+    0, -1, 0,   # Row 1
+    0,  0, 1    # Row 2
 ]
 
 # Coronal: XZ plane (looking from front)

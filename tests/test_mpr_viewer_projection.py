@@ -52,7 +52,7 @@ def test_display_pick_is_converted_back_to_dicom_world():
 
     world = viewer._slice_display_to_world((10.0, -20.0, 0.0))
 
-    assert world == pytest.approx((3.0, 203.0, 503.0))
+    assert world == pytest.approx((3.0, 243.0, 503.0))
 
 
 def test_world_screw_is_drawn_inside_slice_local_coordinates():
@@ -71,7 +71,7 @@ def test_world_screw_is_drawn_inside_slice_local_coordinates():
     guide = _actor_by_name(props, "screw-guide")
     line_bounds = guide.GetBounds()
     assert line_bounds[0:2] == pytest.approx((-13.0, 27.0))
-    assert line_bounds[2:4] == pytest.approx((-23.0, 17.0))
+    assert line_bounds[2:4] == pytest.approx((-17.0, 23.0))
     assert 0.0 < line_bounds[4] < 1.0
     assert 0.0 < line_bounds[5] < 1.0
     assert guide.GetProperty().GetOpacity() == pytest.approx(0.16)
@@ -245,6 +245,18 @@ def test_standard_sagittal_axes_keep_original_patient_orientation():
     assert normal == pytest.approx((1.0, 0.0, 0.0))
 
 
+def test_standard_axial_axes_show_anterior_up_left_on_right():
+    axes = create_reslice_axes("axial", (10.0, 20.0, 30.0))
+
+    x_axis = tuple(axes.GetElement(row, 0) for row in range(3))
+    y_axis = tuple(axes.GetElement(row, 1) for row in range(3))
+    normal = tuple(axes.GetElement(row, 2) for row in range(3))
+
+    assert x_axis == pytest.approx((1.0, 0.0, 0.0))
+    assert y_axis == pytest.approx((0.0, -1.0, 0.0))
+    assert normal == pytest.approx((0.0, 0.0, 1.0))
+
+
 def test_mpr_drag_callbacks_receive_selected_part_and_world_updates():
     viewer = _make_viewer(center=(0.0, 0.0, 0.0), position=0.0)
     events = []
@@ -394,8 +406,8 @@ def test_visible_screw_section_moves_when_slice_position_changes():
         (next_bounds[2] + next_bounds[3]) / 2.0,
     )
 
-    assert first_center == pytest.approx((-13.0, -23.0), abs=0.1)
-    assert next_center == pytest.approx((3.47, -6.53), abs=0.1)
+    assert first_center == pytest.approx((-13.0, 23.0), abs=0.1)
+    assert next_center == pytest.approx((3.47, 6.53), abs=0.1)
     assert next_center != pytest.approx(first_center)
 
 

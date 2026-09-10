@@ -104,6 +104,12 @@ class TestCoordinateSystem:
         normal = CoordinateSystem.get_plane_normal("coronal")
         assert normal == (0, 1, 0)
 
+    def test_get_plane_axes_axial_matches_reslice_columns(self):
+        """Axial row/column axes mirror AXIAL_DIRECTION_COSINES."""
+        row, column = CoordinateSystem.get_plane_axes("axial")
+        assert row == (1, 0, 0)
+        assert column == (0, -1, 0)
+
 
 class TestVTKHelpers:
     """Tests for VTK helper functions."""
