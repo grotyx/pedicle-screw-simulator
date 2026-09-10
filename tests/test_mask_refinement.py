@@ -333,6 +333,18 @@ def test_all_bone_ct_trips_the_guard_and_keeps_the_antialiased_mask():
     assert guarded.notes[0] == ANTIALIAS_ONLY_NOTE
     assert guarded.per_label[BODY_LABEL].ct_guided_applied is False
     assert any("changed volume" in note for note in guarded.notes)
+
+    # The guard rejected the CT-guided candidate because its ratio to the
+    # raw voxel count exceeded the configured limit -- that pre-clip
+    # candidate_ratio is what the "changed volume" note reports, and it must
+    # differ from `ratio`, which reflects the anti-aliased fallback that was
+    # kept instead.
+    stats = guarded.per_label[BODY_LABEL]
+    guard_limit = RefinementConfig().max_volume_change
+    assert abs(stats.candidate_ratio - 1.0) > guard_limit
+    assert stats.ratio == antialias_only.per_label[BODY_LABEL].ratio
+    assert stats.candidate_ratio != stats.ratio
+
     assert np.array_equal(
         sitk.GetArrayFromImage(guarded.mask),
         sitk.GetArrayFromImage(antialias_only.mask),

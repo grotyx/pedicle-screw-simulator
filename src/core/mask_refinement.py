@@ -83,8 +83,21 @@ class LabelStats:
 
     label: int
     raw_voxels: int
+    #: Voxel count after the cross-label competition clip (an earlier label
+    #: in ``requested`` order wins any voxel two labels both claim).
     refined_voxels: int
+    #: ``refined_voxels / raw_voxels``: the final, post-clip ratio.
     ratio: float
+    #: The ratio the volume guard actually evaluated, i.e.
+    #: ``candidate.sum() / raw_voxels`` for the CT-guided candidate *before*
+    #: the cross-label competition clip. When no CT-guided candidate was
+    #: computed at all (no CT, grid mismatch, or the label's anti-aliased
+    #: mask was empty) there is nothing distinct to report and this equals
+    #: ``ratio``. Kept separate from ``ratio`` because the guard's accept/
+    #: reject decision (``change > max_volume_change``) is made on the
+    #: pre-clip candidate, so the two can legitimately disagree when the
+    #: clip later removes voxels another label claimed first.
+    candidate_ratio: float
     ct_guided_applied: bool
 
 
@@ -292,6 +305,7 @@ def refine_vertebra_mask(
                 raw_voxels=raw_counts[label],
                 refined_voxels=raw_counts[label],
                 ratio=1.0,
+                candidate_ratio=1.0,
                 ct_guided_applied=False,
             )
             continue
@@ -354,6 +368,10 @@ def refine_vertebra_mask(
             )
         refined = smooth
         ct_guided_applied = False
+        # Set only when a CT-guided candidate is actually computed below;
+        # otherwise there is no pre-clip candidate distinct from the final
+        # ratio, so it is filled in from ``ratio`` once that is known.
+        candidate_ratio = None
         if use_ct and smooth.any():
             band = _boundary_band(smooth, config.band_mm, spacing)
             # Inside the band the CT decides, but only among voxels this label
@@ -366,7 +384,12 @@ def refine_vertebra_mask(
                 smooth,
             )
             candidate = _fill_and_largest_component(candidate)
-            change = abs(int(candidate.sum()) - raw_count) / raw_count
+            candidate_count = int(candidate.sum())
+            # This is the exact ratio the guard below judges, before the
+            # cross-label competition clip further down can shrink it -- keep
+            # it so the audit trail records what actually tripped the guard.
+            candidate_ratio = candidate_count / raw_count
+            change = abs(candidate_count - raw_count) / raw_count
             if change > config.max_volume_change:
                 notes.append(
                     f"{names.get(label, str(label))}: CT-guided step changed volume "
@@ -390,11 +413,13 @@ def refine_vertebra_mask(
         region[claim] = label
         out_sub[label_box] = region
         refined_count = int(claim.sum())
+        ratio = refined_count / raw_count
         per_label[label] = LabelStats(
             label=label,
             raw_voxels=raw_counts[label],
             refined_voxels=refined_count,
-            ratio=refined_count / raw_count,
+            ratio=ratio,
+            candidate_ratio=ratio if candidate_ratio is None else candidate_ratio,
             ct_guided_applied=ct_guided_applied,
         )
 

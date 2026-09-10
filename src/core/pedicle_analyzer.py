@@ -1278,7 +1278,8 @@ class PedicleAnalyzer:
 
     @classmethod
     def _is_overtilted(cls, axis: np.ndarray) -> bool:
-        """True when *axis* rises out of the axial plane by more than 45 deg.
+        """True when *axis* rises out of the axial plane by more than
+        atan(MAX_AXIS_TILT_RATIO) -- about 35 deg for the current 0.7 ratio.
 
         A pedicle runs very nearly axially.  A fit that climbs faster than it
         advances is an artefact of a short or drifting centroid track, and

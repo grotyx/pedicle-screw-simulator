@@ -40,8 +40,10 @@ GRADE_E_DESCRIPTION = "Breach >6mm (dangerous)"
 
 # MPR Plane Direction Cosines
 # Axial: radiological convention (looking from the patient's feet).
-# Columns: horizontal=+X (patient left on the viewer's right),
-#          vertical=-Y (anterior at the top), normal=+Z (scroll unchanged).
+# Row i of this flat list becomes column i of the reslice axes
+# (screen-right / screen-up / normal): screen-right=+X (patient left on the
+# viewer's right), screen-up=-Y (anterior at the top), normal=+Z (scroll
+# unchanged).
 AXIAL_DIRECTION_COSINES = [
     1,  0, 0,   # Row 0
     0, -1, 0,   # Row 1
@@ -49,7 +51,9 @@ AXIAL_DIRECTION_COSINES = [
 ]
 
 # Coronal: XZ plane (looking from front)
-# Columns: horizontal=X(L-R), vertical=Z(superior-up), normal=-Y(A-P)
+# Row i of this flat list becomes column i of the reslice axes
+# (screen-right / screen-up / normal): screen-right=X(L-R),
+# screen-up=Z(superior-up), normal=-Y(A-P).
 CORONAL_DIRECTION_COSINES = [
     1, 0,  0,   # Row 0
     0, 0, -1,   # Row 1
@@ -57,7 +61,9 @@ CORONAL_DIRECTION_COSINES = [
 ]
 
 # Sagittal: YZ plane (looking from side)
-# Columns: horizontal=Y(A-P), vertical=Z(superior-up), normal=X(L-R)
+# Row i of this flat list becomes column i of the reslice axes
+# (screen-right / screen-up / normal): screen-right=Y(A-P),
+# screen-up=Z(superior-up), normal=X(L-R).
 SAGITTAL_DIRECTION_COSINES = [
     0, 0, 1,   # Row 0
     1, 0, 0,   # Row 1
