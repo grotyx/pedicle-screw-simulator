@@ -496,6 +496,38 @@ QListWidget#screwPlanList::item:selected {{
     border: 2px solid {t["accent"]};
 }}
 
+/* ===== Control Tabs ===== */
+QTabWidget#controlTabs::pane {{
+    background-color: {t["bg_primary"]};
+    border: 1px solid {t["border"]};
+    border-radius: 8px;
+    top: -1px;
+}}
+QTabWidget#controlTabs QTabBar::tab {{
+    background-color: {t["bg_primary"]};
+    color: {t["text_secondary"]};
+    border: 1px solid {t["border"]};
+    border-bottom: none;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    font-weight: 700;
+    margin-right: 2px;
+    padding: 7px 14px;
+}}
+QTabWidget#controlTabs QTabBar::tab:selected {{
+    background-color: {t["bg_secondary"]};
+    border-color: {t["accent"]};
+    color: {t["text_primary"]};
+}}
+QTabWidget#controlTabs QTabBar::tab:hover:!selected {{
+    color: {t["text_primary"]};
+}}
+QWidget#planningCockpit {{
+    background-color: {t["bg_secondary"]};
+    border: 2px solid {t["accent"]};
+    border-radius: 10px;
+}}
+
 /* ===== Planning Cockpit ===== */
 QLabel#selectedScrewTitle {{
     color: {t["text_primary"]};

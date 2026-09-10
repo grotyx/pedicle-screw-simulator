@@ -156,3 +156,56 @@ def test_screw_mpr_toolbar_action_tracks_the_controller(ui_main_window):
 
     assert window._screw_mpr_ctrl.is_active is False
     assert window._screw_mpr_action.isChecked() is False
+
+
+def test_control_panel_has_three_tabs_with_the_expected_sections(ui_main_window):
+    window = ui_main_window
+
+    assert window.control_tabs.count() == 3
+    assert [
+        window.control_tabs.tabText(index)
+        for index in range(window.control_tabs.count())
+    ] == ["Study", "Planning", "Tools"]
+    assert window.control_section_order == {
+        "Study": ["Study", "Segmentation", "Window/Level"],
+        "Planning": [
+            "Planning",
+            "Planning parameters",
+            "Screw Parameters",
+            "Screw Review",
+        ],
+        "Tools": ["Measurement", "Measurement List", "Validation"],
+    }
+    for tab, titles in window.control_section_order.items():
+        assert [
+            group.title for group in window.control_tab_sections[tab]
+        ] == titles
+
+
+def test_cockpit_is_pinned_outside_the_tab_widget(ui_main_window):
+    window = ui_main_window
+
+    assert window.planning_cockpit.objectName() == "planningCockpit"
+    assert window.control_tabs.isAncestorOf(window.planning_cockpit) is False
+    for widget in (
+        window.selected_screw_counter,
+        window.selected_screw_title,
+        window.selected_screw_metrics,
+        window.selected_screw_warning,
+        window.screw_previous_btn,
+        window.screw_next_btn,
+    ):
+        assert window.planning_cockpit.isAncestorOf(widget)
+    assert window.control_tabs.isAncestorOf(window.screw_list_widget)
+
+
+def test_sections_keep_their_default_collapsed_state(ui_main_window):
+    window = ui_main_window
+
+    assert window.segmentation_group.is_collapsed is False
+    assert window.planning_group.is_collapsed is False
+    assert window.selected_screw_group.is_collapsed is False
+    assert window.selected_screw_group.property("role") == "review"
+    assert all(
+        group.is_collapsed for group in window.secondary_control_groups
+    )

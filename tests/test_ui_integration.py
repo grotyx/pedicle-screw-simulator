@@ -799,13 +799,7 @@ def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
     guided_index = window.workspace_mode_combo.findData("guided")
     assert guided_index >= 0
     assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
-    assert window.control_section_order == [
-        "Study",
-        "Screw Review",
-        "Segmentation",
-        "Planning",
-        "Validation",
-    ]
+    assert list(window.control_section_order) == ["Study", "Planning", "Tools"]
 
 
 def test_selected_screw_inspector_updates_from_list_selection(ui_main_window):
