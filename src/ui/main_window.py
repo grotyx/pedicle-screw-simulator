@@ -356,6 +356,15 @@ class MainWindow(QMainWindow):
         self.seg_run_btn = QPushButton("Run Auto Segmentation")
         seg_layout.addWidget(self.seg_run_btn)
 
+        self.seg_refine_check = QCheckBox("Refine boundaries against CT")
+        self.seg_refine_check.setChecked(True)
+        self.seg_refine_check.setToolTip(
+            "Smooth the segmentation to the CT grid and snap its boundaries to "
+            "the bone cortex. Turn off to keep TotalSegmentator's raw 1.5 mm "
+            "label map."
+        )
+        seg_layout.addWidget(self.seg_refine_check)
+
         self.vertebra_isolate_btn = QPushButton("Isolate Vertebrae")
         self.vertebra_isolate_btn.setEnabled(False)
         seg_layout.addWidget(self.vertebra_isolate_btn)
@@ -1099,6 +1108,9 @@ class MainWindow(QMainWindow):
             self._seg_ctrl.on_label_combo_changed
         )
         self.seg_run_btn.clicked.connect(self._seg_ctrl.run)
+        self.seg_refine_check.stateChanged.connect(
+            self._on_segmentation_setting_changed
+        )
         self.seg_show_2d_check.stateChanged.connect(
             self._seg_ctrl.update_visibility
         )
@@ -1577,22 +1589,31 @@ class MainWindow(QMainWindow):
         settings.setValue(
             "subregion_model_dir", self.seg_subregion_dir_edit.text().strip()
         )
+        settings.setValue("refine_mask", self.seg_refine_check.isChecked())
         settings.endGroup()
         settings.sync()
 
     def load_segmentation_settings(self) -> None:
-        """Restore the persisted subregion-model choices."""
+        """Restore the persisted segmentation choices."""
         settings = self._segmentation_settings()
         raw_enabled = settings.value("use_subregion_model", False)
         model_dir = settings.value("subregion_model_dir", "")
+        raw_refine = settings.value("refine_mask", True)
         settings.endGroup()
 
         enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes")
-        for widget in (self.seg_use_subregion_check, self.seg_subregion_dir_edit):
+        refine = str(raw_refine).strip().lower() in ("true", "1", "yes")
+        for widget in (
+            self.seg_use_subregion_check,
+            self.seg_subregion_dir_edit,
+            self.seg_refine_check,
+        ):
             previous = widget.blockSignals(True)
             try:
                 if widget is self.seg_use_subregion_check:
                     widget.setChecked(enabled)
+                elif widget is self.seg_refine_check:
+                    widget.setChecked(refine)
                 else:
                     widget.setText(str(model_dir or ""))
             finally:

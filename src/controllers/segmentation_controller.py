@@ -47,7 +47,7 @@ class AutoSegmentationThread(QThread):
 
     def __init__(self, sitk_image, task: str, device: str, work_dir: str,
                  roi_subset=None, fast=False, force_split=False,
-                 subregion_model=None):
+                 subregion_model=None, refine: bool = True):
         super().__init__()
         self.sitk_image = sitk_image
         self.task = task
@@ -57,6 +57,7 @@ class AutoSegmentationThread(QThread):
         self.fast = fast
         self.force_split = force_split
         self.subregion_model = subregion_model
+        self.refine = refine
         self._holder = ProcessHolder()
 
     def request_cancel(self) -> None:
@@ -81,6 +82,7 @@ class AutoSegmentationThread(QThread):
                 progress_callback=self._on_progress,
                 process_holder=self._holder,
                 subregion_model=self.subregion_model,
+                refine=self.refine,
             )
             self.progress.emit("Segmentation completed.")
             self.finished.emit(result)
@@ -221,6 +223,7 @@ class SegmentationController:
             fast=fast,
             force_split=force_split,
             subregion_model=self._resolve_subregion_model(),
+            refine=self._window.seg_refine_check.isChecked(),
         )
         self._segmentation_thread.progress.connect(self._on_progress)
         self._segmentation_thread.finished.connect(self._on_finished)
@@ -429,8 +432,13 @@ class SegmentationController:
                     "Threshold mask ready · planning unavailable"
                 )
             else:
+                from src.core.mask_refinement import refinement_status_text
+
                 self._window.seg_status_label.setText(
-                    f"Segmentation ready · {len(detected)} vertebrae detected"
+                    f"Segmentation ready · {len(detected)} vertebrae detected · "
+                    + refinement_status_text(
+                        self._last_raw_mask_path, self._last_refinement_notes
+                    )
                     + self._pedicle_status_suffix(result)
                 )
             self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")

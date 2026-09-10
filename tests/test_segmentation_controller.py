@@ -531,3 +531,155 @@ def test_reset_state_forgets_the_previous_refinement(
     ctrl.reset_state()
 
     assert ctrl.mask_refinement_metadata() == {"enabled": False, "ct_guided": False}
+
+
+# ---------------------------------------------------------------------------
+# W2 -- the refinement checkbox, its persistence, and the status text
+# ---------------------------------------------------------------------------
+
+
+def test_the_refine_checkbox_is_on_by_default(ui_main_window):
+    window = ui_main_window
+
+    assert window.seg_refine_check.text() == "Refine boundaries against CT"
+    assert window.seg_refine_check.isChecked() is True
+
+
+def test_unchecking_refine_is_persisted_and_restored(ui_main_window):
+    window = ui_main_window
+    window.seg_refine_check.setChecked(False)
+
+    window.load_segmentation_settings()
+
+    assert window.seg_refine_check.isChecked() is False
+
+    window.seg_refine_check.setChecked(True)
+    window.load_segmentation_settings()
+    assert window.seg_refine_check.isChecked() is True
+
+
+def test_the_checkbox_decides_whether_the_worker_refines(
+    ui_main_window, monkeypatch, tmp_path
+):
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-REFINE", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    captured = {}
+
+    class _CapturingThread:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.progress = _Signal()
+            self.finished = _Signal()
+            self.error = _Signal()
+            self.cancelled = _Signal()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+        def request_cancel(self):
+            return None
+
+    monkeypatch.setattr(
+        seg_controller_module, "AutoSegmentationThread", _CapturingThread
+    )
+
+    window.seg_refine_check.setChecked(False)
+    try:
+        ctrl.run()
+        assert captured["refine"] is False
+        ctrl._segmentation_thread = None
+        ctrl._close_progress_dialog()
+
+        window.seg_refine_check.setChecked(True)
+        ctrl.run()
+        assert captured["refine"] is True
+    finally:
+        ctrl._segmentation_thread = None
+        ctrl._close_progress_dialog()
+        ctrl._stop_heartbeat()
+
+
+def test_the_worker_thread_forwards_refine_to_the_core(qtbot, monkeypatch, tmp_path):
+    """`qtbot` only guarantees a QApplication exists for the QThread."""
+    captured = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+        return SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path="mask.nii.gz",
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        seg_controller_module, "run_segmentation_with_fallback", _fake_run
+    )
+    thread = seg_controller_module.AutoSegmentationThread(
+        sitk_image=_create_test_image(),
+        task="total",
+        device="cpu",
+        work_dir=str(tmp_path),
+        refine=False,
+    )
+
+    thread.run()
+
+    assert captured["refine"] is False
+
+
+def _status_after(window, ctrl, tmp_path, monkeypatch, raw_mask_path, notes, name):
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-STATUS", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / name
+    _write_mask(image, mask_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    ctrl._on_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            raw_mask_path=raw_mask_path,
+            refinement_notes=list(notes),
+        )
+    )
+    return window.seg_status_label.text()
+
+
+def test_status_label_names_the_refinement_state(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from src.core.mask_refinement import ANTIALIAS_ONLY_NOTE, CT_GUIDED_NOTE
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+
+    assert "Refined (CT-guided)" in _status_after(
+        window, ctrl, tmp_path, monkeypatch, "raw.nii.gz", [CT_GUIDED_NOTE], "a.nii.gz"
+    )
+    assert "Refined (anti-alias only)" in _status_after(
+        window, ctrl, tmp_path, monkeypatch, "raw.nii.gz",
+        [ANTIALIAS_ONLY_NOTE], "b.nii.gz"
+    )
+    assert "Raw mask" in _status_after(
+        window, ctrl, tmp_path, monkeypatch, None, [], "c.nii.gz"
+    )
