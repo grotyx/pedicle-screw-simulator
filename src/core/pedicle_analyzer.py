@@ -72,8 +72,21 @@ class PedicleAnalyzer:
     # Half-width of the midline band that separates body/lamina slices
     # from pedicle-zone slices.
     MIDLINE_BAND_MM: float = 3.0
-    # Smallest coronal cross-section accepted as a pedicle.
-    MIN_PEDICLE_AREA_MM2: float = 10.0
+    # Smallest coronal cross-section accepted as a pedicle.  Raised from the
+    # original 10 mm2 because a nearest-neighbour-upsampled mask routinely
+    # leaves a 12-15 mm2 fragment beside the real pedicle (spec W3: a 12.5 mm2
+    # sliver at 8.8 mm lateral displacing a 99 mm2 pedicle at L2 right).
+    MIN_PEDICLE_AREA_MM2: float = 20.0
+    # Narrowest cross-section accepted as a pedicle candidate.  A pedicle is
+    # never 1-2 voxels across; a stair step is.
+    MIN_SLICE_WIDTH_MM: float = 2.0
+    # Furthest a corridor's cross-section centroid may move between
+    # neighbouring coronal slices and still be the same pedicle.  The pedicle
+    # funnels gently; a jump this size is a different structure.
+    MAX_TRACK_JUMP_MM: float = 4.0
+    # Slices the corridor may go untracked before the walk ends.  A stair-step
+    # notch can erase one or two cross-sections without ending the pedicle.
+    MAX_TRACK_GAP_SLICES: int = 3
     # Accepted lateral offset of a pedicle centroid from the midline.
     MIN_LATERAL_MM: float = 3.0
     MAX_LATERAL_MM: float = 40.0
@@ -644,12 +657,35 @@ class PedicleAnalyzer:
 
         js, counts = np.unique(side_voxels[:, 1], return_counts=True)
         areas = counts.astype(np.float64) * sx * sz
+        widths = np.array(
+            [
+                float(
+                    side_voxels[side_voxels[:, 1] == j][:, 2].max()
+                    - side_voxels[side_voxels[:, 1] == j][:, 2].min()
+                    + 1
+                )
+                * sx
+                for j in js
+            ],
+            dtype=np.float64,
+        )
         # Ignore the end slices that taper into body / lamina.
         interior = slice(1, -1) if js.size > 2 else slice(None)
         interior_js = js[interior]
         interior_areas = areas[interior]
-        min_area = float(interior_areas.min())
-        tied = np.flatnonzero(interior_areas == min_area)
+        interior_widths = widths[interior]
+        # A stair-stepped label leaves cross-sections narrower than any real
+        # pedicle inside the corridor; they are not isthmus candidates.  When
+        # the floors would reject every slice the corridor is uniformly thin
+        # and the narrowest slice is still the best answer available.
+        solid = (interior_areas >= self.MIN_PEDICLE_AREA_MM2) & (
+            interior_widths >= self.MIN_SLICE_WIDTH_MM
+        )
+        candidate_areas = (
+            np.where(solid, interior_areas, np.inf) if solid.any() else interior_areas
+        )
+        min_area = float(candidate_areas.min())
+        tied = np.flatnonzero(candidate_areas == min_area)
         isthmus_j = int(interior_js[tied[tied.size // 2]])
 
         coords = side_voxels[side_voxels[:, 1] == isthmus_j]
@@ -688,6 +724,40 @@ class PedicleAnalyzer:
             # window it covers is that corridor's full coronal span.
             "isthmus_window_j": (int(js[0]), int(js[-1])),
         }
+
+    @staticmethod
+    def _track_candidate(
+        candidates: List[Tuple[float, np.ndarray, float, float]],
+        previous_zx_mm: Optional[Tuple[float, float]],
+        max_jump_mm: float,
+    ) -> Optional[np.ndarray]:
+        """Pick this coronal slice's pedicle cross-section.
+
+        The first slice of a corridor has nothing to follow, so it still takes
+        the candidate nearest the midline -- the pedicle is medial to the
+        transverse process and the facet.  Every slice after that follows the
+        corridor by continuity instead: the candidate whose ``(z, x)`` centroid
+        is closest to the previous record's, and only while that step stays
+        under ``max_jump_mm``.  A medial fragment beside the real pedicle is
+        then ignored rather than preferred, which is the failure the
+        nearest-midline rule produces on a stair-stepped mask.
+
+        ``candidates`` entries are ``(lateral_mm, coords_zx, centroid_z_mm,
+        centroid_x_mm)``.  Returns the chosen ``coords_zx``, or ``None`` when
+        this slice has no candidate within reach.
+        """
+        if not candidates:
+            return None
+        if previous_zx_mm is None:
+            return min(candidates, key=lambda item: item[0])[1]
+        best: Optional[Tuple[float, np.ndarray]] = None
+        for _lateral_mm, coords, z_mm, x_mm in candidates:
+            jump = float(np.hypot(z_mm - previous_zx_mm[0], x_mm - previous_zx_mm[1]))
+            if jump > max_jump_mm:
+                continue
+            if best is None or jump < best[0]:
+                best = (jump, coords)
+        return None if best is None else best[1]
 
     def _find_pedicle_coronal(
         self,
@@ -745,6 +815,8 @@ class PedicleAnalyzer:
         band = max(1, int(round(self.MIDLINE_BAND_MM / sx)))
         records: List[Tuple[int, float, np.ndarray]] = []
         body_ended = False
+        previous_zx_mm: Optional[Tuple[float, float]] = None
+        gap = 0
 
         for j in range(j_start, binary.shape[1]):
             coronal = binary[:, j, :]  # (z, x)
@@ -765,11 +837,16 @@ class PedicleAnalyzer:
             elif midline_ids:
                 break                 # lamina / spinous process reached
 
-            best: Optional[Tuple[float, np.ndarray]] = None
+            candidates: List[Tuple[float, np.ndarray, float, float]] = []
             for comp_id in range(1, n_components + 1):
                 coords = np.argwhere(labeled == comp_id)  # (n, 2) -> z, x
                 if coords.shape[0] * sx * sz < self.MIN_PEDICLE_AREA_MM2:
                     continue
+                width_mm = float(
+                    coords[:, 1].max() - coords[:, 1].min() + 1
+                ) * sx
+                if width_mm < self.MIN_SLICE_WIDTH_MM:
+                    continue          # a stair-step sliver, not a pedicle
                 lateral_mm = (float(coords[:, 1].mean()) - cx) * sx * lateral_sign
                 if not self.MIN_LATERAL_MM <= lateral_mm <= self.MAX_LATERAL_MM:
                     continue
@@ -777,12 +854,32 @@ class PedicleAnalyzer:
                 margin = self.Z_RANGE_MARGIN_MM / sz
                 if not z_range[0] - margin <= z_mean <= z_range[1] + margin:
                     continue
-                # The pedicle is the candidate nearest the midline; anything
-                # further lateral is transverse process or facet.
-                if best is None or lateral_mm < best[0]:
-                    best = (lateral_mm, coords)
-            if best is not None:
-                records.append((j, best[1].shape[0] * sx * sz, best[1]))
+                candidates.append(
+                    (
+                        lateral_mm,
+                        coords,
+                        z_mean * sz,
+                        float(coords[:, 1].mean()) * sx,
+                    )
+                )
+
+            chosen = self._track_candidate(
+                candidates, previous_zx_mm, self.MAX_TRACK_JUMP_MM
+            )
+            if chosen is None:
+                # A corridor that loses its cross-section for a slice or two is
+                # still a corridor; one that loses it for longer has ended.
+                if records:
+                    gap += 1
+                    if gap > self.MAX_TRACK_GAP_SLICES:
+                        break
+                continue
+            gap = 0
+            previous_zx_mm = (
+                float(chosen[:, 0].mean()) * sz,
+                float(chosen[:, 1].mean()) * sx,
+            )
+            records.append((j, chosen.shape[0] * sx * sz, chosen))
 
         if len(records) < 2:
             return None

@@ -164,6 +164,34 @@ def _make_one_sided_coronal_phantom(label: int = 28, with_left: bool = True) -> 
     return sitk.GetImageFromArray(arr)
 
 
+def _make_sliver_corridor_phantom(label: int = 28) -> sitk.Image:
+    """An 8 mm pedicle corridor with a one-voxel medial sliver beside it.
+
+    Reproduces the spec's L2-right failure at phantom scale.  For four coronal
+    slices in the middle of the left corridor a 1 x 10 mm fragment (a superior
+    articular process tip in the real mask) sits 7 mm lateral of the midline,
+    medial to the real 8 mm pedicle at 14.5 mm.  The "candidate nearest the
+    midline" rule picks the fragment, the minimum-area rule then makes it the
+    isthmus, and the level is reported as a 1 mm pedicle.  The right corridor
+    has no fragment, so the two sides show the same failure side by side.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 15) & (zz < 45)
+    ped = np.zeros_like(body)
+    for cx in (30, 60):
+        ped |= (
+            (xx >= cx - 4) & (xx < cx + 4)          # exactly 8 voxels = 8.0 mm
+            & (np.abs(zz - 32) <= 6)
+            & (yy >= 44)
+            & (yy < 62)
+        )
+    fragment = (xx == 52) & (zz >= 27) & (zz <= 36) & (yy >= 52) & (yy < 56)
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped | fragment] = label
+    return sitk.GetImageFromArray(arr)
+
+
 # ---------------------------------------------------------------------------
 # Vertebra dataclass tests
 # ---------------------------------------------------------------------------
@@ -531,6 +559,22 @@ class TestCoronalIsthmus:
             inside = sum(1 for p in samples if 48 <= p[1] < 62 and abs(p[0] - cx) <= 4 and abs(p[2] - 32) <= 6)
             assert inside >= 8, f"{screw.side} trajectory misses the pedicle corridor"
             assert screw.gertzbein_grade in {"A", "B"}
+
+    def test_medial_sliver_does_not_displace_the_real_pedicle(self):
+        """A one-voxel fragment beside the corridor must not become the isthmus."""
+        analyzer = PedicleAnalyzer(_make_sliver_corridor_phantom())
+        vertebra = analyzer.get_available_vertebrae()[0]
+
+        result = analyzer.analyze_pedicle(vertebra)
+
+        assert result.success and result.method == "coronal_isthmus"
+        # Both corridors are the same 8 mm box; only the left one has a
+        # fragment beside it, so both sides must report the same width.
+        assert 7.5 <= result.left_pedicle_width <= 8.5
+        assert 7.5 <= result.right_pedicle_width <= 8.5
+        # The isthmus centre stays on the corridor axis (x = 60), not on the
+        # fragment at x = 52.
+        assert result.left_pedicle_center[0] == pytest.approx(59.5, abs=1.0)
 
 
 # ---------------------------------------------------------------------------
