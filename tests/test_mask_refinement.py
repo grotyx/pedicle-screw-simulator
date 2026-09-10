@@ -26,6 +26,7 @@ from src.core.mask_refinement import (
     GRID_MISMATCH_NOTE,
     NO_CT_NOTE,
     NO_LABELS_NOTE,
+    RefinementCancelled,
     RefinementConfig,
     _boundary_band,
     refine_vertebra_mask,
@@ -509,3 +510,42 @@ def test_a_disconnected_bone_speck_in_the_band_is_dropped():
     assert int(out[speck].sum()) == 0
     # The vertebra itself is untouched by the pruning.
     assert result.per_label[BODY_LABEL].ratio >= 0.90
+
+
+# --- cancellation: Cancel must land between vertebrae, not after the run ----
+
+def test_should_cancel_stops_the_run_between_labels():
+    """The Cancel button reaches refinement at the next label boundary."""
+    two = two_label_phantom()
+    seen = []
+
+    def should_cancel():
+        seen.append(len(seen))
+        # False for the first label, True from the second check onwards.
+        return len(seen) > 1
+
+    with pytest.raises(RefinementCancelled):
+        refine_vertebra_mask(as_image(two), bone_ct(), should_cancel=should_cancel)
+
+    assert len(seen) >= 2
+
+
+def test_should_cancel_already_true_stops_before_any_label():
+    with pytest.raises(RefinementCancelled):
+        refine_vertebra_mask(
+            as_image(two_label_phantom()), bone_ct(), should_cancel=lambda: True
+        )
+
+
+def test_a_should_cancel_that_never_fires_changes_nothing():
+    two = two_label_phantom()
+
+    plain = refine_vertebra_mask(as_image(two), bone_ct())
+    watched = refine_vertebra_mask(
+        as_image(two), bone_ct(), should_cancel=lambda: False
+    )
+
+    assert np.array_equal(
+        sitk.GetArrayFromImage(plain.mask), sitk.GetArrayFromImage(watched.mask)
+    )
+    assert plain.notes == watched.notes

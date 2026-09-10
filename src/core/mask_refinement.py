@@ -39,6 +39,22 @@ GRID_MISMATCH_NOTE = (
 NO_LABELS_NOTE = "No vertebra labels present; the mask was returned unchanged."
 
 
+class RefinementCancelled(RuntimeError):
+    """Raised when ``should_cancel`` asks the refinement to stop.
+
+    Deliberately *not* the segmentation pipeline's ``SegmentationCancelled``:
+    this module stays free of Qt and of the subprocess plumbing, so the caller
+    (``totalseg_integration._apply_mask_refinement``) translates this into the
+    pipeline's own cancellation type.
+    """
+
+
+def _raise_if_cancelled(should_cancel: Optional[Callable[[], bool]]) -> None:
+    """Abort the refinement if the caller has asked it to stop."""
+    if should_cancel is not None and should_cancel():
+        raise RefinementCancelled("Mask refinement cancelled")
+
+
 @dataclass(frozen=True)
 class RefinementConfig:
     """Tuning for :func:`refine_vertebra_mask`. All lengths are millimetres."""
@@ -194,6 +210,7 @@ def refine_vertebra_mask(
     ct: Optional[sitk.Image] = None,
     config: RefinementConfig = _DEFAULT_CONFIG,
     progress: Optional[Callable[[str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> RefinementResult:
     """Anti-alias every vertebra label of ``mask``, optionally CT-guided.
 
@@ -205,6 +222,13 @@ def refine_vertebra_mask(
     ``mask`` is returned on its own grid as ``uint8`` (TotalSegmentator's label
     ids top out at 117, so the cast is lossless), with labels outside
     ``VERTEBRA_LABELS`` copied through untouched.
+
+    ``should_cancel`` is polled once per label at the top of each of the two
+    per-label passes; when it returns True the call raises
+    :class:`RefinementCancelled` and returns nothing. A vertebra takes well
+    under a second, so that granularity is what makes a Cancel press land
+    within the run instead of after it — and it keeps each label's work atomic,
+    so no half-refined mask is ever handed back.
     """
     notes: List[str] = []
     array = sitk.GetArrayFromImage(mask)
@@ -250,6 +274,7 @@ def refine_vertebra_mask(
     # below, so a caller can iterate the audit trail without a membership test.
     per_label: Dict[int, LabelStats] = {}
     for index, label in enumerate(requested, start=1):
+        _raise_if_cancelled(should_cancel)
         binary = sub == label
         raw_counts[label] = int(binary.sum())
         label_box = _padded_box(binary, pad, sub.shape)
@@ -306,6 +331,10 @@ def refine_vertebra_mask(
 
     out_sub = np.zeros(sub.shape, dtype=np.int16)
     for label in refinable:
+        # The CT-guided pass is the expensive half (two distance transforms per
+        # label), so a single-vertebra run would be uncancellable if only the
+        # anti-alias loop above were polled.
+        _raise_if_cancelled(should_cancel)
         label_box = boxes[label]
         raw_count = max(raw_counts[label], 1)
         smooth = antialiased[label_box] == label

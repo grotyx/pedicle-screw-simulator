@@ -1131,3 +1131,102 @@ def test_refinement_progress_reaches_the_callback(tmp_path, monkeypatch):
     )
 
     assert any("Refining mask boundaries" in message for message in messages)
+
+
+def test_cancel_during_refinement_aborts_the_run(tmp_path, monkeypatch):
+    """Cancel pressed while the mask is being refined ends the run at once."""
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    holder = ts.ProcessHolder()
+    holder.cancelled = True
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=holder,
+        )
+
+    # No half-written refined mask is left for a later run to pick up.
+    assert not (tmp_path / ts.REFINED_MASK_NAME).exists()
+
+
+def test_refinement_cancellation_is_not_swallowed_as_a_failure(
+    tmp_path, monkeypatch
+):
+    """``RefinementCancelled`` must not fall into the keep-the-raw-mask path."""
+    from src.core import mask_refinement
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    def _cancelled(*_args, **_kwargs):
+        raise mask_refinement.RefinementCancelled("cancelled between vertebrae")
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _cancelled)
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=ts.ProcessHolder(),
+        )
+
+
+def test_refinement_sees_a_cancel_raised_after_the_run_started(
+    tmp_path, monkeypatch
+):
+    """The holder is polled during refinement, not only before it."""
+    from src.core import mask_refinement
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    holder = ts.ProcessHolder()
+    captured = {}
+
+    def _capture(mask, ct, *_args, should_cancel=None, **_kwargs):
+        captured["before"] = should_cancel()
+        holder.terminate()
+        captured["after"] = should_cancel()
+        raise mask_refinement.RefinementCancelled("cancelled between vertebrae")
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _capture)
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=holder,
+        )
+
+    assert captured == {"before": False, "after": True}
+
+
+def test_refinement_progress_tells_the_user_cancel_is_available(
+    tmp_path, monkeypatch
+):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+    messages = []
+
+    ts.run_segmentation_with_fallback(
+        image=_refinable_image(),
+        work_dir=str(tmp_path),
+        device="cpu",
+        progress_callback=messages.append,
+    )
+
+    assert any(
+        "Cancel stops after the current vertebra" in message for message in messages
+    )

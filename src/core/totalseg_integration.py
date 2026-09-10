@@ -583,24 +583,40 @@ def _apply_mask_refinement(
     image: sitk.Image,
     mask_path: str,
     progress_callback: Optional[Callable[[str], None]],
+    process_holder: Optional[ProcessHolder] = None,
 ):
     """Refine `mask_path` against `image`; return (mask_path, raw_path, notes).
 
     Never fails the run. A blocky mask still plans screws, whereas a
     segmentation aborted by an out-of-memory soft mask plans none, so a
     refinement that raises leaves the raw mask in place and reports why.
-    """
-    from src.core.mask_refinement import refine_vertebra_mask
 
-    _emit_progress(progress_callback, "Refining mask boundaries against the CT...")
+    Cancellation is the one exception: refinement runs for seconds after the
+    subprocess is gone, so ``process_holder`` is polled between vertebrae and a
+    cancelled run aborts as :class:`SegmentationCancelled` like every other
+    stage, rather than being reported as a refinement failure.
+    """
+    from src.core.mask_refinement import RefinementCancelled, refine_vertebra_mask
+
+    _emit_progress(
+        progress_callback,
+        "Refining mask boundaries... (Cancel stops after the current vertebra)",
+    )
     try:
         result = refine_vertebra_mask(
             sitk.ReadImage(mask_path),
             image,
             progress=lambda message: _emit_progress(progress_callback, message),
+            should_cancel=(
+                lambda: process_holder is not None and process_holder.cancelled
+            ),
         )
         refined_path = str(Path(mask_path).with_name(REFINED_MASK_NAME))
         sitk.WriteImage(result.mask, refined_path)
+    except RefinementCancelled as exc:
+        # Raised before any refined file is written, so the workspace holds
+        # only the raw mask the caller is about to discard.
+        raise SegmentationCancelled("Segmentation cancelled by user") from exc
     except Exception as exc:
         logger.warning("Mask refinement failed; keeping the raw mask", exc_info=True)
         return mask_path, None, [f"Mask refinement failed: {exc}"]
@@ -756,6 +772,7 @@ def run_segmentation_with_fallback(
                     image=image,
                     mask_path=mask_path,
                     progress_callback=progress_callback,
+                    process_holder=process_holder,
                 )
             subregion_mask_path = None
             subregion_labels: Dict[str, int] = {}
