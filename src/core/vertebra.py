@@ -117,6 +117,12 @@ class PedicleAnalysisResult:
     # Superior vertebral-body endplate plane normal (LPS, +Z oriented)
     upper_endplate_normal: Optional[np.ndarray] = None
 
+    # RMS residual of that plane fit over its retained inliers (mm), or None
+    # when no plane was fitted.  A rough fit means the endplate direction the
+    # planner aims along is a guess, so the number travels with the normal
+    # instead of leaving the planner to trust it blindly.
+    endplate_fit_rmse_mm: Optional[float] = None
+
     # Overall analysis status
     success: bool = False
     warnings: List[str] = field(default_factory=list)

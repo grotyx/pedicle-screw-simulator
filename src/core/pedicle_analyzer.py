@@ -45,6 +45,27 @@ VERTEBRA_LABELS: Dict[int, str] = {
     43: "T1",
 }
 
+#: Endplate plane-fit RMS residual above which the fit is called rough (mm).
+#: One millimetre is a single lumbar CT voxel; 1.5 mm is the point at which the
+#: fitted plane can no longer be told apart from the stair steps of the mask it
+#: was fitted to, and the endplate-parallel trajectory built on it deserves a
+#: second look in the sagittal view.
+ENDPLATE_FIT_RMSE_WARNING_MM: float = 1.5
+
+
+def endplate_fit_warning(rmse_mm: float) -> str:
+    """The single wording for a rough upper-endplate fit.
+
+    Both the analyser and :mod:`src.core.auto_screw_planner` emit this text --
+    the analyser onto the analysis, the planner onto the screw that used it --
+    so it lives in one place and cannot drift between them.
+    """
+    return (
+        f"Upper endplate fit is rough (RMSE {rmse_mm:.1f} mm) — "
+        "check the sagittal view"
+    )
+
+
 # Labels for which pedicle analysis is not meaningful.
 _SKIP_PEDICLE_LABELS: frozenset = frozenset({25})  # sacrum
 
@@ -328,10 +349,20 @@ class PedicleAnalyzer:
         result.vertebral_body_center = body_center
         body_center_ijk: Optional[Tuple[float, float, float]] = None
         if body_center is not None:
-            result.upper_endplate_normal = self._estimate_upper_endplate_normal(
+            (
+                result.upper_endplate_normal,
+                result.endplate_fit_rmse_mm,
+            ) = self._estimate_upper_endplate_normal(
                 indices_zyx,
                 body_center,
             )
+            if (
+                result.endplate_fit_rmse_mm is not None
+                and result.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
+            ):
+                result.warnings.append(
+                    endplate_fit_warning(result.endplate_fit_rmse_mm)
+                )
             body_center_ijk = self._mask_image.TransformPhysicalPointToContinuousIndex(
                 tuple(float(v) for v in body_center)
             )
@@ -1449,15 +1480,22 @@ class PedicleAnalyzer:
         self,
         indices_zyx: np.ndarray,
         body_center: np.ndarray,
-    ) -> Optional[np.ndarray]:
-        """Fit the superior anterior-body envelope as an LPS plane."""
+    ) -> Tuple[Optional[np.ndarray], Optional[float]]:
+        """Fit the superior anterior-body envelope as an LPS plane.
+
+        Returns ``(normal, rmse_mm)``.  ``rmse_mm`` is the RMS residual of the
+        final fit over the samples it retained, so it describes the plane that
+        was actually returned rather than the first, outlier-polluted pass.
+        Both are ``None`` when no plane could be fitted at all -- a missing fit
+        is not a perfect one.
+        """
         if indices_zyx.shape[0] < 12:
-            return None
+            return None, None
 
         points = self._indices_to_lps(indices_zyx)
         extents = np.ptp(points, axis=0)
         if extents[0] < 4.0 or extents[1] < 4.0 or extents[2] < 2.0:
-            return None
+            return None, None
 
         body_mask = (
             (points[:, 1] <= body_center[1] + 0.15 * extents[1])
@@ -1465,7 +1503,7 @@ class PedicleAnalyzer:
         )
         body_points = points[body_mask]
         if body_points.shape[0] < 12:
-            return None
+            return None, None
 
         grid_size = max(2.0, 2.0 * min(self._spacing[0], self._spacing[1]))
         grid_cells = np.floor(body_points[:, :2] / grid_size).astype(np.int64)
@@ -1476,14 +1514,14 @@ class PedicleAnalyzer:
             envelope.append(cell_points[int(np.argmax(cell_points[:, 2]))])
         samples = np.asarray(envelope, dtype=np.float64)
         if samples.shape[0] < 6:
-            return None
+            return None, None
 
         retained = np.ones(samples.shape[0], dtype=bool)
         coefficients = None
         for _ in range(3):
             fit_points = samples[retained]
             if fit_points.shape[0] < 6:
-                return None
+                return None, None
             design = np.column_stack(
                 [fit_points[:, 0], fit_points[:, 1], np.ones(fit_points.shape[0])]
             )
@@ -1507,15 +1545,22 @@ class PedicleAnalyzer:
             retained = updated
 
         if coefficients is None:
-            return None
+            return None, None
+        predicted = (
+            samples[:, 0] * coefficients[0]
+            + samples[:, 1] * coefficients[1]
+            + coefficients[2]
+        )
+        residuals = samples[:, 2] - predicted
+        rmse = float(np.sqrt(np.mean(residuals[retained] ** 2)))
         normal = np.array(
             [-coefficients[0], -coefficients[1], 1.0],
             dtype=np.float64,
         )
         norm = float(np.linalg.norm(normal))
         if norm <= 1e-9:
-            return None
+            return None, None
         normal /= norm
         if normal[2] < 0.0:
             normal = -normal
-        return normal
+        return normal, rmse

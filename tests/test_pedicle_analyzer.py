@@ -7,6 +7,7 @@ verified analytically.
 """
 
 import logging
+import math
 import os
 import sys
 
@@ -17,9 +18,12 @@ import SimpleITK as sitk
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.pedicle_analyzer import (
+    ENDPLATE_FIT_RMSE_WARNING_MM,
     VERTEBRA_LABELS,
     PedicleAnalyzer,
+    endplate_fit_warning,
 )
+from src.core.screw_geometry import endplate_slope_deg
 from src.core.vertebra import PedicleAnalysisResult, Vertebra
 
 # ---------------------------------------------------------------------------
@@ -135,6 +139,42 @@ def _make_anatomical_phantom(label: int = 28, with_arch: bool = True) -> sitk.Im
                 & (yy >= 60) & (zz >= 26) & (zz < 40))
     arr = np.zeros((Z, Y, X), dtype=np.uint8)
     arr[body | ped | arch] = label
+    return sitk.GetImageFromArray(arr)
+
+
+def _make_tilted_endplate_phantom(
+    label: int = 28,
+    tilt_deg: float = 10.0,
+    roughness_mm: float = 0.0,
+    seed: int = 0,
+) -> sitk.Image:
+    """A vertebra whose superior body surface is a plane tilted `tilt_deg`.
+
+    1 mm isotropic, LPS identity, ``(z, y, x)`` array.  The body top is
+    ``z = 52 - tan(tilt) * (y - 35)``: it *rises anteriorly* (toward smaller y),
+    which is the positive sense of ``endplate_slope_deg``, so the analyser must
+    recover ``+tilt_deg`` from the normal it fits.  The body is taller and the
+    pedicles are wider (11 mm) than in ``_make_anatomical_phantom`` so that
+    cranially angled trajectories are actually feasible — the optimiser tests in
+    W8 need a populated craniocaudal band, not a single reachable direction.
+
+    ``roughness_mm`` adds zero-mean Gaussian noise to the surface height, which
+    is what a stair-stepped or leaky segmentation looks like to the plane fit:
+    at 3.0 mm the fit RMSE lands near 2.3 mm, above the 1.5 mm warning threshold,
+    while a smooth surface fits to about 0.27 mm.
+    """
+    Z, Y, X = 70, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    z_top = 52.0 - math.tan(math.radians(tilt_deg)) * (yy - 35.0)
+    if roughness_mm:
+        rng = np.random.default_rng(seed)
+        z_top = z_top + rng.normal(0.0, roughness_mm, size=(Y, X))[None, :, :]
+    body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 12) & (zz <= z_top)
+    ped = np.zeros_like(body)
+    for cx in (30, 60):
+        ped |= (((xx - cx) / 5.0) ** 2 + ((zz - 32) / 8.0) ** 2 <= 1) & (yy >= 44) & (yy < 62)
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped] = label
     return sitk.GetImageFromArray(arr)
 
 
@@ -485,6 +525,7 @@ class TestPedicleAnalysisResultDefaults:
         assert r.left_pedicle_width == 0.0
         assert r.right_pedicle_width == 0.0
         assert r.upper_endplate_normal is None
+        assert r.endplate_fit_rmse_mm is None
         assert r.warnings == []
 
 
@@ -1476,6 +1517,43 @@ class TestWidthPlausibilityGate:
         assert result.left_width_lower_bound_mm <= result.left_pedicle_width
         assert result.method.endswith("+axial_recheck")
         assert result.width_flags == {}
+
+
+class TestEndplateFitQuality:
+    """The endplate plane has to say how well it fitted, not just where it is."""
+
+    def test_smooth_tilted_endplate_fits_tightly_and_raises_no_warning(self):
+        analyzer = PedicleAnalyzer(_make_tilted_endplate_phantom())
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.success
+        assert result.upper_endplate_normal is not None
+        assert endplate_slope_deg(result.upper_endplate_normal) == pytest.approx(10.0, abs=1.5)
+        assert result.endplate_fit_rmse_mm is not None
+        assert result.endplate_fit_rmse_mm < 0.6
+        assert not any("Upper endplate fit is rough" in w for w in result.warnings)
+
+    def test_rough_endplate_reports_its_rmse_and_warns(self):
+        analyzer = PedicleAnalyzer(_make_tilted_endplate_phantom(roughness_mm=3.0))
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.success
+        assert result.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
+        assert result.endplate_fit_rmse_mm == pytest.approx(2.3, abs=0.6)
+        assert any(
+            w == endplate_fit_warning(result.endplate_fit_rmse_mm)
+            for w in result.warnings
+        )
+
+    def test_missing_endplate_leaves_the_rmse_unset(self):
+        """A speck too small to fit a plane must report no RMSE, not 0.0 mm."""
+        array = np.zeros((40, 60, 60), dtype=np.uint8)
+        array[10:13, 20:23, 20:23] = 27          # a 3 mm cube labelled L5
+        analyzer = PedicleAnalyzer(sitk.GetImageFromArray(array))
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.upper_endplate_normal is None
+        assert result.endplate_fit_rmse_mm is None
 
 
 if __name__ == "__main__":
