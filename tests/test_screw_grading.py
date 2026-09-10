@@ -264,6 +264,109 @@ class TestBreachPoint:
         assert result.breach_point_lps == result.breach_centre_lps
 
 
+class TestDirectionalBreach:
+    """The medial / lateral split the narrow-pedicle policy is built on."""
+
+    def test_a_screw_against_the_plus_x_wall_breaches_laterally_on_the_left(self):
+        mask = _cube_mask()          # label occupies x in [20, 40)
+        grader = ScrewGrader(mask, _ct_like(mask))
+
+        result = grader.grade(
+            entry=(39.0, 35.0, 30.0), target=(39.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28, side="left",
+        )
+
+        # +X is away from the midline for a left pedicle: the breach is lateral.
+        assert result.breach_mm == pytest.approx(3.0)
+        assert result.medial_breach_mm == 0.0
+        assert result.lateral_breach_mm == pytest.approx(3.0)
+        assert result.craniocaudal_breach_mm == 0.0
+        # Three medial samples stay inside; the thinnest of them is 3 mm deep.
+        assert result.medial_wall_mm == pytest.approx(3.0)
+
+    def test_the_same_screw_breaches_medially_on_the_right(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+
+        result = grader.grade(
+            entry=(39.0, 35.0, 30.0), target=(39.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28, side="right",
+        )
+
+        assert result.medial_breach_mm == pytest.approx(3.0)
+        assert result.lateral_breach_mm == 0.0
+        assert result.medial_wall_mm == 0.0      # a breached medial wall has no margin
+
+    def test_a_contained_screw_reports_the_wall_on_both_sides(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+
+        result = grader.grade(
+            entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28, side="left",
+        )
+
+        assert (result.medial_breach_mm, result.lateral_breach_mm) == (0.0, 0.0)
+        assert result.craniocaudal_breach_mm == 0.0
+        assert result.medial_wall_mm == pytest.approx(result.min_wall_mm)
+
+    def test_side_none_reproduces_the_undirected_numbers(self):
+        """Every caller that does not know the side must see exactly today's answer."""
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+
+        result = grader.grade(
+            entry=(39.0, 35.0, 30.0), target=(39.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28,
+        )
+
+        assert result.medial_breach_mm == result.breach_mm
+        assert result.lateral_breach_mm == result.breach_mm
+        assert result.craniocaudal_breach_mm == result.breach_mm
+        assert result.medial_wall_mm == result.min_wall_mm
+
+    def test_batch_agrees_with_the_single_evaluation_per_side(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array([[39.0, 35.0, 30.0], [30.0, 35.0, 30.0]])
+        targets = np.array([[39.0, 25.0, 30.0], [30.0, 25.0, 30.0]])
+
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28, side="left")
+
+        for index in range(2):
+            single = grader.grade(
+                entries[index], targets[index], 6.0, label=28, side="left"
+            )
+            assert batch.medial_breach_mm[index] == pytest.approx(
+                single.medial_breach_mm, abs=0.51
+            )
+            assert batch.lateral_breach_mm[index] == pytest.approx(
+                single.lateral_breach_mm, abs=0.51
+            )
+            assert batch.medial_wall_mm[index] == pytest.approx(
+                single.medial_wall_mm, abs=0.51
+            )
+        assert batch.craniocaudal_breach_mm[0] == 0.0
+
+    def test_an_undirected_batch_mirrors_the_plain_arrays(self):
+        grader = ScrewGrader(_cube_mask())
+        entries = np.array([[5.0, 5.0, 30.0]])
+        targets = np.array([[5.0, 50.0, 30.0]])
+
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+
+        assert batch.medial_breach_mm[0] == batch.breach_mm[0]
+        assert batch.medial_wall_mm[0] == batch.min_wall_mm[0]
+
+    def test_an_unknown_side_is_rejected(self):
+        grader = ScrewGrader(_cube_mask())
+        with pytest.raises(ValueError, match="side must be"):
+            grader.grade(
+                entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0),
+                diameter_mm=6.0, label=28, side="middle",
+            )
+
+
 class TestDistancesAtPoints:
     def test_distances_match_the_label_geometry(self):
         grader = ScrewGrader(_cube_mask())  # label occupies index 20..39 on every axis
