@@ -1056,5 +1056,88 @@ class TestTwoPhaseLodSurvivesTheSmartMapper:
         assert "self._mapper_kind" in source
 
 
+class TestSingleLabelSurfaceExtractor:
+    """The generic overlay path must match the vertebral mesh pipeline."""
+
+    @staticmethod
+    def _sphere_mask(dims=(24, 24, 24), radius=8.0, label=27):
+        import numpy as np
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk
+
+        z_index, y_index, x_index = np.indices((dims[2], dims[1], dims[0]))
+        center = (np.asarray(dims) - 1) / 2.0
+        values = np.where(
+            np.sqrt(
+                (x_index - center[0]) ** 2
+                + (y_index - center[1]) ** 2
+                + (z_index - center[2]) ** 2
+            )
+            <= radius,
+            label,
+            0,
+        ).astype(np.uint16)
+
+        image = vtk.vtkImageData()
+        image.SetDimensions(*dims)
+        image.SetSpacing(1.0, 1.0, 1.0)
+        image.GetPointData().SetScalars(numpy_to_vtk(values.ravel(), deep=True))
+        return image
+
+    def _render(self, label_value):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._segmentation_actor = None
+        viewer._segmentation_mask_image = self._sphere_mask()
+        viewer._segmentation_label_value = label_value
+        viewer._segmentation_color = (0.9, 0.8, 0.7)
+        viewer._request_render = lambda: None
+        viewer._render_segmentation_actor()
+        return viewer
+
+    def test_source_uses_flying_edges_not_marching_cubes(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        assert "vtkFlyingEdges3D()" in source
+        assert "vtkMarchingCubes()" not in source
+
+    def test_source_shares_the_vertebral_mesh_fairing_constants(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        assert "SetNumberOfIterations(MESH_SMOOTHING_ITERATIONS)" in source
+        assert "SetPassBand(MESH_SMOOTHING_PASSBAND)" in source
+
+    def test_flying_edges_path_produces_a_non_empty_actor(self):
+        viewer = self._render(27)
+
+        assert viewer._segmentation_actor is not None
+        mapper = viewer._segmentation_actor.GetMapper()
+        mapper.Update()
+        assert mapper.GetInput().GetNumberOfCells() > 0
+
+    def test_all_labels_mode_still_produces_a_surface(self):
+        viewer = self._render(0)
+
+        assert viewer._segmentation_actor is not None
+        mapper = viewer._segmentation_actor.GetMapper()
+        mapper.Update()
+        assert mapper.GetInput().GetNumberOfCells() > 0
+
+    def test_absent_label_produces_no_actor(self):
+        viewer = self._render(31)
+
+        assert viewer._segmentation_actor is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

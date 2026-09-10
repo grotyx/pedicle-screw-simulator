@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core.vertebral_mesh import MESH_SMOOTHING_ITERATIONS, MESH_SMOOTHING_PASSBAND
 from ..core.volume_manager import VolumeManager
 from ..core.volume_scale import assess_volume_scale
 from ..utils.constants import (
@@ -805,7 +806,7 @@ class Viewer3D(QWidget):
 
         self._target_sample_dist = sample_dist
 
-        # Downsampled volume for faster CPU ray casting
+        # Downsampled volume per the mapper's tier table
         t0 = time.perf_counter()
         self._downsampled_image = downsample_vtk_image(vtk_image, shrink)
         ds_dims = self._downsampled_image.GetDimensions()
@@ -1638,26 +1639,31 @@ class Viewer3D(QWidget):
             gaussian.SetDimensionality(3)
             surface_input = gaussian.GetOutputPort()
 
-        marching_cubes = vtk.vtkMarchingCubes()
-        marching_cubes.SetInputConnection(surface_input)
-        marching_cubes.SetValue(0, 0.5)
-        marching_cubes.ComputeNormalsOff()
-        marching_cubes.Update()
+        # vtkFlyingEdges3D is the same sub-voxel extractor used by
+        # extract_vertebral_mesh (src/core/vertebral_mesh.py); it produces the
+        # same isosurface as vtkMarchingCubes with far less staircase noise
+        # on anisotropic grids.
+        surface_extractor = vtk.vtkFlyingEdges3D()
+        surface_extractor.SetInputConnection(surface_input)
+        surface_extractor.SetValue(0, 0.5)
+        surface_extractor.ComputeNormalsOff()
+        surface_extractor.ComputeGradientsOff()
+        surface_extractor.Update()
 
-        n_points = marching_cubes.GetOutput().GetNumberOfPoints()
-        logger.info("3D seg: marching cubes produced %d points", n_points)
+        n_points = surface_extractor.GetOutput().GetNumberOfPoints()
+        logger.info("3D seg: flying edges produced %d points", n_points)
         if n_points == 0:
             return
 
         decimator = vtk.vtkDecimatePro()
-        decimator.SetInputConnection(marching_cubes.GetOutputPort())
+        decimator.SetInputConnection(surface_extractor.GetOutputPort())
         decimator.SetTargetReduction(0.45)
         decimator.PreserveTopologyOn()
 
         smoother = vtk.vtkWindowedSincPolyDataFilter()
         smoother.SetInputConnection(decimator.GetOutputPort())
-        smoother.SetNumberOfIterations(25)
-        smoother.SetPassBand(0.08)
+        smoother.SetNumberOfIterations(MESH_SMOOTHING_ITERATIONS)
+        smoother.SetPassBand(MESH_SMOOTHING_PASSBAND)
         smoother.BoundarySmoothingOff()
         smoother.FeatureEdgeSmoothingOff()
         smoother.NonManifoldSmoothingOn()
