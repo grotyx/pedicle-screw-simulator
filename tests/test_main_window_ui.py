@@ -321,3 +321,148 @@ def test_screw_plan_table_updates_a_row_in_place(ui_main_window):
 
     assert table.count() == 1
     assert table.rowText(0) == "1 · L5 · Left · 7.5 · 50.0 · Grade C · Manual"
+
+
+def _grid_position(window, widget):
+    index = window._view_layout.indexOf(widget)
+    if index < 0:
+        return None
+    return window._view_layout.getItemPosition(index)
+
+
+def test_maximize_hides_the_other_panes_and_restores_the_base_layout(
+    ui_main_window,
+):
+    window = ui_main_window
+    window.set_view_layout("mpr_focus")
+
+    window.set_view_layout("maximize:sagittal")
+
+    assert window._maximized_view == "sagittal"
+    assert window._view_layout_mode == "mpr_focus"
+    assert _grid_position(window, window.sagittal_viewer) == (0, 0, 1, 1)
+    assert window.sagittal_viewer.isHidden() is False
+    for viewer in (
+        window.axial_viewer,
+        window.coronal_viewer,
+        window.viewer_3d,
+    ):
+        assert viewer.isHidden() is True
+
+    window.toggle_maximized_view("sagittal")
+
+    assert window._maximized_view is None
+    assert window._view_layout_mode == "mpr_focus"
+    assert _grid_position(window, window.axial_viewer) == (0, 0, 1, 1)
+    assert _grid_position(window, window.viewer_3d) == (1, 1, 1, 1)
+    for viewer in window._get_mpr_viewers():
+        assert viewer.isHidden() is False
+
+
+def test_header_double_click_toggles_maximize(ui_main_window):
+    window = ui_main_window
+
+    window.axial_viewer.header_double_clicked.emit("axial")
+    assert window._maximized_view == "axial"
+
+    window.axial_viewer.header_double_clicked.emit("axial")
+    assert window._maximized_view is None
+    assert window._view_layout_mode == "planning"
+
+
+def test_maximizing_another_view_keeps_the_original_restore_target(
+    ui_main_window,
+):
+    window = ui_main_window
+    window.set_view_layout("mpr_focus")
+
+    window.toggle_maximized_view("axial")
+    window.toggle_maximized_view("coronal")
+
+    assert window._maximized_view == "coronal"
+    assert window._restore_layout_mode == "mpr_focus"
+
+    window.toggle_maximized_view("coronal")
+
+    assert window._view_layout_mode == "mpr_focus"
+
+
+def test_maximize_menu_action_uses_ctrl_m_and_leaves_f11_alone(ui_main_window):
+    window = ui_main_window
+
+    assert window._maximize_view_action.shortcut().toString() == "Ctrl+M"
+    shortcuts = {
+        action.shortcut().toString()
+        for action in window.findChildren(type(window._maximize_view_action))
+    }
+    assert "F11" not in shortcuts
+
+    window._maximize_view_action.trigger()
+    assert window._maximized_view == "axial"
+
+    window._maximize_view_action.trigger()
+    assert window._maximized_view is None
+
+
+def test_set_view_layout_rejects_an_unknown_maximize_target(ui_main_window):
+    with pytest.raises(ValueError, match="Unknown view layout"):
+        ui_main_window.set_view_layout("maximize:nope")
+
+
+def test_status_bar_mode_label_tracks_the_tool_and_screw_mpr(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+
+    assert window._mode_label.text() == "Select"
+
+    window._tool_ctrl.set_tool("screw")
+    assert window._mode_label.text() == "Add Screw"
+
+    window._tool_ctrl.set_tool("distance")
+    assert window._mode_label.text() == "Distance"
+
+    window._tool_ctrl.set_tool("navigate")
+    window._tool_ctrl.screw_tool.add_screw(
+        Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -40.0, 0.0),
+            diameter=6.0,
+            vertebra_level="L4",
+            side="left",
+        )
+    )
+    window._tool_ctrl._add_screw_to_list(window._tool_ctrl.screw_tool.get_screws()[0])
+    window.screw_list_widget.setCurrentRow(0)
+
+    monkey = window._screw_mpr_ctrl
+    monkey._active = True
+    window.refresh_mode_indicators()
+
+    assert window._mode_label.text() == "Screw MPR · #1 L4 left"
+    assert window._screw_mpr_action.isChecked() is True
+
+
+def test_viewer_header_label_reports_double_clicks(qtbot):
+    from PyQt6.QtCore import QPoint, Qt
+    from PyQt6.QtGui import QMouseEvent
+
+    from src.ui.viewer_header import ViewerHeaderLabel
+
+    label = ViewerHeaderLabel("Axial", "axial")
+    qtbot.addWidget(label)
+    seen = []
+    label.doubleClicked.connect(seen.append)
+
+    event = QMouseEvent(
+        QMouseEvent.Type.MouseButtonDblClick,
+        QPoint(4, 4).toPointF(),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    label.mouseDoubleClickEvent(event)
+
+    assert seen == ["axial"]
+    assert label.view_name == "axial"
+    assert label.objectName() == "viewerHeader"

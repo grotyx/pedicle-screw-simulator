@@ -37,6 +37,7 @@ class DummyMPRViewer(QWidget):
 
     slice_changed = pyqtSignal(str, float)
     crosshair_moved = pyqtSignal(str, float, float, float)
+    header_double_clicked = pyqtSignal(str)
 
     def __init__(self, plane, volume_manager, parent=None):
         super().__init__(parent)
@@ -165,6 +166,8 @@ class DummyMPRViewer(QWidget):
 
 class DummyViewer3D(QWidget):
     """Lightweight 3D viewer test double for UI workflow tests."""
+
+    header_double_clicked = pyqtSignal(str)
 
     def __init__(self, volume_manager, parent=None):
         super().__init__(parent)

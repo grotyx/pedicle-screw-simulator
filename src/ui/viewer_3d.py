@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import vtk
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -55,6 +55,7 @@ from ..utils.vtk_helpers import (
     shrink_factors,
 )
 from .click_detector import DoubleClickDetector
+from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
@@ -360,6 +361,8 @@ class Viewer3D(QWidget):
     from vtkImageData with transfer functions.
     """
 
+    header_double_clicked = pyqtSignal(str)  # ("3d") — maximise request
+
     # Render state: GUARD blocks renders during pipeline setup, NORMAL allows them.
     _RS_GUARD = 0
     _RS_NORMAL = 1
@@ -456,10 +459,11 @@ class Viewer3D(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.label = QLabel("3D View")
+        self.label = ViewerHeaderLabel("3D View", "3d", self)
         self.label.setStyleSheet(
             "color: white; font-weight: bold; padding: 2px;"
         )
+        self.label.doubleClicked.connect(self.header_double_clicked)
 
         self.viewport_container = QWidget(self)
         viewport_layout = QGridLayout(self.viewport_container)

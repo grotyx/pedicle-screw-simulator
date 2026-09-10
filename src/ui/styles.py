@@ -619,6 +619,15 @@ QStatusBar {{
     font-size: 12px;
     padding: 2px 8px;
 }}
+QLabel#statusModeLabel {{
+    background-color: {t["accent_dim"]};
+    border: 1px solid {t["accent"]};
+    border-radius: 4px;
+    color: {t["secondary_action_text"]};
+    font-weight: 700;
+    margin-right: 6px;
+    padding: 2px 8px;
+}}
 
 /* ===== Scroll Bars ===== */
 QScrollBar:vertical {{

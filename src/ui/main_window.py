@@ -261,6 +261,9 @@ class MainWindow(QMainWindow):
         self._view_layout.setSpacing(6)
         self._view_layout.setContentsMargins(6, 6, 6, 6)
         self._view_layout_mode = "planning"
+        self._maximized_view: Optional[str] = None
+        self._restore_layout_mode = "planning"
+        self._focused_view_name = "axial"
 
         # Create viewers
         self.axial_viewer = MPRViewer("axial", self.volume_manager)
@@ -288,8 +291,18 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter)
 
     def set_view_layout(self, mode: str) -> None:
-        """Switch between VWORKS planning and equal-size MPR layouts."""
-        if mode not in {"planning", "mpr_focus"}:
+        """Switch layouts, or maximise one pane with ``maximize:<name>``.
+
+        A maximise leaves ``_view_layout_mode`` on the base layout, so
+        restoring returns to exactly the layout the user was in.
+        """
+        mode = str(mode)
+        maximized: Optional[str] = None
+        if mode.startswith("maximize:"):
+            maximized = mode.split(":", 1)[1]
+            if maximized not in self.MAXIMIZABLE_VIEWS:
+                raise ValueError(f"Unknown view layout: {mode}")
+        elif mode not in {"planning", "mpr_focus"}:
             raise ValueError(f"Unknown view layout: {mode}")
 
         while self._view_layout.count():
@@ -300,36 +313,86 @@ class MainWindow(QMainWindow):
         for column in range(2):
             self._view_layout.setColumnStretch(column, 0)
 
-        if mode == "planning":
-            self._view_layout.addWidget(self.axial_viewer, 0, 0)
-            self._view_layout.addWidget(self.sagittal_viewer, 1, 0)
-            self._view_layout.addWidget(self.coronal_viewer, 2, 0)
-            self._view_layout.addWidget(self.viewer_3d, 0, 1, 3, 1)
-            for row in range(3):
-                self._view_layout.setRowStretch(row, 1)
-            self._view_layout.setColumnStretch(0, 3)
-            self._view_layout.setColumnStretch(1, 5)
-        else:
-            self._view_layout.addWidget(self.axial_viewer, 0, 0)
-            self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
-            self._view_layout.addWidget(self.coronal_viewer, 1, 0)
-            self._view_layout.addWidget(self.viewer_3d, 1, 1)
-            self._view_layout.setRowStretch(0, 1)
-            self._view_layout.setRowStretch(1, 1)
-            self._view_layout.setColumnStretch(0, 1)
-            self._view_layout.setColumnStretch(1, 1)
+        panes = {
+            "axial": self.axial_viewer,
+            "sagittal": self.sagittal_viewer,
+            "coronal": self.coronal_viewer,
+            "3d": self.viewer_3d,
+        }
 
-        self._view_layout_mode = mode
+        if maximized is not None:
+            if self._maximized_view is None:
+                self._restore_layout_mode = self._view_layout_mode
+            for name, pane in panes.items():
+                pane.setVisible(name == maximized)
+            self._view_layout.addWidget(panes[maximized], 0, 0)
+            self._view_layout.setRowStretch(0, 1)
+            self._view_layout.setColumnStretch(0, 1)
+            self._maximized_view = maximized
+            self._focused_view_name = maximized
+        else:
+            for pane in panes.values():
+                pane.setVisible(True)
+            self._maximized_view = None
+            if mode == "planning":
+                self._view_layout.addWidget(self.axial_viewer, 0, 0)
+                self._view_layout.addWidget(self.sagittal_viewer, 1, 0)
+                self._view_layout.addWidget(self.coronal_viewer, 2, 0)
+                self._view_layout.addWidget(self.viewer_3d, 0, 1, 3, 1)
+                for row in range(3):
+                    self._view_layout.setRowStretch(row, 1)
+                self._view_layout.setColumnStretch(0, 3)
+                self._view_layout.setColumnStretch(1, 5)
+            else:
+                self._view_layout.addWidget(self.axial_viewer, 0, 0)
+                self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
+                self._view_layout.addWidget(self.coronal_viewer, 1, 0)
+                self._view_layout.addWidget(self.viewer_3d, 1, 1)
+                self._view_layout.setRowStretch(0, 1)
+                self._view_layout.setRowStretch(1, 1)
+                self._view_layout.setColumnStretch(0, 1)
+                self._view_layout.setColumnStretch(1, 1)
+            self._view_layout_mode = mode
+            self._restore_layout_mode = mode
+
         if hasattr(self, "layout_combo"):
-            combo_index = self.layout_combo.findData(mode)
+            combo_index = self.layout_combo.findData(self._view_layout_mode)
             if combo_index >= 0 and combo_index != self.layout_combo.currentIndex():
                 previous = self.layout_combo.blockSignals(True)
                 self.layout_combo.setCurrentIndex(combo_index)
                 self.layout_combo.blockSignals(previous)
         if hasattr(self, "_planning_layout_action"):
-            self._planning_layout_action.setChecked(mode == "planning")
-            self._mpr_focus_layout_action.setChecked(mode == "mpr_focus")
+            self._planning_layout_action.setChecked(
+                self._view_layout_mode == "planning"
+            )
+            self._mpr_focus_layout_action.setChecked(
+                self._view_layout_mode == "mpr_focus"
+            )
+        if hasattr(self, "_maximize_view_action"):
+            previous = self._maximize_view_action.blockSignals(True)
+            self._maximize_view_action.setChecked(self._maximized_view is not None)
+            self._maximize_view_action.blockSignals(previous)
         QTimer.singleShot(0, self.fit_mpr_views)
+
+    def toggle_maximized_view(self, view_name: str) -> None:
+        """Maximise one pane, or restore the previous layout if it already is."""
+        name = str(view_name)
+        if self._maximized_view == name:
+            self.set_view_layout(self._restore_layout_mode)
+        else:
+            self.set_view_layout(f"maximize:{name}")
+
+    def _toggle_maximize_current_view(self) -> None:
+        """View-menu / Ctrl+M entry point for single-view maximise."""
+        if self._maximized_view is not None:
+            self.set_view_layout(self._restore_layout_mode)
+        else:
+            self.toggle_maximized_view(self._focused_view_name)
+
+    def _remember_focused_view(self, plane: str) -> None:
+        """Track the last MPR pane the user interacted with."""
+        if plane in self.MAXIMIZABLE_VIEWS:
+            self._focused_view_name = str(plane)
 
     def _create_planning_cockpit(self) -> QWidget:
         """Build the pinned screw inspector shown above the control tabs."""
@@ -435,7 +498,11 @@ class MainWindow(QMainWindow):
         return cockpit
 
     def _create_control_panel(self) -> QWidget:
-        """Create the right-side control panel inside a scroll area.
+        """Create the right-side control panel.
+
+        The panel is a pinned Planning Cockpit above a three-tab widget;
+        each tab holds its sections in its own scroll area, so the cockpit
+        stays visible while any tab is scrolled.
 
         Creates all widgets and stores references. Signal connections
         are handled in _connect_signals().
@@ -1294,6 +1361,26 @@ class MainWindow(QMainWindow):
         self._screw_mpr_ctrl.refresh_selected_screw()
         self._screw_edit_ctrl.refresh_controls()
 
+        # Single-view maximise: header double-click on every pane, and a
+        # record of the last MPR pane the user touched for Ctrl+M.
+        for name, pane in (
+            ("axial", self.axial_viewer),
+            ("sagittal", self.sagittal_viewer),
+            ("coronal", self.coronal_viewer),
+            ("3d", self.viewer_3d),
+        ):
+            signal = getattr(pane, "header_double_clicked", None)
+            if signal is not None:
+                signal.connect(self.toggle_maximized_view)
+            del name
+        for viewer in self._get_mpr_viewers():
+            viewer.crosshair_moved.connect(
+                lambda plane, *_unused: self._remember_focused_view(plane)
+            )
+        self.screw_list_widget.currentRowChanged.connect(
+            lambda *_unused: self.refresh_mode_indicators()
+        )
+
     def _select_screw_from_view(self, screw_id: int) -> None:
         """Synchronize a screw picked in MPR/3D with the selection list."""
         if 0 <= int(screw_id) < self.screw_list_widget.count():
@@ -1436,6 +1523,18 @@ class MainWindow(QMainWindow):
         )
         self._layout_action_group.addAction(self._mpr_focus_layout_action)
         view_menu.addAction(self._mpr_focus_layout_action)
+
+        self._maximize_view_action = QAction("Maximize Current View", self)
+        self._maximize_view_action.setShortcut("Ctrl+M")
+        self._maximize_view_action.setCheckable(True)
+        self._maximize_view_action.setToolTip(
+            "Maximize the last-used view, or restore the previous layout"
+        )
+        self._maximize_view_action.triggered.connect(
+            self._toggle_maximize_current_view
+        )
+        self._register_themed_icon(self._maximize_view_action, "layout")
+        view_menu.addAction(self._maximize_view_action)
 
         view_menu.addSeparator()
 
@@ -1627,24 +1726,32 @@ class MainWindow(QMainWindow):
         self.refresh_mode_indicators()
 
     def _toggle_screw_mpr(self, checked: bool) -> None:
-        """Enter or leave Screw MPR from the toolbar toggle."""
+        """Enter or leave Screw MPR from the toolbar toggle.
+
+        Both controller entry points end in ``refresh_controls()``, which
+        calls back into ``refresh_mode_indicators``; refreshing again here
+        would rewrite the status-bar mode text twice per toggle.
+        """
         if checked:
             self._screw_mpr_ctrl.enter()
         else:
             self._screw_mpr_ctrl.exit()
-        self.refresh_mode_indicators()
 
     def _setup_statusbar(self):
-        """Setup the status bar with coordinate and HU display."""
+        """Setup the status bar with mode, coordinate, and HU display."""
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
 
+        self._mode_label = QLabel("Select")
+        self._mode_label.setObjectName("statusModeLabel")
         self._coord_label = QLabel("X: --  Y: --  Z: --")
         self._hu_label = QLabel("HU: --")
+        self.statusbar.addPermanentWidget(self._mode_label)
         self.statusbar.addPermanentWidget(self._coord_label)
         self.statusbar.addPermanentWidget(self._hu_label)
 
         self.statusbar.showMessage("Ready")
+        self.refresh_mode_indicators()
 
     def _get_mpr_viewers(self) -> List[MPRViewer]:
         """Return list of active MPR viewers."""
@@ -1701,16 +1808,35 @@ class MainWindow(QMainWindow):
             target.setIcon(create_tool_icon(kind, accent))
 
     def refresh_mode_indicators(self) -> None:
-        """Sync the Screw MPR toolbar toggle with the controller state."""
+        """Sync the Screw MPR toggle and the status-bar mode label."""
         action = getattr(self, "_screw_mpr_action", None)
-        if action is None:
-            return
-        active = bool(self._screw_mpr_ctrl.is_active)
-        if action.isChecked() != active:
-            previous = action.blockSignals(True)
-            action.setChecked(active)
-            action.blockSignals(previous)
-        action.setEnabled(active or self.screw_axis_mpr_btn.isEnabled())
+        if action is not None:
+            active = bool(self._screw_mpr_ctrl.is_active)
+            if action.isChecked() != active:
+                previous = action.blockSignals(True)
+                action.setChecked(active)
+                action.blockSignals(previous)
+            action.setEnabled(active or self.screw_axis_mpr_btn.isEnabled())
+        label = getattr(self, "_mode_label", None)
+        if label is not None:
+            label.setText(self.current_mode_text())
+
+    def current_mode_text(self) -> str:
+        """Return the status-bar wording for the active tool or review mode."""
+        if self._screw_mpr_ctrl.is_active:
+            row = self.screw_list_widget.currentRow()
+            screws = self._tool_ctrl.screw_tool.get_screws()
+            if 0 <= row < len(screws):
+                screw = screws[row]
+                level = str(getattr(screw, "vertebra_level", "") or "").strip()
+                side = str(getattr(screw, "side", "") or "").strip()
+                identity = " ".join(
+                    part for part in (f"#{row + 1}", level, side) if part
+                )
+                return f"Screw MPR · {identity}"
+            return "Screw MPR"
+        tool = self._tool_ctrl.active_tool
+        return self.TOOL_MODE_LABELS.get(tool, str(tool).capitalize())
 
     # ------------------------------------------------------------------
     # Planning parameters
@@ -1727,6 +1853,18 @@ class MainWindow(QMainWindow):
         "max_convergence_deg",
         "trajectory_hu_threshold",
     )
+
+    #: Views that "maximize:<name>" accepts.
+    MAXIMIZABLE_VIEWS = ("axial", "sagittal", "coronal", "3d")
+
+    #: Status-bar wording for each active tool id.
+    TOOL_MODE_LABELS = {
+        "navigate": "Select",
+        "screw": "Add Screw",
+        "distance": "Distance",
+        "angle": "Angle",
+        "path": "Path",
+    }
 
     @staticmethod
     def _segmentation_settings() -> QSettings:

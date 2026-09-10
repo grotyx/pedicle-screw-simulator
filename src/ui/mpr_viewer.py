@@ -43,6 +43,7 @@ from ..utils.constants import (
 from .click_detector import DoubleClickDetector
 from .styles import DEFAULT_THEME, theme_rgb_float
 from .tool_icons import create_tool_icon
+from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class MPRViewer(QWidget):
     # Signals for cross-viewer synchronization
     slice_changed = pyqtSignal(str, float)  # (plane, position)
     crosshair_moved = pyqtSignal(str, float, float, float)  # (plane, x, y, z)
+    header_double_clicked = pyqtSignal(str)  # (plane) — maximise request
 
     ENTRY_HIT_RADIUS_PX = 16.0
     TIP_HIT_RADIUS_PX = 20.0
@@ -181,8 +183,8 @@ class MPRViewer(QWidget):
             "coronal": COLOR_CORONAL,
         }
         color = colors.get(self.plane, (255, 255, 255))
-        self.label = QLabel(self.plane.capitalize())
-        self.label.setObjectName("viewerHeader")
+        self.label = ViewerHeaderLabel(self.plane.capitalize(), self.plane, self)
+        self.label.doubleClicked.connect(self.header_double_clicked)
         self.label.setStyleSheet(
             f"color: rgb({color[0]}, {color[1]}, {color[2]}); "
             f"font-weight: bold; padding: 2px;"

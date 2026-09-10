@@ -109,6 +109,10 @@ class ToolController:
         else:
             self._window.statusbar.showMessage("Select — navigate and inspect")
 
+        refresh = getattr(self._window, "refresh_mode_indicators", None)
+        if callable(refresh):
+            refresh()
+
     def on_viewer_click(self, plane: str, x: float, y: float, z: float):
         """Handle click events from MPR viewers for active tools."""
         if self._vm.get_vtk_image() is None:
