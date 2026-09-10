@@ -143,6 +143,26 @@ def get_theme(theme_name: str = DEFAULT_THEME) -> dict[str, str]:
     return THEMES.get(str(theme_name), THEMES[DEFAULT_THEME])
 
 
+def theme_rgb_float(theme_name: str, key: str) -> tuple[float, float, float]:
+    """Return one palette colour as VTK-style floats in 0.0-1.0.
+
+    Args:
+        theme_name: Palette name; unknown names fall back to DEFAULT_THEME.
+        key: Palette key, e.g. ``"viewer_foreground"``.
+
+    Returns:
+        (red, green, blue) each in 0.0-1.0; white if the key is missing.
+    """
+    value = get_theme(theme_name).get(key, "#FFFFFF").lstrip("#")
+    if len(value) != 6:
+        return (1.0, 1.0, 1.0)
+    return (
+        int(value[0:2], 16) / 255.0,
+        int(value[2:4], 16) / 255.0,
+        int(value[4:6], 16) / 255.0,
+    )
+
+
 def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
     """Return the application stylesheet for one named palette."""
     t = get_theme(theme_name)
@@ -528,7 +548,7 @@ MPRViewer[reviewActive="true"] {{
 }}
 QLabel#viewerHeader {{
     background-color: {t["viewer_header"]};
-    color: #E8EDF2;
+    color: {t["viewer_foreground"]};
     padding: 5px 8px;
     font-size: 12px;
 }}

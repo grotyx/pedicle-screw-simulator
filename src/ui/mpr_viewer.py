@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core.mpr_geometry import (
+    orientation_letters,
     project_screw_to_slice,
     slice_to_world,
     world_to_slice,
@@ -40,9 +41,15 @@ from ..utils.constants import (
     DEFAULT_WINDOW_WIDTH,
 )
 from .click_detector import DoubleClickDetector
+from .styles import DEFAULT_THEME, theme_rgb_float
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
+
+# Orientation markers: 14 px letters kept 6 px inside the viewport edges.
+ORIENTATION_MARKER_FONT_SIZE = 14
+ORIENTATION_MARKER_MARGIN_PX = 6
+ORIENTATION_MARKER_SIDES = ("top", "bottom", "left", "right")
 
 
 class MPRViewer(QWidget):
@@ -141,6 +148,7 @@ class MPRViewer(QWidget):
         self._mpr_pan_mode_active = False
         self._mpr_pan_drag_active = False
         self._mpr_pan_last_display: Optional[Tuple[int, int]] = None
+        self._orientation_actors: Dict[str, vtk.vtkTextActor] = {}
 
         self._setup_ui()
         self._setup_vtk_pipeline()
@@ -261,6 +269,7 @@ class MPRViewer(QWidget):
 
         # Create crosshair actors
         self._create_crosshairs()
+        self._create_orientation_markers()
 
     def _setup_interactor(self):
         """Setup interactor for mouse events."""
@@ -354,6 +363,79 @@ class MPRViewer(QWidget):
                 "source": line_source,
                 "orientation": orientation,
             })
+
+    def _create_orientation_markers(self) -> None:
+        """Create the four corner letters that name the patient axes."""
+        for side in ORIENTATION_MARKER_SIDES:
+            actor = vtk.vtkTextActor()
+            actor.SetObjectName(f"orientation-{side}")
+            actor.SetInput("")
+            actor.SetVisibility(False)
+            text_property = actor.GetTextProperty()
+            text_property.SetFontFamilyToArial()
+            text_property.SetFontSize(ORIENTATION_MARKER_FONT_SIZE)
+            text_property.SetBold(True)
+            if side == "top":
+                text_property.SetJustificationToCentered()
+                text_property.SetVerticalJustificationToTop()
+            elif side == "bottom":
+                text_property.SetJustificationToCentered()
+                text_property.SetVerticalJustificationToBottom()
+            elif side == "left":
+                text_property.SetJustificationToLeft()
+                text_property.SetVerticalJustificationToCentered()
+            else:
+                text_property.SetJustificationToRight()
+                text_property.SetVerticalJustificationToCentered()
+            text_property.SetColor(*self._orientation_marker_color())
+            self._orientation_actors[side] = actor
+            if self._renderer is not None:
+                self._renderer.AddViewProp(actor)
+
+    def _orientation_marker_color(self) -> Tuple[float, float, float]:
+        """Marker colour taken from the running application's theme."""
+        app = QApplication.instance()
+        theme_name = None if app is None else app.property("themeName")
+        return theme_rgb_float(theme_name or DEFAULT_THEME, "viewer_foreground")
+
+    def _orientation_marker_positions(
+        self,
+        width: int,
+        height: int,
+    ) -> Dict[str, Tuple[int, int]]:
+        """Display positions (VTK pixels, y increasing upwards) per side."""
+        margin = ORIENTATION_MARKER_MARGIN_PX
+        return {
+            "top": (width // 2, max(height - margin, 0)),
+            "bottom": (width // 2, margin),
+            "left": (margin, height // 2),
+            "right": (max(width - margin, 0), height // 2),
+        }
+
+    def refresh_orientation_markers(self, render: bool = False) -> None:
+        """Re-derive, re-colour and re-place the four orientation letters.
+
+        Markers are hidden whenever there is no slice to label -- before a
+        volume is loaded ``_active_reslice_axes`` returns ``None``.
+        """
+        actors = getattr(self, "_orientation_actors", None)
+        if not actors:
+            return
+        axes = self._active_reslice_axes()
+        letters = {} if axes is None else orientation_letters(axes)
+        color = self._orientation_marker_color()
+        widget = getattr(self, "vtk_widget", None)
+        width = max(int(widget.width()), 1) if widget is not None else 1
+        height = max(int(widget.height()), 1) if widget is not None else 1
+        positions = self._orientation_marker_positions(width, height)
+        for side, actor in actors.items():
+            text = letters.get(side, "")
+            actor.SetInput(text)
+            actor.SetVisibility(bool(text))
+            actor.GetTextProperty().SetColor(*color)
+            actor.SetDisplayPosition(*positions[side])
+        if render:
+            self._request_render()
 
     def update_volume(self):
         """Update the viewer when volume data changes."""
