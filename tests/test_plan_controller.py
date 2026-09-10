@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QApplication
 
 import src.controllers.plan_controller as plan_controller_module
 import src.ui.main_window as main_window_module
+from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
 
 
@@ -98,6 +99,13 @@ def _v1_plan_payload(grade="A"):
         ],
         "measurements": [],
     }
+
+
+def _plan_payload_with_metrics(metrics):
+    """A plan payload for one screw carrying the given ``metrics`` dict."""
+    payload = _v1_plan_payload()
+    payload["screws"][0]["metrics"] = metrics
+    return payload
 
 
 def _load_plan(window, monkeypatch, tmp_path, payload):
@@ -195,3 +203,37 @@ def test_saved_plans_record_the_mask_refinement_settings(
         "enabled": True,
         "ct_guided": True,
     }
+
+
+def test_loading_a_narrow_pedicle_screw_colours_the_3d_screw_red_on_first_draw(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """The 3D screw must be red the instant it is drawn, not only after regrade.
+
+    ``_apply_loaded_plan`` used to add the 3D screw with no ``color=`` at all,
+    relying on the later unconditional ``regrade_all()`` call to repaint it.
+    Stubbing out ``regrade_all`` here isolates the first draw: if the initial
+    ``add_screw`` call is still colourless, this catches it even though the
+    final on-screen state would otherwise self-heal.
+    """
+    window = ui_main_window
+    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: None)
+
+    payload = _plan_payload_with_metrics({"narrow_pedicle": True})
+    _load_plan(window, monkeypatch, tmp_path, payload)
+
+    expected = tuple(value / 255.0 for value in COLOR_SCREW_BREACH)
+    assert window.viewer_3d.screws[0].color == expected
+
+
+def test_loading_a_normal_screw_colours_the_3d_screw_with_the_default_colour(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: None)
+
+    payload = _plan_payload_with_metrics({"narrow_pedicle": False})
+    _load_plan(window, monkeypatch, tmp_path, payload)
+
+    expected = tuple(value / 255.0 for value in COLOR_SCREW)
+    assert window.viewer_3d.screws[0].color == expected
