@@ -42,6 +42,7 @@ from ..utils.constants import (
 )
 from .click_detector import DoubleClickDetector
 from .styles import DEFAULT_THEME, theme_rgb_float
+from .tool_icons import create_tool_icon
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,7 @@ class MPRViewer(QWidget):
         )
         self.pan_button.setCheckable(True)
         self.pan_button.setChecked(False)
+        self.pan_button.setIcon(create_tool_icon("pan", "#E8EEF4", 14))
         self.zoom_out_button = QToolButton(self.mpr_zoom_controls)
         self.zoom_out_button.setText("−")
         self.zoom_out_button.setToolTip("Zoom out this MPR")

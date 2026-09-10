@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QToolBar,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from src.controllers.auto_placement_controller import AutoPlacementController
@@ -179,6 +180,8 @@ class MainWindow(QMainWindow):
             else stored_theme if stored_theme in THEMES else DEFAULT_THEME
         )
         self._active_selection_kind: Optional[str] = None
+        #: (QAction | QAbstractButton, icon kind) pairs repainted by apply_theme.
+        self._themed_icon_targets: list[tuple[object, str]] = []
         self.control_section_order = [
             "Study",
             "Screw Review",
@@ -516,6 +519,24 @@ class MainWindow(QMainWindow):
         auto_layout = QVBoxLayout()
         auto_layout.setContentsMargins(6, 2, 6, 4)
         auto_layout.setSpacing(3)
+
+        workspace_mode_row = QHBoxLayout()
+        workspace_mode_row.addWidget(QLabel("Mode:"))
+        self.workspace_mode_combo = QComboBox()
+        self.workspace_mode_combo.setObjectName("workspaceMode")
+        self.workspace_mode_combo.addItem("Planning", "planning")
+        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
+        guided_index = self.workspace_mode_combo.findData("guided")
+        guided_item = self.workspace_mode_combo.model().item(guided_index)
+        if guided_item is not None:
+            guided_item.setEnabled(False)
+        self.workspace_mode_combo.setToolTip(
+            "Guided Workflow is reserved for a later release"
+        )
+        self.workspace_mode_combo.setMaximumWidth(100)
+        self.workspace_mode_combo.setMaximumHeight(26)
+        workspace_mode_row.addWidget(self.workspace_mode_combo, 1)
+        auto_layout.addLayout(workspace_mode_row)
 
         self.auto_screw_review_notice = QLabel(
             "Generated screws are added immediately. Select and adjust them below."
@@ -993,6 +1014,8 @@ class MainWindow(QMainWindow):
             self.screw_axis_mpr_btn,
         ):
             button.setProperty("role", "primary")
+        self._register_themed_icon(self.seg_run_btn, "run")
+        self._register_themed_icon(self.auto_screw_plan_btn, "run")
         for button in (
             self.standard_mpr_btn,
             self.screw_mpr_reset_btn,
@@ -1294,11 +1317,13 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
 
         open_action = QAction("Open DICOM Folder...", self)
+        self._register_themed_icon(open_action, "open")
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._dicom_ctrl.open_folder)
         file_menu.addAction(open_action)
 
         save_plan_action = QAction("Save Plan...", self)
+        self._register_themed_icon(save_plan_action, "save")
         save_plan_action.setShortcut("Ctrl+S")
         save_plan_action.triggered.connect(self._plan_ctrl.save_dialog)
         file_menu.addAction(save_plan_action)
@@ -1326,27 +1351,29 @@ class MainWindow(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
 
-        select_action = QAction(create_tool_icon("select"), "Select", self)
+        select_action = QAction("Select", self)
+        self._register_themed_icon(select_action, "select")
         select_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("navigate")
         )
         tools_menu.addAction(select_action)
 
-        screw_action = QAction(create_tool_icon("screw"), "Add Screw", self)
+        screw_action = QAction("Add Screw", self)
+        self._register_themed_icon(screw_action, "screw")
         screw_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("screw")
         )
         tools_menu.addAction(screw_action)
 
-        distance_action = QAction(
-            create_tool_icon("distance"), "Measure Distance", self
-        )
+        distance_action = QAction("Measure Distance", self)
+        self._register_themed_icon(distance_action, "distance")
         distance_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("distance")
         )
         tools_menu.addAction(distance_action)
 
-        angle_action = QAction(create_tool_icon("angle"), "Measure Angle", self)
+        angle_action = QAction("Measure Angle", self)
+        self._register_themed_icon(angle_action, "angle")
         angle_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("angle")
         )
@@ -1380,6 +1407,36 @@ class MainWindow(QMainWindow):
         self._layout_action_group.addAction(self._mpr_focus_layout_action)
         view_menu.addAction(self._mpr_focus_layout_action)
 
+        view_menu.addSeparator()
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.setObjectName("themeSelector")
+        for theme_name, label in THEME_LABELS.items():
+            self.theme_combo.addItem(label, theme_name)
+        theme_index = self.theme_combo.findData(self._theme_name)
+        self.theme_combo.setCurrentIndex(max(theme_index, 0))
+        self.theme_combo.setMaximumWidth(110)
+        self.theme_combo.setMaximumHeight(26)
+        self.theme_combo.currentIndexChanged.connect(
+            lambda: self.apply_theme(self.theme_combo.currentData())
+        )
+        view_menu.addAction(
+            self._menu_combo_action("Theme:", self.theme_combo)
+        )
+
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItem("Planning (3D Large)", "planning")
+        self.layout_combo.addItem("MPR Focus (2 x 2)", "mpr_focus")
+        self.layout_combo.setCurrentIndex(
+            self.layout_combo.findData(self._view_layout_mode)
+        )
+        self.layout_combo.currentIndexChanged.connect(
+            lambda: self.set_view_layout(self.layout_combo.currentData())
+        )
+        view_menu.addAction(
+            self._menu_combo_action("Layout:", self.layout_combo)
+        )
+
         help_menu = menubar.addMenu("Help")
         self._screw_mpr_help_action = QAction("Screw MPR controls", self)
         self._screw_mpr_help_action.triggered.connect(
@@ -1390,6 +1447,18 @@ class MainWindow(QMainWindow):
         self._about_action = QAction(f"About {__title__}", self)
         self._about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self._about_action)
+
+    def _menu_combo_action(self, caption: str, combo: QComboBox) -> QWidgetAction:
+        """Wrap a labelled combo box so it can live inside a QMenu."""
+        row = QWidget(self)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 3, 10, 3)
+        row_layout.setSpacing(6)
+        row_layout.addWidget(QLabel(caption))
+        row_layout.addWidget(combo, 1)
+        action = QWidgetAction(self)
+        action.setDefaultWidget(row)
+        return action
 
     def show_screw_mpr_help(self) -> None:
         """Show the Screw MPR mouse and keyboard gesture map."""
@@ -1412,38 +1481,37 @@ class MainWindow(QMainWindow):
     def _setup_toolbar(self):
         """Setup the application toolbar and unified icon tool palette."""
         toolbar = QToolBar("Main Toolbar")
+        toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
+        self.main_toolbar = toolbar
 
-        # Open button
         open_action = QAction("Open DICOM", self)
+        open_action.setToolTip("Open a DICOM series folder")
         open_action.triggered.connect(self._dicom_ctrl.open_folder)
+        self._register_themed_icon(open_action, "open")
         toolbar.addAction(open_action)
+        self._open_toolbar_action = open_action
 
         toolbar.addSeparator()
-
-        toolbar.addWidget(QLabel("Tools:"))
 
         # Unified tool palette (mutually exclusive)
         self._tool_group = QActionGroup(self)
         self._tool_group.setExclusive(True)
 
-        self._select_tool_action = QAction(
-            create_tool_icon("select"), "Select", self
-        )
+        self._select_tool_action = QAction("Select", self)
         self._select_tool_action.setToolTip("Select, navigate, and inspect")
         self._select_tool_action.setCheckable(True)
         self._select_tool_action.setChecked(True)
         self._select_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("navigate")
         )
+        self._register_themed_icon(self._select_tool_action, "select")
         self._tool_group.addAction(self._select_tool_action)
         toolbar.addAction(self._select_tool_action)
 
-        self._add_screw_tool_action = QAction(
-            create_tool_icon("screw"), "Add Screw", self
-        )
+        self._add_screw_tool_action = QAction("Add Screw", self)
         self._add_screw_tool_action.setToolTip(
             "Add a screw: click entry, then tip, in an MPR view"
         )
@@ -1451,12 +1519,11 @@ class MainWindow(QMainWindow):
         self._add_screw_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("screw")
         )
+        self._register_themed_icon(self._add_screw_tool_action, "screw")
         self._tool_group.addAction(self._add_screw_tool_action)
         toolbar.addAction(self._add_screw_tool_action)
 
-        self._distance_tool_action = QAction(
-            create_tool_icon("distance"), "Distance", self
-        )
+        self._distance_tool_action = QAction("Distance", self)
         self._distance_tool_action.setToolTip(
             "Measure distance: click two points in one MPR view"
         )
@@ -1464,12 +1531,11 @@ class MainWindow(QMainWindow):
         self._distance_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("distance")
         )
+        self._register_themed_icon(self._distance_tool_action, "distance")
         self._tool_group.addAction(self._distance_tool_action)
         toolbar.addAction(self._distance_tool_action)
 
-        self._angle_tool_action = QAction(
-            create_tool_icon("angle"), "Angle", self
-        )
+        self._angle_tool_action = QAction("Angle", self)
         self._angle_tool_action.setToolTip(
             "Measure angle: click three points in one MPR view"
         )
@@ -1477,6 +1543,7 @@ class MainWindow(QMainWindow):
         self._angle_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("angle")
         )
+        self._register_themed_icon(self._angle_tool_action, "angle")
         self._tool_group.addAction(self._angle_tool_action)
         toolbar.addAction(self._angle_tool_action)
 
@@ -1485,74 +1552,57 @@ class MainWindow(QMainWindow):
         self._measure_action = self._distance_tool_action
 
         toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Mode:"))
-        self.workspace_mode_combo = QComboBox()
-        self.workspace_mode_combo.setObjectName("workspaceMode")
-        self.workspace_mode_combo.addItem("Planning", "planning")
-        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
-        guided_index = self.workspace_mode_combo.findData("guided")
-        guided_item = self.workspace_mode_combo.model().item(guided_index)
-        if guided_item is not None:
-            guided_item.setEnabled(False)
-        self.workspace_mode_combo.setToolTip(
-            "Guided Workflow is reserved for a later release"
-        )
-        self.workspace_mode_combo.setMaximumWidth(100)
-        self.workspace_mode_combo.setMaximumHeight(26)
-        toolbar.addWidget(self.workspace_mode_combo)
 
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Theme:"))
-        self.theme_combo = QComboBox()
-        self.theme_combo.setObjectName("themeSelector")
-        for theme_name, label in THEME_LABELS.items():
-            self.theme_combo.addItem(label, theme_name)
-        theme_index = self.theme_combo.findData(self._theme_name)
-        self.theme_combo.setCurrentIndex(max(theme_index, 0))
-        self.theme_combo.setMaximumWidth(110)
-        self.theme_combo.setMaximumHeight(26)
-        self.theme_combo.currentIndexChanged.connect(
-            lambda: self.apply_theme(self.theme_combo.currentData())
-        )
-        toolbar.addWidget(self.theme_combo)
-
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Layout:"))
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItem("Planning (3D Large)", "planning")
-        self.layout_combo.addItem("MPR Focus (2 x 2)", "mpr_focus")
-        self.layout_combo.setCurrentIndex(
-            self.layout_combo.findData(self._view_layout_mode)
-        )
-        self.layout_combo.currentIndexChanged.connect(
-            lambda: self.set_view_layout(self.layout_combo.currentData())
-        )
-        toolbar.addWidget(self.layout_combo)
-
-        toolbar.addSeparator()
         self._fit_mpr_action = QAction("Fit MPR", self)
         self._fit_mpr_action.setToolTip("Fit CT images tightly in all MPR views")
         self._fit_mpr_action.triggered.connect(self.fit_mpr_views)
+        self._register_themed_icon(self._fit_mpr_action, "fit")
         toolbar.addAction(self._fit_mpr_action)
-
-        self._zoom_in_3d_action = QAction("3D +", self)
-        self._zoom_in_3d_action.setToolTip("Zoom in the 3D view")
-        self._zoom_in_3d_action.triggered.connect(
-            lambda: self.viewer_3d.zoom_camera(1.2)
-        )
-        toolbar.addAction(self._zoom_in_3d_action)
 
         self._zoom_out_3d_action = QAction("3D -", self)
         self._zoom_out_3d_action.setToolTip("Zoom out the 3D view")
         self._zoom_out_3d_action.triggered.connect(
             lambda: self.viewer_3d.zoom_camera(1.0 / 1.2)
         )
+        self._register_themed_icon(self._zoom_out_3d_action, "zoom_out")
         toolbar.addAction(self._zoom_out_3d_action)
+
+        self._zoom_in_3d_action = QAction("3D +", self)
+        self._zoom_in_3d_action.setToolTip("Zoom in the 3D view")
+        self._zoom_in_3d_action.triggered.connect(
+            lambda: self.viewer_3d.zoom_camera(1.2)
+        )
+        self._register_themed_icon(self._zoom_in_3d_action, "zoom_in")
+        toolbar.addAction(self._zoom_in_3d_action)
 
         self._fit_3d_action = QAction("Fit 3D", self)
         self._fit_3d_action.setToolTip("Fit all visible objects in the 3D view")
         self._fit_3d_action.triggered.connect(self.viewer_3d.fit_to_view)
+        self._register_themed_icon(self._fit_3d_action, "reset")
         toolbar.addAction(self._fit_3d_action)
+
+        toolbar.addSeparator()
+
+        self._screw_mpr_action = QAction("Screw MPR", self)
+        self._screw_mpr_action.setToolTip(
+            "Toggle screw-aligned MPR for the selected screw"
+        )
+        self._screw_mpr_action.setCheckable(True)
+        self._screw_mpr_action.setEnabled(False)
+        self._screw_mpr_action.triggered.connect(self._toggle_screw_mpr)
+        self._register_themed_icon(self._screw_mpr_action, "screw_mpr")
+        toolbar.addAction(self._screw_mpr_action)
+
+        self._refresh_themed_icons()
+        self.refresh_mode_indicators()
+
+    def _toggle_screw_mpr(self, checked: bool) -> None:
+        """Enter or leave Screw MPR from the toolbar toggle."""
+        if checked:
+            self._screw_mpr_ctrl.enter()
+        else:
+            self._screw_mpr_ctrl.exit()
+        self.refresh_mode_indicators()
 
     def _setup_statusbar(self):
         """Setup the status bar with coordinate and HU display."""
@@ -1588,6 +1638,7 @@ class MainWindow(QMainWindow):
             app.setProperty("themeName", theme_name)
             app.setStyleSheet(load_stylesheet(theme_name))
         self._theme_name = theme_name
+        self._refresh_themed_icons()
         for viewer in self._get_mpr_viewers():
             viewer.refresh_orientation_markers(render=True)
 
@@ -1605,6 +1656,29 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage(
                 f"Theme changed to {THEME_LABELS[theme_name]}"
             )
+
+    def _register_themed_icon(self, target, kind: str) -> None:
+        """Track a widget/action whose icon must follow the active palette."""
+        self._themed_icon_targets.append((target, kind))
+        target.setIcon(create_tool_icon(kind, THEMES[self._theme_name]["accent"]))
+
+    def _refresh_themed_icons(self) -> None:
+        """Repaint every registered icon with the active theme's accent."""
+        accent = THEMES[self._theme_name]["accent"]
+        for target, kind in self._themed_icon_targets:
+            target.setIcon(create_tool_icon(kind, accent))
+
+    def refresh_mode_indicators(self) -> None:
+        """Sync the Screw MPR toolbar toggle with the controller state."""
+        action = getattr(self, "_screw_mpr_action", None)
+        if action is None:
+            return
+        active = bool(self._screw_mpr_ctrl.is_active)
+        if action.isChecked() != active:
+            previous = action.blockSignals(True)
+            action.setChecked(active)
+            action.blockSignals(previous)
+        action.setEnabled(active or self.screw_axis_mpr_btn.isEnabled())
 
     # ------------------------------------------------------------------
     # Planning parameters

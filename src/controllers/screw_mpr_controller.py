@@ -384,6 +384,9 @@ class ScrewMPRController:
         reset_button = getattr(self._window, "screw_mpr_reset_btn", None)
         if reset_button is not None:
             reset_button.setEnabled(self._active)
+        refresh = getattr(self._window, "refresh_mode_indicators", None)
+        if callable(refresh):
+            refresh()
 
     def _apply_screw(self, screw) -> None:
         axes = build_screw_mpr_axes(
