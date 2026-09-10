@@ -152,6 +152,9 @@ class MPRViewer(QWidget):
         self._middle_pan_last_display: Optional[Tuple[int, int]] = None
         self._custom_scroll_handler: Optional[Callable] = None
         self._custom_readout: Optional[str] = None
+        self._custom_rotate_handler: Optional[Callable] = None
+        self._rotate_drag_active = False
+        self._rotate_drag_last_display: Optional[Tuple[int, int]] = None
         self._orientation_actors: Dict[str, vtk.vtkTextActor] = {}
 
         self._setup_ui()
@@ -616,6 +619,8 @@ class MPRViewer(QWidget):
         """Restore the viewer's standard axial, sagittal, or coronal plane."""
         self._custom_reslice_axes = None
         self._custom_readout = None
+        self._rotate_drag_active = False
+        self._rotate_drag_last_display = None
         self._set_review_active(False)
         self.label.setText(self.plane.capitalize())
         self._update_reslice_position()
@@ -633,6 +638,16 @@ class MPRViewer(QWidget):
         never reaches the handler.
         """
         self._custom_scroll_handler = handler
+
+    def set_custom_rotate_handler(self, handler: Optional[Callable]) -> None:
+        """Enable Ctrl+left-drag rotation on this viewer.
+
+        ``handler(plane, delta_deg)`` receives the frame rotation in degrees:
+        positive follows the right-hand rule about the plane normal, and the
+        sign is already chosen so the anatomy follows the pointer. Only
+        viewers with a handler start a rotate drag.
+        """
+        self._custom_rotate_handler = handler
 
     def set_custom_readout(self, text: Optional[str]) -> None:
         """Replace the ``Screw-aligned`` readout prefix with ``text``."""
@@ -1788,6 +1803,19 @@ class MPRViewer(QWidget):
         click_pos = interactor.GetEventPosition()
         self._update_hover_hu(click_pos[0], click_pos[1])
 
+        if (
+            self.__dict__.get("_custom_rotate_handler") is not None
+            and self._custom_reslice_axes is not None
+            and "ctrl" in self._modifier_names(self._current_modifiers())
+        ):
+            self._rotate_drag_active = True
+            self._rotate_drag_last_display = (
+                int(click_pos[0]),
+                int(click_pos[1]),
+            )
+            self.vtk_widget.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
         if self.__dict__.get("_mpr_pan_mode_active", False):
             self._mpr_pan_drag_active = True
             self._mpr_pan_last_display = (int(click_pos[0]), int(click_pos[1]))
@@ -1903,6 +1931,18 @@ class MPRViewer(QWidget):
             self._middle_pan_last_display = (int(x), int(y))
             return
 
+        if self.__dict__.get("_rotate_drag_active", False):
+            previous = self._rotate_drag_last_display
+            handler = self.__dict__.get("_custom_rotate_handler")
+            if previous is not None and handler is not None:
+                delta = self._drag_rotation_delta_deg(
+                    self._viewport_center_display(), previous, (x, y)
+                )
+                if delta != 0.0:
+                    handler(self.plane, delta)
+            self._rotate_drag_last_display = (int(x), int(y))
+            return
+
         if self.__dict__.get("_mpr_pan_drag_active", False):
             previous = self._mpr_pan_last_display
             if previous is not None:
@@ -1940,6 +1980,10 @@ class MPRViewer(QWidget):
 
     def _on_left_release(self, obj, event):
         """Release does not end double-click-locked screw movement."""
+        if self.__dict__.get("_rotate_drag_active", False):
+            self._rotate_drag_active = False
+            self._rotate_drag_last_display = None
+            self.vtk_widget.setCursor(Qt.CursorShape.ArrowCursor)
         if self.__dict__.get("_mpr_pan_drag_active", False):
             self._mpr_pan_drag_active = False
             self._mpr_pan_last_display = None
@@ -2051,6 +2095,40 @@ class MPRViewer(QWidget):
             if self._mpr_pan_mode_active
             else Qt.CursorShape.ArrowCursor
         )
+
+    def _viewport_center_display(self) -> Tuple[float, float]:
+        """Pixel centre of this viewport, the Ctrl-drag rotation pivot."""
+        return (
+            float(self.vtk_widget.width()) / 2.0,
+            float(self.vtk_widget.height()) / 2.0,
+        )
+
+    @staticmethod
+    def _drag_rotation_delta_deg(center, previous, current) -> float:
+        """Frame rotation in degrees so the image follows a Ctrl-drag.
+
+        VTK display coordinates are bottom-up, so a counter-clockwise drag
+        increases the screen angle. The view frame must turn the other way
+        for the anatomy to follow the pointer, hence the negation. Points
+        within 4 px of the pivot are ignored to avoid wild jumps.
+        """
+        previous_dx = float(previous[0]) - float(center[0])
+        previous_dy = float(previous[1]) - float(center[1])
+        current_dx = float(current[0]) - float(center[0])
+        current_dy = float(current[1]) - float(center[1])
+        if math.hypot(previous_dx, previous_dy) < 4.0:
+            return 0.0
+        if math.hypot(current_dx, current_dy) < 4.0:
+            return 0.0
+        delta = math.degrees(
+            math.atan2(current_dy, current_dx)
+            - math.atan2(previous_dy, previous_dx)
+        )
+        while delta > 180.0:
+            delta -= 360.0
+        while delta <= -180.0:
+            delta += 360.0
+        return -delta
 
     def _pan_camera_by_pixels(
         self,

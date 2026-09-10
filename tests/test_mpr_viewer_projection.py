@@ -709,3 +709,88 @@ def test_modifier_names_translate_qt_modifiers():
     assert MPRViewer._modifier_names(
         Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
     ) == frozenset({"ctrl", "alt"})
+
+
+def test_drag_rotation_delta_negates_the_on_screen_pointer_angle():
+    # Pivot (200, 100); pointer moves from +x to +y, i.e. +90 deg on screen.
+    delta = MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (300.0, 100.0), (200.0, 200.0)
+    )
+
+    assert delta == pytest.approx(-90.0)
+
+
+def test_drag_rotation_wraps_across_the_negative_x_axis():
+    # Crossing the atan2 branch cut must stay a small step, not ~360 deg.
+    delta = MPRViewer._drag_rotation_delta_deg(
+        (0.0, 0.0), (-100.0, -1.0), (-100.0, 1.0)
+    )
+
+    assert delta == pytest.approx(1.1458773953669, abs=1e-9)
+
+
+def test_drag_rotation_ignores_points_near_the_pivot():
+    assert MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (201.0, 100.0), (200.0, 200.0)
+    ) == 0.0
+    assert MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (300.0, 100.0), (200.0, 102.0)
+    ) == 0.0
+
+
+def test_ctrl_left_drag_on_a_custom_plane_reports_frame_rotation():
+    viewer = _make_camera_viewer()
+    axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._custom_reslice_axes = axes
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ControlModifier
+    rotations = []
+    viewer.set_custom_rotate_handler(
+        lambda plane, delta: rotations.append((plane, delta))
+    )
+
+    viewer.vtk_widget.event_position = (300, 100)
+    viewer._on_left_click(None, "LeftButtonPressEvent")
+    assert viewer._rotate_drag_active is True
+
+    viewer.vtk_widget.event_position = (200, 200)
+    viewer._on_mouse_move(None, "MouseMoveEvent")
+    viewer._on_left_release(None, "LeftButtonReleaseEvent")
+
+    assert rotations == [("axial", pytest.approx(-90.0))]
+    assert viewer._rotate_drag_active is False
+    assert viewer._rotate_drag_last_display is None
+
+
+def test_plain_left_click_on_a_custom_plane_does_not_rotate():
+    viewer = _make_camera_viewer()
+    axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._custom_reslice_axes = axes
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+    viewer._mpr_pan_mode_active = True
+    viewer.set_custom_rotate_handler(lambda *args: pytest.fail("rotated"))
+
+    viewer.vtk_widget.event_position = (300, 100)
+    viewer._on_left_click(None, "LeftButtonPressEvent")
+
+    assert viewer.__dict__.get("_rotate_drag_active", False) is False
+    assert viewer._mpr_pan_drag_active is True
+
+
+def test_leaving_custom_axes_cancels_an_in_flight_rotate_drag():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._rotate_drag_active = True
+    viewer._rotate_drag_last_display = (10, 10)
+    viewer._set_review_active = lambda _active: None
+    viewer.label = SimpleNamespace(setText=lambda _text: None)
+    viewer._update_reslice_position = lambda: None
+    viewer._update_slice_info = lambda: None
+    viewer.fit_to_view = lambda render=True: None
+
+    viewer.clear_custom_reslice_axes()
+
+    assert viewer._rotate_drag_active is False
+    assert viewer._rotate_drag_last_display is None
+    assert viewer._custom_readout is None
