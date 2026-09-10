@@ -161,10 +161,16 @@ class ScrewMPRController:
         self._reapply()
 
     def set_rotation(self, degrees: float) -> None:
-        """Spin both long-axis planes about the screw axis (right-hand rule)."""
-        self._rotation_deg = max(
-            MIN_ROTATION_DEG, min(MAX_ROTATION_DEG, float(degrees))
-        )
+        """Spin both long-axis planes about the screw axis (right-hand rule).
+
+        The stored angle wraps rather than clamps, so a continuous drag or
+        wheel gesture never sticks at the range boundary: the convention is
+        -180 <= rotation_deg < 180, e.g. 185 degrees is stored as -175.
+        """
+        span = MAX_ROTATION_DEG - MIN_ROTATION_DEG
+        self._rotation_deg = (
+            (float(degrees) - MIN_ROTATION_DEG) % span
+        ) + MIN_ROTATION_DEG
         self._sync_rotation_control()
         self._reapply()
 

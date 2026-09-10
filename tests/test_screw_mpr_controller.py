@@ -430,15 +430,42 @@ def test_ctrl_drag_rotation_only_applies_to_the_cross_section():
     assert controller.rotation_deg == pytest.approx(12.0)
 
 
-def test_rotation_is_clamped_to_plus_minus_one_hundred_eighty_degrees():
+def test_rotation_wraps_instead_of_clamping_at_the_boundary():
+    # Convention: -180 <= rotation_deg < 180, so the boundary itself
+    # normalises to -180 rather than +180.
     controller, _window = _make_controller([_screw()])
     controller.enter()
 
-    controller.set_rotation(400.0)
-    assert controller.rotation_deg == pytest.approx(180.0)
+    controller.set_rotation(175.0)
+    controller.rotate(10.0)
+    assert controller.rotation_deg == pytest.approx(-175.0)
+
+    controller.set_rotation(540.0)
+    assert controller.rotation_deg == pytest.approx(-180.0)
 
     controller.set_rotation(-400.0)
-    assert controller.rotation_deg == pytest.approx(-180.0)
+    assert controller.rotation_deg == pytest.approx(-40.0)
+
+
+def test_a_full_turn_of_drag_returns_to_the_starting_rotation():
+    controller, _window = _make_controller([_screw()])
+    controller.enter()
+
+    controller.set_rotation(20.0)
+    for _ in range(36):
+        controller.rotate(10.0)
+
+    assert controller.rotation_deg == pytest.approx(20.0)
+
+
+def test_rotation_spin_box_shows_the_normalised_value():
+    controller, window = _make_controller([_screw()])
+    controller.enter()
+
+    controller.set_rotation(185.0)
+
+    assert controller.rotation_deg == pytest.approx(-175.0)
+    assert window.screw_axis_rotation_spin.current_value == -175
 
 
 def test_reset_view_restores_position_rotation_and_offsets():
