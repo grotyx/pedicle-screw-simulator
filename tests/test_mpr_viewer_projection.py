@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 import vtk
+from PyQt6.QtCore import Qt
 
 from src.core.mpr_geometry import build_screw_mpr_axes
 from src.ui.click_detector import DoubleClickDetector
@@ -525,3 +526,186 @@ def test_selected_measurement_shows_pacs_style_point_handles():
     viewer.set_selected_measurement(4)
 
     assert all(handle.GetVisibility() for handle in handles)
+
+
+class _FakeVTKWidget:
+    """Stands in for QVTKRenderWindowInteractor, its window, and interactor."""
+
+    def __init__(self, width=400, height=200):
+        self._width = width
+        self._height = height
+        self.cursors = []
+        self.event_position = (0, 0)
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
+    def setCursor(self, cursor):
+        self.cursors.append(cursor)
+
+    def GetRenderWindow(self):
+        return self
+
+    def GetInteractor(self):
+        return self
+
+    def GetEventPosition(self):
+        return self.event_position
+
+
+def _make_camera_viewer(width=400, height=200):
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.plane = "axial"
+    viewer._renderer = vtk.vtkRenderer()
+    camera = viewer._renderer.GetActiveCamera()
+    camera.ParallelProjectionOn()
+    camera.SetParallelScale(100.0)
+    camera.SetFocalPoint(0.0, 0.0, 0.0)
+    camera.SetPosition(0.0, 0.0, 100.0)
+    viewer.vtk_widget = _FakeVTKWidget(width, height)
+    viewer._request_render = lambda: None
+    viewer._update_hover_hu = lambda x, y: None
+    viewer._custom_reslice_axes = None
+    viewer._custom_scroll_handler = None
+    viewer._custom_readout = None
+    return viewer
+
+
+def test_interactor_binds_middle_button_pan_events(monkeypatch):
+    recorded = []
+
+    class _Style:
+        def AddObserver(self, event, _callback):
+            recorded.append(event)
+
+    class _Interactor:
+        def SetInteractorStyle(self, _style):
+            return None
+
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        GetRenderWindow=lambda: SimpleNamespace(
+            GetInteractor=lambda: _Interactor()
+        )
+    )
+    monkeypatch.setattr(vtk, "vtkInteractorStyleImage", _Style)
+
+    viewer._setup_interactor()
+
+    assert "MiddleButtonPressEvent" in recorded
+    assert "MiddleButtonReleaseEvent" in recorded
+
+
+def test_middle_button_drag_pans_without_changing_zoom():
+    viewer = _make_camera_viewer()
+    viewer.vtk_widget.event_position = (100, 100)
+
+    viewer._on_middle_click(None, "MiddleButtonPressEvent")
+    assert viewer._middle_pan_active is True
+
+    viewer.vtk_widget.event_position = (110, 80)
+    viewer._on_mouse_move(None, "MouseMoveEvent")
+
+    camera = viewer._renderer.GetActiveCamera()
+    assert camera.GetFocalPoint() == pytest.approx((-10.0, 20.0, 0.0))
+    assert camera.GetPosition() == pytest.approx((-10.0, 20.0, 100.0))
+    assert camera.GetParallelScale() == pytest.approx(100.0)
+
+    viewer._on_middle_release(None, "MiddleButtonReleaseEvent")
+    assert viewer._middle_pan_active is False
+    assert viewer._middle_pan_last_display is None
+
+
+def test_custom_axes_wheel_is_routed_to_the_scroll_handler():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    events = []
+    viewer.set_custom_scroll_handler(
+        lambda plane, steps, modifiers: events.append(
+            (plane, steps, modifiers)
+        )
+    )
+
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ShiftModifier
+    viewer._on_scroll_backward(None, "MouseWheelBackwardEvent")
+
+    assert events == [
+        ("axial", 1, frozenset()),
+        ("axial", -1, frozenset({"shift"})),
+    ]
+
+
+def test_ctrl_wheel_still_zooms_while_custom_axes_are_active():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    events = []
+    viewer.set_custom_scroll_handler(lambda *args: events.append(args))
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ControlModifier
+
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+
+    assert events == []
+    assert viewer._renderer.GetActiveCamera().GetParallelScale() == (
+        pytest.approx(100.0 / 1.15)
+    )
+
+
+def test_standard_mode_wheel_still_steps_one_slice():
+    viewer = _make_camera_viewer()
+    viewer.volume_manager = _VolumeManager(10.0)
+    moved = []
+    emitted = []
+    viewer.set_slice_position = lambda position: moved.append(position)
+    viewer.slice_changed = SimpleNamespace(
+        emit=lambda plane, position: emitted.append((plane, position))
+    )
+    viewer.set_custom_scroll_handler(lambda *args: pytest.fail("not custom"))
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+    viewer._on_scroll_backward(None, "MouseWheelBackwardEvent")
+
+    assert moved == [pytest.approx(11.0), pytest.approx(9.0)]
+    assert emitted == [
+        ("axial", pytest.approx(11.0)),
+        ("axial", pytest.approx(9.0)),
+    ]
+
+
+def test_custom_readout_replaces_the_screw_aligned_prefix():
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.plane = "axial"
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._custom_readout = None
+    viewer._last_hu_value = 412.0
+    viewer.info_label = SimpleNamespace(
+        text="", setText=lambda value: setattr(viewer.info_label, "text", value)
+    )
+
+    viewer._update_slice_info()
+    assert viewer.info_label.text == "Screw-aligned | HU: 412"
+
+    viewer.set_custom_readout("Screw-aligned · rot 15° · +2.0 mm")
+    assert viewer.info_label.text == (
+        "Screw-aligned · rot 15° · +2.0 mm | HU: 412"
+    )
+
+    viewer.set_custom_readout(None)
+    assert viewer.info_label.text == "Screw-aligned | HU: 412"
+
+
+def test_modifier_names_translate_qt_modifiers():
+    assert MPRViewer._modifier_names(Qt.KeyboardModifier.NoModifier) == (
+        frozenset()
+    )
+    assert MPRViewer._modifier_names(Qt.KeyboardModifier.ShiftModifier) == (
+        frozenset({"shift"})
+    )
+    assert MPRViewer._modifier_names(
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    ) == frozenset({"ctrl", "alt"})

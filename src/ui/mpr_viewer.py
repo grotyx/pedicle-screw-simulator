@@ -148,6 +148,10 @@ class MPRViewer(QWidget):
         self._mpr_pan_mode_active = False
         self._mpr_pan_drag_active = False
         self._mpr_pan_last_display: Optional[Tuple[int, int]] = None
+        self._middle_pan_active = False
+        self._middle_pan_last_display: Optional[Tuple[int, int]] = None
+        self._custom_scroll_handler: Optional[Callable] = None
+        self._custom_readout: Optional[str] = None
         self._orientation_actors: Dict[str, vtk.vtkTextActor] = {}
 
         self._setup_ui()
@@ -196,7 +200,8 @@ class MPRViewer(QWidget):
         self.pan_button = QToolButton(self.mpr_zoom_controls)
         self.pan_button.setText("Pan")
         self.pan_button.setToolTip(
-            "Move this MPR image: enable Pan, then left-drag"
+            "Move this MPR image: enable Pan and left-drag, "
+            "or middle-drag at any time"
         )
         self.pan_button.setCheckable(True)
         self.pan_button.setChecked(False)
@@ -294,6 +299,10 @@ class MPRViewer(QWidget):
         style.AddObserver("MouseMoveEvent", self._on_mouse_move)
         style.AddObserver("RightButtonPressEvent", self._on_right_click)
         style.AddObserver("RightButtonReleaseEvent", self._on_right_release)
+
+        # Middle-drag pans the camera in every mode, next to the Pan toggle.
+        style.AddObserver("MiddleButtonPressEvent", self._on_middle_click)
+        style.AddObserver("MiddleButtonReleaseEvent", self._on_middle_release)
 
         self._right_button_down = False
         self._last_mouse_y = 0
@@ -606,6 +615,7 @@ class MPRViewer(QWidget):
     def clear_custom_reslice_axes(self) -> None:
         """Restore the viewer's standard axial, sagittal, or coronal plane."""
         self._custom_reslice_axes = None
+        self._custom_readout = None
         self._set_review_active(False)
         self.label.setText(self.plane.capitalize())
         self._update_reslice_position()
@@ -613,6 +623,21 @@ class MPRViewer(QWidget):
         self.refresh_orientation_markers()
         self.fit_to_view(render=False)
         self._request_render()
+
+    def set_custom_scroll_handler(self, handler: Optional[Callable]) -> None:
+        """Route wheel notches to ``handler`` while custom axes are active.
+
+        ``handler(plane, steps, modifiers)`` gets this viewer's plane name,
+        ``+1``/``-1`` per notch, and a frozenset of lowercase modifier names
+        (``"shift"``, ``"ctrl"``, ``"alt"``). Ctrl/Cmd+wheel still zooms and
+        never reaches the handler.
+        """
+        self._custom_scroll_handler = handler
+
+    def set_custom_readout(self, text: Optional[str]) -> None:
+        """Replace the ``Screw-aligned`` readout prefix with ``text``."""
+        self._custom_readout = None if text is None else str(text)
+        self._update_slice_info()
 
     def set_review_screw(self, screw_id: Optional[int]) -> None:
         """Show only one selected screw during Screw MPR."""
@@ -739,7 +764,8 @@ class MPRViewer(QWidget):
         else:
             hu_text = f"HU: {self._last_hu_value:.0f}"
         if self._custom_reslice_axes is not None:
-            self.info_label.setText(f"Screw-aligned | {hu_text}")
+            prefix = self.__dict__.get("_custom_readout") or "Screw-aligned"
+            self.info_label.setText(f"{prefix} | {hu_text}")
         else:
             position = self.volume_manager.get_slice_position(self.plane)
             self.info_label.setText(f"Slice: {position:.1f} mm | {hu_text}")
@@ -1870,6 +1896,13 @@ class MPRViewer(QWidget):
         x, y = interactor.GetEventPosition()
         self._update_hover_hu(x, y)
 
+        if self.__dict__.get("_middle_pan_active", False):
+            previous = self._middle_pan_last_display
+            if previous is not None:
+                self._pan_camera_by_pixels(x - previous[0], y - previous[1])
+            self._middle_pan_last_display = (int(x), int(y))
+            return
+
         if self.__dict__.get("_mpr_pan_drag_active", False):
             previous = self._mpr_pan_last_display
             if previous is not None:
@@ -1938,31 +1971,59 @@ class MPRViewer(QWidget):
             return spacing[0]
         return spacing[1]
 
-    def _on_scroll_forward(self, obj, event):
-        """Scroll forward: Ctrl/Cmd+Scroll = zoom in, plain = next slice."""
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-            self._zoom(1.15)
-        elif self._custom_reslice_axes is not None:
+    def _current_modifiers(self):
+        """Keyboard modifiers driving wheel and drag decisions.
+
+        Read through a method (not inline) so tests can substitute one
+        without touching Qt's global application state.
+        """
+        return QApplication.keyboardModifiers()
+
+    @staticmethod
+    def _modifier_names(modifiers) -> frozenset:
+        """Translate Qt keyboard modifiers into lowercase names."""
+        names = []
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            names.append("shift")
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            names.append("ctrl")
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            names.append("alt")
+        return frozenset(names)
+
+    def _handle_scroll(self, steps: int, zoom_factor: float) -> None:
+        """Zoom, hand the notch to the custom handler, or step one slice."""
+        modifiers = self._current_modifiers()
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            self._zoom(zoom_factor)
             return
-        else:
-            step = self._get_scroll_step()
-            current = self.volume_manager.get_slice_position(self.plane)
-            self.set_slice_position(current + step)
-            self.slice_changed.emit(self.plane, current + step)
+        if self._custom_reslice_axes is not None:
+            handler = self.__dict__.get("_custom_scroll_handler")
+            if handler is not None:
+                handler(
+                    self.plane,
+                    int(steps),
+                    self._modifier_names(modifiers),
+                )
+            return
+        position = self.volume_manager.get_slice_position(self.plane)
+        position += self._get_scroll_step() * int(steps)
+        self.set_slice_position(position)
+        self.slice_changed.emit(self.plane, position)
+
+    def _on_scroll_forward(self, obj, event):
+        """Scroll forward: Ctrl/Cmd = zoom in, otherwise next slice or hook."""
+        self._handle_scroll(1, 1.15)
 
     def _on_scroll_backward(self, obj, event):
-        """Scroll backward: Ctrl/Cmd+Scroll = zoom out, plain = prev slice."""
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-            self._zoom(0.85)
-        elif self._custom_reslice_axes is not None:
-            return
-        else:
-            step = self._get_scroll_step()
-            current = self.volume_manager.get_slice_position(self.plane)
-            self.set_slice_position(current - step)
-            self.slice_changed.emit(self.plane, current - step)
+        """Scroll backward: Ctrl/Cmd = zoom out, otherwise prev slice or hook."""
+        self._handle_scroll(-1, 0.85)
 
     def _zoom(self, factor: float) -> None:
         """Zoom in/out by adjusting camera zoom factor."""
@@ -2023,6 +2084,27 @@ class MPRViewer(QWidget):
             position[2],
         )
         self._request_render()
+
+    def _on_middle_click(self, obj, event):
+        """Start a middle-button camera pan (works in every MPR mode)."""
+        interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
+        position = interactor.GetEventPosition()
+        self._middle_pan_active = True
+        self._middle_pan_last_display = (
+            int(position[0]),
+            int(position[1]),
+        )
+        self.vtk_widget.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _on_middle_release(self, obj, event):
+        """Finish a middle-button pan and restore the pointer shape."""
+        self._middle_pan_active = False
+        self._middle_pan_last_display = None
+        self.vtk_widget.setCursor(
+            Qt.CursorShape.OpenHandCursor
+            if self.__dict__.get("_mpr_pan_mode_active", False)
+            else Qt.CursorShape.ArrowCursor
+        )
 
     def _on_right_click(self, obj, event):
         """Handle right click start for window/level."""
