@@ -213,6 +213,19 @@ def test_theme_and_planner_settings_share_one_scope(ui_main_window, isolated_qse
     assert unified.value("appearance/theme") == "graphite_mint"
 
 
+def test_theme_change_recolours_the_orientation_markers(ui_main_window):
+    window = ui_main_window
+    before = {
+        viewer.plane: viewer.orientation_refresh_count
+        for viewer in window._get_mpr_viewers()
+    }
+
+    window.apply_theme("graphite_mint", persist=False)
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.orientation_refresh_count == before[viewer.plane] + 1
+
+
 def test_legacy_theme_and_geometry_are_migrated_into_the_unified_scope(
     monkeypatch, qtbot, isolated_qsettings
 ):

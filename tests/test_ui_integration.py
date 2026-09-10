@@ -56,6 +56,7 @@ class DummyMPRViewer(QWidget):
         self.selected_measurement_id = None
         self.screw_interaction_cancelled = 0
         self.last_slice_position = None
+        self.orientation_refresh_count = 0
 
     def set_window_level(self, _window, _level):
         return
@@ -136,6 +137,9 @@ class DummyMPRViewer(QWidget):
 
     def fit_to_view(self):
         self.fit_count += 1
+
+    def refresh_orientation_markers(self, render=False):
+        self.orientation_refresh_count += 1
 
     # Stubs for _coordinated_initial_render
     _render_guard_active = False

@@ -1,5 +1,6 @@
 """Tests for patient-orientation letters derived from reslice matrices."""
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -231,3 +232,37 @@ def test_theme_rgb_float_converts_hex_to_vtk_floats():
 
 def test_every_palette_defines_a_viewer_foreground():
     assert all("viewer_foreground" in palette for palette in THEMES.values())
+
+
+def test_refresh_follows_the_current_viewport_size():
+    viewer = _marker_viewer(create_reslice_axes("axial", (0.0, 0.0, 0.0)))
+
+    viewer.refresh_orientation_markers()
+    assert viewer._orientation_actors["right"].GetPosition() == pytest.approx(
+        (394.0, 150.0)
+    )
+
+    viewer.vtk_widget = SimpleNamespace(width=lambda: 800, height=lambda: 600)
+    viewer.refresh_orientation_markers()
+
+    assert viewer._orientation_actors["right"].GetPosition() == pytest.approx(
+        (794.0, 300.0)
+    )
+    assert viewer._orientation_actors["top"].GetPosition() == pytest.approx(
+        (400.0, 594.0)
+    )
+
+
+def test_viewer_resize_hook_is_wired_to_the_marker_refresh():
+    # resizeEvent itself is a two-line Qt delegation; a real MPRViewer
+    # cannot be built in-process (its VTK render window crashes offscreen
+    # Qt), so pin the wiring rather than the Qt event delivery.
+    assert "resizeEvent" in MPRViewer.__dict__
+    source = inspect.getsource(MPRViewer.resizeEvent)
+    assert "refresh_orientation_markers" in source
+
+
+def test_refresh_is_a_noop_before_the_actors_exist():
+    viewer = MPRViewer.__new__(MPRViewer)
+
+    viewer.refresh_orientation_markers()   # must not raise

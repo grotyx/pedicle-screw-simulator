@@ -1527,6 +1527,8 @@ class MainWindow(QMainWindow):
             app.setProperty("themeName", theme_name)
             app.setStyleSheet(load_stylesheet(theme_name))
         self._theme_name = theme_name
+        for viewer in self._get_mpr_viewers():
+            viewer.refresh_orientation_markers(render=True)
 
         if hasattr(self, "theme_combo"):
             index = self.theme_combo.findData(theme_name)

@@ -250,6 +250,11 @@ class MPRViewer(QWidget):
         layout.addWidget(self.viewport_container, stretch=1)
         layout.addWidget(self.info_label)
 
+    def resizeEvent(self, event):
+        """Keep the orientation letters pinned to the viewport edges."""
+        super().resizeEvent(event)
+        self.refresh_orientation_markers()
+
     def _setup_vtk_pipeline(self):
         """Setup the VTK rendering pipeline."""
         # Create renderer
@@ -418,7 +423,10 @@ class MPRViewer(QWidget):
         Markers are hidden whenever there is no slice to label -- before a
         volume is loaded ``_active_reslice_axes`` returns ``None``.
         """
-        actors = getattr(self, "_orientation_actors", None)
+        # Use the instance dict directly: a bare, not-yet-``__init__``-ed
+        # QWidget raises RuntimeError (not AttributeError) on ordinary
+        # attribute access, which ``getattr(..., default)`` cannot catch.
+        actors = self.__dict__.get("_orientation_actors")
         if not actors:
             return
         axes = self._active_reslice_axes()
@@ -474,6 +482,7 @@ class MPRViewer(QWidget):
             self._crosshairs_added = True
 
         self.fit_to_view(render=False)
+        self.refresh_orientation_markers()
 
         # Update display
         self._update_slice_info()
@@ -589,6 +598,7 @@ class MPRViewer(QWidget):
         self.label.setText(title)
         self._update_reslice_position()
         self._update_slice_info()
+        self.refresh_orientation_markers()
         if not was_custom:
             self.fit_to_view(render=False)
         self._request_render()
@@ -600,6 +610,7 @@ class MPRViewer(QWidget):
         self.label.setText(self.plane.capitalize())
         self._update_reslice_position()
         self._update_slice_info()
+        self.refresh_orientation_markers()
         self.fit_to_view(render=False)
         self._request_render()
 
