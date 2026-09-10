@@ -366,6 +366,116 @@ class TestDirectionalBreach:
                 diameter_mm=6.0, label=28, side="middle",
             )
 
+    def test_an_unknown_side_is_rejected_without_a_radial_ring(self):
+        """A grader with no ring still never reaches the classification."""
+        grader = ScrewGrader(_cube_mask(), radial_samples=0)
+        with pytest.raises(ValueError, match="side must be"):
+            grader.grade(
+                entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0),
+                diameter_mm=6.0, label=28, side="middle",
+            )
+
+    def test_an_unknown_side_is_rejected_for_a_zero_length_screw(self):
+        grader = ScrewGrader(_cube_mask())
+        with pytest.raises(ValueError, match="side must be"):
+            grader.grade(
+                entry=(30.0, 30.0, 30.0), target=(30.0, 30.0, 30.0),
+                diameter_mm=6.0, label=28, side="middle",
+            )
+
+    def test_an_unknown_side_is_rejected_for_an_empty_batch(self):
+        grader = ScrewGrader(_cube_mask())
+        with pytest.raises(ValueError, match="side must be"):
+            grader.evaluate_batch(
+                np.empty((0, 3)), np.empty((0, 3)), 6.0, 28, side="middle"
+            )
+
+    def test_a_grader_without_a_ring_reports_the_undirected_wall(self):
+        """The centreline alone cannot say which side of the screw the wall is on."""
+        grader = ScrewGrader(_cube_mask(), radial_samples=0)
+        entry, target = (30.0, 35.0, 30.0), (30.0, 25.0, 30.0)
+
+        single = grader.grade(
+            entry=entry, target=target, diameter_mm=6.0, label=28, side="left"
+        )
+        batch = grader.evaluate_batch(
+            np.array([entry]), np.array([target]), 6.0, 28, side="left"
+        )
+
+        assert single.min_wall_mm > 0.0
+        assert single.medial_wall_mm == pytest.approx(single.min_wall_mm)
+        assert batch.medial_wall_mm[0] == pytest.approx(batch.min_wall_mm[0])
+        assert batch.medial_wall_mm[0] == pytest.approx(single.medial_wall_mm)
+        assert batch.medial_breach_mm[0] == batch.breach_mm[0]
+
+    def test_a_convergent_screw_is_classified_against_a_perpendicular_axis(self):
+        """The medial axis is the midline direction with the trajectory projected out."""
+        direction = np.array([[0.8, -0.6, 0.0]])
+        medial = ScrewGrader._medial_directions(direction, "left")
+        assert float(np.dot(medial[0], direction[0])) == pytest.approx(0.0, abs=1e-12)
+        assert float(np.linalg.norm(medial[0])) == pytest.approx(1.0)
+        assert medial[0][0] < 0.0          # still points toward the midline
+
+        # The screw runs obliquely to the -y wall of the label (y in [20, 40)),
+        # which the medial half of its ring pokes through by 2 mm.
+        grader = ScrewGrader(_cube_mask())
+        result = grader.grade(
+            entry=(28.0, 26.0, 30.0), target=(36.0, 20.0, 30.0),
+            diameter_mm=6.0, label=28, side="left",
+        )
+
+        assert result.medial_breach_mm == pytest.approx(2.0)
+        assert result.lateral_breach_mm == 0.0
+        assert result.craniocaudal_breach_mm == 0.0
+        assert result.medial_wall_mm == 0.0
+
+    def test_a_screw_along_x_has_no_medial_axis_and_falls_back(self):
+        """A trajectory parallel to the midline direction cannot be split at all."""
+        grader = ScrewGrader(_cube_mask())
+        entry, target = (5.0, 30.0, 30.0), (45.0, 30.0, 30.0)
+
+        directed = grader.grade(
+            entry=entry, target=target, diameter_mm=6.0, label=28, side="left"
+        )
+        plain = grader.grade(entry=entry, target=target, diameter_mm=6.0, label=28)
+
+        assert directed.breach_mm > 0.0
+        assert directed.medial_breach_mm == plain.breach_mm
+        assert directed.lateral_breach_mm == plain.breach_mm
+        assert directed.craniocaudal_breach_mm == plain.breach_mm
+        assert directed.medial_wall_mm == plain.min_wall_mm
+
+        batch = grader.evaluate_batch(
+            np.array([entry]), np.array([target]), 6.0, 28, side="left"
+        )
+        assert batch.medial_breach_mm[0] == batch.breach_mm[0]
+        assert batch.lateral_breach_mm[0] == batch.breach_mm[0]
+        assert batch.craniocaudal_breach_mm[0] == batch.breach_mm[0]
+        assert batch.medial_wall_mm[0] == batch.min_wall_mm[0]
+
+    def test_chunking_does_not_change_a_directed_batch(self, monkeypatch):
+        """Membership is sliced with the candidates, so the chunk size cannot matter."""
+        import src.core.screw_grading as screw_grading
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array(
+            [[39.0, 35.0, 30.0], [30.0, 35.0, 30.0], [28.0, 26.0, 30.0]]
+        )
+        targets = np.array(
+            [[39.0, 25.0, 30.0], [30.0, 25.0, 30.0], [36.0, 20.0, 30.0]]
+        )
+
+        whole = grader.evaluate_batch(entries, targets, 6.0, 28, side="left")
+        monkeypatch.setattr(screw_grading, "MAX_BATCH_SAMPLE_POINTS", 1)
+        chunked = grader.evaluate_batch(entries, targets, 6.0, 28, side="left")
+
+        for name in (
+            "breach_mm", "min_wall_mm", "medial_breach_mm", "lateral_breach_mm",
+            "craniocaudal_breach_mm", "medial_wall_mm",
+        ):
+            assert np.array_equal(getattr(chunked, name), getattr(whole, name)), name
+
 
 class TestDistancesAtPoints:
     def test_distances_match_the_label_geometry(self):

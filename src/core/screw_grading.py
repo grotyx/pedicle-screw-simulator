@@ -300,6 +300,7 @@ class ScrewGrader:
         label: Optional[int] = None,
         side: Optional[str] = None,
     ) -> Optional[GradeResult]:
+        self._validate_side(side)
         if label is None:
             label = self.detect_label(entry, target)
         if label is None:
@@ -403,7 +404,13 @@ class ScrewGrader:
             membership,
             degenerate,
         )
-        return tuple(float(value[0]) for value in values)
+        medial, lateral, craniocaudal, medial_wall = values
+        return (
+            float(medial[0]),
+            float(lateral[0]),
+            float(craniocaudal[0]),
+            float(medial_wall[0]),
+        )
 
     def evaluate_batch(
         self,
@@ -434,6 +441,7 @@ class ScrewGrader:
         wall left on the medial side; without it those four fields mirror
         ``breach_mm``/``min_wall_mm``.
         """
+        self._validate_side(side)
         starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
         ends = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
         if starts.shape != ends.shape:
@@ -513,6 +521,19 @@ class ScrewGrader:
         return out
 
     @staticmethod
+    def _validate_side(side: Optional[str]) -> None:
+        """Reject anything but ``None``, ``"left"`` or ``"right"``.
+
+        Called at the top of :meth:`grade` and :meth:`evaluate_batch` rather
+        than only where the ring is classified, because three paths never reach
+        that classification at all -- a grader built without radial samples, an
+        empty batch, and a zero-length screw -- and would otherwise accept a
+        misspelt side in silence.
+        """
+        if side is not None and side not in ("left", "right"):
+            raise ValueError(f"side must be 'left', 'right' or None, got {side!r}")
+
+    @staticmethod
     def _medial_directions(directions: np.ndarray, side: str) -> np.ndarray:
         """Unit vectors from each pedicle toward the midline, perpendicular to the screw.
 
@@ -536,29 +557,32 @@ class ScrewGrader:
         Returns ``(membership, degenerate)``: a ``(C, 1 + radial_samples, 3)``
         boolean array whose columns are medial / lateral / craniocaudal, and a
         ``(C,)`` mask of candidates with no medial direction perpendicular to
-        the trajectory.  ``side=None`` disables the split and both are ``None``.
+        the trajectory.  Both are ``None`` when there is no split to make --
+        ``side=None``, or a grader built without radial samples, whose only
+        sample is the centreline; the centreline's wall distance describes the
+        nearest cortex in *any* direction, so classifying it as the medial wall
+        would report zero margin for a comfortably contained screw.  The caller
+        falls back to the undirected numbers instead, exactly as :meth:`grade`
+        already did.
 
         The centreline sample (offset 0) joins *every* class: a centreline
         outside the label has left the vertebra in every direction at once, so
         counting it everywhere is the conservative reading, and it is excluded
-        again from the wall reduction, where its own distance describes the
-        nearest cortex in any direction rather than the medial one.
+        again from the wall reduction.
         """
-        if side is None:
-            return None, None
-        if side not in ("left", "right"):
-            raise ValueError(f"side must be 'left', 'right' or None, got {side!r}")
+        self._validate_side(side)
         count, radial = offsets.shape[0], offsets.shape[1]
+        if side is None or radial == 0:
+            return None, None
         membership = np.zeros((count, 1 + radial, 3), dtype=bool)
         membership[:, 0, :] = True
         medial = self._medial_directions(directions, side)
         degenerate = ~medial.any(axis=1)
-        if radial:
-            units = self._normalise_rows(offsets.reshape(-1, 3)).reshape(count, radial, 3)
-            dots = np.einsum("crk,ck->cr", units, medial)
-            membership[:, 1:, 0] = dots > MEDIAL_CONE_COS
-            membership[:, 1:, 1] = dots < -MEDIAL_CONE_COS
-            membership[:, 1:, 2] = ~(membership[:, 1:, 0] | membership[:, 1:, 1])
+        units = self._normalise_rows(offsets.reshape(-1, 3)).reshape(count, radial, 3)
+        dots = np.einsum("crk,ck->cr", units, medial)
+        membership[:, 1:, 0] = dots > MEDIAL_CONE_COS
+        membership[:, 1:, 1] = dots < -MEDIAL_CONE_COS
+        membership[:, 1:, 2] = ~(membership[:, 1:, 0] | membership[:, 1:, 1])
         membership[degenerate] = True
         return membership, degenerate
 
