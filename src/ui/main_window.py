@@ -69,6 +69,7 @@ from ..utils.constants import (
 )
 from .collapsible_group import CollapsibleGroupBox
 from .mpr_viewer import MPRViewer
+from .screw_plan_table import ScrewPlanTable
 from .spin_boxes import DiameterSpinBox
 from .styles import (
     DEFAULT_THEME,
@@ -887,17 +888,8 @@ class MainWindow(QMainWindow):
         screw_list_layout.setContentsMargins(8, 4, 8, 8)
         screw_list_layout.setSpacing(6)
 
-        self.screw_list_widget = QListWidget()
-        self.screw_list_widget.setObjectName("screwPlanList")
-        self.screw_list_widget.setMinimumHeight(160)
-        self.screw_list_widget.setMaximumHeight(220)
-        self.screw_list_widget.setSpacing(2)
-        self.screw_list_widget.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-        )
-        self.screw_list_widget.setVerticalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
+        self.screw_list_widget = ScrewPlanTable()
+        self.screw_list_widget.apply_theme(self._theme_name)
         screw_list_layout.addWidget(self.screw_list_widget)
 
         screw_edit_buttons = QHBoxLayout()
@@ -1677,6 +1669,8 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(load_stylesheet(theme_name))
         self._theme_name = theme_name
         self._refresh_themed_icons()
+        if hasattr(self, "screw_list_widget"):
+            self.screw_list_widget.apply_theme(theme_name)
         for viewer in self._get_mpr_viewers():
             viewer.refresh_orientation_markers(render=True)
 
@@ -2033,12 +2027,7 @@ class MainWindow(QMainWindow):
         self.selected_screw_counter.setText(
             f"Screw {index + 1} of {screw_count}"
         )
-        selected_item = self.screw_list_widget.item(index)
-        if selected_item is not None:
-            self.screw_list_widget.scrollToItem(
-                selected_item,
-                QAbstractItemView.ScrollHint.PositionAtCenter,
-            )
+        self.screw_list_widget.scrollToRow(index)
 
         level = str(getattr(screw, "vertebra_level", "") or "").strip()
         side = str(getattr(screw, "side", "") or "").strip().capitalize()

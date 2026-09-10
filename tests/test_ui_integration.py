@@ -852,7 +852,7 @@ def test_selected_screw_diameter_control_updates_model_and_linked_views(
     assert window.viewer_3d.screws[0].radius == pytest.approx(3.75)
     for viewer in window._get_mpr_viewers():
         assert viewer.screw_overlays[0]["diameter"] == pytest.approx(7.5)
-    assert "Ø 7.5 mm" in window.screw_list_widget.item(0).text()
+    assert "7.5" in window.screw_list_widget.rowText(0)
 
 
 def test_manual_screw_diameter_defaults_to_common_size_and_caps_at_7_5(
@@ -1056,7 +1056,7 @@ def test_refresh_screw_replaces_same_overlay_id_and_list_row(ui_main_window):
     for viewer in window._get_mpr_viewers():
         assert viewer.screw_overlays[0]["entry"] == (4.0, 5.0, 6.0)
         assert viewer.screw_overlays[0]["target"] == (7.0, 8.0, 12.0)
-    assert "Len 7.3 mm" in window.screw_list_widget.item(0).text()
+    assert "7.3" in window.screw_list_widget.rowText(0)
     assert window.viewer_3d.screws[0].entry_point == (4.0, 5.0, 6.0)
 
 
@@ -1073,7 +1073,7 @@ def test_screw_list_row_shows_level_side_and_geometry(ui_main_window):
 
     window._tool_ctrl.add_existing_screw(screw, select=True)
 
-    text = window.screw_list_widget.item(0).text()
+    text = window.screw_list_widget.rowText(0)
     assert "L4" in text
     assert "Left" in text
     assert "6.5" in text

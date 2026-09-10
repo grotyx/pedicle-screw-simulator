@@ -167,7 +167,7 @@ def test_the_screw_list_row_reflects_the_regraded_screw(
     _load_plan(window, monkeypatch, tmp_path, _v1_plan_payload(grade="A"))
 
     assert window.screw_list_widget.count() == 1
-    assert "Grade N/A" in window.screw_list_widget.item(0).text()
+    assert "Grade N/A" in window.screw_list_widget.rowText(0)
 
 
 def test_saved_plans_record_the_mask_refinement_settings(

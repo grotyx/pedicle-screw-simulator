@@ -209,3 +209,115 @@ def test_sections_keep_their_default_collapsed_state(ui_main_window):
     assert all(
         group.is_collapsed for group in window.secondary_control_groups
     )
+
+
+def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    table = window.screw_list_widget
+
+    assert table.count() == 0
+    assert table.currentRow() == -1
+
+    rows = []
+    table.currentRowChanged.connect(rows.append)
+
+    for offset in range(2):
+        table.addScrewRow(
+            Screw(
+                entry_point=(0.0, 0.0, float(offset)),
+                target_point=(0.0, -40.0, float(offset)),
+                diameter=6.5,
+                vertebra_level=f"L{offset + 3}",
+                side="left" if offset == 0 else "right",
+                grade="A" if offset == 0 else "D",
+            ),
+            offset,
+        )
+
+    assert table.count() == 2
+    assert table.rowText(0) == "1 · L3 · Left · 6.5 · 40.0 · Grade A · Manual"
+    assert "Grade D" in table.rowText(1)
+
+    table.setCurrentRow(1)
+    assert table.currentRow() == 1
+    assert rows[-1] == 1
+
+    table.clear()
+    assert table.count() == 0
+    assert rows[-1] == -1
+
+
+def test_screw_plan_table_paints_grade_chips_from_the_theme(ui_main_window):
+    from src.models.screw import Screw
+    from src.ui.screw_plan_table import GRADE_COLUMN
+
+    window = ui_main_window
+    table = window.screw_list_widget
+
+    for grade in ("A", "B", "C", "E", "N/A"):
+        table.addScrewRow(
+            Screw(
+                entry_point=(0.0, 0.0, 0.0),
+                target_point=(0.0, -40.0, 0.0),
+                diameter=6.0,
+                grade=grade,
+            )
+        )
+
+    palette = THEMES["graphite_blue"]
+    expected = [
+        palette["grade_a"],
+        palette["grade_b"],
+        palette["grade_c"],
+        palette["grade_d"],
+        palette["grade_na"],
+    ]
+    for row, colour in enumerate(expected):
+        chip = table.item(row, GRADE_COLUMN)
+        assert chip.background().color() == QColor(colour)
+        assert chip.foreground().color() == QColor(palette["grade_text"])
+
+    window.apply_theme("graphite_mint", persist=False)
+
+    mint = THEMES["graphite_mint"]
+    assert table.item(0, GRADE_COLUMN).background().color() == QColor(
+        mint["grade_a"]
+    )
+    assert table.item(4, GRADE_COLUMN).background().color() == QColor(
+        mint["grade_na"]
+    )
+
+
+def test_screw_plan_table_updates_a_row_in_place(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    table = window.screw_list_widget
+    table.addScrewRow(
+        Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -30.0, 0.0),
+            diameter=6.0,
+            vertebra_level="L4",
+            side="right",
+            grade="A",
+        ),
+        0,
+    )
+
+    table.updateScrewRow(
+        0,
+        Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -50.0, 0.0),
+            diameter=7.5,
+            vertebra_level="L5",
+            side="left",
+            grade="C",
+        ),
+    )
+
+    assert table.count() == 1
+    assert table.rowText(0) == "1 · L5 · Left · 7.5 · 50.0 · Grade C · Manual"

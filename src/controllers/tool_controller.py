@@ -566,11 +566,9 @@ class ToolController:
         return viewer_map.get(plane)
 
     def _add_screw_to_list(self, screw):
-        """Append one screw entry to list widget."""
+        """Append one screw row to the screw plan table."""
         index = self._window.screw_list_widget.count()
-        self._window.screw_list_widget.addItem(
-            self._format_screw_list_text(index, screw)
-        )
+        self._window.screw_list_widget.addScrewRow(screw, index)
 
     def add_existing_screw(self, screw, select: bool = False) -> int:
         """Register an existing screw in the model and every linked view."""
@@ -588,17 +586,6 @@ class ToolController:
         if select:
             self._window.screw_list_widget.setCurrentRow(screw_id)
         return screw_id
-
-    @staticmethod
-    def _format_screw_list_text(index: int, screw) -> str:
-        """Return the canonical list label for one screw."""
-        level = screw.vertebra_level or "Manual"
-        side = screw.side.capitalize() if screw.side else "--"
-        return (
-            f"#{index + 1}  {level} · {side}\n"
-            f"Ø {screw.diameter:.1f} mm  ·  Len {screw.length:.1f} mm  ·  "
-            f"Grade {screw.grade}"
-        )
 
     def _add_screw_to_mpr(self, screw_id: int, screw) -> None:
         """Add screw projection overlay to all MPR viewers."""
@@ -631,9 +618,7 @@ class ToolController:
             self._screw_actors.append(new_actor)
 
         self._add_screw_to_mpr(index, screw)
-        item = self._window.screw_list_widget.item(index)
-        if item is not None:
-            item.setText(self._format_screw_list_text(index, screw))
+        self._window.screw_list_widget.updateScrewRow(index, screw)
         self._window._screw_mpr_ctrl.on_screw_updated(index)
 
     def regrade_all(self) -> None:

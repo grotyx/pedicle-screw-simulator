@@ -480,21 +480,6 @@ QListWidget::item:selected {{
 QListWidget::item:hover {{
     background-color: {t["bg_secondary"]};
 }}
-QListWidget#screwPlanList {{
-    border-radius: 7px;
-    padding: 4px;
-}}
-QListWidget#screwPlanList::item {{
-    padding: 7px 8px;
-    margin: 1px;
-    border: 1px solid {t["border"]};
-    border-radius: 5px;
-}}
-QListWidget#screwPlanList::item:selected {{
-    background-color: {t["accent_dim"]};
-    color: {t["text_primary"]};
-    border: 2px solid {t["accent"]};
-}}
 
 /* ===== Control Tabs ===== */
 QTabWidget#controlTabs::pane {{
@@ -609,6 +594,21 @@ QHeaderView::section {{
     border-bottom: 1px solid {t["border"]};
     padding: 6px 4px;
     font-weight: 700;
+}}
+QTableWidget#screwPlanTable {{
+    background-color: {t["bg_tertiary"]};
+    alternate-background-color: {t["table_alternate"]};
+    border: 1px solid {t["border"]};
+    border-radius: 7px;
+    selection-background-color: {t["accent_dim"]};
+    selection-color: {t["text_primary"]};
+}}
+QTableWidget#screwPlanTable::item {{
+    padding: 5px 6px;
+}}
+QTableWidget#screwPlanTable::item:selected {{
+    background-color: {t["accent_dim"]};
+    color: {t["text_primary"]};
 }}
 
 /* ===== Status Bar ===== */
