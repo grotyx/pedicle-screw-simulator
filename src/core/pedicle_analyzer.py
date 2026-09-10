@@ -560,12 +560,14 @@ class PedicleAnalyzer:
             result.left_pedicle_center = found["center_lps"]
             result.left_pedicle_axis = found["axis_lps"]
             result.left_pedicle_width = found["width_mm"]
+            result.left_width_lower_bound_mm = found["width_lower_bound_mm"]
             result.left_pedicle_height = found["height_mm"]
             result.left_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
         else:
             result.right_pedicle_center = found["center_lps"]
             result.right_pedicle_axis = found["axis_lps"]
             result.right_pedicle_width = found["width_mm"]
+            result.right_width_lower_bound_mm = found["width_lower_bound_mm"]
             result.right_pedicle_height = found["height_mm"]
             result.right_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
 
@@ -689,9 +691,31 @@ class PedicleAnalyzer:
         isthmus_j = int(interior_js[tied[tied.size // 2]])
 
         coords = side_voxels[side_voxels[:, 1] == isthmus_j]
-        # Outer voxel-boundary extents, as in _find_pedicle_coronal.
-        width_mm = float(coords[:, 2].max() - coords[:, 2].min() + 1) * sx
-        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        # Outer voxel-boundary extents, as in _find_pedicle_coronal, taken as
+        # the median over the isthmus slice and its neighbours in the labelled
+        # corridor and cross-checked against the inscribed diameter.
+        isthmus_pos = int(np.flatnonzero(js == isthmus_j)[0])
+        neighbour_js = js[max(0, isthmus_pos - 1):isthmus_pos + 2]
+        neighbour_slices = [side_voxels[side_voxels[:, 1] == j] for j in neighbour_js]
+        width_extent_mm = float(
+            np.median(
+                [
+                    float(sl[:, 2].max() - sl[:, 2].min() + 1) * sx
+                    for sl in neighbour_slices
+                ]
+            )
+        )
+        height_mm = float(
+            np.median(
+                [
+                    float(sl[:, 0].max() - sl[:, 0].min() + 1) * sz
+                    for sl in neighbour_slices
+                ]
+            )
+        )
+        width_edt_mm = self._inscribed_width_mm(coords[:, [0, 2]], (sz, sx))
+        width_mm = max(width_extent_mm, width_edt_mm)
+        width_lower_bound_mm = min(width_extent_mm, width_edt_mm)
         center = self._continuous_ijk_to_lps(
             float(coords[:, 2].mean()),
             float(isthmus_j),
@@ -715,6 +739,7 @@ class PedicleAnalyzer:
             "center_lps": center,
             "axis_lps": axis,
             "width_mm": width_mm,
+            "width_lower_bound_mm": width_lower_bound_mm,
             "height_mm": height_mm,
             "isthmus_j": isthmus_j,
             "inferior_medial_lps": self._inferior_medial_corner_lps(
@@ -724,6 +749,35 @@ class PedicleAnalyzer:
             # window it covers is that corridor's full coronal span.
             "isthmus_window_j": (int(js[0]), int(js[-1])),
         }
+
+    @staticmethod
+    def _inscribed_width_mm(
+        coords_zx: np.ndarray,
+        sampling: Tuple[float, float],
+    ) -> float:
+        """Twice the largest inscribed radius of one cross-section, in mm.
+
+        A bounding-box extent and an inscribed circle fail in opposite
+        directions: a stair-stepped cross-section can have a wide box with no
+        room inside it, while a cross-section clipped by the slice grid can
+        have a narrow box around a corridor a screw still fits.  Measuring
+        both and keeping the larger is what stops a 7 mm pedicle being
+        reported as 1.6 mm.
+
+        ``coords_zx`` are the component's ``(z, x)`` voxel indices and
+        ``sampling`` their ``(sz, sx)`` spacing.  The component is rasterised
+        into its own bounding box padded by one background voxel on every
+        side, so the transform measures the distance to the real boundary
+        rather than to the edge of the array.
+        """
+        lo = coords_zx.min(axis=0)
+        local = coords_zx - lo
+        section = np.zeros(
+            tuple(int(n) + 2 for n in local.max(axis=0) + 1), dtype=bool
+        )
+        section[local[:, 0] + 1, local[:, 1] + 1] = True
+        distances = ndi.distance_transform_edt(section, sampling=sampling)
+        return 2.0 * float(distances.max())
 
     @staticmethod
     def _track_candidate(
@@ -893,9 +947,30 @@ class PedicleAnalyzer:
         isthmus_j, _, coords = records[isthmus_index]
 
         # Extents are outer voxel-boundary extents (max - min + 1 voxels), so
-        # they over-read the underlying continuous extent by one voxel.
-        width_mm = float(coords[:, 1].max() - coords[:, 1].min() + 1) * sx
-        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        # they over-read the underlying continuous extent by one voxel.  A
+        # single slice of a stair-stepped mask is not trustworthy on its own,
+        # so the extents are the median over the isthmus and its neighbours in
+        # the recorded corridor (fewer at a corridor end).
+        neighbourhood = records[max(0, isthmus_index - 1):isthmus_index + 2]
+        width_extent_mm = float(
+            np.median(
+                [
+                    float(rec[2][:, 1].max() - rec[2][:, 1].min() + 1) * sx
+                    for rec in neighbourhood
+                ]
+            )
+        )
+        height_mm = float(
+            np.median(
+                [
+                    float(rec[2][:, 0].max() - rec[2][:, 0].min() + 1) * sz
+                    for rec in neighbourhood
+                ]
+            )
+        )
+        width_edt_mm = self._inscribed_width_mm(coords, (sz, sx))
+        width_mm = max(width_extent_mm, width_edt_mm)
+        width_lower_bound_mm = min(width_extent_mm, width_edt_mm)
         center = self._continuous_ijk_to_lps(
             float(coords[:, 1].mean()),
             float(isthmus_j),
@@ -930,6 +1005,7 @@ class PedicleAnalyzer:
             "center_lps": center,
             "axis_lps": axis,
             "width_mm": width_mm,
+            "width_lower_bound_mm": width_lower_bound_mm,
             "height_mm": height_mm,
             "isthmus_j": int(isthmus_j),
             "inferior_medial_lps": self._inferior_medial_corner_lps(

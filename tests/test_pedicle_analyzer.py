@@ -201,6 +201,54 @@ def _make_sliver_corridor_phantom(label: int = 28) -> sitk.Image:
     return sitk.GetImageFromArray(arr)
 
 
+def _make_coarse_phantom(label: int = 28) -> sitk.Image:
+    """The body/pedicle phantom drawn on a 2 mm inference grid.
+
+    The pedicles are exactly four coarse voxels wide, so their true width is
+    8.0 mm however finely the mask is later resampled.  The body is an ellipse
+    so that the mask as a whole has the oblique boundaries a stair step shows
+    up on.
+    """
+    Z, Y, X = 30, 45, 45
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (
+        (((xx - 22.5) / 10.0) ** 2 + ((yy - 17.5) / 7.5) ** 2 <= 1)
+        & (zz >= 8)
+        & (zz < 23)
+    )
+    ped = np.zeros_like(body)
+    for cx in (15, 30):
+        ped |= (
+            (xx >= cx) & (xx < cx + 4)
+            & (np.abs(zz - 16) <= 3)
+            & (yy >= 22)
+            & (yy < 31)
+        )
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped] = label
+    image = sitk.GetImageFromArray(arr)
+    image.SetSpacing((2.0, 2.0, 2.0))
+    return image
+
+
+def _nearest_neighbour_upsample(image: sitk.Image, factor: int) -> sitk.Image:
+    """Resample *image* by an integer factor with nearest-neighbour interpolation.
+
+    This is exactly what the app receives from TotalSegmentator: a mask
+    inferred on a coarse grid and pushed onto the fine CT grid, so every
+    boundary becomes a stair step ``factor`` voxels deep and every value
+    repeats in runs of ``factor``.
+    """
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    resampler.SetOutputSpacing([s / factor for s in image.GetSpacing()])
+    resampler.SetSize([int(n * factor) for n in image.GetSize()])
+    resampler.SetOutputOrigin(image.GetOrigin())
+    resampler.SetOutputDirection(image.GetDirection())
+    resampler.SetDefaultPixelValue(0)
+    return resampler.Execute(image)
+
+
 def _make_notched_corridor_phantom(notch_slices: int, label: int = 28) -> sitk.Image:
     """A left corridor interrupted by ``notch_slices`` blank coronal slices.
 
@@ -613,18 +661,42 @@ class TestCoronalIsthmus:
         # fragment at x = 52.
         assert result.left_pedicle_center[0] == pytest.approx(59.5, abs=1.0)
 
+    def test_nearest_neighbour_upsampled_mask_keeps_the_true_width(self):
+        """A 2 mm mask pushed onto a 0.5 mm grid must still measure 8 mm."""
+        mask = _nearest_neighbour_upsample(_make_coarse_phantom(), 4)
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+
+        result = analyzer.analyze_pedicle(vertebra)
+
+        assert result.success
+        assert result.left_pedicle_width == pytest.approx(8.0, abs=1.0)
+        assert result.right_pedicle_width == pytest.approx(8.0, abs=1.0)
+        # The bounding-box extent and the inscribed diameter bracket the truth,
+        # so the lower bound is a real second opinion, never zero.
+        assert result.left_width_lower_bound_mm == pytest.approx(8.0, abs=1.0)
+        assert result.right_width_lower_bound_mm == pytest.approx(8.0, abs=1.0)
+        assert result.left_width_lower_bound_mm <= result.left_pedicle_width
+
     @pytest.mark.parametrize(
-        "notch_slices, expected_width_mm",
-        [(1, 5.0), (2, 5.0), (3, 5.0), (4, 8.0)],
+        "notch_slices, expected_width_mm, expected_lower_bound_mm",
+        [(1, 6.0, 5.0), (2, 6.0, 5.0), (3, 6.0, 5.0), (4, 8.0, 8.0)],
     )
     def test_short_notch_is_bridged_and_a_long_one_ends_the_walk(
-        self, notch_slices, expected_width_mm
+        self, notch_slices, expected_width_mm, expected_lower_bound_mm
     ):
         """Up to MAX_TRACK_GAP_SLICES missing slices the corridor continues.
 
         A notch of 1-3 slices is bridged, so the walk reaches the 5 mm distal
         isthmus; the fourth blank slice exhausts the budget and the walk keeps
         only the 8 mm proximal box.
+
+        The distal box is five voxels across, and an inscribed diameter is
+        measured to the centres of the surrounding background voxels, so it
+        reads 6 mm where the extent reads 5 mm.  The reported width is the
+        larger of the two, so it is the lower bound that pins the 5 mm the
+        phantom was drawn with -- and it is the two that together separate the
+        bridged corridor from the 8 mm proximal box.
         """
         mask = _make_notched_corridor_phantom(notch_slices)
         analyzer = PedicleAnalyzer(mask)
@@ -646,6 +718,7 @@ class TestCoronalIsthmus:
 
         assert found is not None
         assert found["width_mm"] == pytest.approx(expected_width_mm)
+        assert found["width_lower_bound_mm"] == pytest.approx(expected_lower_bound_mm)
 
 
 # ---------------------------------------------------------------------------
@@ -709,7 +782,12 @@ class TestSubregionLabelPath:
 
         # The floors must not drop a side outright — they only rank candidates.
         assert result.left_pedicle_center is not None
-        assert result.left_pedicle_width == pytest.approx(1.0)
+        # One voxel across, so the inscribed diameter reads 2 mm (it is
+        # measured to the centres of the background voxels either side) and
+        # the reported width takes the larger of the two estimates.  The lower
+        # bound is the one that still says 1 mm.
+        assert result.left_pedicle_width == pytest.approx(2.0)
+        assert result.left_width_lower_bound_mm == pytest.approx(1.0)
 
     def test_shape_mismatch_is_rejected(self):
         mask = _make_anatomical_phantom()

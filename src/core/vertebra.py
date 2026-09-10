@@ -78,6 +78,13 @@ class PedicleAnalysisResult:
     left_pedicle_width: float = 0.0
     right_pedicle_width: float = 0.0
 
+    # The smaller of the two width estimates (bounding-box extent of the
+    # isthmus neighbourhood vs. inscribed diameter of the isthmus slice).  The
+    # reported width is the larger; this is the conservative floor a reviewer
+    # can compare it against.
+    left_width_lower_bound_mm: float = 0.0
+    right_width_lower_bound_mm: float = 0.0
+
     # Pedicle craniocaudal height at the isthmus (mm)
     left_pedicle_height: float = 0.0
     right_pedicle_height: float = 0.0
