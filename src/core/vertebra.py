@@ -89,8 +89,8 @@ class PedicleAnalysisResult:
     # Sides whose measured width failed their level's plausibility band, keyed
     # by side.  The only value is ``"implausible"``; a believable width leaves
     # no entry, so ``width_flags.get(side)`` is the whole check.  The planner
-    # uses it to say "uncertain" rather than "too narrow" about a side it
-    # dropped, which are two different messages to a surgeon.
+    # treats a flagged side as narrow -- smallest implant, level marked -- and
+    # warns that the width itself could not be trusted.
     width_flags: Dict[str, str] = field(default_factory=dict)
 
     # Pedicle craniocaudal height at the isthmus (mm)

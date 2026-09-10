@@ -192,8 +192,8 @@ def test_diameter_steps_down_when_recommendation_does_not_fit():
     recommended = planner._compute_diameter(analysis.left_pedicle_width, analysis.vertebra.name)
     assert recommended == 6.5
     best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
-    assert best.diameter == 6.0
-    assert "Diameter reduced from 6.5 to 6.0 mm for cortical containment" in best.warnings
+    assert best.diameter == 5.5
+    assert "Diameter reduced from 6.5 to 5.5 mm for cortical containment" in best.warnings
 
 
 def test_right_side_convergence_is_mirrored():

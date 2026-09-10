@@ -33,6 +33,18 @@ PROXIMAL_FRACTION = 0.3
 #: Penetration at or beyond this depth counts as a frank facet violation.
 FACET_PENETRATION_MM = 1.0
 
+#: Prefix of the note a medial breach raises.  It is regenerated on every
+#: re-grade (see :data:`src.tools.screw_tool._DERIVED_WARNING_PREFIXES`), so the
+#: planner and the manual tool must build it from this one function or an edited
+#: screw will lose -- or keep -- a canal warning its trajectory disproves.
+MEDIAL_BREACH_WARNING_PREFIX = "Medial breach"
+
+
+def medial_breach_warning(medial_breach_mm: float) -> str:
+    """The note a screw that left the pedicle toward the canal carries."""
+    return f"{MEDIAL_BREACH_WARNING_PREFIX} {float(medial_breach_mm):.1f} mm — canal side"
+
+
 _NO_CEPHALAD = (0, "no cephalad vertebra segmented")
 
 

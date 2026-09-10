@@ -865,8 +865,8 @@ class PedicleAnalyzer:
         plausible second opinion replaces it and is recorded in
         :attr:`~src.core.vertebra.PedicleAnalysisResult.method`; when there is
         none, the original value is kept -- it is still the best number
-        available -- and the side is flagged so the planner reports the level
-        as uncertain instead of as too narrow.
+        available -- and the side is flagged so the planner plans it under the
+        narrow-pedicle policy and marks the level as uncertain.
 
         A replaced width takes its lower bound with it.  The bound belongs to
         the estimate that produced it, and the axial route has only the one

@@ -701,14 +701,17 @@ class TestPlanScrew:
 
         assert result is None
 
-    def test_plan_screw_narrow_pedicle_returns_none(self):
-        """Pedicle too narrow for any screw should return None."""
+    def test_plan_screw_narrow_pedicle_is_planned_at_the_minimum_diameter(self):
+        """A narrow pedicle gets the smallest screw, not a dropped side."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
         analysis = _make_analysis(left_width=3.0, right_width=3.0)
 
         result = planner.plan_screw(analysis, "left")
-        assert result is None
+
+        assert result is not None
+        assert result.diameter_mm == pytest.approx(AutoScrewPlanner.MIN_SCREW_DIAMETER)
+        assert result.metrics["narrow_pedicle"] is True
 
     def test_plan_screw_invalid_side_raises(self):
         """Invalid side string should raise ValueError."""
@@ -730,14 +733,14 @@ class TestPlanScrew:
         assert not np.allclose(result.entry_lps, result.target_lps)
 
     def test_screw_diameter_respects_pedicle_width(self):
-        """Diameter should keep 1 mm cortical clearance on each side."""
+        """Diameter follows the fill ratio once the clearance default is 0 mm."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
         analysis = _make_analysis(left_width=6.0)
 
         result = planner.plan_screw(analysis, "left")
         assert result is not None
-        assert result.diameter_mm == pytest.approx(4.0)
+        assert result.diameter_mm == pytest.approx(4.5)
 
     def test_diameter_is_reduced_until_trajectory_is_grade_a_or_b(
         self,
@@ -1015,21 +1018,17 @@ class TestHelperMethods:
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(6.0, "L4") == pytest.approx(4.0)
+        # min(0.8 * 6.0, 6.0 - 0) = 4.8 -> largest catalogue size at or under it.
+        assert planner._compute_diameter(6.0, "L4") == pytest.approx(4.5)
 
-    def test_compute_diameter_minimum_clamp(self):
-        """Width without 1 mm clearance each side should be rejected."""
+    def test_compute_diameter_falls_back_to_the_minimum(self):
+        """A pedicle under the smallest implant still gets the smallest implant."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(5.0, "L4") is None
-
-    def test_compute_diameter_too_narrow(self):
-        """Width below MIN_SCREW_DIAMETER should return None."""
-        ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
-
-        assert planner._compute_diameter(3.5, "T4") is None
+        assert planner._compute_diameter(5.0, "L4") == pytest.approx(4.0)
+        assert planner._compute_diameter(3.5, "T4") == pytest.approx(4.0)
+        assert planner._compute_diameter(0.0, "L4") == pytest.approx(4.0)
 
     def test_compute_diameter_maximum_clamp(self):
         """Very wide pedicle should clamp to MAX_SCREW_DIAMETER."""
@@ -1227,12 +1226,12 @@ class TestDiameterRule:
     def test_diameter_capped_at_80_percent_and_clearance(self):
         ct, mask = TestGrading()._cube()
         planner = AutoScrewPlanner(ct, mask)
-        # width 7.0 -> min(0.8*7=5.6, 7-2=5.0) -> floor to 0.5 -> 5.0
-        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.0)
-        # width 10 -> min(8.0, 8.0) -> 8.0 -> capped by level preset/automatic max (7.0 for L4)
+        # width 7.0 -> min(0.8*7=5.6, 7-0=7.0) -> floor to the catalogue -> 5.5
+        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.5)
+        # width 10 -> min(8.0, 10.0) -> capped by the level preset/automatic max
         assert planner._compute_diameter(10.0, "L4") == pytest.approx(7.0)
-        # too narrow
-        assert planner._compute_diameter(5.5, "L4") is None
+        # too narrow for the fill ratio: the smallest implant, never nothing
+        assert planner._compute_diameter(5.5, "L4") == pytest.approx(4.0)
 
 
 class TestPlannerConfig:
@@ -1437,10 +1436,10 @@ class TestPlanAllProgressAndCancel:
         assert planner.last_run_cancelled is False
 
 
-class TestUncertainPedicleWidth:
-    """A width the analyser could not trust is reported as uncertain."""
+class TestNarrowPedicle:
+    """A narrow or untrustworthy width is a finding, never a reason to skip."""
 
-    def test_skip_reason_says_uncertain_rather_than_too_narrow(self):
+    def test_a_flagged_width_no_longer_drops_the_side(self):
         from src.core.auto_screw_planner import AutoScrewPlanner
         from src.core.pedicle_analyzer import PedicleAnalyzer
         from src.core.planner_config import PlannerConfig
@@ -1457,13 +1456,11 @@ class TestUncertainPedicleWidth:
         planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
         planner.plan_all([analysis])
 
-        reasons = {side: reason for _name, side, reason in planner.skipped_sides}
-        assert reasons["left"] == (
-            "left pedicle width uncertain (2.0 mm) — plan manually"
-        )
-        assert "too narrow" not in reasons["left"]
+        reasons = [reason for _name, _side, reason in planner.skipped_sides]
+        assert not any("too narrow" in reason for reason in reasons)
+        assert not any("width uncertain" in reason for reason in reasons)
 
-    def test_a_planned_screw_on_a_flagged_side_carries_a_warning(self):
+    def test_a_planned_screw_on_a_flagged_side_carries_both_warnings(self):
         from src.core.auto_screw_planner import (
             WIDTH_UNCERTAIN_SCREW_WARNING,
             AutoScrewPlanner,
@@ -1478,38 +1475,86 @@ class TestUncertainPedicleWidth:
 
         assert screw is not None
         assert WIDTH_UNCERTAIN_SCREW_WARNING in screw.warnings
+        # An untrustworthy measurement is planned as if it were narrow.
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["narrow_pedicle"] is True
 
-    def test_an_unflagged_narrow_side_still_says_too_narrow(self):
-        """The old message must survive for a pedicle that really is small."""
+    def test_a_narrow_side_is_planned_with_the_smallest_screw(self):
         from src.core.auto_screw_planner import AutoScrewPlanner
         from src.core.planner_config import PlannerConfig
 
         ct, mask = _make_bone_cylinder()
-        analysis = _make_analysis(left_width=3.0, right_width=3.0)
+        analysis = _make_analysis(left_width=4.5, right_width=4.5)
         planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
-        planner.plan_all([analysis], sides="left")
 
-        _name, _side, reason = planner.skipped_sides[0]
-        assert reason == "left pedicle too narrow (3.0 mm) for any screw"
+        screws = planner.plan_all([analysis], sides="left")
 
-    def test_unflagged_but_policy_narrow_side_names_the_clearance_fix(self):
-        """A plausible pedicle dropped only by the clearance policy explains why."""
-        from src.core.auto_screw_planner import AutoScrewPlanner
-        from src.core.planner_config import PlannerConfig
-
-        ct, mask = _make_bone_cylinder()
-        # 5.5 mm is plausible but, with the default 1.0 mm wall clearance,
-        # 5.5 - 2*1.0 = 3.5 mm < MIN_SCREW_DIAMETER (4.0 mm).
-        analysis = _make_analysis(left_width=5.5, right_width=5.5)
-        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
-        planner.plan_all([analysis], sides="left")
-
-        _name, _side, reason = planner.skipped_sides[0]
-        assert reason == (
-            "left pedicle too narrow (5.5 mm) for a 4.0 mm screw with "
-            "1.0 mm wall clearance — lower the clearance in Planning "
-            "parameters to plan it"
+        assert planner.skipped_sides == []
+        assert len(screws) == 1
+        screw = screws[0]
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+        assert screw.warnings[0] == (
+            "Narrow pedicle (4.5 mm): 4.0 mm screw is 89 % of the width — "
+            "verify the measurement or accept a lateral (in-out-in) breach"
         )
+
+    def test_a_normal_side_is_not_marked_narrow(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(_make_analysis(left_width=8.0), "left")
+
+        assert screw is not None
+        assert screw.metrics["narrow_pedicle"] is False
+        assert screw.metrics["pedicle_width_mm"] == pytest.approx(8.0)
+        assert not any(w.startswith("Narrow pedicle") for w in screw.warnings)
+
+    def test_the_narrow_threshold_is_configurable(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=6.0)
+        relaxed = AutoScrewPlanner(ct, mask)
+        strict = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(narrow_pedicle_mm=7.0)
+        )
+
+        assert relaxed._is_narrow_side(analysis, "left") is False
+        assert strict._is_narrow_side(analysis, "left") is True
+
+    def test_a_graded_screw_records_the_directional_breach(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(_make_analysis(), "left")
+
+        assert screw is not None
+        for key in (
+            "medial_breach_mm", "lateral_breach_mm",
+            "craniocaudal_breach_mm", "medial_wall_mm",
+        ):
+            assert isinstance(screw.metrics[key], float)
+        assert screw.metrics["medial_breach_mm"] <= screw.breach_mm + 1e-9
+
+    def test_no_planner_path_still_says_too_narrow(self):
+        """The width-based skip is gone from the product; nothing may put it back."""
+        import pathlib
+
+        source = pathlib.Path(__file__).resolve().parent.parent / "src"
+        offenders = sorted(
+            str(path.relative_to(source))
+            for path in source.rglob("*.py")
+            if "too narrow" in path.read_text(encoding="utf-8")
+        )
+
+        assert offenders == []
 
 
 if __name__ == "__main__":

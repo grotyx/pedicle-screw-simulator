@@ -20,7 +20,10 @@ def test_roundtrip_mapping_ignores_unknown_keys():
 
 @pytest.mark.parametrize("field,value", [("pedicle_fill_ratio", 1.2), ("pedicle_fill_ratio", 0.2),
                                          ("wall_clearance_mm", -1.0), ("anterior_margin_mm", 30.0),
-                                         ("max_convergence_deg", 91.0)])
+                                         ("max_convergence_deg", 91.0),
+                                         ("narrow_pedicle_mm", 2.5), ("narrow_pedicle_mm", 8.5),
+                                         ("narrow_lateral_breach_mm", -0.1),
+                                         ("narrow_lateral_breach_mm", 6.5)])
 def test_validate_rejects_out_of_range(field, value):
     with pytest.raises(ValueError):
         PlannerConfig(**{field: value}).validate()

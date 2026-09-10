@@ -211,10 +211,10 @@ def test_the_chosen_cbt_trajectory_is_pinned():
     assert screw is not None
     assert screw.entry_lps == pytest.approx(np.array([54.0, 76.0, 18.0]))
     assert screw.target_lps == pytest.approx(
-        np.array([60.20376069, 38.92778793, 31.68080573])
+        np.array([58.58078891, 38.69246822, 31.68080573])
     )
     assert (screw.diameter_mm, screw.length_mm) == (6.0, 40.0)
-    assert screw.metrics["score"] == pytest.approx(0.6262872628726288)
+    assert screw.metrics["score"] == pytest.approx(0.5788617886178862)
     assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(20.0)
 
 
