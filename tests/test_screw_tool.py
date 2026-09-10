@@ -232,7 +232,17 @@ def test_ungradable_screw_drops_only_what_it_measured():
     emptying the bundle here would make one out-of-mask frame permanent.
     """
     tool = _split_density_tool()
-    tool.add_screw(_planner_screw((2.0, 2.0, 2.0), (2.0, 10.0, 2.0)))
+    tool.add_screw(_planner_screw(
+        (2.0, 2.0, 2.0), (2.0, 10.0, 2.0),
+        metrics={
+            "narrow_pedicle": True,
+            "pedicle_width_mm": 4.5,
+            "medial_breach_mm": 1.0,
+            "lateral_breach_mm": 0.0,
+            "craniocaudal_breach_mm": 0.0,
+            "medial_wall_mm": 2.0,
+        },
+    ))
 
     tool.regrade_all()
 
@@ -242,7 +252,9 @@ def test_ungradable_screw_drops_only_what_it_measured():
     assert any(w.startswith("Not graded") for w in screw.warnings)
     # Measured off the (missing) trajectory: gone.
     for key in ("trajectory_mean_hu", "trajectory_min_hu", "trajectory_body_ratio",
-                "min_wall_mm", "heary_direction", "facet_grade", "facet_text"):
+                "min_wall_mm", "heary_direction", "facet_grade", "facet_text",
+                "medial_breach_mm", "lateral_breach_mm", "craniocaudal_breach_mm",
+                "medial_wall_mm"):
         assert key not in screw.metrics
     # Everything the plan still knows: kept.
     assert screw.metrics["score"] == pytest.approx(1.9)
@@ -252,6 +264,8 @@ def test_ungradable_screw_drops_only_what_it_measured():
     assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
     assert screw.metrics["pedicle_mean_hu"] == pytest.approx(210.0)
     assert screw.metrics["body_mean_hu"] == pytest.approx(150.0)
+    assert screw.metrics["narrow_pedicle"] is True
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
 
 
 def test_a_drag_through_open_space_and_back_restores_the_full_bundle():
@@ -318,6 +332,58 @@ def test_a_low_ratio_warning_is_regenerated_not_silently_dropped():
         0, entry_point=(34.0, 38.0, 30.0), target_point=(34.0, 22.0, 30.0)
     )
     assert not any(w.startswith("Trajectory/body HU ratio") for w in back.warnings)
+
+
+def test_a_medial_breach_warning_is_regenerated_not_silently_dropped():
+    """The canal note is stripped as derived, so it has to be re-raised.
+
+    Mirrors ``test_a_low_ratio_warning_is_regenerated_not_silently_dropped``:
+    without an explicit regeneration, repeated re-grading would either drop the
+    note while the breach stayed on screen, or pile up a duplicate copy per call.
+    """
+    tool = _split_density_tool()
+    screw = Screw(
+        entry_point=(39.0, 35.0, 30.0),
+        target_point=(39.0, 25.0, 30.0),
+        diameter=6.0,
+        side="right",              # +X is toward the midline for a right pedicle
+    )
+    tool.add_screw(screw)
+
+    tool.regrade_all()
+    tool.regrade_all()
+    tool.regrade_all()
+
+    regraded = tool.get_screws()[0]
+    assert regraded.warnings.count("Medial breach 3.0 mm — canal side") == 1
+
+    # Dragged off the canal side: the note has nothing left to describe.
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 35.0, 30.0), target_point=(30.0, 25.0, 30.0)
+    )
+    assert sum(1 for w in moved.warnings if w.startswith("Medial breach")) == 0
+
+
+def test_medial_breach_mm_tracks_the_trajectory_across_a_drag():
+    """The number itself must follow the trajectory, not just its sign."""
+    tool = _split_density_tool()
+    tool.add_screw(Screw(
+        entry_point=(37.0, 35.0, 30.0),
+        target_point=(37.0, 25.0, 30.0),
+        diameter=6.0,
+        side="right",
+    ))
+
+    tool.regrade_all()
+    first = tool.get_screws()[0].metrics["medial_breach_mm"]
+
+    deeper = tool.replace_screw(
+        0, entry_point=(38.0, 35.0, 30.0), target_point=(38.0, 25.0, 30.0)
+    )
+
+    assert first == pytest.approx(1.0)
+    assert deeper.metrics["medial_breach_mm"] == pytest.approx(2.0)
+    assert deeper.metrics["medial_breach_mm"] != pytest.approx(first)
 
 
 class TestDirectionalRegrade:
