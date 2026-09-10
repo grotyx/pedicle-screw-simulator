@@ -1375,3 +1375,36 @@ def test_dropped_sides_note_says_one_more_for_a_single_extra():
     import src.controllers.auto_placement_controller as module
 
     assert module._dropped_sides_note(_skipped(5)).endswith("and 1 more")
+
+
+def test_dropped_sides_note_spells_out_an_uncertain_width():
+    """"Too narrow" and "not measurable" are different messages to a surgeon."""
+    import src.controllers.auto_placement_controller as module
+    from src.core.auto_screw_planner import width_uncertain_reason
+
+    note = module._dropped_sides_note(
+        [("L3", "left", width_uncertain_reason("left", 2.0))]
+    )
+
+    assert note == (
+        " No screw planned: L3 left pedicle width uncertain (2.0 mm)"
+        " — plan manually"
+    )
+
+
+def test_dropped_sides_note_keeps_ordinary_reasons_short():
+    """Only the uncertain-width reason is spelled out; the rest stay in the log."""
+    import src.controllers.auto_placement_controller as module
+    from src.core.auto_screw_planner import width_uncertain_reason
+
+    note = module._dropped_sides_note(
+        [
+            ("L2", "right", "no feasible trajectory"),
+            ("L3", "left", width_uncertain_reason("left", 2.0)),
+        ]
+    )
+
+    assert note == (
+        " No screw planned: L2 right, L3 left pedicle width uncertain (2.0 mm)"
+        " — plan manually"
+    )

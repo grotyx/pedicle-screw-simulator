@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
-from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.auto_screw_planner import (
+    AutoScrewPlanner,
+    PlannedScrew,
+    is_width_uncertain_reason,
+)
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
@@ -441,6 +445,21 @@ class AutoPlacementController:
             self._window.auto_screw_plan_btn.setEnabled(True)
 
 
+def _dropped_side_text(name: str, side: str, reason: str) -> str:
+    """One dropped side, as the status line words it.
+
+    Normally just the level and the side: the reason is in the log and the
+    surgeon can see the level for themselves.  A width the analyser could not
+    trust is the exception -- "L3 left" alone reads as "that pedicle is too
+    small", which is the opposite of what happened -- so that reason is spelled
+    out.  It already begins with the side word, so the level name prefixes it
+    into a sentence.
+    """
+    if is_width_uncertain_reason(side, reason):
+        return f"{name} {reason}"
+    return f"{name} {side}"
+
+
 def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     """Name the sides the planner could not place a screw on.
 
@@ -457,7 +476,9 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     if not skipped:
         return ""
     named = skipped[:_MAX_NAMED_DROPPED_SIDES]
-    sides = ", ".join(f"{name} {side}" for name, side, _reason in named)
+    sides = ", ".join(
+        _dropped_side_text(name, side, reason) for name, side, reason in named
+    )
     remaining = len(skipped) - len(named)
     if remaining:
         sides += f" and {remaining} more"
