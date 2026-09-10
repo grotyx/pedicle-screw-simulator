@@ -32,9 +32,9 @@ from ..utils.constants import (
 #: Warning prefixes the grader owns: they are regenerated on every evaluation so
 #: a re-graded screw can never keep a note that contradicts its current grade.
 #: The texts must match :mod:`src.core.bone_quality`,
-#: :mod:`src.core.breach_classification` and
-#: :mod:`src.core.auto_screw_planner` verbatim, or a planner-authored note will
-#: survive an edit that disproves it.  Everything else a screw carries — the
+#: :mod:`src.core.breach_classification` (including its medial-breach note)
+#: and :mod:`src.core.auto_screw_planner` verbatim, or a planner-authored note
+#: will survive an edit that disproves it.  Everything else a screw carries — the
 #: CBT contraindication note, the optimiser fallback note, the diameter
 #: step-down note — describes how the screw was *chosen*, not how it grades,
 #: and is left alone.
@@ -53,6 +53,7 @@ _DERIVED_WARNING_PREFIXES = (
     "Trajectory/body HU ratio",
     "Facet violation grade",
     "High convergence angle",
+    "Medial breach",
 )
 
 #: Metrics that need the pedicle analysis (isthmus and vertebral-body centres)
@@ -81,6 +82,10 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "heary_direction",
     "facet_grade",
     "facet_text",
+    "medial_breach_mm",
+    "lateral_breach_mm",
+    "craniocaudal_breach_mm",
+    "medial_wall_mm",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold
@@ -332,7 +337,12 @@ class ScrewTool:
             self._clear_grading(screw)
             screw.warnings.append("Not graded: run segmentation first")
             return
-        result = self._grader.grade(screw.entry_point, screw.target_point, screw.diameter)
+        result = self._grader.grade(
+            screw.entry_point,
+            screw.target_point,
+            screw.diameter,
+            side=self._screw_side(screw),
+        )
         if result is None:
             self._clear_grading(screw)
             screw.warnings.append(
@@ -404,9 +414,14 @@ class ScrewTool:
         so that both halves of one measurement are produced together — the
         clinical notes a reviewer reads next to a grade have to describe the
         same trajectory the grade does.
+
+        The medial/lateral/craniocaudal split needs to know which side of the
+        spine the screw is on.  A screw with no side leaves all four ``None`` —
+        "not measured", which is what :meth:`_merge_metrics` writes through, so
+        an auto screw that loses its side never keeps a stale canal number.
         """
         from ..core.bone_quality import assess_bone_quality
-        from ..core.breach_classification import facet_violation_grade
+        from ..core.breach_classification import facet_violation_grade, medial_breach_warning
 
         quality = assess_bone_quality(
             self._grader,
@@ -418,6 +433,22 @@ class ScrewTool:
         facet_grade, facet_text = facet_violation_grade(
             self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
         )
+
+        side = self._screw_side(screw)
+        directional: Dict[str, Any] = {
+            "medial_breach_mm": None,
+            "lateral_breach_mm": None,
+            "craniocaudal_breach_mm": None,
+            "medial_wall_mm": None,
+        }
+        if side is not None:
+            directional = {
+                "medial_breach_mm": float(result.medial_breach_mm),
+                "lateral_breach_mm": float(result.lateral_breach_mm),
+                "craniocaudal_breach_mm": float(result.craniocaudal_breach_mm),
+                "medial_wall_mm": float(result.medial_wall_mm),
+            }
+
         metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -425,6 +456,7 @@ class ScrewTool:
             "body_mean_hu": quality.body_mean_hu,
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
+            **directional,
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
@@ -438,6 +470,9 @@ class ScrewTool:
             warnings.append(
                 f"High convergence angle {screw.medial_angle:.1f}° — verify on CT"
             )
+        medial_breach = directional["medial_breach_mm"]
+        if medial_breach is not None and medial_breach > 0.0:
+            warnings.append(medial_breach_warning(medial_breach))
         return metrics, warnings
 
     @staticmethod
@@ -529,6 +564,18 @@ class ScrewTool:
             result.breach_point_lps, result.breach_centre_lps, "left"
         )
         return "mediolateral" if label in ("medial", "lateral") else label
+
+    @staticmethod
+    def _screw_side(screw: Screw) -> Optional[str]:
+        """The screw's side as the grader wants it, or ``None`` when unknown.
+
+        A manually placed screw often has no side yet, and the medial/lateral
+        split is undefined without one -- the grader would then report the whole
+        breach as medial, which would put a canal warning on a screw that left
+        the vertebra laterally.  ``None`` keeps the split unmeasured instead.
+        """
+        side = str(getattr(screw, "side", "") or "").strip().lower()
+        return side if side in ("left", "right") else None
 
     def _reset_state(self):
         """Reset tool state."""

@@ -318,3 +318,89 @@ def test_a_low_ratio_warning_is_regenerated_not_silently_dropped():
         0, entry_point=(34.0, 38.0, 30.0), target_point=(34.0, 22.0, 30.0)
     )
     assert not any(w.startswith("Trajectory/body HU ratio") for w in back.warnings)
+
+
+class TestDirectionalRegrade:
+    """A re-graded screw keeps the planner's flag and refreshes the measurement."""
+
+    def _grader(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+        ct.CopyInformation(mask)
+        return ScrewGrader(mask, ct)
+
+    def test_regrade_preserves_the_planner_flag_and_refreshes_the_breach(self):
+        from src.models.screw import Screw
+        from src.tools.screw_tool import ScrewTool
+
+        tool = ScrewTool(volume_manager=None)
+        tool.set_grader(self._grader())
+        screw = Screw(
+            entry_point=(39.0, 35.0, 30.0),
+            target_point=(39.0, 25.0, 30.0),
+            diameter=6.0,
+            side="left",
+            metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5, "score": 1.25},
+        )
+
+        tool.add_screw(screw)
+        tool.regrade_all()
+
+        # Planner-owned, untouched by the grader.
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.metrics["pedicle_width_mm"] == 4.5
+        assert screw.metrics["score"] == 1.25
+        # Grader-measured, rewritten from the trajectory in front of it.
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert screw.metrics["lateral_breach_mm"] > 0.0
+        assert screw.metrics["medial_wall_mm"] > 0.0
+
+    def test_a_medial_breach_raises_a_canal_warning_that_a_move_clears(self):
+        from src.models.screw import Screw
+        from src.tools.screw_tool import ScrewTool
+
+        tool = ScrewTool(volume_manager=None)
+        tool.set_grader(self._grader())
+        screw = Screw(
+            entry_point=(39.0, 35.0, 30.0),
+            target_point=(39.0, 25.0, 30.0),
+            diameter=6.0,
+            side="right",              # +X is toward the midline for a right pedicle
+        )
+
+        tool.add_screw(screw)
+        tool.regrade_all()
+        assert "Medial breach 3.0 mm — canal side" in screw.warnings
+
+        screw.entry_point = (30.0, 35.0, 30.0)
+        screw.target_point = (30.0, 25.0, 30.0)
+        tool.regrade_all()
+        assert not any(w.startswith("Medial breach") for w in screw.warnings)
+
+    def test_a_screw_with_no_side_reports_no_direction(self):
+        """Without a side the split is meaningless; it must not be invented."""
+        from src.models.screw import Screw
+        from src.tools.screw_tool import ScrewTool
+
+        tool = ScrewTool(volume_manager=None)
+        tool.set_grader(self._grader())
+        screw = Screw(
+            entry_point=(39.0, 35.0, 30.0),
+            target_point=(39.0, 25.0, 30.0),
+            diameter=6.0,
+        )
+
+        tool.add_screw(screw)
+        tool.regrade_all()
+
+        assert screw.breach_distance > 0.0
+        assert screw.metrics["medial_breach_mm"] is None
+        assert screw.metrics["lateral_breach_mm"] is None
+        assert not any(w.startswith("Medial breach") for w in screw.warnings)
