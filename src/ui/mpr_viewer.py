@@ -2196,12 +2196,11 @@ class MPRViewer(QWidget):
         """Translate the parallel camera so the image follows pointer drag."""
         if self._renderer is None:
             return
-        height = max(
-            int(viewport_height)
-            if viewport_height is not None
-            else int(self.vtk_widget.height()),
-            1,
-        )
+        if viewport_height is not None:
+            height = max(int(viewport_height), 1)
+        else:
+            _, display_height = self._display_size()
+            height = max(display_height, 1)
         camera = self._renderer.GetActiveCamera()
         world_per_pixel = 2.0 * float(camera.GetParallelScale()) / height
         offset_x = -float(delta_x) * world_per_pixel

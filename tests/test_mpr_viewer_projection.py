@@ -469,6 +469,36 @@ def test_mpr_pan_moves_camera_without_changing_zoom():
     assert render_calls == [True]
 
 
+def test_mpr_pan_scales_by_device_pixels_not_logical_widget_height():
+    """GetEventPosition() deltas are device pixels; on a 125-150% scaled
+    desktop the render window is taller than the logical widget, so panning
+    must divide by the render window's real pixel height or drags overshoot.
+    """
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer._renderer = vtk.vtkRenderer()
+    camera = viewer._renderer.GetActiveCamera()
+    camera.ParallelProjectionOn()
+    camera.SetParallelScale(90.0)
+    camera.SetFocalPoint(0.0, 0.0, 0.0)
+    camera.SetPosition(0.0, 0.0, 100.0)
+    render_calls = []
+    viewer._request_render = lambda: render_calls.append(True)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 300,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 2.0,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (600, 600)),
+    )
+
+    viewer._pan_camera_by_pixels(30, 0)
+
+    world_per_pixel = 2.0 * 90.0 / 600.0
+    expected_offset = -30.0 * world_per_pixel
+    assert camera.GetFocalPoint() == pytest.approx((expected_offset, 0.0, 0.0))
+    assert camera.GetFocalPoint()[0] != pytest.approx(-30.0 * (2.0 * 90.0 / 300.0))
+    assert render_calls == [True]
+
+
 def test_measurement_is_visible_only_on_its_original_mpr_cut():
     viewer = _make_viewer(center=(0.0, 0.0, 10.0), position=10.0)
     viewer._measurement_props = {}

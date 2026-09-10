@@ -39,35 +39,39 @@ GRADE_D_DESCRIPTION = "Breach 4-6mm (unsafe)"
 GRADE_E_DESCRIPTION = "Breach >6mm (dangerous)"
 
 # MPR Plane Direction Cosines
+# Each flat list is loaded ROW-MAJOR into the reslice axes matrix by
+# create_reslice_axes() in vtk_helpers.py: axes[i][j] = list[i*3 + j].
+# vtkImageReslice then reads the matrix's COLUMNS as screen-right /
+# screen-up / normal, i.e. entries drawn from the list as:
+#   column 0 (screen-right) = (list[0], list[3], list[6])
+#   column 1 (screen-up)    = (list[1], list[4], list[7])
+#   column 2 (normal)       = (list[2], list[5], list[8])
+# Do NOT read a row of the list below as an axis — a row is only one
+# matrix row, not a screen-right/up/normal column.
+
 # Axial: radiological convention (looking from the patient's feet).
-# Row i of this flat list becomes column i of the reslice axes
-# (screen-right / screen-up / normal): screen-right=+X (patient left on the
-# viewer's right), screen-up=-Y (anterior at the top), normal=+Z (scroll
-# unchanged).
+# screen-right=+X (patient left on the viewer's right), screen-up=-Y
+# (anterior at the top), normal=+Z (scroll unchanged).
 AXIAL_DIRECTION_COSINES = [
-    1,  0, 0,   # Row 0
-    0, -1, 0,   # Row 1
-    0,  0, 1    # Row 2
+    1,  0, 0,
+    0, -1, 0,
+    0,  0, 1
 ]
 
-# Coronal: XZ plane (looking from front)
-# Row i of this flat list becomes column i of the reslice axes
-# (screen-right / screen-up / normal): screen-right=X(L-R),
-# screen-up=Z(superior-up), normal=-Y(A-P).
+# Coronal: XZ plane (looking from front).
+# screen-right=X(L-R), screen-up=Z(superior-up), normal=-Y(A-P).
 CORONAL_DIRECTION_COSINES = [
-    1, 0,  0,   # Row 0
-    0, 0, -1,   # Row 1
-    0, 1,  0    # Row 2
+    1, 0,  0,
+    0, 0, -1,
+    0, 1,  0
 ]
 
-# Sagittal: YZ plane (looking from side)
-# Row i of this flat list becomes column i of the reslice axes
-# (screen-right / screen-up / normal): screen-right=Y(A-P),
-# screen-up=Z(superior-up), normal=X(L-R).
+# Sagittal: YZ plane (looking from side).
+# screen-right=Y(A-P), screen-up=Z(superior-up), normal=X(L-R).
 SAGITTAL_DIRECTION_COSINES = [
-    0, 0, 1,   # Row 0
-    1, 0, 0,   # Row 1
-    0, 1, 0    # Row 2
+    0, 0, 1,
+    1, 0, 0,
+    0, 1, 0
 ]
 
 # UI Colors (RGB, 0-255)
