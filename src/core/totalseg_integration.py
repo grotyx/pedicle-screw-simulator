@@ -3,6 +3,7 @@ TotalSegmentator integration helpers with safe fallback behavior.
 """
 
 import importlib.util
+import logging
 import os
 import shutil
 import subprocess
@@ -18,6 +19,12 @@ import SimpleITK as sitk
 if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
     from src.core.subregion_segmentation import SubregionModel
 
+
+logger = logging.getLogger(__name__)
+
+#: Basename of the refined mask, written beside TotalSegmentator's own output
+#: so a run's raw and refined masks stay together in one workspace directory.
+REFINED_MASK_NAME = "totalseg_multilabel_refined.nii.gz"
 
 SPINE_ROI_SUBSET = (
     "sacrum",
@@ -256,6 +263,12 @@ class SegmentationRunResult:
     subregion_mask_path: Optional[str] = None
     subregion_labels: Dict[str, int] = field(default_factory=dict)
     subregion_message: str = ""
+    #: TotalSegmentator's own output when ``mask_path`` points at a refined
+    #: copy of it; ``None`` when the mask in use is the raw one.
+    raw_mask_path: Optional[str] = None
+    #: Human-readable audit trail from :func:`refine_vertebra_mask`. Its first
+    #: entry is the summary note the UI and the plan metadata read.
+    refinement_notes: List[str] = field(default_factory=list)
 
 
 def run_subregion_segmentation(*args, **kwargs) -> str:
@@ -566,6 +579,34 @@ def validate_segmentation_output(
     return check_segmentation_geometry(reference_image, mask_image)
 
 
+def _apply_mask_refinement(
+    image: sitk.Image,
+    mask_path: str,
+    progress_callback: Optional[Callable[[str], None]],
+):
+    """Refine `mask_path` against `image`; return (mask_path, raw_path, notes).
+
+    Never fails the run. A blocky mask still plans screws, whereas a
+    segmentation aborted by an out-of-memory soft mask plans none, so a
+    refinement that raises leaves the raw mask in place and reports why.
+    """
+    from src.core.mask_refinement import refine_vertebra_mask
+
+    _emit_progress(progress_callback, "Refining mask boundaries against the CT...")
+    try:
+        result = refine_vertebra_mask(
+            sitk.ReadImage(mask_path),
+            image,
+            progress=lambda message: _emit_progress(progress_callback, message),
+        )
+        refined_path = str(Path(mask_path).with_name(REFINED_MASK_NAME))
+        sitk.WriteImage(result.mask, refined_path)
+    except Exception as exc:
+        logger.warning("Mask refinement failed; keeping the raw mask", exc_info=True)
+        return mask_path, None, [f"Mask refinement failed: {exc}"]
+    return refined_path, mask_path, list(result.notes)
+
+
 def _build_result(
     image: sitk.Image,
     method: str,
@@ -574,6 +615,8 @@ def _build_result(
     subregion_mask_path: Optional[str] = None,
     subregion_labels: Optional[Dict[str, int]] = None,
     subregion_message: str = "",
+    raw_mask_path: Optional[str] = None,
+    refinement_notes: Optional[List[str]] = None,
 ) -> SegmentationRunResult:
     geometry_warnings = validate_segmentation_output(image, mask_path)
     if geometry_warnings:
@@ -591,6 +634,8 @@ def _build_result(
         subregion_mask_path=subregion_mask_path,
         subregion_labels=dict(subregion_labels or {}),
         subregion_message=subregion_message,
+        raw_mask_path=raw_mask_path,
+        refinement_notes=list(refinement_notes or []),
     )
 
 
@@ -636,6 +681,7 @@ def run_segmentation_with_fallback(
     progress_callback: Optional[Callable[[str], None]] = None,
     process_holder: Optional[ProcessHolder] = None,
     subregion_model: Optional["SubregionModel"] = None,
+    refine: bool = True,
 ) -> SegmentationRunResult:
     """
     Run TotalSegmentator with fallback strategy.
@@ -643,6 +689,10 @@ def run_segmentation_with_fallback(
     Behavior:
     1) If TotalSegmentator is available and succeeds -> use it.
     2) Otherwise fallback to threshold mask.
+    3) A successful TotalSegmentator mask is refined against the CT
+       (``refine=True``) and ``mask_path`` then names the refined copy, with
+       the original kept as ``raw_mask_path``. The threshold fallback is never
+       refined: it carries no vertebra labels.
 
     When ``subregion_model`` is given, a second-stage subregion inference runs
     after a successful TotalSegmentator run. Its failure never fails the run:
@@ -695,6 +745,18 @@ def run_segmentation_with_fallback(
                 message = (
                     "TotalSegmentator segmentation completed after CPU retry."
                 )
+            raw_mask_path: Optional[str] = None
+            refinement_notes: List[str] = []
+            if refine:
+                (
+                    mask_path,
+                    raw_mask_path,
+                    refinement_notes,
+                ) = _apply_mask_refinement(
+                    image=image,
+                    mask_path=mask_path,
+                    progress_callback=progress_callback,
+                )
             subregion_mask_path = None
             subregion_labels: Dict[str, int] = {}
             subregion_message = ""
@@ -719,6 +781,8 @@ def run_segmentation_with_fallback(
                 subregion_mask_path=subregion_mask_path,
                 subregion_labels=subregion_labels,
                 subregion_message=subregion_message,
+                raw_mask_path=raw_mask_path,
+                refinement_notes=refinement_notes,
             )
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SegmentationCancelled)):
