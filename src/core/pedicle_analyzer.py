@@ -102,6 +102,19 @@ class PedicleAnalyzer:
     PEDICLE_WINDOW_AREA_RATIO: float = 1.25
     # Fewest window records needed to fit an axis through their centroids.
     MIN_AXIS_WINDOW_RECORDS: int = 3
+    # Shortest AP travel the centroid track may be fitted over.  On a
+    # CT-guided refined mask (0.39 mm coronal voxels) the area-ratio window is
+    # 3-4 records = 1.2-1.6 mm, over which a single 1.0 mm slice of stair-step
+    # drift swings the SVD by more than 40 degrees.  Five millimetres is short
+    # enough to stay inside a real pedicle's isthmus and long enough that one
+    # voxel of drift is a small angle.
+    MIN_AXIS_WINDOW_MM: float = 5.0
+    # Largest cranio-caudal rise the fitted axis may have per unit of AP
+    # travel.  A pedicle axis is close to axial; anything past 45 degrees is a
+    # fitting artefact, and following it puts the entry point a centimetre off
+    # the isthmus.  Such a fit is discarded in favour of body centre ->
+    # isthmus.
+    MAX_AXIS_TILT_RATIO: float = 1.0
     # Fewest labelled voxels on one side before that side is measured.  Below
     # this the label is a speck of leakage rather than a pedicle.
     MIN_LABEL_SIDE_VOXELS: int = 20
@@ -734,8 +747,9 @@ class PedicleAnalyzer:
         )
 
         axis = self._compute_pedicle_axis(side_voxels)
-        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
-            # A cloud whose principal axis is not AP enough to trust — fall
+        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT or self._is_overtilted(axis):
+            # A cloud whose principal axis is not AP enough to trust, or one
+            # that climbs out of the axial plane faster than it advances — fall
             # back on body centre -> isthmus, as the coronal search does.
             body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
             fallback = center - body_center_lps
@@ -993,10 +1007,12 @@ class PedicleAnalyzer:
 
         * the **isthmus** is the single narrowest recorded slice, and
           supplies the centre, width and height;
-        * the **axis** is fitted only over the contiguous run of records
+        * the **axis** is fitted over the contiguous run of records
           around the isthmus whose area stays within
           ``PEDICLE_WINDOW_AREA_RATIO`` of the minimum, which drops the
-          laminar slices as soon as the cross-section starts to flare.
+          laminar slices as soon as the cross-section starts to flare —
+          widened, when that run is shorter than
+          ``MIN_AXIS_WINDOW_MM`` of AP travel, until it is not.
 
         Parameters
         ----------
@@ -1144,9 +1160,11 @@ class PedicleAnalyzer:
         hi_index = isthmus_index
         while hi_index + 1 < len(records) and records[hi_index + 1][1] <= area_limit:
             hi_index += 1
-        window = records[lo_index:hi_index + 1]
+        # A direction fitted over a millimetre of AP travel is noise: widen the
+        # window until it spans a real length, whatever the areas say.
+        lo_index, hi_index = self._extend_axis_window(records, lo_index, hi_index)
 
-        axis = self._fit_axis_through_centroids(window)
+        axis = self._fit_axis_through_centroids(records[lo_index:hi_index + 1])
         if axis is None:
             # Too few slices, or a corridor whose centroids do not track the
             # AP direction — fall back on body centre -> isthmus.
@@ -1171,6 +1189,43 @@ class PedicleAnalyzer:
             ),
             "isthmus_window_j": (int(records[lo_index][0]), int(records[hi_index][0])),
         }
+
+    def _extend_axis_window(
+        self,
+        records: List[Tuple[int, float, np.ndarray]],
+        lo_index: int,
+        hi_index: int,
+    ) -> Tuple[int, int]:
+        """Widen ``records[lo_index:hi_index + 1]`` to :attr:`MIN_AXIS_WINDOW_MM`.
+
+        The area-ratio window says which slices are *pedicle*; it says nothing
+        about whether they are enough slices to fit a direction to.  On a fine
+        coronal grid they routinely are not — three 0.39 mm slices span 1.2 mm,
+        and one voxel of stair-step drift across that baseline tilts the fit by
+        tens of degrees.
+
+        Slices are added alternately in front of and behind the window, over
+        the recorded corridor and ignoring the area ratio (they only steady the
+        direction; the isthmus, width and height are already measured), until
+        the window spans ``MIN_AXIS_WINDOW_MM`` of AP travel or the corridor
+        runs out.  A corridor shorter than that is used whole.
+        """
+        _, sy, _ = self._spacing
+        last = len(records) - 1
+        extend_lo = True
+        while (records[hi_index][0] - records[lo_index][0] + 1) * sy < (
+            self.MIN_AXIS_WINDOW_MM
+        ):
+            if lo_index == 0 and hi_index == last:
+                break                  # the whole corridor is shorter than that
+            if extend_lo and lo_index > 0:
+                lo_index -= 1
+            elif hi_index < last:
+                hi_index += 1
+            else:
+                lo_index -= 1
+            extend_lo = not extend_lo
+        return lo_index, hi_index
 
     def _fit_axis_through_centroids(
         self,
@@ -1208,7 +1263,19 @@ class PedicleAnalyzer:
         axis = axis / norm
         if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
             return None
+        if self._is_overtilted(axis):
+            return None
         return axis
+
+    @classmethod
+    def _is_overtilted(cls, axis: np.ndarray) -> bool:
+        """True when *axis* rises out of the axial plane by more than 45 deg.
+
+        A pedicle runs very nearly axially.  A fit that climbs faster than it
+        advances is an artefact of a short or drifting centroid track, and
+        following it lands the entry point a centimetre off the isthmus.
+        """
+        return abs(float(axis[2])) > cls.MAX_AXIS_TILT_RATIO * abs(float(axis[1]))
 
     def analyze_all(
         self, labels: Optional[List[int]] = None

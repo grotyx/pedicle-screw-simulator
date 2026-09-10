@@ -300,6 +300,35 @@ def _make_notched_corridor_phantom(notch_slices: int, label: int = 28) -> sitk.I
     return sitk.GetImageFromArray(arr)
 
 
+def _make_fine_corridor_phantom(z_step: bool = False, label: int = 28) -> sitk.Image:
+    """A left corridor on a 0.4 mm in-plane grid whose isthmus is three slices.
+
+    Reproduces the geometry of a CT-guided refined mask: 0.4 x 0.4 mm coronal
+    voxels with 1.0 mm slices.  The corridor runs from y = 70 to y = 99 and is
+    6.4 mm across everywhere except for three slices (y = 84..86) where it
+    narrows to 4.0 mm, so the area-ratio window around the isthmus is exactly
+    three records -- 1.2 mm of AP travel, far too short to fit a direction to.
+
+    With ``z_step=True`` the corridor shifts up by exactly one 1.0 mm slice at
+    y = 85, the one-voxel stair a real mask leaves behind.  Over 1.2 mm of AP
+    travel that 1 mm rise tilts an SVD fit by more than 55 degrees; over the
+    5 mm the fit is now given it is under 17 degrees.
+    """
+    Z, Y, X = 40, 150, 200
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (xx >= 50) & (xx < 150) & (yy >= 20) & (yy < 70) & (zz >= 10) & (zz < 31)
+    step = (yy >= 85) & z_step
+    in_z = (zz >= 14 + step) & (zz <= 25 + step)
+    narrow = (yy >= 84) & (yy <= 86)
+    in_x = np.where(narrow, (xx >= 125) & (xx <= 134), (xx >= 122) & (xx <= 137))
+    corridor = (yy >= 70) & (yy < 100) & in_z & in_x
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | corridor] = label
+    image = sitk.GetImageFromArray(arr)
+    image.SetSpacing((0.4, 0.4, 1.0))  # sitk order (x, y, z)
+    return image
+
+
 # ---------------------------------------------------------------------------
 # Vertebra dataclass tests
 # ---------------------------------------------------------------------------
@@ -743,6 +772,87 @@ class TestCoronalIsthmus:
         assert found["width_lower_bound_mm"] == pytest.approx(expected_lower_bound_mm)
 
 
+class TestAxisWindowLength:
+    """The axis must be fitted over a real length of AP travel, never a sliver."""
+
+    @staticmethod
+    def _find_left(mask: sitk.Image):
+        analyzer = PedicleAnalyzer(mask)
+        binary = (sitk.GetArrayFromImage(mask) == 28).astype(np.uint8)
+        return analyzer, analyzer._find_pedicle_coronal(
+            binary, (100.0, 45.0, 20.0), (10, 30), "left"
+        )
+
+    def test_axis_window_spans_at_least_five_millimetres(self):
+        """At 0.4 mm coronal spacing the three-record window is extended to 13."""
+        _, found = self._find_left(_make_fine_corridor_phantom())
+
+        assert found is not None
+        j_lo, j_hi = found["isthmus_window_j"]
+        assert j_lo <= found["isthmus_j"] <= j_hi
+        # The area-ratio window is y = 84..86 (3 records, 1.2 mm); the fit needs
+        # ceil(5.0 / 0.4) = 13 records, taken symmetrically about it.
+        span_slices = j_hi - j_lo + 1
+        assert span_slices >= 13, f"axis window spans only {span_slices} slices"
+        assert span_slices * 0.4 >= PedicleAnalyzer.MIN_AXIS_WINDOW_MM
+        # The isthmus itself is untouched by the extension.
+        assert found["isthmus_j"] == 85
+        assert found["width_mm"] == pytest.approx(4.0, abs=0.2)
+
+    def test_one_voxel_centroid_drift_does_not_tilt_the_axis(self):
+        """A 1 mm stair in the middle of the corridor must not tilt the fit."""
+        _, found = self._find_left(_make_fine_corridor_phantom(z_step=True))
+
+        assert found is not None
+        axis = np.asarray(found["axis_lps"], dtype=float)
+        # Fitted over 1.2 mm the same 1 mm stair yields |axis_z| ~ 0.84; fitted
+        # over 5.2 mm it is ~0.28.
+        assert abs(axis[2]) < 0.3, f"axis still tilted: {axis}"
+        # And this is the centroid fit, not the body-centre fallback: the
+        # corridor's centroids never move in x, while body -> isthmus would
+        # carry a lateral component of ~0.6.
+        assert abs(axis[0]) < 0.05, f"axis came from the fallback: {axis}"
+
+    def test_overtilted_fit_falls_back_to_body_centre_axis(self):
+        """A centroid track climbing faster than it advances is refused."""
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())  # 1 mm isotropic
+
+        def window(z_per_slice: float):
+            return [
+                (j, 10.0, np.array([[j * z_per_slice, 45.0]], dtype=np.float64))
+                for j in range(4)
+            ]
+
+        # 4 mm of rise over 3 mm of AP travel: more than 45 degrees off-axial,
+        # so the helper refuses it and the caller falls back on body -> isthmus.
+        assert analyzer._fit_axis_through_centroids(window(4.0 / 3.0)) is None
+        # 2 mm over 3 mm is a real, if steep, pedicle and is still fitted.
+        gentle = analyzer._fit_axis_through_centroids(window(2.0 / 3.0))
+        assert gentle is not None
+        assert abs(gentle[2]) < abs(gentle[1])
+
+    def test_overtilted_corridor_axis_becomes_the_body_centre_direction(self):
+        """The rejected fit reaches the caller as the isthmus fallback."""
+        mask = _make_fine_corridor_phantom()
+        analyzer, found = self._find_left(mask)
+        assert found is not None
+
+        analyzer._fit_axis_through_centroids = lambda window: None
+        binary = (sitk.GetArrayFromImage(mask) == 28).astype(np.uint8)
+        fallback = analyzer._find_pedicle_coronal(
+            binary, (100.0, 45.0, 20.0), (10, 30), "left"
+        )
+
+        assert fallback is not None
+        axis = np.asarray(fallback["axis_lps"], dtype=float)
+        body_center_lps = analyzer._continuous_ijk_to_lps(100.0, 45.0, 20.0)
+        expected = fallback["center_lps"] - body_center_lps
+        expected = expected / np.linalg.norm(expected)
+        assert axis == pytest.approx(expected)
+        # The fitted axis had no lateral component at all; this one does.
+        assert abs(axis[0]) > 0.3
+
+
 # ---------------------------------------------------------------------------
 # PedicleAnalyzer: pedicle subregion label path
 # ---------------------------------------------------------------------------
@@ -877,6 +987,40 @@ class TestSubregionLabelPath:
         assert found["isthmus_window_j"] == (10, 19)
         assert found["center_lps"] == pytest.approx(np.array([36.5, 15.0, 2.0]))
         assert found["axis_lps"] == pytest.approx(np.array([0.0, 1.0, 0.0]), abs=1e-6)
+
+    def test_label_path_rejects_overtilted_pca_axis(self):
+        """A diagonal labelled corridor must not hand the planner a 63 deg axis.
+
+        The corridor climbs two z voxels for every coronal slice it advances,
+        so the PCA over its voxel cloud runs along the tube: AP enough to clear
+        ``MIN_AXIS_AP_COMPONENT`` but far too steep to drill.  The tilt guard
+        has to send it to the same isthmus -> body-centre fallback the coronal
+        search uses.
+        """
+        Z, Y, X = 60, 60, 60
+        arr = np.full((Z, Y, X), 28, dtype=np.uint8)
+        mask = sitk.GetImageFromArray(arr)
+
+        pedicle = np.zeros((Z, Y, X), bool)
+        for t in range(19):                      # y = 20..38
+            pedicle[12 + 2 * t:17 + 2 * t, 20 + t, 24:31] = True
+
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        voxels = np.argwhere(pedicle)
+        # The raw PCA is steeper in z than in y — the old AP-only guard let it
+        # through untouched.
+        raw = analyzer._compute_pedicle_axis(voxels)
+        assert abs(raw[1]) > PedicleAnalyzer.MIN_AXIS_AP_COMPONENT
+        assert abs(raw[2]) > abs(raw[1])
+
+        found = analyzer._find_pedicle_from_label(voxels, (20.0, 10.0, 32.0), "left")
+
+        assert found is not None
+        axis = np.asarray(found["axis_lps"], dtype=float)
+        expected = found["center_lps"] - analyzer._continuous_ijk_to_lps(20.0, 10.0, 32.0)
+        expected = expected / np.linalg.norm(expected)
+        assert axis == pytest.approx(expected)
+        assert axis[1] > 0.9 and abs(axis[2]) < 1e-9
 
     def test_no_label_keeps_the_coronal_path(self):
         analyzer = PedicleAnalyzer(_make_anatomical_phantom(), pedicle_mask=None)
