@@ -7,7 +7,7 @@ Each vertebra receives a distinct low-saturation warm ivory color.
 
 Pipeline per label:
   1. Crop each label to a spacing-aware padded region
-  2. Smooth a float binary field using a physical 0.9 mm Gaussian
+  2. Smooth a float binary field with a spacing-derived physical Gaussian
   3. Extract a sub-voxel surface with vtkFlyingEdges3D
   4. Light surface fairing and moderate topology-preserving decimation
   5. Point-normal recomputation and Phong rendering
@@ -18,7 +18,7 @@ All extracted surfaces are combined into one vtkAppendPolyData output.
 
 import logging
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import vtk
@@ -51,6 +51,37 @@ VERTEBRA_LABELS: Dict[int, str] = {
     42: "vertebrae_T2",
     43: "vertebrae_T1",
 }
+
+
+# Windowed-sinc fairing shared by extract_vertebral_mesh and the generic
+# single-label surface path in src/ui/viewer_3d.py, so both pipelines produce
+# the same surface quality.
+MESH_SMOOTHING_ITERATIONS = 30
+MESH_SMOOTHING_PASSBAND = 0.06
+
+# Physical-millimetre bounds for the Gaussian pre-filter. The floor keeps a
+# refined native-resolution mask at today's 0.9 mm; the ceiling stops very
+# thick-slice studies from being blurred into a blob.
+MIN_SMOOTHING_MM = 0.9
+MAX_SMOOTHING_MM = 2.0
+
+
+def default_smoothing_mm(spacing: Sequence[float]) -> float:
+    """Derive the Gaussian sigma in millimetres from a mask's voxel spacing.
+
+    ``max(MIN_SMOOTHING_MM, 0.5 * max(spacing))`` clamped to
+    ``MAX_SMOOTHING_MM``: a 0.39 x 0.39 x 1.0 mm CT grid and a raw 1.5 mm
+    inference grid both land on the 0.9 mm floor, while a 5 mm-slice study
+    gets a sigma matched to its own grid.
+
+    Args:
+        spacing: Voxel spacing (x, y, z) in millimetres.
+
+    Returns:
+        Gaussian standard deviation in millimetres.
+    """
+    coarsest = max(abs(float(value)) for value in spacing)
+    return min(max(MIN_SMOOTHING_MM, 0.5 * coarsest), MAX_SMOOTHING_MM)
 
 
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[float, float, float]:
@@ -292,11 +323,11 @@ def _find_label_vois(
 
 def extract_vertebral_mesh(
     mask_image: vtk.vtkImageData,
-    smoothing_iterations: int = 20,
-    smoothing_passband: float = 0.08,
+    smoothing_iterations: int = MESH_SMOOTHING_ITERATIONS,
+    smoothing_passband: float = MESH_SMOOTHING_PASSBAND,
     target_reduction: float = 0.50,
     labels: Optional[List[int]] = None,
-    smoothing_mm: float = 0.9,
+    smoothing_mm: Optional[float] = None,
 ) -> Optional[vtk.vtkPolyData]:
     """Extract colored vertebral body mesh from a multilabel segmentation mask.
 
@@ -313,6 +344,8 @@ def extract_vertebral_mesh(
         target_reduction: Requested fraction of polygons to remove.
         labels: Optional pre-detected vertebral labels, avoiding another scan.
         smoothing_mm: Gaussian standard deviation in physical millimetres.
+            ``None`` derives it from the mask spacing via
+            ``default_smoothing_mm``.
 
     Returns:
         Combined colored vtkPolyData, or None if no vertebral labels found.
@@ -335,8 +368,10 @@ def extract_vertebral_mesh(
     reduction = min(max(float(target_reduction), 0.0), 0.95)
     iterations = max(int(smoothing_iterations), 0)
     passband = min(max(float(smoothing_passband), 0.001), 1.0)
-    smoothing_mm = min(max(float(smoothing_mm), 0.0), 2.0)
     spacing = np.asarray(mask_image.GetSpacing(), dtype=float)
+    if smoothing_mm is None:
+        smoothing_mm = default_smoothing_mm(spacing)
+    smoothing_mm = min(max(float(smoothing_mm), 0.0), MAX_SMOOTHING_MM)
     sigma_voxels = tuple(
         float(value) for value in smoothing_mm / spacing
     )
