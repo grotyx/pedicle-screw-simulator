@@ -1,6 +1,6 @@
 """Selectable flat-color QSS themes for the planning workstation."""
 
-DEFAULT_THEME = "soft_light"
+DEFAULT_THEME = "graphite_blue"
 
 THEME_LABELS = {
     "soft_light": "Soft Light",
@@ -36,6 +36,15 @@ THEMES = {
         "danger_text": "#B82F3A",
         "viewer_header": "#12161B",
         "viewer_readout": "#0B0E12",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#B8C1CB",
+        "grade_a": "#2E9E5B",
+        "grade_b": "#8FBF3F",
+        "grade_c": "#E0A326",
+        "grade_d": "#D64545",
+        "grade_na": "#8D99A5",
+        "grade_text": "#FFFFFF",
         "table_alternate": "#F1F3F5",
         "table_header": "#ECEFF2",
         "scrollbar_bg": "#E7EAEE",
@@ -69,6 +78,15 @@ THEMES = {
         "danger_text": "#FFBBC2",
         "viewer_header": "#15181C",
         "viewer_readout": "#101317",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#2B3138",
+        "grade_a": "#35B36B",
+        "grade_b": "#9BCB4C",
+        "grade_c": "#E8AE35",
+        "grade_d": "#E05561",
+        "grade_na": "#5E6873",
+        "grade_text": "#0B0E12",
         "table_alternate": "#181C21",
         "table_header": "#111419",
         "scrollbar_bg": "#15181C",
@@ -102,6 +120,15 @@ THEMES = {
         "danger_text": "#FFC0C4",
         "viewer_header": "#181A17",
         "viewer_readout": "#111310",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#30352F",
+        "grade_a": "#3FBE7B",
+        "grade_b": "#A3D255",
+        "grade_c": "#EDB645",
+        "grade_d": "#E76A72",
+        "grade_na": "#626A60",
+        "grade_text": "#07110E",
         "table_alternate": "#1B1E1A",
         "table_header": "#141613",
         "scrollbar_bg": "#181A17",
@@ -124,7 +151,7 @@ def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
 QMainWindow, QWidget {{
     background-color: {t["bg_primary"]};
     color: {t["text_primary"]};
-    font-family: "Avenir Next", "Helvetica Neue", Arial;
+    font-family: "Segoe UI", "SF Pro Text", "Avenir Next", "Helvetica Neue", Arial;
     font-size: 13px;
 }}
 
@@ -491,9 +518,9 @@ QLabel#screwDragHint {{
     border-radius: 5px;
     padding: 6px 8px;
 }}
-MPRViewer {{
-    background-color: #050A0F;
-    border: 1px solid {t["border"]};
+MPRViewer, Viewer3D {{
+    background-color: {t["viewer_bg"]};
+    border: 1px solid {t["viewer_separator"]};
     border-radius: 7px;
 }}
 MPRViewer[reviewActive="true"] {{
