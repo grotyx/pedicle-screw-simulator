@@ -41,7 +41,7 @@ from ..utils.constants import (
     DEFAULT_WINDOW_WIDTH,
 )
 from .click_detector import DoubleClickDetector
-from .styles import DEFAULT_THEME, theme_rgb_float
+from .styles import DEFAULT_THEME, get_theme, theme_rgb_float
 from .tool_icons import create_tool_icon
 from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
@@ -211,7 +211,7 @@ class MPRViewer(QWidget):
         )
         self.pan_button.setCheckable(True)
         self.pan_button.setChecked(False)
-        self.pan_button.setIcon(create_tool_icon("pan", "#E8EEF4", 14))
+        self.set_pan_icon_color(self._theme_token("viewer_foreground"))
         self.zoom_out_button = QToolButton(self.mpr_zoom_controls)
         self.zoom_out_button.setText("−")
         self.zoom_out_button.setToolTip("Zoom out this MPR")
@@ -413,11 +413,60 @@ class MPRViewer(QWidget):
             if self._renderer is not None:
                 self._renderer.AddViewProp(actor)
 
-    def _orientation_marker_color(self) -> Tuple[float, float, float]:
-        """Marker colour taken from the running application's theme."""
+    def _active_theme_name(self) -> str:
+        """Name of the palette the running application is using."""
         app = QApplication.instance()
         theme_name = None if app is None else app.property("themeName")
-        return theme_rgb_float(theme_name or DEFAULT_THEME, "viewer_foreground")
+        return str(theme_name or DEFAULT_THEME)
+
+    def _theme_token(self, key: str) -> str:
+        """Hex colour for one palette token under the active theme."""
+        return get_theme(self._active_theme_name())[key]
+
+    def _orientation_marker_color(self) -> Tuple[float, float, float]:
+        """Marker colour taken from the running application's theme."""
+        return theme_rgb_float(self._active_theme_name(), "viewer_foreground")
+
+    def set_pan_icon_color(self, color: str) -> None:
+        """Repaint the Pan glyph so it follows the active palette.
+
+        ``MainWindow.apply_theme`` calls this for every MPR pane; the colour
+        used to be a hard-coded hex that stayed dark-theme grey on the light
+        palettes.
+        """
+        button = self.__dict__.get("pan_button")
+        if button is not None:
+            button.setIcon(create_tool_icon("pan", str(color), 14))
+
+    def _display_size(self) -> Tuple[int, int]:
+        """Viewport size in VTK device pixels.
+
+        ``vtkTextActor.SetDisplayPosition`` and ``GetEventPosition`` both
+        speak device pixels, while ``QWidget.width()``/``height()`` are Qt
+        logical pixels. The two differ by ``devicePixelRatio`` on a scaled
+        Windows desktop (125-150 %), which used to bunch the orientation
+        letters -- and the Ctrl-drag rotation pivot -- towards the centre-left
+        of the view. The render window knows the real pixel size; the scaled
+        widget size is only a fallback for before it has been sized.
+        """
+        widget = self.__dict__.get("vtk_widget")
+        if widget is None:
+            return (1, 1)
+        get_render_window = getattr(widget, "GetRenderWindow", None)
+        render_window = get_render_window() if callable(get_render_window) else None
+        get_size = getattr(render_window, "GetSize", None)
+        if callable(get_size):
+            size = get_size()
+            if size and int(size[0]) > 0 and int(size[1]) > 0:
+                return (int(size[0]), int(size[1]))
+        ratio_getter = getattr(widget, "devicePixelRatioF", None)
+        ratio = float(ratio_getter()) if callable(ratio_getter) else 1.0
+        if ratio <= 0.0:
+            ratio = 1.0
+        return (
+            max(int(round(widget.width() * ratio)), 1),
+            max(int(round(widget.height() * ratio)), 1),
+        )
 
     def _orientation_marker_positions(
         self,
@@ -448,9 +497,7 @@ class MPRViewer(QWidget):
         axes = self._active_reslice_axes()
         letters = {} if axes is None else orientation_letters(axes)
         color = self._orientation_marker_color()
-        widget = getattr(self, "vtk_widget", None)
-        width = max(int(widget.width()), 1) if widget is not None else 1
-        height = max(int(widget.height()), 1) if widget is not None else 1
+        width, height = self._display_size()
         positions = self._orientation_marker_positions(width, height)
         for side, actor in actors.items():
             text = letters.get(side, "")
@@ -2105,11 +2152,13 @@ class MPRViewer(QWidget):
         )
 
     def _viewport_center_display(self) -> Tuple[float, float]:
-        """Pixel centre of this viewport, the Ctrl-drag rotation pivot."""
-        return (
-            float(self.vtk_widget.width()) / 2.0,
-            float(self.vtk_widget.height()) / 2.0,
-        )
+        """Pixel centre of this viewport, the Ctrl-drag rotation pivot.
+
+        ``GetEventPosition()`` reports device pixels, so the pivot must be
+        the render window's centre rather than half the logical widget size.
+        """
+        width, height = self._display_size()
+        return (float(width) / 2.0, float(height) / 2.0)
 
     @staticmethod
     def _drag_rotation_delta_deg(center, previous, current) -> float:

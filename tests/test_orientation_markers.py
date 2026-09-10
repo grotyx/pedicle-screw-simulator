@@ -253,6 +253,46 @@ def test_refresh_follows_the_current_viewport_size():
     )
 
 
+def test_refresh_places_markers_in_render_window_device_pixels():
+    # On a scaled Windows desktop (125-150 %) the render window is larger than
+    # the logical widget, and SetDisplayPosition speaks those device pixels.
+    viewer = _marker_viewer(create_reslice_axes("axial", (0.0, 0.0, 0.0)))
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 2.0,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (800, 600)),
+    )
+
+    viewer.refresh_orientation_markers()
+
+    margin = ORIENTATION_MARKER_MARGIN_PX
+    assert viewer._orientation_actors["right"].GetPosition() == pytest.approx(
+        (800 - margin, 300.0)
+    )
+    assert viewer._orientation_actors["top"].GetPosition() == pytest.approx(
+        (400.0, 600 - margin)
+    )
+
+
+def test_refresh_scales_the_widget_size_when_the_window_has_none_yet():
+    # Before the render window is sized, the logical widget size times the
+    # device pixel ratio is the best estimate of the device-pixel viewport.
+    viewer = _marker_viewer(create_reslice_axes("axial", (0.0, 0.0, 0.0)))
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 1.5,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (0, 0)),
+    )
+
+    viewer.refresh_orientation_markers()
+
+    assert viewer._orientation_actors["top"].GetPosition() == pytest.approx(
+        (300.0, 450 - ORIENTATION_MARKER_MARGIN_PX)
+    )
+
+
 def test_viewer_resize_hook_is_wired_to_the_marker_refresh():
     # resizeEvent itself is a two-line Qt delegation; a real MPRViewer
     # cannot be built in-process (its VTK render window crashes offscreen

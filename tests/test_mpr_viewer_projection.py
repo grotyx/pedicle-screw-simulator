@@ -729,6 +729,32 @@ def test_drag_rotation_wraps_across_the_negative_x_axis():
     assert delta == pytest.approx(1.1458773953669, abs=1e-9)
 
 
+def test_rotation_pivot_is_the_render_window_centre_not_the_logical_one():
+    # GetEventPosition() reports device pixels; on a 150 % desktop half the
+    # logical widget size would put the pivot up and to the left of centre.
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 1.5,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (600, 450)),
+    )
+
+    assert viewer._viewport_center_display() == pytest.approx((300.0, 225.0))
+
+
+def test_rotation_pivot_scales_the_widget_size_before_the_window_is_sized():
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 1.5,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (0, 0)),
+    )
+
+    assert viewer._viewport_center_display() == pytest.approx((300.0, 225.0))
+
+
 def test_drag_rotation_ignores_points_near_the_pivot():
     assert MPRViewer._drag_rotation_delta_deg(
         (200.0, 100.0), (201.0, 100.0), (200.0, 200.0)
