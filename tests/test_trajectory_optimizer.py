@@ -18,6 +18,7 @@ from src.core.screw_grading import BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
     MAX_DIAMETER_STEPS,
     MAX_ENTRY_SHORTFALL_MM,
+    SAFETY_CAP_MM,
     TIP_SEGMENT_MM,
     OptimizerWeights,
     _seat_entries,
@@ -149,9 +150,9 @@ def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
     tried = []
     graded = grader.evaluate_batch
 
-    def counting(entries, targets, diameter, label):
+    def counting(entries, targets, diameter, label, side=None):
         tried.append(diameter)
-        return graded(entries, targets, diameter, label)
+        return graded(entries, targets, diameter, label, side=side)
 
     grader.evaluate_batch = counting
     started = time.perf_counter()
@@ -288,3 +289,79 @@ def test_plan_all_optimized_does_not_build_a_planner_per_pedicle(monkeypatch):
 
     assert screws
     assert built == []      # the planner lent itself to every pedicle
+def _narrow_setup():
+    """The narrow phantom plus a matching CT and its analysis."""
+    from tests.test_pedicle_analyzer import _make_narrow_pedicle_phantom
+
+    mask = _make_narrow_pedicle_phantom()
+    arr = sitk.GetArrayFromImage(mask)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+    analyzer = PedicleAnalyzer(mask)
+    analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+    return ct, mask, analysis
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_a_narrow_pedicle_has_no_contained_trajectory(side):
+    """Without the narrow mode the 3.5 mm corridor simply has no answer."""
+    ct, mask, analysis = _narrow_setup()
+
+    assert optimize_screw(ScrewGrader(mask, ct), analysis, side, PlannerConfig()) == []
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_the_narrow_mode_protects_the_medial_wall(side):
+    ct, mask, analysis = _narrow_setup()
+    config = PlannerConfig()
+
+    ranked = optimize_screw(
+        ScrewGrader(mask, ct), analysis, side, config, narrow=True
+    )
+
+    assert ranked
+    best = ranked[0]
+    assert best.diameter == pytest.approx(4.0)          # no step-down for a narrow side
+    assert best.medial_breach_mm == 0.0
+    assert best.craniocaudal_breach_mm == 0.0
+    assert 0.0 < best.lateral_breach_mm <= config.narrow_lateral_breach_mm
+    # The corridor was pushed away from the canal, so the head sits lateral of
+    # the isthmus centre.
+    centre = (
+        analysis.left_pedicle_center if side == "left" else analysis.right_pedicle_center
+    )
+    medial_sign = -1.0 if side == "left" else 1.0
+    assert medial_sign * (best.entry[0] - centre[0]) < -0.5
+    assert best.components.keys() == {
+        "safety", "density", "length", "endplate", "lateral"
+    }
+    assert best.components["safety"] == pytest.approx(
+        min(best.medial_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM
+    )
+
+
+def test_every_narrow_candidate_respects_the_lateral_cap():
+    ct, mask, analysis = _narrow_setup()
+    config = PlannerConfig(narrow_lateral_breach_mm=1.0)
+
+    ranked = optimize_screw(
+        ScrewGrader(mask, ct), analysis, "left", config, narrow=True, top_k=50
+    )
+
+    assert all(c.medial_breach_mm == 0.0 for c in ranked)
+    assert all(c.lateral_breach_mm <= 1.0 + 1e-9 for c in ranked)
+
+
+def test_a_normal_pedicle_is_unchanged_by_the_narrow_plumbing():
+    """narrow=False must reproduce today's answer on the anatomical phantom."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+
+    assert best.breach_mm == 0.0
+    assert best.components.keys() == {
+        "safety", "density", "length", "endplate", "centering"
+    }
+    assert best.medial_breach_mm == 0.0 and best.lateral_breach_mm == 0.0
+    assert best.medial_wall_mm >= best.min_wall_mm - 1e-9

@@ -52,6 +52,13 @@ MAX_ENTRY_SHORTFALL_MM = 3.0
 #: before giving up.  Bounds the worst-case runtime of :func:`optimize_screw`.
 MAX_DIAMETER_STEPS = 2
 
+#: Tangential entry offsets (mm) the candidate sweep spreads over the entry
+#: surface.  A narrow side needs a wider one: the whole point of the policy is
+#: that the corridor can be slid laterally until the medial wall survives, and
+#: +/- 2 mm is not always far enough to get there.
+DEFAULT_ENTRY_GRID_MM: Tuple[float, ...] = (-2.0, -1.0, 0.0, 1.0, 2.0)
+NARROW_ENTRY_GRID_MM: Tuple[float, ...] = (-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0)
+
 #: Head-misalignment (mm) at which the rod objective costs a full unit of score.
 ROD_TOLERANCE_MM = 3.0
 
@@ -138,6 +145,13 @@ class Candidate:
     surface_shortfall_mm: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    #: Directional split of ``breach_mm`` from the grader, and the wall left on
+    #: the medial side.  All four equal the undirected numbers for a candidate
+    #: graded without a side.
+    medial_breach_mm: float = 0.0
+    lateral_breach_mm: float = 0.0
+    craniocaudal_breach_mm: float = 0.0
+    medial_wall_mm: float = 0.0
 
 
 # --------------------------------------------------------------------- helpers
@@ -295,7 +309,7 @@ def generate_candidates(
     analysis: PedicleAnalysisResult,
     side: str,
     config: PlannerConfig,
-    entry_grid_mm: Sequence[float] = (-2.0, -1.0, 0.0, 1.0, 2.0),
+    entry_grid_mm: Sequence[float] = DEFAULT_ENTRY_GRID_MM,
     convergence_step_deg: float = 2.5,
     craniocaudal_range_deg: Tuple[float, float] = (-10.0, 10.0),
     craniocaudal_step_deg: float = 5.0,
@@ -433,6 +447,7 @@ def score_candidates(
     tip_batch: Optional[BatchResult] = None,
     surface_shortfall_mm: Optional[np.ndarray] = None,
     grader: Optional[ScrewGrader] = None,
+    narrow: bool = False,
 ) -> List[Candidate]:
     """Filter graded candidates to the feasible ones and rank them.
 
@@ -448,6 +463,17 @@ def score_candidates(
     an otherwise-sampled batch still mean the candidate could not be measured
     and stay infeasible.  ``grader``, when given, deduplicates that missing-CT
     warning to one per study instead of one per scoring pass.
+
+    ``narrow`` swaps the feasibility rule and the objective for a pedicle the
+    planner flagged: containment is required medially and craniocaudally only,
+    a lateral breach up to ``config.narrow_lateral_breach_mm`` is accepted, the
+    safety term measures the *medial* wall rather than the thinnest one, and a
+    new ``lateral`` term (sharing the safety weight) pays for keeping that
+    breach small.  Centering is dropped -- on a narrow side it would pull the
+    corridor back toward the canal, which is the one direction it must not go.
+    Narrow and normal scores are never compared with each other (every
+    comparison is within one screw's own candidate list), so the two objectives
+    do not have to be on the same scale.
     """
     entries = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -478,14 +504,25 @@ def score_candidates(
     if without_ct:
         _warn_missing_ct(grader)
 
-    feasible = (
-        (batch.breach_mm <= 0.0)
-        & (batch.min_wall_mm >= config.wall_clearance_mm)
-        & (sampled_hu | without_ct)
-        & movable
-        & (convergence >= config.min_convergence_deg - 1e-6)
-        & (convergence <= config.max_convergence_deg + 1e-6)
-    )
+    if narrow:
+        feasible = (
+            (batch.medial_breach_mm <= 0.0)
+            & (batch.craniocaudal_breach_mm <= 0.0)
+            & (batch.lateral_breach_mm <= config.narrow_lateral_breach_mm + 1e-9)
+            & (sampled_hu | without_ct)
+            & movable
+            & (convergence >= config.min_convergence_deg - 1e-6)
+            & (convergence <= config.max_convergence_deg + 1e-6)
+        )
+    else:
+        feasible = (
+            (batch.breach_mm <= 0.0)
+            & (batch.min_wall_mm >= config.wall_clearance_mm)
+            & (sampled_hu | without_ct)
+            & movable
+            & (convergence >= config.min_convergence_deg - 1e-6)
+            & (convergence <= config.max_convergence_deg + 1e-6)
+        )
     if tip_batch is not None:
         tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
@@ -497,7 +534,8 @@ def score_candidates(
     if not feasible.any():
         return []
 
-    safety = np.clip(np.minimum(batch.min_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
+    safety_wall = batch.medial_wall_mm if narrow else batch.min_wall_mm
+    safety = np.clip(np.minimum(safety_wall, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
     density = np.clip(
         (np.where(sampled_hu, batch.mean_hu, DENSITY_LOW_HU) - DENSITY_LOW_HU)
         / (DENSITY_HIGH_HU - DENSITY_LOW_HU),
@@ -510,21 +548,42 @@ def score_candidates(
     else:
         tilt = np.degrees(np.arcsin(np.clip(directions @ normal, -1.0, 1.0)))
         endplate = np.clip(1.0 - np.abs(tilt) / ENDPLATE_TOLERANCE_DEG, 0.0, 1.0)
-    if center is None:
-        centering = np.ones(count)
+
+    # Insertion order is the order the weighted sum is accumulated in, and it
+    # matches the pre-split expression term for term, so a normal pedicle keeps
+    # its exact score.
+    component_arrays: Dict[str, np.ndarray] = {
+        "safety": safety,
+        "density": density,
+        "length": length_score,
+        "endplate": endplate,
+    }
+    if narrow:
+        cap = max(float(config.narrow_lateral_breach_mm), 1e-9)
+        component_arrays["lateral"] = np.clip(
+            1.0 - batch.lateral_breach_mm / cap, 0.0, 1.0
+        )
+    elif center is None:
+        component_arrays["centering"] = np.ones(count)
     else:
         offset = np.asarray(center, dtype=np.float64)[None, :] - entries
         perpendicular = offset - directions * np.sum(offset * directions, axis=1)[:, None]
-        centering = np.clip(
+        component_arrays["centering"] = np.clip(
             1.0 - np.linalg.norm(perpendicular, axis=1) / half_width, 0.0, 1.0
         )
 
-    total = (
-        weights.safety * safety
-        + weights.density * density
-        + weights.length * length_score
-        + weights.endplate * endplate
-        + weights.centering * centering
+    #: The lateral cap and the medial wall are two halves of one trade-off, so
+    #: they share the safety weight: raising "safety" tightens both.
+    component_weights = {
+        "safety": weights.safety,
+        "density": weights.density,
+        "length": weights.length,
+        "endplate": weights.endplate,
+        "lateral": weights.safety,
+        "centering": weights.centering,
+    }
+    total = sum(
+        component_weights[name] * values for name, values in component_arrays.items()
     )
 
     candidates = [
@@ -540,12 +599,12 @@ def score_candidates(
             craniocaudal_deg=float(craniocaudal[i]),
             score=float(total[i]),
             surface_shortfall_mm=float(shortfall[i]),
+            medial_breach_mm=float(batch.medial_breach_mm[i]),
+            lateral_breach_mm=float(batch.lateral_breach_mm[i]),
+            craniocaudal_breach_mm=float(batch.craniocaudal_breach_mm[i]),
+            medial_wall_mm=float(batch.medial_wall_mm[i]),
             components={
-                "safety": float(safety[i]),
-                "density": float(density[i]),
-                "length": float(length_score[i]),
-                "endplate": float(endplate[i]),
-                "centering": float(centering[i]),
+                name: float(values[i]) for name, values in component_arrays.items()
             },
         )
         for i in np.flatnonzero(feasible)
@@ -563,6 +622,7 @@ def optimize_screw(
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
     top_k: int = 10,
     planner=None,
+    narrow: bool = False,
 ) -> List[Candidate]:
     """Best ``top_k`` trajectories for one pedicle, highest score first.
 
@@ -578,6 +638,12 @@ def optimize_screw(
     entry-point search and diameter rules are used, so a substitute is
     equivalent exactly when it holds this ``grader``'s mask and this ``config``;
     :func:`make_planner` builds that planner when none is given.
+
+    ``narrow`` plans the pedicle under the narrow policy: the single minimum
+    diameter (the rule already returned it, and there is nothing below it to
+    step down to), the wider :data:`NARROW_ENTRY_GRID_MM` so a lateral shift is
+    reachable, and the relaxed, medial-first feasibility of
+    :func:`score_candidates`.
     """
     center, _axis, width = _side_data(analysis, side)
     if center is None or not analysis.success:
@@ -585,13 +651,17 @@ def optimize_screw(
 
     planner = planner if planner is not None else make_planner(grader, config)
     recommended = planner._compute_diameter(width, analysis.vertebra.name)
-    if recommended is None:
-        return []
     label = int(analysis.vertebra.label)
 
-    catalogue = sorted(
-        (d for d in config.implant_diameters_mm if d <= recommended + 1e-9), reverse=True
-    )[: MAX_DIAMETER_STEPS + 1]
+    if narrow:
+        catalogue = [recommended]
+        entry_grid = NARROW_ENTRY_GRID_MM
+    else:
+        catalogue = sorted(
+            (d for d in config.implant_diameters_mm if d <= recommended + 1e-9),
+            reverse=True,
+        )[: MAX_DIAMETER_STEPS + 1]
+        entry_grid = DEFAULT_ENTRY_GRID_MM
     for diameter in catalogue:
         diagnostics: Dict[str, np.ndarray] = {}
         entries, targets, lengths = generate_candidates(
@@ -599,13 +669,14 @@ def optimize_screw(
             analysis,
             side,
             config,
+            entry_grid_mm=entry_grid,
             corridor_radius_mm=diameter / 2.0,
             planner=planner,
             diagnostics=diagnostics,
         )
         if entries.shape[0] == 0:
             continue
-        batch = grader.evaluate_batch(entries, targets, diameter, label)
+        batch = grader.evaluate_batch(entries, targets, diameter, label, side=side)
         directions = targets - entries
         norms = np.linalg.norm(directions, axis=1)
         norms[norms <= 1e-12] = 1.0
@@ -618,6 +689,7 @@ def optimize_screw(
             tip_batch=tip_batch,
             surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
             grader=grader,
+            narrow=narrow,
         )
         if ranked:
             if diameter < recommended:

@@ -658,6 +658,7 @@ class AutoScrewPlanner:
                         self.config.weights,
                         top_k=_CONSTRUCT_TOP_K,
                         planner=reusable,
+                        narrow=self._is_narrow_side(analysis, side),
                     )
                 except Exception:   # pragma: no cover - defensive
                     logger.exception(

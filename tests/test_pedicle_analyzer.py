@@ -138,6 +138,46 @@ def _make_anatomical_phantom(label: int = 28, with_arch: bool = True) -> sitk.Im
     return sitk.GetImageFromArray(arr)
 
 
+def _make_narrow_pedicle_phantom(label: int = 28, waist_mm: float = 3.5) -> sitk.Image:
+    """A vertebra whose pedicle corridor is too narrow for the smallest screw.
+
+    Same anatomy as :func:`_make_anatomical_phantom` -- an elliptical body with
+    a pedicle on each side -- at 0.5 mm isotropic spacing so that a millimetre
+    of medial wall is two voxels rather than one, and with the corridor cut down
+    to ``waist_mm``.  Everything medial to a pedicle, all the way to its
+    opposite number, is air: that gap is the canal, so a screw that leaves the
+    corridor medially is in it immediately, while leaving laterally only costs
+    the lateral cortex.  The body is deliberately generous (32 x 28 mm in the
+    axial plane, 28 mm tall) so that a 25 mm implant still clears the anterior
+    margin once it converges; the corridor, not the body, is what makes this
+    phantom hard.
+
+    With the default 3.5 mm waist the analyser measures 3.5 mm on both sides and
+    flags both as implausible for a lumbar level, and no 4.0 mm screw can be
+    contained -- which is exactly the case the narrow policy exists for.
+    """
+    Z, Y, X = 88, 144, 136
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    z, y, x = zz * 0.5, yy * 0.5, xx * 0.5
+    body = (
+        (((x - 34.0) / 20.0) ** 2 + ((y - 21.0) / 14.0) ** 2 <= 1.0)
+        & (z >= 8.0) & (z < 36.0)
+    )
+    half = float(waist_mm) / 2.0
+    ped = np.zeros_like(body)
+    for cx in (25.5, 42.5):
+        ped |= (
+            (np.abs(x - cx) <= half + 1e-9)
+            & (np.abs(z - 22.0) <= 4.0 + 1e-9)
+            & (y >= 26.0) & (y < 42.0)
+        )
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped] = label
+    image = sitk.GetImageFromArray(arr)
+    image.SetSpacing((0.5, 0.5, 0.5))
+    return image
+
+
 def _make_one_sided_coronal_phantom(label: int = 28, with_left: bool = True) -> sitk.Image:
     """A vertebra the coronal isthmus search can only measure on one side.
 
@@ -674,6 +714,20 @@ class TestCoronalIsthmus:
         assert 7.0 <= result.left_pedicle_width <= 9.0
         assert 11.0 <= result.left_pedicle_height <= 13.0
         assert result.left_pedicle_axis[1] > 0.7  # posterior-oriented, mostly AP
+
+    def test_narrow_pedicle_phantom_measures_its_waist(self):
+        """The optimiser's narrow fixture has to be narrow to the analyser too."""
+        analyzer = PedicleAnalyzer(_make_narrow_pedicle_phantom())
+        vertebra = analyzer.get_available_vertebrae()[0]
+
+        result = analyzer.analyze_pedicle(vertebra)
+
+        assert result.success and result.method == "coronal_isthmus"
+        assert result.left_pedicle_width == pytest.approx(3.5)
+        assert result.right_pedicle_width == pytest.approx(3.5)
+        assert np.allclose(result.left_pedicle_center, [42.5, 38.5, 22.0])
+        assert np.allclose(result.right_pedicle_center, [25.5, 38.5, 22.0])
+        assert result.width_flags == {"left": "implausible", "right": "implausible"}
 
     def test_axis_window_excludes_laminar_arch_slices(self):
         """The arch starts at y = 60; the axis window must stop short of it."""
