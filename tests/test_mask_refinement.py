@@ -429,14 +429,16 @@ def canal_phantom(slot=False):
     """
     zz, yy, xx = np.ogrid[: FINE_SHAPE[0], : FINE_SHAPE[1], : FINE_SHAPE[2]]
     radius = (yy - 36) ** 2 + (xx - 36) ** 2
-    ring = (radius >= 8 ** 2) & (radius <= 14 ** 2)
+    # inner=6, outer=14 -> canal is ~22% of the ring, under the 30% volume
+    # guard, so the CT-guided step actually runs instead of being discarded.
+    ring = (radius >= 6 ** 2) & (radius <= 14 ** 2)
     tube = np.broadcast_to(ring, FINE_SHAPE).copy()
     if slot:
         tube[:, 34:39, 36:] = False                 # the slot, opening to +x
     mask = np.zeros(FINE_SHAPE, np.uint8)
     mask[TUBE_Z][tube[TUBE_Z]] = BODY_LABEL
     canal = np.zeros(FINE_SHAPE, bool)
-    canal[TUBE_Z] = np.broadcast_to(radius < 8 ** 2, FINE_SHAPE)[TUBE_Z]
+    canal[TUBE_Z] = np.broadcast_to(radius < 6 ** 2, FINE_SHAPE)[TUBE_Z]
     return mask, canal
 
 
@@ -445,10 +447,14 @@ def test_the_canal_is_never_packed_by_the_hole_fill(slot):
     """The canal is soft tissue and must stay background.
 
     The closed ring is the one that matters: its canal is enclosed inside
-    every axial slice, so a per-slice fill packs all of it (measured: 6176 of
-    6176 voxels, a 46 % volume gain). In 3D it is a tube open at both ends of
-    the padded crop, so it is not a hole and survives. This mask feeds the
-    canal-breach grader, so packing it would hide breaches.
+    every axial slice, so a per-slice fill packs all of it. In 3D it is a
+    tube open at both ends of the padded crop, so it is not a hole and
+    survives. This mask feeds the canal-breach grader, so packing it would
+    hide breaches. The ring is thick enough (inner radius 6, outer 14) that
+    the canal is only ~22% of the ring's volume, under the 30% volume guard,
+    so the CT-guided step actually runs and ``(out & canal).sum() == 0`` is
+    exercising the hole-fill logic rather than the guard falling back to the
+    anti-aliased mask.
     """
     mask, canal = canal_phantom(slot=slot)
     ct = np.where(mask > 0, BONE_HU, SOFT_HU).astype(np.int16)

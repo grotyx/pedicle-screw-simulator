@@ -265,8 +265,8 @@ def refine_vertebra_mask(
             per_label[label] = LabelStats(
                 label=label,
                 raw_voxels=raw_counts[label],
-                refined_voxels=0,
-                ratio=0.0,
+                refined_voxels=raw_counts[label],
+                ratio=1.0,
                 ct_guided_applied=False,
             )
             continue
