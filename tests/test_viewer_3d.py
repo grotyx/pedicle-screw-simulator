@@ -1052,8 +1052,117 @@ class TestTwoPhaseLodSurvivesTheSmartMapper:
         from src.ui.viewer_3d import Viewer3D
 
         source = inspect.getsource(Viewer3D._deferred_render_phase1)
-        assert "describe_render_mode(self._volume_mapper)" in source
         assert "self._mapper_kind" in source
+        # The mode itself is read one event-loop turn later, after the paint.
+        assert "self._log_render_mode" in source
+        mode_src = inspect.getsource(Viewer3D._log_render_mode)
+        assert "describe_render_mode(mapper)" in mode_src
+
+
+class _LateModeMapper:
+    """A mapper whose render mode is only defined once Render() has run."""
+
+    UNDEFINED = 5
+    GPU = 2
+
+    def __init__(self, defines_on_render=True):
+        self._defines_on_render = bool(defines_on_render)
+        self._mode = self.UNDEFINED
+        self.sample_distances = []
+
+    def SetSampleDistance(self, distance):
+        self.sample_distances.append(float(distance))
+
+    def GetSampleDistance(self):
+        return self.sample_distances[-1] if self.sample_distances else 0.0
+
+    def Render(self):
+        if self._defines_on_render:
+            self._mode = self.GPU
+
+    def GetLastUsedRenderMode(self):
+        return self._mode
+
+
+class _PaintingWidget:
+    """A vtk_widget stub whose safe_render() paints straight away."""
+
+    def __init__(self, mapper):
+        self._mapper = mapper
+        self.render_count = 0
+
+    def setUpdatesEnabled(self, _enabled):
+        return None
+
+    def safe_render(self):
+        self.render_count += 1
+        self._mapper.Render()
+
+
+class TestRenderModeIsLoggedAfterTheFirstRealRender:
+    """The dirty-flag paint gate means the mode is unknown at request time."""
+
+    @staticmethod
+    def _viewer(mapper):
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume_mapper = mapper
+        viewer._volume_added = True
+        viewer._target_sample_dist = 1.0
+        viewer._render_generation = 3
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._mapper_kind = "smart"
+        viewer.vtk_widget = _PaintingWidget(mapper)
+        viewer._request_render = viewer.vtk_widget.safe_render
+        return viewer
+
+    def test_phase1_log_names_the_mode_the_paint_settled_on(self, qtbot, caplog):
+        import logging
+
+        mapper = _LateModeMapper()
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            assert "render mode" not in caplog.text
+            qtbot.wait(20)
+
+        assert "Phase 1 render mode=gpu (mapper=smart)" in caplog.text
+        assert "undefined" not in caplog.text
+
+    def test_an_undefined_mode_waits_and_phase2_reports_it_anyway(
+        self, qtbot, caplog
+    ):
+        import logging
+
+        mapper = _LateModeMapper(defines_on_render=False)
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            qtbot.wait(20)
+            assert "render mode" not in caplog.text
+
+            mapper._defines_on_render = True
+            viewer._execute_phase2(3)
+            qtbot.wait(20)
+
+        assert "Phase 2 render mode=gpu (mapper=smart)" in caplog.text
+
+    def test_the_mode_is_logged_once_per_volume(self, qtbot, caplog):
+        import logging
+
+        mapper = _LateModeMapper()
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            qtbot.wait(20)
+            viewer._execute_phase2(3)
+            qtbot.wait(20)
+
+        assert caplog.text.count("render mode=") == 1
 
 
 class TestSingleLabelSurfaceExtractor:
@@ -1141,3 +1250,21 @@ class TestSingleLabelSurfaceExtractor:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+class TestThe3DHeaderFollowsTheTheme:
+    """The 3D title used to be hard-coded white, unreadable on light themes."""
+
+    def test_the_inline_header_sheet_sets_no_colour_of_its_own(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._setup_ui)
+        assert "font-weight: bold; padding: 2px;" in source
+        assert "color: white" not in source
+
+    def test_every_palette_colours_the_shared_viewer_header(self):
+        from src.ui.styles import THEMES, load_stylesheet
+
+        for name, palette in THEMES.items():
+            rule = load_stylesheet(name).split("QLabel#viewerHeader")[1]
+            assert palette["viewer_foreground"] in rule.split("}")[0]

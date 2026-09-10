@@ -13,19 +13,43 @@ from PyQt6.QtWidgets import (
 
 from .styles import DEFAULT_THEME, get_theme
 
-#: Column headers, in display order.
+#: Column headers, in display order. Kept short so they survive the default
+#: control-panel width; the units live in COLUMN_TOOLTIPS instead.
 COLUMN_TITLES = (
     "#",
     "Level",
     "Side",
-    "Ø (mm)",
-    "Length (mm)",
+    "Ø",
+    "Len",
     "Grade",
     "Source",
 )
 
+#: Header tooltips, in display order -- this is where the units went.
+COLUMN_TOOLTIPS = (
+    "Screw number",
+    "Vertebral level",
+    "Side (left / right)",
+    "Screw diameter (mm)",
+    "Screw length (mm)",
+    "Gertzbein-Robbins breach grade",
+    "Auto-planned or manually placed",
+)
+
 #: Index of the column that carries the coloured grade chip.
 GRADE_COLUMN = 5
+
+#: Columns sized to their content: the number, the two measurements and the
+#: grade chip, which must never elide to "Gr...".
+_FIT_COLUMNS = (0, 3, 4, GRADE_COLUMN)
+
+#: Columns that absorb the leftover width.
+_STRETCH_COLUMNS = (1, 2, 6)
+
+#: Floor under every column. Qt applies one minimum to the whole header, so
+#: this stays modest -- the grade chip gets its full width from
+#: ResizeToContents and only leans on this floor in a very narrow panel.
+MINIMUM_SECTION_WIDTH_PX = 32
 
 #: Columns whose numeric content reads better right-aligned.
 _NUMERIC_COLUMNS = (0, 3, 4)
@@ -96,9 +120,19 @@ class ScrewPlanTable(QTableWidget):
         self.setMinimumHeight(160)
         self.setMaximumHeight(220)
 
+        for column, tooltip in enumerate(COLUMN_TOOLTIPS):
+            header_item = self.horizontalHeaderItem(column)
+            if header_item is not None:
+                header_item.setToolTip(tooltip)
+
         header = self.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setMinimumSectionSize(MINIMUM_SECTION_WIDTH_PX)
+        for column in _STRETCH_COLUMNS:
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        for column in _FIT_COLUMNS:
+            header.setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
 
         self._theme_name = DEFAULT_THEME
         self._last_row = -1

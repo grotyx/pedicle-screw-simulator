@@ -129,6 +129,11 @@ def describe_render_mode(mapper) -> str:
     return RENDER_MODE_NAMES.get(int(getter()), "unknown")
 
 
+#: Render-mode names that mean "the mapper has not rendered yet", so the log
+#: should wait for a real frame rather than report them.
+PENDING_RENDER_MODES = frozenset({"undefined", "unknown"})
+
+
 # Per-tier target sample distance: (spacing multiplier, absolute floor in mm).
 # These reproduce the pre-GPU formulas exactly and do not depend on the mapper.
 _SAMPLE_DISTANCE_RULES = {
@@ -460,9 +465,10 @@ class Viewer3D(QWidget):
         layout.setSpacing(0)
 
         self.label = ViewerHeaderLabel("3D View", "3d", self)
-        self.label.setStyleSheet(
-            "color: white; font-weight: bold; padding: 2px;"
-        )
+        # No colour here on purpose: the app stylesheet's QLabel#viewerHeader
+        # rule supplies the theme's viewer_foreground, and a hard-coded white
+        # in this inline sheet used to override it on the light palettes.
+        self.label.setStyleSheet("font-weight: bold; padding: 2px;")
         self.label.doubleClicked.connect(self.header_double_clicked)
 
         self.viewport_container = QWidget(self)
@@ -893,16 +899,47 @@ class Viewer3D(QWidget):
             self.vtk_widget.GetRenderWindow().Render()
         render_sec = time.perf_counter() - t0
         logger.info(
-            "  Phase 1 done: %.3fs (mapper=%s, render mode=%s)",
-            render_sec,
-            self._mapper_kind,
-            describe_render_mode(self._volume_mapper),
+            "  Phase 1 done: %.3fs (mapper=%s)", render_sec, self._mapper_kind
         )
+
+        # safe_render() only marks the widget dirty; the VTK render itself
+        # happens in the next paintEvent, so the mapper's last-used mode is
+        # still undefined right here. Read it on the next event-loop turn.
+        self._render_mode_logged = False
+        QTimer.singleShot(0, lambda: self._log_render_mode("Phase 1"))
 
         # Schedule Phase 2 via QTimer (works now — no Cocoa event loop starvation)
         gen = self._render_generation
         QTimer.singleShot(500, lambda: self._execute_phase2(gen))
         logger.info("  Phase 2 timer started (gen=%d, 0.5s)", gen)
+
+    def _log_render_mode(self, phase: str = "Phase 1", final: bool = False):
+        """Log the render mode the mapper actually used, once it is known.
+
+        Called on the event-loop turn after each phase's paint request. While
+        the mode is still undefined the log is held back, so a mapper that
+        only settles later is reported honestly; Phase 2 makes the final
+        attempt and logs whatever it sees.
+        """
+        # Read through __dict__: a Viewer3D built with __new__ (as the tests
+        # do) raises RuntimeError, not AttributeError, on attribute access.
+        state = self.__dict__
+        if state.get("_render_mode_logged", False):
+            return
+        mapper = state.get("_volume_mapper")
+        if mapper is None:
+            return
+        mode = describe_render_mode(mapper)
+        if mode in PENDING_RENDER_MODES and not final:
+            return
+        state["_render_mode_logged"] = True
+        logger.info(
+            "  %s render mode=%s (mapper=%s)",
+            phase,
+            mode,
+            state.get("_mapper_kind", "?"),
+        )
+        _flush_logs()
 
     def _execute_phase2(self, generation: int):
         """Phase 2: Fine quality render after delay.
@@ -920,6 +957,9 @@ class Viewer3D(QWidget):
                         self._target_sample_dist)
         self._request_render()
         logger.info("  Phase 2 done")
+        QTimer.singleShot(
+            0, lambda: self._log_render_mode("Phase 2", final=True)
+        )
 
     def _request_render(self):
         """Request a VTK render."""

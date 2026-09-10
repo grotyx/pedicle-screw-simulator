@@ -45,6 +45,53 @@ def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
     return window
 
 
+class RenderRecordingMPRViewer(DummyMPRViewer):
+    """DummyMPRViewer that counts render requests and pan-icon repaints."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.render_requests = 0
+        self.pan_icon_colors = []
+
+    def _request_render(self):
+        self.render_requests += 1
+
+    def set_pan_icon_color(self, color):
+        self.pan_icon_colors.append(str(color))
+
+
+class RenderRecordingViewer3D(DummyViewer3D):
+    """DummyViewer3D that counts render requests."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.render_requests = 0
+
+    def _request_render(self):
+        self.render_requests += 1
+
+
+@pytest.fixture
+def render_recording_main_window(monkeypatch, qtbot, isolated_qsettings):
+    """MainWindow whose viewer stubs record every render request."""
+    monkeypatch.setattr(main_window_module, "MPRViewer", RenderRecordingMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", RenderRecordingViewer3D)
+    QApplication.instance().setProperty("themeName", "graphite_blue")
+
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+    return window
+
+
+def _pane_map(window):
+    return {
+        "axial": window.axial_viewer,
+        "sagittal": window.sagittal_viewer,
+        "coronal": window.coronal_viewer,
+        "3d": window.viewer_3d,
+    }
+
+
 def _toolbar_entries(window):
     return [
         "|" if action.isSeparator() else action.text()
@@ -466,3 +513,106 @@ def test_viewer_header_label_reports_double_clicks(qtbot):
     assert seen == ["axial"]
     assert label.view_name == "axial"
     assert label.objectName() == "viewerHeader"
+def test_restoring_a_maximized_layout_repaints_every_re_shown_pane(
+    render_recording_main_window,
+):
+    # Re-showing a hidden VTK pane does not repaint its surface, so the 3D
+    # view kept a stale, full-size copy of the maximised axial slice.
+    window = render_recording_main_window
+    panes = _pane_map(window)
+
+    window.set_view_layout("maximize:axial")
+    baseline = {name: pane.render_requests for name, pane in panes.items()}
+
+    window.set_view_layout("planning")
+
+    for name, pane in panes.items():
+        assert pane.render_requests > baseline[name], name
+
+
+def test_maximizing_does_not_repaint_the_panes_it_hides(
+    render_recording_main_window,
+):
+    window = render_recording_main_window
+    panes = _pane_map(window)
+    baseline = {name: pane.render_requests for name, pane in panes.items()}
+
+    window.set_view_layout("maximize:axial")
+
+    assert panes["axial"].render_requests > baseline["axial"]
+    for name in ("sagittal", "coronal", "3d"):
+        assert panes[name].render_requests == baseline[name], name
+
+
+def test_theme_change_repaints_the_mpr_pan_icon(render_recording_main_window):
+    window = render_recording_main_window
+
+    window.apply_theme("soft_light", persist=False)
+
+    expected = THEMES["soft_light"]["viewer_foreground"]
+    for viewer in window._get_mpr_viewers():
+        assert viewer.pan_icon_colors[-1] == expected
+
+
+def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
+    ui_main_window,
+):
+    from PyQt6.QtWidgets import QHeaderView
+
+    from src.ui.screw_plan_table import GRADE_COLUMN, MINIMUM_SECTION_WIDTH_PX
+
+    table = ui_main_window.screw_list_widget
+    header = table.horizontalHeader()
+
+    titles = [
+        table.horizontalHeaderItem(column).text()
+        for column in range(table.columnCount())
+    ]
+    assert titles == ["#", "Level", "Side", "Ø", "Len", "Grade", "Source"]
+
+    assert table.horizontalHeaderItem(3).toolTip() == "Screw diameter (mm)"
+    assert table.horizontalHeaderItem(4).toolTip() == "Screw length (mm)"
+    assert all(
+        table.horizontalHeaderItem(column).toolTip()
+        for column in range(table.columnCount())
+    )
+
+    fit = QHeaderView.ResizeMode.ResizeToContents
+    stretch = QHeaderView.ResizeMode.Stretch
+    assert [header.sectionResizeMode(c) for c in (0, 3, 4, GRADE_COLUMN)] == [
+        fit,
+        fit,
+        fit,
+        fit,
+    ]
+    assert [header.sectionResizeMode(c) for c in (1, 2, 6)] == [
+        stretch,
+        stretch,
+        stretch,
+    ]
+    assert header.minimumSectionSize() == MINIMUM_SECTION_WIDTH_PX
+
+
+def test_grade_chip_column_is_wide_enough_for_its_text(ui_main_window):
+    from src.models.screw import Screw
+    from src.ui.screw_plan_table import GRADE_COLUMN
+
+    table = ui_main_window.screw_list_widget
+    table.addScrewRow(
+        Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -40.0, 0.0),
+            diameter=6.5,
+            vertebra_level="L4",
+            side="left",
+            grade="B",
+        ),
+        0,
+    )
+
+    chip = table.item(0, GRADE_COLUMN)
+    assert chip.text() == "Grade B"
+    text_width = table.fontMetrics().horizontalAdvance(chip.text())
+    assert table.columnWidth(GRADE_COLUMN) >= text_width
+    # The values themselves are unchanged by the shorter headers.
+    assert table.rowText(0) == "1 · L4 · Left · 6.5 · 40.0 · Grade B · Manual"

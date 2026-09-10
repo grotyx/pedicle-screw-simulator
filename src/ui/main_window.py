@@ -355,6 +355,8 @@ class MainWindow(QMainWindow):
             self._view_layout_mode = mode
             self._restore_layout_mode = mode
 
+        self._render_shown_panes(panes, maximized)
+
         if hasattr(self, "layout_combo"):
             combo_index = self.layout_combo.findData(self._view_layout_mode)
             if combo_index >= 0 and combo_index != self.layout_combo.currentIndex():
@@ -373,6 +375,24 @@ class MainWindow(QMainWindow):
             self._maximize_view_action.setChecked(self._maximized_view is not None)
             self._maximize_view_action.blockSignals(previous)
         QTimer.singleShot(0, self.fit_mpr_views)
+
+    def _render_shown_panes(self, panes: dict, maximized: Optional[str]) -> None:
+        """Repaint every pane the new layout leaves on screen.
+
+        Re-showing a hidden VTK pane does not repaint its surface: the widget
+        only renders when its dirty flag is set, and a plain ``setVisible``
+        does not set it. Restoring from a maximised view therefore left the
+        other panes -- most visibly the 3D view -- showing a stale, wrongly
+        scaled copy of the maximised pane until the next interaction.
+        """
+        for name, pane in panes.items():
+            if maximized is not None and name != maximized:
+                continue
+            for hook_name in ("_request_render", "safe_render"):
+                hook = getattr(pane, hook_name, None)
+                if callable(hook):
+                    hook()
+                    break
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -1778,8 +1798,12 @@ class MainWindow(QMainWindow):
         self._refresh_themed_icons()
         if hasattr(self, "screw_list_widget"):
             self.screw_list_widget.apply_theme(theme_name)
+        pan_icon_color = THEMES[theme_name]["viewer_foreground"]
         for viewer in self._get_mpr_viewers():
             viewer.refresh_orientation_markers(render=True)
+            set_pan_icon_color = getattr(viewer, "set_pan_icon_color", None)
+            if callable(set_pan_icon_color):
+                set_pan_icon_color(pan_icon_color)
 
         if hasattr(self, "theme_combo"):
             index = self.theme_combo.findData(theme_name)
