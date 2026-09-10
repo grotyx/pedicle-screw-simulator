@@ -165,15 +165,20 @@ def _make_one_sided_coronal_phantom(label: int = 28, with_left: bool = True) -> 
 
 
 def _make_sliver_corridor_phantom(label: int = 28) -> sitk.Image:
-    """An 8 mm pedicle corridor with a one-voxel medial sliver beside it.
+    """An 8 mm pedicle corridor with a solid medial fragment beside it.
 
     Reproduces the spec's L2-right failure at phantom scale.  For four coronal
-    slices in the middle of the left corridor a 1 x 10 mm fragment (a superior
+    slices in the middle of the left corridor a 3 x 10 mm fragment (a superior
     articular process tip in the real mask) sits 7 mm lateral of the midline,
     medial to the real 8 mm pedicle at 14.5 mm.  The "candidate nearest the
     midline" rule picks the fragment, the minimum-area rule then makes it the
-    isthmus, and the level is reported as a 1 mm pedicle.  The right corridor
+    isthmus, and the level is reported as a 3 mm pedicle.  The right corridor
     has no fragment, so the two sides show the same failure side by side.
+
+    The fragment is deliberately *solid*: 30 mm2 and 3 mm across, clear of
+    both :attr:`PedicleAnalyzer.MIN_PEDICLE_AREA_MM2` and
+    :attr:`PedicleAnalyzer.MIN_SLICE_WIDTH_MM`, so neither floor can reject it
+    and only following the corridor by continuity keeps it out of the walk.
     """
     Z, Y, X = 60, 90, 90
     zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
@@ -186,9 +191,41 @@ def _make_sliver_corridor_phantom(label: int = 28) -> sitk.Image:
             & (yy >= 44)
             & (yy < 62)
         )
-    fragment = (xx == 52) & (zz >= 27) & (zz <= 36) & (yy >= 52) & (yy < 56)
+    fragment = (
+        (xx >= 51) & (xx <= 53)                 # 3 voxels = 3.0 mm across
+        & (zz >= 27) & (zz <= 36)               # x 10 voxels = 30 mm2
+        & (yy >= 52) & (yy < 56)
+    )
     arr = np.zeros((Z, Y, X), dtype=np.uint8)
     arr[body | ped | fragment] = label
+    return sitk.GetImageFromArray(arr)
+
+
+def _make_notched_corridor_phantom(notch_slices: int, label: int = 28) -> sitk.Image:
+    """A left corridor interrupted by ``notch_slices`` blank coronal slices.
+
+    The left corridor is an 8 x 13 mm box (104 mm2) from y = 44 to y = 55, then
+    ``notch_slices`` slices where that side has nothing, then a narrower
+    5 x 7 mm box (35 mm2) -- the true isthmus -- for five more slices.  The
+    right corridor runs straight through, so a notched slice is never blank in
+    the coronal plane and the walk has to decide for itself whether the left
+    corridor ended.  Bridging the notch reaches the 5 mm distal isthmus;
+    stopping at it leaves only the 8 mm proximal box.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 15) & (zz < 45)
+    notch_start = 56
+    far_start = notch_start + notch_slices
+    far_end = far_start + 5
+    near = (xx >= 56) & (xx < 64) & (np.abs(zz - 32) <= 6) & (yy >= 44) & (yy < notch_start)
+    far = (
+        (xx >= 58) & (xx < 63) & (np.abs(zz - 32) <= 3)
+        & (yy >= far_start) & (yy < far_end)
+    )
+    right = (xx >= 26) & (xx < 34) & (np.abs(zz - 32) <= 6) & (yy >= 44) & (yy < far_end)
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | near | far | right] = label
     return sitk.GetImageFromArray(arr)
 
 
@@ -576,6 +613,40 @@ class TestCoronalIsthmus:
         # fragment at x = 52.
         assert result.left_pedicle_center[0] == pytest.approx(59.5, abs=1.0)
 
+    @pytest.mark.parametrize(
+        "notch_slices, expected_width_mm",
+        [(1, 5.0), (2, 5.0), (3, 5.0), (4, 8.0)],
+    )
+    def test_short_notch_is_bridged_and_a_long_one_ends_the_walk(
+        self, notch_slices, expected_width_mm
+    ):
+        """Up to MAX_TRACK_GAP_SLICES missing slices the corridor continues.
+
+        A notch of 1-3 slices is bridged, so the walk reaches the 5 mm distal
+        isthmus; the fourth blank slice exhausts the budget and the walk keeps
+        only the 8 mm proximal box.
+        """
+        mask = _make_notched_corridor_phantom(notch_slices)
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        indices_zyx = np.argwhere(binary)
+        body_center = analyzer._estimate_body_center(binary, indices_zyx)
+        body_center_ijk = mask.TransformPhysicalPointToContinuousIndex(
+            tuple(float(v) for v in body_center)
+        )
+        z_indices = np.where(binary.any(axis=(1, 2)))[0]
+
+        found = analyzer._find_pedicle_coronal(
+            binary,
+            body_center_ijk,
+            (int(z_indices.min()), int(z_indices.max())),
+            "left",
+        )
+
+        assert found is not None
+        assert found["width_mm"] == pytest.approx(expected_width_mm)
+
 
 # ---------------------------------------------------------------------------
 # PedicleAnalyzer: pedicle subregion label path
@@ -608,6 +679,37 @@ class TestSubregionLabelPath:
         assert result.method == "subregion_label"
         assert 5.0 <= result.left_pedicle_width <= 7.0
         assert np.linalg.norm(result.left_pedicle_center - np.array([60.0, 55.0, 32.0])) <= 1.5
+
+    def test_a_sliver_slice_inside_the_label_is_not_the_isthmus(self):
+        """One stair-stepped slice must not become the label path's isthmus."""
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        pedicle = _make_pedicle_label(arr.shape, centres=(60,))  # left only
+        # Replace one interior coronal slice of the corridor with a 1 mm-wide,
+        # 6 mm2 column — below both MIN_SLICE_WIDTH_MM and MIN_PEDICLE_AREA_MM2,
+        # and by far the smallest cross-section in the corridor.
+        pedicle[:, 54, :] = False
+        pedicle[30:36, 54, 60] = True
+
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        # Without the floors the sliver wins on area and the level reads 1 mm.
+        assert 5.0 <= result.left_pedicle_width <= 7.0
+
+    def test_a_uniformly_thin_label_is_still_measured(self):
+        """When every slice fails the floors, the narrowest is still the answer."""
+        mask = _make_anatomical_phantom()
+        arr = sitk.GetArrayFromImage(mask)
+        pedicle = np.zeros(arr.shape, bool)
+        pedicle[30:36, 48:62, 60] = True  # a 1 mm-wide, 6 mm2 corridor throughout
+
+        analyzer = PedicleAnalyzer(mask, pedicle_mask=pedicle)
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        # The floors must not drop a side outright — they only rank candidates.
+        assert result.left_pedicle_center is not None
+        assert result.left_pedicle_width == pytest.approx(1.0)
 
     def test_shape_mismatch_is_rejected(self):
         mask = _make_anatomical_phantom()
