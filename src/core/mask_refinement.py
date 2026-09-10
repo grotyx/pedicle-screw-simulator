@@ -106,8 +106,8 @@ def spacing_zyx(image: sitk.Image) -> np.ndarray:
 
 def sigma_voxels(sigma_mm: float, spacing: np.ndarray) -> Tuple[float, float, float]:
     """A physical sigma expressed in voxels per axis."""
-    per_axis = float(sigma_mm) / np.asarray(spacing, dtype=np.float64)
-    return tuple(float(v) for v in per_axis)
+    per_z, per_y, per_x = float(sigma_mm) / np.asarray(spacing, dtype=np.float64)
+    return (float(per_z), float(per_y), float(per_x))
 
 
 def refinement_status_text(
@@ -136,6 +136,24 @@ def _padded_box(
         slice(max(0, span.start - grow), min(int(dim), span.stop + grow))
         for span, grow, dim in zip(found[0], pad, shape, strict=True)
     )
+
+
+def _fill_and_largest_component(binary: np.ndarray) -> np.ndarray:
+    """Close in-slice holes, then keep only the largest 3D component.
+
+    Holes are filled per axial slice because a vertebra's canal is a genuine
+    through-hole in 3D: filling in 3D would pack the spinal canal with bone.
+    """
+    filled = binary.copy()
+    for index in range(filled.shape[0]):
+        if filled[index].any():
+            filled[index] = ndi.binary_fill_holes(filled[index])
+    labelled, count = ndi.label(filled)
+    if count <= 1:
+        return filled
+    sizes = np.bincount(labelled.ravel())
+    sizes[0] = 0
+    return labelled == int(sizes.argmax())
 
 
 #: Default config singleton, so the public signature can carry a
@@ -201,11 +219,23 @@ def refine_vertebra_mask(
     names = _vertebra_labels()
     raw_counts: Dict[int, int] = {}
     boxes: Dict[int, Tuple[slice, ...]] = {}
+    refinable: List[int] = []
     for index, label in enumerate(requested, start=1):
         binary = sub == label
         raw_counts[label] = int(binary.sum())
         label_box = _padded_box(binary, pad, sub.shape)
+        if label_box is None:
+            # Defensive: a label that reached ``requested`` has voxels, so an
+            # empty box means the crop and the label disagree. Leave those
+            # voxels exactly as they are rather than silently deleting them.
+            notes.append(
+                f"{names.get(label, str(label))}: no voxels inside the crop; "
+                "left unrefined."
+            )
+            logger.info("Mask refinement: label %d has an empty box; skipped", label)
+            continue
         boxes[label] = label_box
+        refinable.append(label)
         if progress is not None:
             progress(
                 f"Refining {names.get(label, str(label))} "
@@ -213,11 +243,15 @@ def refine_vertebra_mask(
             )
         # Each label is smoothed inside its own crop; the running argmax is the
         # only thing shared, so cost scales with the vertebrae, not the volume.
+        # ``nearest`` and not ``constant``: where the crop stops at the volume
+        # face there is no data, not air. Zero padding there would shave the
+        # perimeter ring off the terminal slice of a vertebra the scan cuts
+        # through. Where the crop stops early the pad is >= 3 sigma of
+        # background anyway, so replicating it changes nothing.
         soft = ndi.gaussian_filter(
             binary[label_box].astype(np.float32),
             sigma=sigma,
-            mode="constant",
-            cval=0.0,
+            mode="nearest",
         )
         current_value = best_value[label_box]
         current_label = best_label[label_box]
@@ -227,11 +261,67 @@ def refine_vertebra_mask(
 
     antialiased = np.where(best_value >= 0.5, best_label, 0).astype(np.int16)
 
+    ct_sub = None
+    if use_ct:
+        ct_sub = sitk.GetArrayFromImage(ct)[box]
+
     out_sub = np.zeros(sub.shape, dtype=np.int16)
     per_label: Dict[int, LabelStats] = {}
-    for label in requested:
+    for label in refinable:
         label_box = boxes[label]
-        refined = antialiased[label_box] == label
+        raw_count = max(raw_counts[label], 1)
+        smooth = antialiased[label_box] == label
+        smooth_ratio = int(smooth.sum()) / raw_count
+        if smooth_ratio < 0.5:
+            # Single voxels and one-voxel sheets are smaller than the kernel,
+            # so the Gaussian never reaches 0.5 anywhere. That verdict stands
+            # (the label really is that thin), but it must not be silent.
+            notes.append(
+                f"{names.get(label, str(label))}: anti-aliasing kept "
+                f"{smooth_ratio * 100:.0f}% of its voxels; the label is "
+                "smaller than the smoothing kernel."
+            )
+            logger.info(
+                "Mask refinement: label %d shrank to %.2f under anti-aliasing",
+                label,
+                smooth_ratio,
+            )
+        refined = smooth
+        ct_guided_applied = False
+        if use_ct and smooth.any():
+            # The exact metric equivalent of dilate(band_mm) & ~erode(band_mm).
+            inside = ndi.distance_transform_edt(smooth, sampling=spacing)
+            outside = ndi.distance_transform_edt(~smooth, sampling=spacing)
+            band = (inside <= config.band_mm) & (outside <= config.band_mm)
+            # Inside the band the CT decides, but only among voxels this label
+            # already wins the soft-label argmax for: bone that belongs to the
+            # neighbouring vertebra must not be stolen.
+            candidate = np.where(
+                band,
+                (ct_sub[label_box] >= config.bone_threshold_hu)
+                & (best_label[label_box] == label),
+                smooth,
+            )
+            candidate = _fill_and_largest_component(candidate)
+            change = abs(int(candidate.sum()) - raw_count) / raw_count
+            if change > config.max_volume_change:
+                notes.append(
+                    f"{names.get(label, str(label))}: CT-guided step changed volume "
+                    f"by {change * 100:.0f}% "
+                    f"(limit {config.max_volume_change * 100:.0f}%); "
+                    "kept the anti-aliased boundary."
+                )
+                logger.info(
+                    "Mask refinement: label %d exceeded the volume guard (%.2f)",
+                    label,
+                    change,
+                )
+            else:
+                refined = candidate
+                ct_guided_applied = True
+        # The anti-aliased labels are an argmax and so already disjoint, but a
+        # CT-guided boundary is grown per label and the hole fill can cross
+        # into a neighbour that was written first. Earlier labels win.
         claim = refined & (out_sub[label_box] == 0)
         region = out_sub[label_box]
         region[claim] = label
@@ -241,13 +331,13 @@ def refine_vertebra_mask(
             label=label,
             raw_voxels=raw_counts[label],
             refined_voxels=refined_count,
-            ratio=refined_count / max(raw_counts[label], 1),
-            ct_guided_applied=False,
+            ratio=refined_count / raw_count,
+            ct_guided_applied=ct_guided_applied,
         )
 
     out = array.copy()
     region = out[box]
-    region[np.isin(region, requested)] = 0
+    region[np.isin(region, refinable)] = 0
     replace = (region == 0) & (out_sub != 0)
     region[replace] = out_sub[replace]
     out[box] = region

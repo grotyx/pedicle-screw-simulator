@@ -224,3 +224,153 @@ def test_progress_callback_names_every_label():
     refine_vertebra_mask(as_image(raw), None, progress=messages.append)
 
     assert any("vertebrae_L4" in message for message in messages)
+
+
+def two_label_phantom():
+    """The phantom split at mid-height into two touching vertebrae."""
+    raw = stair_stepped_label()
+    half = FINE_SHAPE[0] // 2
+    two = raw.copy()
+    two[:half][two[:half] > 0] = BODY_LABEL
+    two[half:][two[half:] > 0] = SECOND_LABEL
+    return two
+
+
+# --- (g) anti-alias alone must not let two labels fight over the interface ---
+
+def test_two_labels_stay_disjoint_without_ct():
+    """Anti-aliasing alone: one id per voxel and neither label melts away."""
+    two = two_label_phantom()
+
+    result = refine_vertebra_mask(as_image(two), None)
+    out = sitk.GetArrayFromImage(result.mask)
+
+    assert sorted(int(v) for v in np.unique(out)) == [0, BODY_LABEL, SECOND_LABEL]
+    # A label map cannot store two ids in one voxel, so "disjoint" is the claim
+    # that the two label counts add up to the whole foreground: nothing was
+    # written twice and nothing was dropped in the hand-over.
+    body = int((out == BODY_LABEL).sum())
+    second = int((out == SECOND_LABEL).sum())
+    assert body + second == int((out > 0).sum())
+    for label in (BODY_LABEL, SECOND_LABEL):
+        assert result.per_label[label].ratio >= 0.90
+
+
+# --- (h) the volume edge is unknown, not background -------------------------
+
+def test_a_label_cut_by_the_volume_edge_keeps_its_terminal_slice():
+    """Outside the field of view is unknown, not air.
+
+    A Gaussian padded with zeros shaves the perimeter ring off the terminal
+    slice, which is exactly the slice a surgeon scrolls to at the top of a
+    scan.
+    """
+    raw = np.zeros(FINE_SHAPE, np.uint8)
+    raw[0:12, 20:52, 20:52] = BODY_LABEL
+
+    result = refine_vertebra_mask(as_image(raw), None)
+    out = label_of(result, BODY_LABEL)
+
+    kept = int(out[0].sum()) / int((raw[0] > 0).sum())
+    assert kept >= 0.95
+
+
+# --- (i) a label the smoothing kernel swallows is named in the notes --------
+
+def test_a_label_smaller_than_the_kernel_is_named_in_the_notes():
+    """A one-voxel label genuinely is noise, but the audit trail must say so."""
+    raw = np.zeros(FINE_SHAPE, np.uint8)
+    raw[24, 36, 36] = BODY_LABEL
+
+    result = refine_vertebra_mask(as_image(raw), None)
+
+    assert result.per_label[BODY_LABEL].ratio < 0.5
+    assert any(
+        note.startswith("vertebrae_L4: anti-aliasing kept") for note in result.notes
+    )
+
+
+# --- (a) refined Dice beats raw Dice by >= 0.03 -----------------------------
+
+def test_ct_guided_refinement_improves_dice_against_the_true_shape():
+    raw = stair_stepped_label()
+    truth = truth_mask()
+
+    result = refine_vertebra_mask(as_image(raw), bone_ct())
+
+    raw_dice = dice(raw > 0, truth)
+    refined_dice = dice(label_of(result, BODY_LABEL), truth)
+    assert result.notes[0] == CT_GUIDED_NOTE
+    assert result.per_label[BODY_LABEL].ct_guided_applied is True
+    assert refined_dice - raw_dice >= 0.03
+
+
+# --- (b) fewer stair steps -------------------------------------------------
+
+def test_ct_guided_refinement_removes_stair_steps():
+    raw = stair_stepped_label()
+
+    result = refine_vertebra_mask(as_image(raw), bone_ct())
+
+    assert boundary_voxels(label_of(result, BODY_LABEL)) < boundary_voxels(raw > 0)
+
+
+# --- (c) the volume guard ---------------------------------------------------
+
+def test_all_bone_ct_trips_the_guard_and_keeps_the_antialiased_mask():
+    """Every voxel bone means the band would swallow a 1.5 mm shell.
+
+    Without the guard the label grows ~45 %, which is how a bad CT window or a
+    metal artefact would silently inflate a vertebra.
+    """
+    raw = stair_stepped_label()
+    all_bone = as_image(np.full(FINE_SHAPE, BONE_HU, np.int16))
+
+    guarded = refine_vertebra_mask(as_image(raw), all_bone)
+    antialias_only = refine_vertebra_mask(as_image(raw), None)
+
+    assert guarded.notes[0] == ANTIALIAS_ONLY_NOTE
+    assert guarded.per_label[BODY_LABEL].ct_guided_applied is False
+    assert any("changed volume" in note for note in guarded.notes)
+    assert np.array_equal(
+        sitk.GetArrayFromImage(guarded.mask),
+        sitk.GetArrayFromImage(antialias_only.mask),
+    )
+
+
+# --- (d) two touching labels stay disjoint ----------------------------------
+
+def test_two_touching_labels_stay_disjoint_and_keep_their_volume():
+    """The upper and lower halves of the phantom are two vertebrae.
+
+    The CT is bone across the interface, so without the "soft-label argmax is
+    this label" condition the first label's band eats ~3 voxel layers of the
+    second (measured: it drops to 77 % of its raw volume).
+    """
+    two = two_label_phantom()
+    half = FINE_SHAPE[0] // 2
+
+    result = refine_vertebra_mask(as_image(two), bone_ct())
+    out = sitk.GetArrayFromImage(result.mask)
+
+    assert sorted(int(v) for v in np.unique(out)) == [0, BODY_LABEL, SECOND_LABEL]
+    # Neither label crosses into the other's territory.
+    assert int((out[half:] == BODY_LABEL).sum()) == 0
+    assert int((out[:half] == SECOND_LABEL).sum()) == 0
+    for label in (BODY_LABEL, SECOND_LABEL):
+        assert result.per_label[label].ratio >= 0.90
+
+
+def test_band_width_is_measured_in_millimetres_not_voxels():
+    """A band of 0 mm leaves the anti-aliased boundary exactly as it was."""
+    raw = stair_stepped_label()
+
+    narrow = refine_vertebra_mask(
+        as_image(raw), bone_ct(), RefinementConfig(band_mm=0.0)
+    )
+    antialias_only = refine_vertebra_mask(as_image(raw), None)
+
+    assert np.array_equal(
+        sitk.GetArrayFromImage(narrow.mask),
+        sitk.GetArrayFromImage(antialias_only.mask),
+    )
