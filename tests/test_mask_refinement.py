@@ -27,6 +27,7 @@ from src.core.mask_refinement import (
     NO_CT_NOTE,
     NO_LABELS_NOTE,
     RefinementConfig,
+    _boundary_band,
     refine_vertebra_mask,
     refinement_status_text,
     sigma_voxels,
@@ -239,19 +240,18 @@ def two_label_phantom():
 # --- (g) anti-alias alone must not let two labels fight over the interface ---
 
 def test_two_labels_stay_disjoint_without_ct():
-    """Anti-aliasing alone: one id per voxel and neither label melts away."""
+    """Anti-aliasing alone: neither label crosses into the other's half."""
     two = two_label_phantom()
+    half = FINE_SHAPE[0] // 2
 
     result = refine_vertebra_mask(as_image(two), None)
     out = sitk.GetArrayFromImage(result.mask)
 
     assert sorted(int(v) for v in np.unique(out)) == [0, BODY_LABEL, SECOND_LABEL]
-    # A label map cannot store two ids in one voxel, so "disjoint" is the claim
-    # that the two label counts add up to the whole foreground: nothing was
-    # written twice and nothing was dropped in the hand-over.
-    body = int((out == BODY_LABEL).sum())
-    second = int((out == SECOND_LABEL).sum())
-    assert body + second == int((out > 0).sum())
+    assert int((out[half:] == BODY_LABEL).sum()) == 0
+    assert int((out[:half] == SECOND_LABEL).sum()) == 0
+    # Every requested label carries an audit entry, and nothing else does.
+    assert set(result.per_label) == {BODY_LABEL, SECOND_LABEL}
     for label in (BODY_LABEL, SECOND_LABEL):
         assert result.per_label[label].ratio >= 0.90
 
@@ -361,8 +361,46 @@ def test_two_touching_labels_stay_disjoint_and_keep_their_volume():
         assert result.per_label[label].ratio >= 0.90
 
 
+def _band_thickness(band, axis, through):
+    """Band voxels per boundary crossing along `axis`, on the line `through`.
+
+    The line leaves and re-enters the box, so it crosses the boundary twice;
+    halving gives the thickness of one crossing (inside half plus outside).
+    """
+    index = list(through)
+    index[axis] = slice(None)
+    crossed = int(np.asarray(band[tuple(index)], dtype=bool).sum())
+    assert crossed % 2 == 0, "the probe line must cross two parallel faces"
+    return crossed // 2
+
+
 def test_band_width_is_measured_in_millimetres_not_voxels():
-    """A band of 0 mm leaves the anti-aliased boundary exactly as it was."""
+    """1.5 mm is fewer voxels along a 1.0 mm axis than along a 0.39 mm one.
+
+    On the anisotropic clinical grid a voxel-metric band would be equally deep
+    on every axis, which is 1.5 voxels = 0.59 mm in plane and 1.5 mm along z:
+    the same nominal number meaning two different physical widths.
+    """
+    anisotropic = np.array([1.0, 0.39, 0.39])          # (z, y, x) millimetres
+    box = np.zeros((40, 60, 60), bool)
+    box[10:30, 20:40, 20:40] = True
+    centre = (0, 30, 30)                                # a z-column through it
+
+    metric = _boundary_band(box, 1.5, anisotropic)
+    voxel = _boundary_band(box, 1.5, np.array([1.0, 1.0, 1.0]))
+
+    # 1.5 mm reaches floor(1.5 / spacing) voxels each side of the boundary:
+    # 1 each side along z (1.0 mm), 3 each side in plane (0.39 mm).
+    assert _band_thickness(metric, 0, centre) == 2
+    assert _band_thickness(metric, 2, (20, 30, 0)) == 6
+
+    # The same call without a physical sampling cannot tell the axes apart:
+    # one nominal "1.5" spends 1.5 mm along z and 0.59 mm in plane.
+    assert _band_thickness(voxel, 0, centre) == _band_thickness(voxel, 2, (20, 30, 0))
+
+
+def test_a_zero_band_leaves_the_antialiased_boundary_alone():
+    """band_mm=0 admits no voxel, so the CT gets no say."""
     raw = stair_stepped_label()
 
     narrow = refine_vertebra_mask(
@@ -374,3 +412,58 @@ def test_band_width_is_measured_in_millimetres_not_voxels():
         sitk.GetArrayFromImage(narrow.mask),
         sitk.GetArrayFromImage(antialias_only.mask),
     )
+
+
+# --- _fill_and_largest_component: the canal and the speck -------------------
+
+def canal_phantom():
+    """A C-shaped tube: a ring with a slot cut through it, extruded along z.
+
+    The slot keeps the canal open inside every axial slice, which is what the
+    per-slice hole fill needs in order to leave it alone.
+    """
+    zz, yy, xx = np.ogrid[: FINE_SHAPE[0], : FINE_SHAPE[1], : FINE_SHAPE[2]]
+    radius = (yy - 36) ** 2 + (xx - 36) ** 2
+    ring = (radius >= 8 ** 2) & (radius <= 14 ** 2)
+    tube = np.broadcast_to(ring, FINE_SHAPE).copy()
+    tube[:, 34:39, 36:] = False                     # the slot, opening to +x
+    mask = np.zeros(FINE_SHAPE, np.uint8)
+    mask[8:40][tube[8:40]] = BODY_LABEL
+    canal = np.zeros(FINE_SHAPE, bool)
+    canal[8:40] = np.broadcast_to(radius < 8 ** 2, FINE_SHAPE)[8:40]
+    return mask, canal
+
+
+def test_the_canal_is_not_packed_by_the_hole_fill():
+    """A canal open in-plane is soft tissue and must stay outside the label."""
+    mask, canal = canal_phantom()
+    ct = np.where(mask > 0, BONE_HU, SOFT_HU).astype(np.int16)
+
+    result = refine_vertebra_mask(as_image(mask), as_image(ct))
+    out = label_of(result, BODY_LABEL)
+
+    assert result.per_label[BODY_LABEL].ct_guided_applied is True
+    assert int((out & canal).sum()) == 0
+    assert result.per_label[BODY_LABEL].ratio >= 0.90
+
+
+def test_a_disconnected_bone_speck_in_the_band_is_dropped():
+    """Only the largest component survives, so stray cortex is not annexed.
+
+    The speck is 1.5 mm outside the boundary — inside the band and above the
+    bone threshold — with soft tissue between it and the vertebra, which is
+    what a transverse process tip or a rib head looks like to the threshold.
+    """
+    mask = np.zeros(FINE_SHAPE, np.uint8)
+    mask[6:42, 24:48, 24:48] = BODY_LABEL
+    ct = np.where(mask > 0, BONE_HU, SOFT_HU).astype(np.int16)
+    speck = (slice(20, 24), slice(30, 34), slice(50, 51))
+    ct[speck] = BONE_HU
+
+    result = refine_vertebra_mask(as_image(mask), as_image(ct))
+    out = label_of(result, BODY_LABEL)
+
+    assert result.per_label[BODY_LABEL].ct_guided_applied is True
+    assert int(out[speck].sum()) == 0
+    # The vertebra itself is untouched by the pruning.
+    assert result.per_label[BODY_LABEL].ratio >= 0.90

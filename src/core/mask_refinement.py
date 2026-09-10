@@ -138,11 +138,33 @@ def _padded_box(
     )
 
 
+def _boundary_band(
+    binary: np.ndarray, band_mm: float, spacing: np.ndarray
+) -> np.ndarray:
+    """Voxels within ``band_mm`` millimetres of the boundary of ``binary``.
+
+    The exact metric equivalent of ``dilate(band_mm) & ~erode(band_mm)``: one
+    Euclidean distance transform each way, both sampled with the voxel
+    spacing, so on an anisotropic grid the band is the same *physical* width
+    on every axis and therefore fewer voxels deep along the coarse one. Doing
+    it with a structuring element instead would be both slower and only
+    approximately metric.
+    """
+    inside = ndi.distance_transform_edt(binary, sampling=spacing)
+    outside = ndi.distance_transform_edt(~binary, sampling=spacing)
+    return (inside <= band_mm) & (outside <= band_mm)
+
+
 def _fill_and_largest_component(binary: np.ndarray) -> np.ndarray:
     """Close in-slice holes, then keep only the largest 3D component.
 
-    Holes are filled per axial slice because a vertebra's canal is a genuine
-    through-hole in 3D: filling in 3D would pack the spinal canal with bone.
+    Holes are closed per axial slice rather than in 3D so that the speckle a
+    CT threshold punches into the band closes without the label having to be
+    sealed along z. Be aware of the cost of that choice: a canal the neural
+    arch rings shut inside a single slice is closed too, whereas a 3D fill
+    would leave it alone (within a padded crop the canal reaches the border
+    through the background above and below the vertebra, so it is not a
+    3D hole at all). Only a canal left open in-plane survives this step.
     """
     filled = binary.copy()
     for index in range(filled.shape[0]):
@@ -220,6 +242,9 @@ def refine_vertebra_mask(
     raw_counts: Dict[int, int] = {}
     boxes: Dict[int, Tuple[slice, ...]] = {}
     refinable: List[int] = []
+    # Every requested label gets an entry, including one that is skipped
+    # below, so a caller can iterate the audit trail without a membership test.
+    per_label: Dict[int, LabelStats] = {}
     for index, label in enumerate(requested, start=1):
         binary = sub == label
         raw_counts[label] = int(binary.sum())
@@ -233,6 +258,13 @@ def refine_vertebra_mask(
                 "left unrefined."
             )
             logger.info("Mask refinement: label %d has an empty box; skipped", label)
+            per_label[label] = LabelStats(
+                label=label,
+                raw_voxels=raw_counts[label],
+                refined_voxels=0,
+                ratio=0.0,
+                ct_guided_applied=False,
+            )
             continue
         boxes[label] = label_box
         refinable.append(label)
@@ -263,23 +295,24 @@ def refine_vertebra_mask(
 
     ct_sub = None
     if use_ct:
-        ct_sub = sitk.GetArrayFromImage(ct)[box]
+        # ``.copy()``: a basic-slice view would pin the whole CT array in
+        # memory for the rest of the call, which on a 512x512x292 scan is
+        # 150 MB held for the sake of one vertebra-sized crop.
+        ct_sub = sitk.GetArrayFromImage(ct)[box].copy()
 
     out_sub = np.zeros(sub.shape, dtype=np.int16)
-    per_label: Dict[int, LabelStats] = {}
     for label in refinable:
         label_box = boxes[label]
         raw_count = max(raw_counts[label], 1)
         smooth = antialiased[label_box] == label
         smooth_ratio = int(smooth.sum()) / raw_count
         if smooth_ratio < 0.5:
-            # Single voxels and one-voxel sheets are smaller than the kernel,
-            # so the Gaussian never reaches 0.5 anywhere. That verdict stands
-            # (the label really is that thin), but it must not be silent.
+            # Typically a single voxel or a one-voxel sheet, which the
+            # Gaussian never lifts to 0.5 anywhere. The verdict stands; the
+            # note only records what happened, without diagnosing why.
             notes.append(
                 f"{names.get(label, str(label))}: anti-aliasing kept "
-                f"{smooth_ratio * 100:.0f}% of its voxels; the label is "
-                "smaller than the smoothing kernel."
+                f"{smooth_ratio * 100:.0f}% of its voxels."
             )
             logger.info(
                 "Mask refinement: label %d shrank to %.2f under anti-aliasing",
@@ -289,10 +322,7 @@ def refine_vertebra_mask(
         refined = smooth
         ct_guided_applied = False
         if use_ct and smooth.any():
-            # The exact metric equivalent of dilate(band_mm) & ~erode(band_mm).
-            inside = ndi.distance_transform_edt(smooth, sampling=spacing)
-            outside = ndi.distance_transform_edt(~smooth, sampling=spacing)
-            band = (inside <= config.band_mm) & (outside <= config.band_mm)
+            band = _boundary_band(smooth, config.band_mm, spacing)
             # Inside the band the CT decides, but only among voxels this label
             # already wins the soft-label argmax for: bone that belongs to the
             # neighbouring vertebra must not be stolen.
