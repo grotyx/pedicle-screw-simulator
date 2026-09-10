@@ -50,6 +50,30 @@ OPTIMIZER_FALLBACK_WARNING = (
     "Optimizer found no feasible trajectory; legacy planner used"
 )
 
+#: Warning attached to a screw planned from a width the analyser flagged.
+WIDTH_UNCERTAIN_SCREW_WARNING = "Pedicle width uncertain – verify diameter"
+
+_WIDTH_UNCERTAIN_PHRASE = "pedicle width uncertain"
+
+
+def width_uncertain_reason(side: str, width_mm: float) -> str:
+    """Why a side whose width the analyser could not trust was dropped.
+
+    Distinct from "too narrow" on purpose: a narrow pedicle is a finding, an
+    untrustworthy measurement is a request to look at the images.  The phrase
+    starts with the side word so that prefixing a level name turns it into a
+    sentence -- which is exactly how
+    :func:`~src.controllers.auto_placement_controller._dropped_sides_note`
+    puts it in front of the surgeon.
+    """
+    return f"{side} {_WIDTH_UNCERTAIN_PHRASE} ({width_mm:.1f} mm) — plan manually"
+
+
+def is_width_uncertain_reason(side: str, reason: str) -> bool:
+    """Whether *reason* is the width-uncertain skip reason for *side*."""
+    return reason.startswith(f"{side} {_WIDTH_UNCERTAIN_PHRASE}")
+
+
 #: How many ranked trajectories per pedicle the construct stage may choose from.
 _CONSTRUCT_TOP_K = 10
 
@@ -226,13 +250,23 @@ class AutoScrewPlanner:
             )
 
         # 1. Determine optimal screw diameter.
+        if analysis.width_flags.get(side) == "implausible":
+            # The number is not a finding about the patient, so neither the
+            # warning nor the skip reason may present it as one.
+            warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         diameter = self._compute_diameter(pedicle_width, vertebra.name)
         if diameter is None:
+            if analysis.width_flags.get(side) == "implausible":
+                logger.info(
+                    "Pedicle width not trustworthy (%s %s, width=%.1f mm)",
+                    vertebra.name, side, pedicle_width,
+                )
+                return None, width_uncertain_reason(side, pedicle_width)
             logger.info(
                 "Pedicle too narrow for any screw (%s %s, width=%.1f mm)",
                 vertebra.name, side, pedicle_width,
             )
-            return None, f"{side} pedicle too narrow ({pedicle_width:.1f} mm) for any screw"
+            return None, self._too_narrow_reason(side, pedicle_width)
 
         # 2. Orient pedicle axis so it points posteriorly (+Y in LPS).
         #    Validate that PCA axis is roughly AP-directed (>30% Y component).
@@ -668,6 +702,8 @@ class AutoScrewPlanner:
             warnings.append(
                 "Upper endplate unavailable; used horizontal sagittal trajectory"
             )
+        if analysis.width_flags.get(side) == "implausible":
+            warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         recommended = self._compute_diameter(pedicle_width, vertebra.name)
         if recommended is not None and candidate.diameter < recommended - 1e-9:
             warnings.append(
@@ -1122,6 +1158,31 @@ class AutoScrewPlanner:
                 analysis.right_pedicle_axis,
                 analysis.right_pedicle_width,
             )
+
+    def _too_narrow_reason(self, side: str, pedicle_width: float) -> str:
+        """Skip reason for a genuine (unflagged) width that yielded no diameter.
+
+        A pedicle that is small under every constraint is "too narrow for any
+        screw".  One that would clear :attr:`MIN_SCREW_DIAMETER` on fill ratio
+        alone, and is only excluded by the cortical wall clearance, is not
+        anatomically hopeless -- it is a policy choice the surgeon can relax,
+        so the reason names the clearance and points at the fix instead of
+        implying the pedicle itself is the problem.
+        """
+        clearance = self.config.wall_clearance_mm
+        fill_capacity = self.config.pedicle_fill_ratio * pedicle_width
+        clearance_capacity = pedicle_width - 2.0 * clearance
+        if (
+            fill_capacity >= self.MIN_SCREW_DIAMETER
+            and clearance_capacity < self.MIN_SCREW_DIAMETER
+        ):
+            return (
+                f"{side} pedicle too narrow ({pedicle_width:.1f} mm) for a "
+                f"{self.MIN_SCREW_DIAMETER:.1f} mm screw with {clearance:.1f} mm "
+                "wall clearance — lower the clearance in Planning parameters "
+                "to plan it"
+            )
+        return f"{side} pedicle too narrow ({pedicle_width:.1f} mm) for any screw"
 
     def _compute_diameter(
         self,

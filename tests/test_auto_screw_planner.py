@@ -1437,5 +1437,80 @@ class TestPlanAllProgressAndCancel:
         assert planner.last_run_cancelled is False
 
 
+class TestUncertainPedicleWidth:
+    """A width the analyser could not trust is reported as uncertain."""
+
+    def test_skip_reason_says_uncertain_rather_than_too_narrow(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.pedicle_analyzer import PedicleAnalyzer
+        from src.core.planner_config import PlannerConfig
+        from tests.test_pedicle_analyzer import _make_narrow_corridor_phantom
+
+        mask = _make_narrow_corridor_phantom(label=29)  # L3
+        arr = sitk.GetArrayFromImage(mask)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 400, -50).astype(np.int16))
+        ct.CopyInformation(mask)
+        analyzer = PedicleAnalyzer(mask)
+        analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        assert analysis.width_flags["left"] == "implausible"
+
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        planner.plan_all([analysis])
+
+        reasons = {side: reason for _name, side, reason in planner.skipped_sides}
+        assert reasons["left"] == (
+            "left pedicle width uncertain (2.0 mm) — plan manually"
+        )
+        assert "too narrow" not in reasons["left"]
+
+    def test_a_planned_screw_on_a_flagged_side_carries_a_warning(self):
+        from src.core.auto_screw_planner import (
+            WIDTH_UNCERTAIN_SCREW_WARNING,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=8.0)
+        analysis.width_flags["left"] = "implausible"
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert WIDTH_UNCERTAIN_SCREW_WARNING in screw.warnings
+
+    def test_an_unflagged_narrow_side_still_says_too_narrow(self):
+        """The old message must survive for a pedicle that really is small."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=3.0, right_width=3.0)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        planner.plan_all([analysis], sides="left")
+
+        _name, _side, reason = planner.skipped_sides[0]
+        assert reason == "left pedicle too narrow (3.0 mm) for any screw"
+
+    def test_unflagged_but_policy_narrow_side_names_the_clearance_fix(self):
+        """A plausible pedicle dropped only by the clearance policy explains why."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        # 5.5 mm is plausible but, with the default 1.0 mm wall clearance,
+        # 5.5 - 2*1.0 = 3.5 mm < MIN_SCREW_DIAMETER (4.0 mm).
+        analysis = _make_analysis(left_width=5.5, right_width=5.5)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        planner.plan_all([analysis], sides="left")
+
+        _name, _side, reason = planner.skipped_sides[0]
+        assert reason == (
+            "left pedicle too narrow (5.5 mm) for a 4.0 mm screw with "
+            "1.0 mm wall clearance — lower the clearance in Planning "
+            "parameters to plan it"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
