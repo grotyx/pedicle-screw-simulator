@@ -427,3 +427,56 @@ def test_csv_has_trajectory_type_column(tmp_path):
     assert dict(zip(header, rows[1], strict=True))["trajectory_type"] == "cbt"
     # Absent on a manual screw: an empty cell, not a shifted row.
     assert dict(zip(header, rows[2], strict=True))["trajectory_type"] == ""
+
+
+def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
+    import csv as _csv
+
+    from src.utils.planning_io import export_screws_csv
+
+    narrow = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={
+            "pedicle_width_mm": 4.5,
+            "narrow_pedicle": True,
+            "medial_breach_mm": 0.0,
+            "lateral_breach_mm": 1.5,
+        },
+    )
+    manual = Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))
+    path = tmp_path / "screws.csv"
+
+    export_screws_csv(str(path), [narrow, manual])
+
+    rows = list(_csv.reader(path.open(encoding="utf-8")))
+    header = rows[0]
+    assert header[-4:] == [
+        "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
+    ]
+    row = dict(zip(header, rows[1], strict=True))
+    assert row["pedicle_width_mm"] == "4.500"
+    assert row["narrow_pedicle"] == "true"
+    assert row["medial_breach_mm"] == "0.000"
+    assert row["lateral_breach_mm"] == "1.500"
+
+    blank = dict(zip(header, rows[2], strict=True))
+    assert blank["pedicle_width_mm"] == ""
+    assert blank["narrow_pedicle"] == ""
+
+
+def test_plan_json_round_trips_the_narrow_metrics(tmp_path):
+    from src.utils.planning_io import deserialize_plan, serialize_plan
+
+    screw = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5,
+                 "medial_breach_mm": 0.0, "lateral_breach_mm": 1.5},
+    )
+
+    parsed = deserialize_plan(serialize_plan("s", [screw], []))
+
+    assert parsed["version"] == 3
+    metrics = parsed["screws"][0].metrics
+    assert metrics["narrow_pedicle"] is True
+    assert metrics["pedicle_width_mm"] == 4.5
+    assert metrics["lateral_breach_mm"] == 1.5

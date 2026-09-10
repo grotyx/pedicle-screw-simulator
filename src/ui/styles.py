@@ -555,6 +555,10 @@ QLabel#screwDragHint {{
     border-radius: 5px;
     padding: 6px 8px;
 }}
+QLabel#screwNarrowLegend {{
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
 MPRViewer, Viewer3D {{
     background-color: {t["viewer_bg"]};
     border: 1px solid {t["viewer_separator"]};

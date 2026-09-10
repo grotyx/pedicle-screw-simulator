@@ -1807,6 +1807,65 @@ def test_planner_spin_boxes_use_specified_ranges(ui_main_window):
             window.plan_hu_threshold_spin.maximum()) == (50.0, 300.0)
 
 
+def test_narrow_pedicle_spin_boxes_reach_the_planner_config(ui_main_window):
+    window = ui_main_window
+
+    assert (window.plan_narrow_pedicle_spin.minimum(),
+            window.plan_narrow_pedicle_spin.maximum()) == (3.0, 8.0)
+    assert window.plan_narrow_pedicle_spin.singleStep() == pytest.approx(0.5)
+    assert (window.plan_narrow_lateral_spin.minimum(),
+            window.plan_narrow_lateral_spin.maximum()) == (0.0, 6.0)
+    assert window.plan_narrow_lateral_spin.singleStep() == pytest.approx(0.5)
+
+    window.plan_narrow_pedicle_spin.setValue(6.0)
+    window.plan_narrow_lateral_spin.setValue(4.0)
+    cfg = window.planner_config()
+
+    assert cfg.narrow_pedicle_mm == pytest.approx(6.0)
+    assert cfg.narrow_lateral_breach_mm == pytest.approx(4.0)
+
+
+def test_narrow_settings_persist_into_a_new_window(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_narrow_pedicle_spin.setValue(6.5)
+    window.plan_narrow_lateral_spin.setValue(3.0)
+
+    settings = _planner_settings(isolated_qsettings)
+    assert float(settings.value("narrow_pedicle_mm")) == pytest.approx(6.5)
+    assert float(settings.value("narrow_lateral_breach_mm")) == pytest.approx(3.0)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_narrow_pedicle_spin.value() == pytest.approx(6.5)
+        assert reopened.plan_narrow_lateral_spin.value() == pytest.approx(3.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_the_wall_clearance_default_is_zero_but_a_stored_value_is_kept(
+    ui_main_window, isolated_qsettings
+):
+    """No migration: a surgeon who raised the clearance keeps it."""
+    from src.core.planner_config import PlannerConfig
+
+    window = ui_main_window
+    window.plan_wall_clearance_spin.setValue(1.5)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_wall_clearance_spin.value() == pytest.approx(1.5)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+    window.plan_reset_defaults_btn.click()
+    assert window.plan_wall_clearance_spin.value() == pytest.approx(
+        PlannerConfig().wall_clearance_mm
+    )
+    assert PlannerConfig().wall_clearance_mm == 0.0
+
+
 def test_planner_settings_persist_into_a_new_window(ui_main_window):
     window = ui_main_window
     window.plan_fill_ratio_spin.setValue(0.65)

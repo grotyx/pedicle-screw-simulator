@@ -81,6 +81,20 @@ def _metric_number(metrics: Dict[str, Any], key: str, spec: str = ".3f") -> str:
     return f"{int(number):d}" if spec == "d" else format(number, spec)
 
 
+def _metric_flag(metrics: Dict[str, Any], key: str) -> str:
+    """Format one boolean metric for CSV; empty when it was never recorded.
+
+    A manually placed screw has no pedicle analysis behind it, so ``narrow`` is
+    unknown rather than false -- and a spreadsheet that reads an empty cell as
+    "not narrow" is at least reading it as a missing measurement, which an
+    explicit ``false`` would hide.
+    """
+    value = metrics.get(key)
+    if value is None:
+        return ""
+    return "true" if bool(value) else "false"
+
+
 def screw_to_dict(screw: Screw) -> Dict[str, Any]:
     """Serialize Screw dataclass to plain dict."""
     return {
@@ -278,6 +292,9 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
             "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
             "warnings",
+            # Appended, per the plan-file contract: readers key on the header.
+            "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
+            "lateral_breach_mm",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -314,4 +331,8 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 # cell stays empty rather than guessing "traditional".
                 "" if metrics.get("trajectory_type") is None else str(metrics["trajectory_type"]),
                 "|".join(screw.warnings),
+                _metric_number(metrics, "pedicle_width_mm"),
+                _metric_flag(metrics, "narrow_pedicle"),
+                _metric_number(metrics, "medial_breach_mm"),
+                _metric_number(metrics, "lateral_breach_mm"),
             ])

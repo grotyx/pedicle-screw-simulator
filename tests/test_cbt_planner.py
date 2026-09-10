@@ -167,6 +167,25 @@ def test_cbt_screw_angles_and_size():
     assert CBT_CONTRAINDICATION_NOTE in screw.warnings
 
 
+def test_a_cbt_screw_on_a_narrow_pedicle_is_flagged():
+    """A CBT screw shares the traditional planner's narrow-pedicle policy.
+
+    ``_finalise_screw`` decides the flag from its ``narrow`` argument alone, so
+    a CBT side measured below ``narrow_pedicle_mm`` must be flagged the same
+    way a traditional one is -- red in the UI, and carrying the same warning.
+    """
+    ct, mask, analysis = _setup()
+    analysis.left_pedicle_width = 3.0  # below the default 5.0 mm threshold
+
+    screw = plan_cbt_screw(
+        ScrewGrader(mask, ct), analysis, "left", LABEL, PlannerConfig(trajectory="cbt")
+    )
+
+    assert screw is not None
+    assert screw.metrics["narrow_pedicle"] is True
+    assert any("narrow" in warning.lower() for warning in screw.warnings)
+
+
 def test_cbt_screw_diverges_laterally_on_both_sides():
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)

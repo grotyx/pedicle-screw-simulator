@@ -111,3 +111,12 @@ def test_grade_chip_colours_are_distinct_within_every_theme():
             palette["grade_na"],
         ]
         assert len(set(chips)) == 5
+
+
+def test_the_narrow_pedicle_legend_is_muted_secondary_text_in_every_theme():
+    for theme_name, palette in THEMES.items():
+        stylesheet = load_stylesheet(theme_name)
+        assert "QLabel#screwNarrowLegend {" in stylesheet
+        rule = stylesheet.split("QLabel#screwNarrowLegend {", 1)[1].split("}", 1)[0]
+        assert f'color: {palette["text_secondary"]};' in rule
+        assert "font-size:" in rule

@@ -352,6 +352,7 @@ def _plan_cbt_screw(
         body_center,
         [CBT_CONTRAINDICATION_NOTE],
         pedicle_width,
+        narrow=planner._is_narrow_side(analysis, side),
     )
     # ``span`` is the catalogue length by construction; recomputing it from the
     # end points would only add float noise to a nominal implant size.

@@ -845,6 +845,34 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(QLabel("HU threshold"), 6, 0)
         params_layout.addWidget(self.plan_hu_threshold_spin, 6, 1, 1, 2)
 
+        self.plan_narrow_pedicle_spin = QDoubleSpinBox()
+        self.plan_narrow_pedicle_spin.setRange(3.0, 8.0)
+        self.plan_narrow_pedicle_spin.setSingleStep(0.5)
+        self.plan_narrow_pedicle_spin.setDecimals(1)
+        self.plan_narrow_pedicle_spin.setSuffix(" mm")
+        self.plan_narrow_pedicle_spin.setValue(planner_defaults.narrow_pedicle_mm)
+        self.plan_narrow_pedicle_spin.setToolTip(
+            "Pedicle width below which the smallest screw is planned and the "
+            "level is marked narrow"
+        )
+        params_layout.addWidget(QLabel("Narrow pedicle"), 7, 0)
+        params_layout.addWidget(self.plan_narrow_pedicle_spin, 7, 1, 1, 2)
+
+        self.plan_narrow_lateral_spin = QDoubleSpinBox()
+        self.plan_narrow_lateral_spin.setRange(0.0, 6.0)
+        self.plan_narrow_lateral_spin.setSingleStep(0.5)
+        self.plan_narrow_lateral_spin.setDecimals(1)
+        self.plan_narrow_lateral_spin.setSuffix(" mm")
+        self.plan_narrow_lateral_spin.setValue(
+            planner_defaults.narrow_lateral_breach_mm
+        )
+        self.plan_narrow_lateral_spin.setToolTip(
+            "Lateral (in-out-in) breach a narrow pedicle may accept; the medial "
+            "wall is never breached"
+        )
+        params_layout.addWidget(QLabel("Lateral breach cap"), 8, 0)
+        params_layout.addWidget(self.plan_narrow_lateral_spin, 8, 1, 1, 2)
+
         weight_rows = (
             ("Safety weight", "safety", "Importance of cortical wall clearance"),
             ("Density weight", "density",
@@ -853,7 +881,7 @@ class MainWindow(QMainWindow):
              "Importance of lining up the screw heads for the rod"),
         )
         self._planner_weight_value_labels = {}
-        for row, (caption, name, tip) in enumerate(weight_rows, start=7):
+        for row, (caption, name, tip) in enumerate(weight_rows, start=9):
             attribute = f"plan_weight_{name}"
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 300)
@@ -875,7 +903,7 @@ class MainWindow(QMainWindow):
         self._refresh_planner_weight_labels()
 
         self.plan_reset_defaults_btn = QPushButton("Reset Defaults")
-        params_layout.addWidget(self.plan_reset_defaults_btn, 10, 0, 1, 3)
+        params_layout.addWidget(self.plan_reset_defaults_btn, 12, 0, 1, 3)
 
         plan_params_group.set_content_layout(params_layout)
         layout.addWidget(plan_params_group)
@@ -1887,6 +1915,8 @@ class MainWindow(QMainWindow):
         "anterior_margin_mm",
         "max_convergence_deg",
         "trajectory_hu_threshold",
+        "narrow_pedicle_mm",
+        "narrow_lateral_breach_mm",
     )
 
     #: Views that "maximize:<name>" accepts.
@@ -1976,6 +2006,8 @@ class MainWindow(QMainWindow):
             "anterior_margin_mm": self.plan_anterior_margin_spin,
             "max_convergence_deg": self.plan_max_convergence_spin,
             "trajectory_hu_threshold": self.plan_hu_threshold_spin,
+            "narrow_pedicle_mm": self.plan_narrow_pedicle_spin,
+            "narrow_lateral_breach_mm": self.plan_narrow_lateral_spin,
         }
 
     def _planner_choice_combos(self) -> dict:
