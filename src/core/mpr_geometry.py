@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import vtk
@@ -72,6 +72,57 @@ def world_to_slice(point: Point3D, axes: vtk.vtkMatrix4x4) -> Point3D:
     except np.linalg.LinAlgError as exc:
         raise ValueError("reslice axes matrix is not invertible") from exc
     return _transform_point(point, inverse)
+
+
+# (negative-direction letter, positive-direction letter) per LPS axis.
+_LPS_AXIS_LETTERS = (("R", "L"), ("A", "P"), ("I", "S"))
+
+# A column whose dominant component falls below this is only approximately
+# aligned with a patient axis, so its letters are marked with a suffix.
+ORIENTATION_OBLIQUE_THRESHOLD = 0.7
+ORIENTATION_OBLIQUE_SUFFIX = "'"
+
+
+def _axis_letters(column: np.ndarray) -> Tuple[str, str]:
+    """Return (letter along +column, letter along -column) for one axis."""
+    norm = float(np.linalg.norm(column))
+    if norm <= 1e-9:
+        return ("?", "?")
+    unit = column / norm
+    axis = int(np.argmax(np.abs(unit)))
+    negative_letter, positive_letter = _LPS_AXIS_LETTERS[axis]
+    if unit[axis] < 0.0:
+        positive_letter, negative_letter = negative_letter, positive_letter
+    if abs(unit[axis]) < ORIENTATION_OBLIQUE_THRESHOLD:
+        positive_letter += ORIENTATION_OBLIQUE_SUFFIX
+        negative_letter += ORIENTATION_OBLIQUE_SUFFIX
+    return positive_letter, negative_letter
+
+
+def orientation_letters(axes: vtk.vtkMatrix4x4) -> Dict[str, str]:
+    """Name the patient direction at each edge of a resliced image.
+
+    Column 0 of a reslice matrix points along screen-right and column 1
+    along screen-up, so the letters follow any plane -- standard or
+    screw-aligned -- without a per-plane table.  A column that is only
+    approximately aligned with a patient axis (dominant component below
+    ``ORIENTATION_OBLIQUE_THRESHOLD``) is suffixed with ``'``.
+
+    Args:
+        axes: Reslice matrix mapping slice-local points into LPS world mm.
+
+    Returns:
+        ``{"top": ..., "bottom": ..., "left": ..., "right": ...}``.
+    """
+    matrix = _matrix_to_numpy(axes)
+    right_letter, left_letter = _axis_letters(matrix[:3, 0])
+    top_letter, bottom_letter = _axis_letters(matrix[:3, 1])
+    return {
+        "top": top_letter,
+        "bottom": bottom_letter,
+        "left": left_letter,
+        "right": right_letter,
+    }
 
 
 def project_screw_to_slice(
