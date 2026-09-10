@@ -17,6 +17,8 @@ import SimpleITK as sitk
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.pedicle_analyzer import endplate_fit_warning
+from src.core.planner_config import PlannerConfig
 from src.core.vertebra import PedicleAnalysisResult, Vertebra
 
 # ---------------------------------------------------------------------------
@@ -1559,3 +1561,79 @@ class TestNarrowPedicle:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestEndplateOptionAndMetric:
+    """The endplate trajectory is switchable, and always measured."""
+
+    _NORMAL_10_DEG = np.array([0.0, math.sin(math.radians(10.0)), math.cos(math.radians(10.0))])
+
+    def test_endplate_parallel_on_tilts_the_trajectory_and_reads_zero(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        # Measured on this phantom today: craniocaudal +9.64, endplate -0.36.
+        assert result.craniocaudal_angle > 3.0          # aimed up along the endplate
+        assert result.metrics["endplate_angle_deg"] == pytest.approx(0.0, abs=2.0)
+
+    def test_endplate_parallel_off_keeps_the_trajectory_horizontal(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert result.target_lps[2] == pytest.approx(result.entry_lps[2])
+        assert result.craniocaudal_angle == pytest.approx(0.0, abs=0.1)
+        # The metric is a measurement, not a setting: it is still recorded, and
+        # it now says the screw is 10 degrees caudal of the endplate.
+        assert result.metrics["endplate_angle_deg"] == pytest.approx(-10.0, abs=0.5)
+
+    def test_endplate_parallel_off_does_not_claim_the_endplate_was_unavailable(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+
+        result = planner.plan_screw(_make_analysis(), "left")
+
+        assert result is not None
+        assert not any("Upper endplate unavailable" in w for w in result.warnings)
+
+    def test_metric_is_absent_when_the_endplate_is_unknown(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        result = planner.plan_screw(_make_analysis(), "left")
+
+        assert result is not None
+        assert "endplate_angle_deg" not in result.metrics
+
+    def test_rough_endplate_fit_warning_reaches_the_screw(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 2.3
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert endplate_fit_warning(2.3) in result.warnings
+
+    def test_a_tight_endplate_fit_says_nothing(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 0.4
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert not any("Upper endplate fit is rough" in w for w in result.warnings)

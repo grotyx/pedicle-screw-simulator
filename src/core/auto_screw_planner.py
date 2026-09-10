@@ -28,8 +28,9 @@ import SimpleITK as sitk
 from .bone_quality import assess_bone_quality
 from .breach_classification import facet_violation_grade, heary_direction, medial_breach_warning
 from .cbt_planner import plan_cbt_screws
+from .pedicle_analyzer import ENDPLATE_FIT_RMSE_WARNING_MM, endplate_fit_warning
 from .planner_config import PlannerConfig
-from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg, endplate_angle_deg
 from .screw_grading import ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
     Candidate,
@@ -247,10 +248,23 @@ class AutoScrewPlanner:
             return None, "no vertebral body centre"
 
         warnings: List[str] = []
-        if analysis.upper_endplate_normal is None:
+        # ``endplate_normal`` is what the trajectory is *aimed* along -- None
+        # when the user switched the endplate-parallel option off, which is a
+        # deliberate horizontal trajectory and therefore not worth a warning.
+        # ``analysis.upper_endplate_normal`` stays the thing the screw is
+        # *measured* against below.
+        endplate_normal = (
+            analysis.upper_endplate_normal if self.config.endplate_parallel else None
+        )
+        if self.config.endplate_parallel and analysis.upper_endplate_normal is None:
             warnings.append(
                 "Upper endplate unavailable; used horizontal sagittal trajectory"
             )
+        if (
+            analysis.endplate_fit_rmse_mm is not None
+            and analysis.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
+        ):
+            warnings.append(endplate_fit_warning(analysis.endplate_fit_rmse_mm))
 
         # 1. Determine optimal screw diameter.  A width is never a reason to
         #    drop the side: a narrow pedicle takes the smallest implant.
@@ -293,7 +307,7 @@ class AutoScrewPlanner:
             body_center,
             vertebra.label,
             diameter,
-            analysis.upper_endplate_normal,
+            endplate_normal,
         )
         if target is None:
             logger.info("Target point search failed for %s %s", vertebra.name, side)
@@ -345,7 +359,7 @@ class AutoScrewPlanner:
                 body_center,
                 vertebra.label,
                 diameter,
-                analysis.upper_endplate_normal,
+                endplate_normal,
             )
             if candidate is None:
                 return None, f"no {side} target point at the reduced diameter"
@@ -373,6 +387,7 @@ class AutoScrewPlanner:
             body_center,
             warnings,
             pedicle_width,
+            upper_endplate_normal=analysis.upper_endplate_normal,
             narrow=narrow,
         )
         return planned, None
@@ -388,6 +403,7 @@ class AutoScrewPlanner:
         body_center: np.ndarray,
         extra_warnings: Optional[List[str]] = None,
         pedicle_width: float = 0.0,
+        upper_endplate_normal: Optional[np.ndarray] = None,
         narrow: bool = False,
     ) -> PlannedScrew:
         """Grade an accepted trajectory and wrap it in a :class:`PlannedScrew`.
@@ -397,6 +413,11 @@ class AutoScrewPlanner:
         facet/Heary classification, angles and warnings as a legacy one.
         ``extra_warnings`` are the messages the caller accumulated while
         constructing the trajectory; they are copied, never mutated.
+
+        ``upper_endplate_normal`` is the analysis's plane normal.  It is passed
+        even when ``config.endplate_parallel`` is off: the endplate angle is a
+        measurement of the trajectory that was chosen, not a record of the
+        setting that chose it, so the inspector shows it either way.
         """
         warnings: List[str] = list(extra_warnings or [])
         length = float(np.linalg.norm(target - entry))
@@ -462,6 +483,11 @@ class AutoScrewPlanner:
             # Overwritten by :mod:`.cbt_planner`, which shares this tail.
             "trajectory_type": "traditional",
         }
+        endplate_angle = endplate_angle_deg(entry, target, upper_endplate_normal)
+        if endplate_angle is not None:
+            # Absent, not 0.0, when the endplate could not be fitted: a missing
+            # measurement must never read as a perfectly parallel screw.
+            metrics["endplate_angle_deg"] = float(endplate_angle)
         if narrow:
             # First in the list: it is the reason this screw looks the way it
             # does, and the cockpit reads the block top down.
@@ -722,10 +748,15 @@ class AutoScrewPlanner:
             return self._legacy_fallback(analysis, side)
 
         warnings: List[str] = []
-        if analysis.upper_endplate_normal is None:
+        if self.config.endplate_parallel and analysis.upper_endplate_normal is None:
             warnings.append(
                 "Upper endplate unavailable; used horizontal sagittal trajectory"
             )
+        if (
+            analysis.endplate_fit_rmse_mm is not None
+            and analysis.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
+        ):
+            warnings.append(endplate_fit_warning(analysis.endplate_fit_rmse_mm))
         if analysis.width_flags.get(side) == "implausible":
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         narrow = self._is_narrow_side(analysis, side)
@@ -748,8 +779,16 @@ class AutoScrewPlanner:
             body_center,
             warnings,
             pedicle_width,
+            upper_endplate_normal=analysis.upper_endplate_normal,
             narrow=narrow,
         )
+        for message in candidate.warnings:
+            # The optimiser explains how a trajectory was chosen; the planner
+            # cannot re-derive those notes, and dropping them loses the only
+            # record that a constraint was relaxed.  Worded identically to the
+            # ones rebuilt above, so a repeat is a duplicate, not a new note.
+            if message not in planned.warnings:
+                planned.warnings.append(message)
         planned.metrics["score"] = float(candidate.score)
         planned.metrics["score_components"] = dict(candidate.components)
         return planned, None

@@ -58,6 +58,14 @@ class PlannerConfig:
     mode: str = "optimizer"
     #: Trajectory family, one of :data:`TRAJECTORY_KINDS`.
     trajectory: str = "traditional"
+    #: Aim the trajectory along the upper endplate.  When off, the legacy
+    #: planner keeps the target at the entry height and the optimiser drops both
+    #: its endplate band and its endplate objective, leaving the sagittal angle
+    #: to the other objectives.
+    endplate_parallel: bool = True
+    #: Half-width of the hard band the optimiser holds the endplate angle inside
+    #: while :attr:`endplate_parallel` is on (degrees).
+    endplate_tolerance_deg: float = 10.0
     #: Objective weights consumed by the optimiser (ignored in legacy mode).
     weights: "OptimizerWeights" = field(default_factory=_default_weights)
 
@@ -68,6 +76,8 @@ class PlannerConfig:
             raise ValueError("wall_clearance_mm must be within [0, 3]")
         if not 0.0 <= self.anterior_margin_mm <= 15.0:
             raise ValueError("anterior_margin_mm must be within [0, 15]")
+        if not 0.0 <= self.endplate_tolerance_deg <= 30.0:
+            raise ValueError("endplate_tolerance_deg must be within [0, 30]")
         if not -30.0 <= self.min_convergence_deg < self.max_convergence_deg <= 90.0:
             raise ValueError("convergence limits must satisfy -30 <= min < max <= 90")
         if not 3.0 <= self.narrow_pedicle_mm <= 8.0:
@@ -93,6 +103,16 @@ class PlannerConfig:
         for key in ("mode", "trajectory"):
             if key in kwargs:
                 kwargs[key] = str(kwargs[key])
+        if "endplate_parallel" in kwargs:
+            raw = kwargs["endplate_parallel"]
+            # QSettings returns "true"/"false" strings, and bool("false") is True.
+            kwargs["endplate_parallel"] = (
+                raw.strip().lower() in ("true", "1", "yes")
+                if isinstance(raw, str)
+                else bool(raw)
+            )
+        if "endplate_tolerance_deg" in kwargs:
+            kwargs["endplate_tolerance_deg"] = float(kwargs["endplate_tolerance_deg"])
         if isinstance(kwargs.get("weights"), Mapping):
             from .trajectory_optimizer import OptimizerWeights
 
