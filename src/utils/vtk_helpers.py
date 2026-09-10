@@ -125,6 +125,58 @@ def downsample_vtk_image(
     return shrink.GetOutput()
 
 
+# Volume mapper kinds used by the 3D viewer.
+#   "cpu"   -> vtkFixedPointVolumeRayCastMapper (macOS only; the OpenGL->Metal
+#              translation layer hangs in glFinish() during 3D texture upload)
+#   "smart" -> vtkSmartVolumeMapper (GPU ray cast where a usable context
+#              exists, its own CPU ray caster otherwise)
+MAPPER_KIND_CPU = "cpu"
+MAPPER_KIND_SMART = "smart"
+
+# Tier names produced by src/core/volume_scale.py::assess_volume_scale.
+VOLUME_TIERS = ("small", "medium", "large", "xl")
+
+# Per-mapper downsampling before the volume reaches the mapper. The CPU rows
+# reproduce the pre-GPU behaviour exactly; the smart rows trade far less
+# resolution because the GPU ray caster is not the bottleneck.
+_SHRINK_FACTOR_TABLE = {
+    MAPPER_KIND_CPU: {
+        "small": (2, 2, 1),
+        "medium": (2, 2, 2),
+        "large": (3, 3, 2),
+        "xl": (3, 3, 3),
+    },
+    MAPPER_KIND_SMART: {
+        "small": (1, 1, 1),
+        "medium": (2, 2, 1),
+        "large": (2, 2, 2),
+        "xl": (3, 3, 2),
+    },
+}
+
+
+def shrink_factors(tier: str, mapper_kind: str) -> Tuple[int, int, int]:
+    """Return the (x, y, z) shrink factors for a volume tier and mapper.
+
+    Args:
+        tier: One of ``VOLUME_TIERS`` (as produced by ``assess_volume_scale``).
+        mapper_kind: ``MAPPER_KIND_CPU`` or ``MAPPER_KIND_SMART``.
+
+    Returns:
+        Integer shrink factors for ``downsample_vtk_image``.
+
+    Raises:
+        ValueError: if the tier or the mapper kind is unknown.
+    """
+    by_tier = _SHRINK_FACTOR_TABLE.get(mapper_kind)
+    if by_tier is None:
+        raise ValueError(f"unknown mapper kind: {mapper_kind!r}")
+    factors = by_tier.get(tier)
+    if factors is None:
+        raise ValueError(f"unknown volume tier: {tier!r}")
+    return factors
+
+
 def lps_to_ras_transform(point: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """
     Transform a point from DICOM LPS to VTK RAS coordinate system.
