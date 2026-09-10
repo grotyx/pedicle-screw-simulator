@@ -540,14 +540,16 @@ class TestSegmentationSurfaceSmoothing:
 class TestVolumeMapperPerformanceConfig:
     """Verify vtkFixedPointVolumeRayCastMapper (CPU) config to avoid macOS glFinish hang."""
 
-    def test_source_uses_cpu_mapper(self):
-        """Must use vtkFixedPointVolumeRayCastMapper (CPU) — NOT vtkGPUVolumeRayCastMapper."""
+    def test_source_keeps_the_cpu_mapper_and_never_hard_codes_the_gpu_mapper(self):
+        """macOS keeps vtkFixedPointVolumeRayCastMapper; nobody instantiates
+        vtkGPUVolumeRayCastMapper directly — vtkSmartVolumeMapper owns that
+        choice and falls back to CPU when no context is available."""
         import inspect
 
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "vtkFixedPointVolumeRayCastMapper" in source
-        # GPU mapper must NOT be present — it causes macOS glFinish hang
+        assert "vtkSmartVolumeMapper" in source
         assert "vtkGPUVolumeRayCastMapper" not in source
 
     def test_source_has_auto_adjust_sample_distances(self):
@@ -558,13 +560,14 @@ class TestVolumeMapperPerformanceConfig:
         source = inspect.getsource(viewer_3d)
         assert "SetAutoAdjustSampleDistances" in source
 
-    def test_source_has_interactive_sample_distance(self):
-        """CPU mapper must set InteractiveSampleDistance for responsive interaction."""
+    def test_source_has_interactive_sample_distance_for_the_cpu_mapper(self):
+        """The fixed-point CPU mapper must keep its InteractiveSampleDistance."""
         import inspect
 
         from src.ui import viewer_3d
-        source = inspect.getsource(viewer_3d)
-        assert "SetInteractiveSampleDistance" in source
+        source = inspect.getsource(viewer_3d.create_volume_mapper)
+        assert "SetInteractiveSampleDistance(3.0)" in source
+        assert "SetInteractiveUpdateRate(1.0 / 15.0)" in source
 
     def test_source_has_sample_distance(self):
         """update_volume must set SampleDistance per volume tier."""
@@ -735,6 +738,146 @@ class TestVolumeMapperPerformanceConfig:
         assert "setUpdatesEnabled(True)" not in update_src
         # Phase 1 RE-ENABLES before rendering
         assert "setUpdatesEnabled(True)" in phase1_src
+
+
+class TestVolumeMapperSelection:
+    """Platform decides the mapper; macOS keeps the fixed-point CPU caster."""
+
+    def test_macos_keeps_the_fixed_point_cpu_mapper(self):
+        from src.ui.viewer_3d import select_volume_mapper_kind
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        assert select_volume_mapper_kind("darwin") == MAPPER_KIND_CPU
+
+    def test_windows_and_linux_use_the_smart_mapper(self):
+        from src.ui.viewer_3d import select_volume_mapper_kind
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        assert select_volume_mapper_kind("win32") == MAPPER_KIND_SMART
+        assert select_volume_mapper_kind("linux") == MAPPER_KIND_SMART
+
+    def test_cpu_mapper_configuration_is_byte_for_byte_todays(self):
+        import vtk
+
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        mapper = create_volume_mapper(MAPPER_KIND_CPU)
+        assert isinstance(mapper, vtk.vtkFixedPointVolumeRayCastMapper)
+        assert mapper.GetBlendMode() == vtk.vtkVolumeMapper.COMPOSITE_BLEND
+        assert mapper.GetAutoAdjustSampleDistances() == 0
+        assert mapper.GetLockSampleDistanceToInputSpacing() == 0
+        assert mapper.GetInteractiveSampleDistance() == pytest.approx(3.0)
+
+    def test_smart_mapper_requests_the_default_render_mode(self):
+        import vtk
+
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert isinstance(mapper, vtk.vtkSmartVolumeMapper)
+        assert (
+            mapper.GetRequestedRenderMode()
+            == vtk.vtkSmartVolumeMapper.DefaultRenderMode
+        )
+        assert mapper.GetBlendMode() == vtk.vtkVolumeMapper.COMPOSITE_BLEND
+        assert mapper.GetAutoAdjustSampleDistances() == 0
+        assert mapper.GetInteractiveUpdateRate() == pytest.approx(1.0 / 15.0)
+
+    def test_smart_mapper_has_no_interactive_sample_distance_knob(self):
+        """VTK 9.7 documents why the LOD drives SetSampleDistance directly."""
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert not hasattr(mapper, "SetInteractiveSampleDistance")
+        assert not hasattr(mapper, "LockSampleDistanceToInputSpacingOff")
+        assert hasattr(mapper, "SetSampleDistance")
+
+    def test_unknown_mapper_kind_raises_value_error(self):
+        from src.ui.viewer_3d import create_volume_mapper
+
+        with pytest.raises(ValueError, match="mapper kind"):
+            create_volume_mapper("quantum")
+
+    def test_pipeline_builds_the_cpu_mapper_on_macos(self, monkeypatch):
+        import vtk
+
+        from src.ui import viewer_3d
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        monkeypatch.setattr(viewer_3d.sys, "platform", "darwin")
+        viewer = viewer_3d.Viewer3D.__new__(viewer_3d.Viewer3D)
+        mapper = viewer._build_volume_mapper()
+
+        assert isinstance(mapper, vtk.vtkFixedPointVolumeRayCastMapper)
+        assert viewer._mapper_kind == MAPPER_KIND_CPU
+
+    def test_pipeline_builds_the_smart_mapper_on_windows(self, monkeypatch):
+        import vtk
+
+        from src.ui import viewer_3d
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        monkeypatch.setattr(viewer_3d.sys, "platform", "win32")
+        viewer = viewer_3d.Viewer3D.__new__(viewer_3d.Viewer3D)
+        mapper = viewer._build_volume_mapper()
+
+        assert isinstance(mapper, vtk.vtkSmartVolumeMapper)
+        assert viewer._mapper_kind == MAPPER_KIND_SMART
+
+    def test_setup_pipeline_delegates_to_build_volume_mapper(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._setup_vtk_pipeline)
+        assert "self._build_volume_mapper()" in source
+        assert "vtkFixedPointVolumeRayCastMapper()" not in source
+
+
+class TestRenderModeNaming:
+    """The log must name the mode the mapper actually used."""
+
+    def test_gpu_mode_is_named(self):
+        import vtk
+
+        from src.ui.viewer_3d import describe_render_mode
+
+        fake = SimpleNamespace(
+            GetLastUsedRenderMode=lambda: vtk.vtkSmartVolumeMapper.GPURenderMode
+        )
+        assert describe_render_mode(fake) == "gpu"
+
+    def test_cpu_raycast_mode_is_named(self):
+        import vtk
+
+        from src.ui.viewer_3d import describe_render_mode
+
+        fake = SimpleNamespace(
+            GetLastUsedRenderMode=lambda: vtk.vtkSmartVolumeMapper.RayCastRenderMode
+        )
+        assert describe_render_mode(fake) == "cpu-raycast"
+
+    def test_smart_mapper_before_first_render_is_undefined(self):
+        from src.ui.viewer_3d import create_volume_mapper, describe_render_mode
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert describe_render_mode(mapper) == "undefined"
+
+    def test_fixed_point_mapper_has_no_last_used_mode(self):
+        from src.ui.viewer_3d import create_volume_mapper, describe_render_mode
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        mapper = create_volume_mapper(MAPPER_KIND_CPU)
+        assert describe_render_mode(mapper) == "cpu-fixed-point"
+
+    def test_unrecognised_mode_value_is_reported_not_raised(self):
+        from src.ui.viewer_3d import describe_render_mode
+
+        assert describe_render_mode(SimpleNamespace(GetLastUsedRenderMode=lambda: 99)) == "unknown"
 
 
 class TestTransferFunctionPresets:

@@ -1,8 +1,8 @@
 """
-3D Viewer - CPU Volume Rendering
+3D Viewer - Volume Rendering
 
 Provides:
-- CPU volume rendering (vtkFixedPointVolumeRayCastMapper)
+- Volume rendering (vtkSmartVolumeMapper, or a CPU fallback on macOS)
 - Transfer function presets (Bone, Soft Tissue, CT Angiography, MIP)
 - MPR plane indicators
 - Screw visualization
@@ -10,17 +10,20 @@ Provides:
 - Segmentation overlay
 - Interactive rotation/zoom
 
-Why CPU, not GPU?
-  macOS OpenGL is emulated on Metal. GPU volume mappers trigger glFinish()
-  during 3D texture upload, blocking the main thread for 60-312s. No parameter
-  tuning or downsampling avoids this — the bottleneck is the OpenGL→Metal
-  translation layer itself (AppleMetalOpenGLRenderer).
-  The fixed-point CPU mapper does all ray casting on CPU and only blits
-  a 2D result image to screen (~1 MB), completely bypassing the GPU hang.
+Why the mapper depends on the platform:
+  macOS OpenGL is emulated on Metal. The hardware volume mappers trigger
+  glFinish() during 3D texture upload, blocking the main thread for 60-312s.
+  No parameter tuning or downsampling avoids this - the bottleneck is the
+  OpenGL->Metal translation layer itself (AppleMetalOpenGLRenderer). On macOS
+  the fixed-point CPU mapper therefore does all ray casting on CPU and only
+  blits a 2D result image to screen (~1 MB), completely bypassing the hang.
+  Everywhere else vtkSmartVolumeMapper picks hardware ray casting when a
+  usable context exists and falls back to its own CPU caster otherwise.
 """
 
 import logging
 import math
+import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
@@ -44,7 +47,11 @@ from ..utils.constants import (
     COLOR_SCREW,
     TRANSFER_FUNCTION_PRESETS,
 )
-from ..utils.vtk_helpers import downsample_vtk_image
+from ..utils.vtk_helpers import (
+    MAPPER_KIND_CPU,
+    MAPPER_KIND_SMART,
+    downsample_vtk_image,
+)
 from .click_detector import DoubleClickDetector
 from .vtk_widget import create_vtk_widget
 
@@ -58,6 +65,65 @@ PLANE_INDICATOR_COLORS = {
 }
 PLANE_INDICATOR_OPACITY = 0.14
 PLANE_OUTLINE_OPACITY = 0.48
+
+# vtkSmartVolumeMapper render-mode enum -> log-friendly name.
+RENDER_MODE_NAMES = {
+    0: "default",
+    1: "cpu-raycast",
+    2: "gpu",
+    3: "ospray",
+    4: "anari",
+    5: "undefined",
+    6: "invalid",
+}
+
+
+def select_volume_mapper_kind(platform: str) -> str:
+    """Pick the volume mapper kind for a ``sys.platform`` string.
+
+    macOS keeps the fixed-point CPU ray caster (see the module docstring for
+    the Metal glFinish() hang); every other platform gets the smart mapper.
+    """
+    return MAPPER_KIND_CPU if str(platform) == "darwin" else MAPPER_KIND_SMART
+
+
+def create_volume_mapper(kind: str) -> vtk.vtkVolumeMapper:
+    """Build and configure the volume mapper for ``kind``.
+
+    Raises:
+        ValueError: if ``kind`` is not a known mapper kind.
+    """
+    if kind == MAPPER_KIND_CPU:
+        mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+        mapper.SetBlendModeToComposite()
+        mapper.SetAutoAdjustSampleDistances(False)
+        mapper.LockSampleDistanceToInputSpacingOff()
+        mapper.SetInteractiveSampleDistance(3.0)
+        return mapper
+    if kind == MAPPER_KIND_SMART:
+        # VTK 9.7's vtkSmartVolumeMapper exposes neither
+        # SetInteractiveSampleDistance nor LockSampleDistanceToInputSpacing;
+        # the two-phase LOD in _on_interaction_start / _execute_phase2 drives
+        # SetSampleDistance directly instead, which both mappers support.
+        mapper = vtk.vtkSmartVolumeMapper()
+        mapper.SetRequestedRenderModeToDefault()
+        mapper.SetBlendModeToComposite()
+        mapper.SetAutoAdjustSampleDistances(False)
+        mapper.SetInteractiveUpdateRate(1.0 / 15.0)
+        return mapper
+    raise ValueError(f"unknown mapper kind: {kind!r}")
+
+
+def describe_render_mode(mapper) -> str:
+    """Name the render mode a mapper used on its last render.
+
+    vtkFixedPointVolumeRayCastMapper has no GetLastUsedRenderMode(); it is
+    always a CPU fixed-point cast, so say so instead of failing.
+    """
+    getter = getattr(mapper, "GetLastUsedRenderMode", None)
+    if getter is None:
+        return "cpu-fixed-point"
+    return RENDER_MODE_NAMES.get(int(getter()), "unknown")
 
 
 @dataclass
@@ -289,7 +355,8 @@ class Viewer3D(QWidget):
 
         # Volume rendering pipeline
         self._volume: Optional[vtk.vtkVolume] = None
-        self._volume_mapper: Optional[vtk.vtkFixedPointVolumeRayCastMapper] = None
+        self._volume_mapper: Optional[vtk.vtkVolumeMapper] = None
+        self._mapper_kind: str = select_volume_mapper_kind(sys.platform)
         self._volume_property: Optional[vtk.vtkVolumeProperty] = None
         self._color_tf: Optional[vtk.vtkColorTransferFunction] = None
         self._opacity_tf: Optional[vtk.vtkPiecewiseFunction] = None
@@ -488,9 +555,21 @@ class Viewer3D(QWidget):
         layout.addWidget(self.label)
         layout.addWidget(self.viewport_container, stretch=1)
 
+    def _build_volume_mapper(self) -> vtk.vtkVolumeMapper:
+        """Select and configure the volume mapper for the current platform."""
+        self._mapper_kind = select_volume_mapper_kind(sys.platform)
+        mapper = create_volume_mapper(self._mapper_kind)
+        logger.info(
+            "_setup_vtk_pipeline: volume mapper=%s (kind=%s, platform=%s)",
+            type(mapper).__name__,
+            self._mapper_kind,
+            sys.platform,
+        )
+        return mapper
+
     def _setup_vtk_pipeline(self):
         """Setup the VTK CPU volume rendering pipeline."""
-        logger.info("_setup_vtk_pipeline: initializing CPU volume renderer")
+        logger.info("_setup_vtk_pipeline: initializing volume renderer")
         # Flat neutral background keeps anatomy and implant colors dominant.
         self._renderer = vtk.vtkRenderer()
         self._renderer.SetBackground(*VIEWPORT_BACKGROUND)
@@ -517,12 +596,7 @@ class Viewer3D(QWidget):
         interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
         interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
 
-        # CPU volume mapper — bypasses macOS OpenGL→Metal glFinish() hang.
-        self._volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
-        self._volume_mapper.SetBlendModeToComposite()
-        self._volume_mapper.SetAutoAdjustSampleDistances(False)
-        self._volume_mapper.LockSampleDistanceToInputSpacingOff()
-        self._volume_mapper.SetInteractiveSampleDistance(3.0)
+        self._volume_mapper = self._build_volume_mapper()
 
         self._color_tf = vtk.vtkColorTransferFunction()
         self._opacity_tf = vtk.vtkPiecewiseFunction()
