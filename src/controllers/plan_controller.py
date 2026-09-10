@@ -53,6 +53,11 @@ class PlanController:
                 screws=screws,
                 measurements=measurements,
                 measurement_planes=planes,
+                metadata={
+                    "mask_refinement": (
+                        self._window._seg_ctrl.mask_refinement_metadata()
+                    )
+                },
             )
             save_plan_json(path, payload)
             self._window.statusbar.showMessage(

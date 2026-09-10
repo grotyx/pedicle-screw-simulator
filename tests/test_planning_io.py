@@ -104,6 +104,43 @@ class TestPlanningIO:
             return
         raise AssertionError("Expected ValueError for invalid plane")
 
+    def test_metadata_round_trips_through_the_plan_file(self, tmp_path):
+        payload = serialize_plan(
+            series_id="SERIES-META",
+            screws=[],
+            measurements=[],
+            metadata={"mask_refinement": {"enabled": True, "ct_guided": True}},
+        )
+        path = tmp_path / "plan.json"
+        save_plan_json(str(path), payload)
+
+        parsed = deserialize_plan(load_plan_json(str(path)))
+
+        assert parsed["metadata"] == {
+            "mask_refinement": {"enabled": True, "ct_guided": True}
+        }
+
+    def test_metadata_defaults_to_an_empty_object(self):
+        payload = serialize_plan(series_id="S", screws=[], measurements=[])
+
+        assert payload["metadata"] == {}
+        assert deserialize_plan(payload)["metadata"] == {}
+
+    def test_a_v3_plan_without_metadata_still_loads(self):
+        """Every plan saved before this change has no metadata key at all."""
+        parsed = deserialize_plan(
+            {"version": 3, "series_id": "S", "screws": [], "measurements": []}
+        )
+
+        assert parsed["metadata"] == {}
+
+    def test_non_object_metadata_is_rejected(self):
+        with pytest.raises(ValueError, match="metadata"):
+            deserialize_plan(
+                {"version": 3, "series_id": "S", "screws": [], "measurements": [],
+                 "metadata": ["not", "an", "object"]}
+            )
+
 
 def test_v2_roundtrip_preserves_metadata(tmp_path):
     from src.models.screw import Screw

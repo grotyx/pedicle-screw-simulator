@@ -114,6 +114,11 @@ class SegmentationController:
         self._heartbeat_timer: Optional[QTimer] = None
         self._last_segmentation_mask_path: Optional[str] = None
         self._last_segmentation_method: str = "totalsegmentator"
+        # How the mask now in use was produced. `_last_raw_mask_path` is set
+        # only when `mask_path` points at a refined copy, so its presence is
+        # the single fact "refinement ran".
+        self._last_raw_mask_path: Optional[str] = None
+        self._last_refinement_notes: list[str] = []
         self._segmentation_label_map: Dict[int, str] = {}
         self._updating_segmentation_label_ui = False
         self._vertebrae_isolated: bool = False
@@ -385,6 +390,10 @@ class SegmentationController:
             # `run_planning` plan screws on a mask with no vertebra labels.
             self._last_segmentation_mask_path = result.mask_path
             self._last_segmentation_method = result.method
+            self._last_raw_mask_path = getattr(result, "raw_mask_path", None)
+            self._last_refinement_notes = list(
+                getattr(result, "refinement_notes", None) or []
+            )
             self._window.statusbar.showMessage("Resampling pedicle mask…")
             QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -542,6 +551,20 @@ class SegmentationController:
             # The model ran but its output was unusable (missing label / read error).
             return " · pedicle model unavailable: mask could not be read"
         return ""
+
+    def mask_refinement_metadata(self) -> Dict[str, bool]:
+        """Plan-file record of how the mask behind these screws was produced.
+
+        Read off the same two result fields the status label uses, so a plan can
+        never claim a CT-guided mask the app did not actually build.
+        """
+        from src.core.mask_refinement import CT_GUIDED_NOTE
+
+        enabled = self._last_raw_mask_path is not None
+        return {
+            "enabled": enabled,
+            "ct_guided": enabled and CT_GUIDED_NOTE in self._last_refinement_notes,
+        }
 
     def _on_error(self, error: str):
         """Handle segmentation failure."""
@@ -828,6 +851,8 @@ class SegmentationController:
             self.restore_full_volume()
         self._last_segmentation_mask_path = None
         self._last_segmentation_method = "totalsegmentator"
+        self._last_raw_mask_path = None
+        self._last_refinement_notes = []
         self._last_pedicle_mask = None
         self._last_vtk_mask = None
         self._detected_vertebra_labels = []

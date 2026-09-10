@@ -168,3 +168,30 @@ def test_the_screw_list_row_reflects_the_regraded_screw(
 
     assert window.screw_list_widget.count() == 1
     assert "Grade N/A" in window.screw_list_widget.item(0).text()
+
+
+def test_saved_plans_record_the_mask_refinement_settings(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """A plan is only as good as the mask its screws were measured against."""
+    from src.core.mask_refinement import CT_GUIDED_NOTE
+
+    window = ui_main_window
+    _load_volume(window)
+    window._seg_ctrl._last_raw_mask_path = "raw.nii.gz"
+    window._seg_ctrl._last_refinement_notes = [CT_GUIDED_NOTE]
+
+    path = tmp_path / "saved.json"
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(path), "JSON Files (*.json)")),
+    )
+
+    window._plan_ctrl.save_dialog()
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["metadata"]["mask_refinement"] == {
+        "enabled": True,
+        "ct_guided": True,
+    }

@@ -180,8 +180,15 @@ def serialize_plan(
     screws: List[Screw],
     measurements: List[Measurement],
     measurement_planes: Optional[List[Optional[str]]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build plan payload dictionary for JSON persistence."""
+    """Build plan payload dictionary for JSON persistence.
+
+    ``metadata`` is an additive, free-form block describing how the plan was
+    produced (currently the mask-refinement settings). It never affects how
+    screws or measurements are read back, so a reader that does not know a key
+    simply ignores it and the plan version stays at 3.
+    """
     planes = measurement_planes
     if planes is None:
         planes = [None] * len(measurements)
@@ -201,6 +208,7 @@ def serialize_plan(
         "series_id": series_id,
         "screws": [screw_to_dict(screw) for screw in screws],
         "measurements": measurement_items,
+        "metadata": dict(metadata or {}),
     }
 
 
@@ -215,6 +223,10 @@ def deserialize_plan(
     measurement_items = payload.get("measurements", [])
     if not isinstance(screw_items, list) or not isinstance(measurement_items, list):
         raise ValueError("Invalid plan payload: screws/measurements must be lists")
+
+    raw_metadata = payload.get("metadata", {})
+    if raw_metadata is not None and not isinstance(raw_metadata, dict):
+        raise ValueError("Invalid plan payload: metadata must be an object")
 
     screws = [screw_from_dict(item) for item in screw_items]
     measurements: List[Measurement] = []
@@ -233,6 +245,7 @@ def deserialize_plan(
         "screws": screws,
         "measurements": measurements,
         "measurement_planes": planes,
+        "metadata": dict(raw_metadata or {}),
     }
 
 

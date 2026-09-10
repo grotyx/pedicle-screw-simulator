@@ -436,3 +436,98 @@ def test_grading_is_skipped_when_no_ct_is_loaded(ui_main_window, tmp_path):
     ctrl = ui_main_window._seg_ctrl
     mask = sitk.Cast(_create_test_image() > 0, sitk.sitkUInt8)
     assert ctrl._build_grader(mask) is None
+
+
+# ---------------------------------------------------------------------------
+# W2 -- the plan file records how the mask behind its screws was produced
+# ---------------------------------------------------------------------------
+
+
+def _refined_result(mask_path, notes, raw_mask_path="raw.nii.gz"):
+    return SegmentationRunResult(
+        success=True,
+        method="totalsegmentator",
+        mask_path=str(mask_path),
+        message="ok",
+        raw_mask_path=raw_mask_path,
+        refinement_notes=list(notes),
+    )
+
+
+def test_mask_refinement_metadata_is_empty_before_any_run(ui_main_window):
+    ctrl = ui_main_window._seg_ctrl
+
+    assert ctrl.mask_refinement_metadata() == {"enabled": False, "ct_guided": False}
+
+
+def test_mask_refinement_metadata_reports_a_ct_guided_run(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from src.core.mask_refinement import CT_GUIDED_NOTE
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-META", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "refined.nii.gz"
+    _write_mask(image, mask_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+
+    ctrl._on_finished(_refined_result(mask_path, [CT_GUIDED_NOTE]))
+
+    assert ctrl.mask_refinement_metadata() == {"enabled": True, "ct_guided": True}
+
+
+def test_mask_refinement_metadata_reports_an_antialias_only_run(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from src.core.mask_refinement import ANTIALIAS_ONLY_NOTE, NO_CT_NOTE
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-AA", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "aa.nii.gz"
+    _write_mask(image, mask_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+
+    ctrl._on_finished(_refined_result(mask_path, [ANTIALIAS_ONLY_NOTE, NO_CT_NOTE]))
+
+    assert ctrl.mask_refinement_metadata() == {"enabled": True, "ct_guided": False}
+
+
+def test_reset_state_forgets_the_previous_refinement(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from src.core.mask_refinement import CT_GUIDED_NOTE
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-RESET", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "refined.nii.gz"
+    _write_mask(image, mask_path)
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    ctrl._on_finished(_refined_result(mask_path, [CT_GUIDED_NOTE]))
+
+    ctrl.reset_state()
+
+    assert ctrl.mask_refinement_metadata() == {"enabled": False, "ct_guided": False}
