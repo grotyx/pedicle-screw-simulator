@@ -156,20 +156,24 @@ def _boundary_band(
 
 
 def _fill_and_largest_component(binary: np.ndarray) -> np.ndarray:
-    """Close in-slice holes, then keep only the largest 3D component.
+    """Fill fully enclosed cavities, then keep only the largest 3D component.
 
-    Holes are closed per axial slice rather than in 3D so that the speckle a
-    CT threshold punches into the band closes without the label having to be
-    sealed along z. Be aware of the cost of that choice: a canal the neural
-    arch rings shut inside a single slice is closed too, whereas a 3D fill
-    would leave it alone (within a padded crop the canal reaches the border
-    through the background above and below the vertebra, so it is not a
-    3D hole at all). Only a canal left open in-plane survives this step.
+    The fill is 3D, and that is the whole point. Every crop here is padded by
+    the band width plus 3 sigma, so the spinal canal is a tube open at both
+    ends of the crop: its background runs out past the top and bottom of the
+    vertebra to the crop border, which means it is not a 3D hole and is left
+    alone. What does get filled is a cavity with no route out, which is what
+    the speckle a HU threshold punches into the band looks like.
+
+    Filling per axial slice instead would pack the canal on every slice the
+    neural arch rings shut. This mask feeds the canal-breach grader, so a
+    vertebra label containing the canal is exactly the input that makes a
+    breach look like it is still inside bone.
     """
-    filled = binary.copy()
-    for index in range(filled.shape[0]):
-        if filled[index].any():
-            filled[index] = ndi.binary_fill_holes(filled[index])
+    # A vertebra cut by the volume edge is safe for the same reason: the canal
+    # is still open at its other end. Only a tube sealed at BOTH ends inside
+    # the crop would fill, and no real vertebra is.
+    filled = ndi.binary_fill_holes(binary)
     labelled, count = ndi.label(filled)
     if count <= 1:
         return filled

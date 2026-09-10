@@ -414,29 +414,43 @@ def test_a_zero_band_leaves_the_antialiased_boundary_alone():
     )
 
 
-# --- _fill_and_largest_component: the canal and the speck -------------------
+# --- _fill_and_largest_component: the canal, the cavity and the speck -------
 
-def canal_phantom():
-    """A C-shaped tube: a ring with a slot cut through it, extruded along z.
+TUBE_Z = slice(8, 40)                   # the tube spans well inside the crop
 
-    The slot keeps the canal open inside every axial slice, which is what the
-    per-slice hole fill needs in order to leave it alone.
+
+def canal_phantom(slot=False):
+    """A tube extruded along z, standing in for a vertebra and its canal.
+
+    With ``slot`` the ring is cut open to +x, so the canal is open inside
+    every axial slice as well as at both ends. Without it the ring is closed
+    in plane and the canal is a hole in 2D but not in 3D -- which is the real
+    geometry of a neural arch, and the case a per-slice fill would pack.
     """
     zz, yy, xx = np.ogrid[: FINE_SHAPE[0], : FINE_SHAPE[1], : FINE_SHAPE[2]]
     radius = (yy - 36) ** 2 + (xx - 36) ** 2
     ring = (radius >= 8 ** 2) & (radius <= 14 ** 2)
     tube = np.broadcast_to(ring, FINE_SHAPE).copy()
-    tube[:, 34:39, 36:] = False                     # the slot, opening to +x
+    if slot:
+        tube[:, 34:39, 36:] = False                 # the slot, opening to +x
     mask = np.zeros(FINE_SHAPE, np.uint8)
-    mask[8:40][tube[8:40]] = BODY_LABEL
+    mask[TUBE_Z][tube[TUBE_Z]] = BODY_LABEL
     canal = np.zeros(FINE_SHAPE, bool)
-    canal[8:40] = np.broadcast_to(radius < 8 ** 2, FINE_SHAPE)[8:40]
+    canal[TUBE_Z] = np.broadcast_to(radius < 8 ** 2, FINE_SHAPE)[TUBE_Z]
     return mask, canal
 
 
-def test_the_canal_is_not_packed_by_the_hole_fill():
-    """A canal open in-plane is soft tissue and must stay outside the label."""
-    mask, canal = canal_phantom()
+@pytest.mark.parametrize("slot", [False, True], ids=["closed ring", "open ring"])
+def test_the_canal_is_never_packed_by_the_hole_fill(slot):
+    """The canal is soft tissue and must stay background.
+
+    The closed ring is the one that matters: its canal is enclosed inside
+    every axial slice, so a per-slice fill packs all of it (measured: 6176 of
+    6176 voxels, a 46 % volume gain). In 3D it is a tube open at both ends of
+    the padded crop, so it is not a hole and survives. This mask feeds the
+    canal-breach grader, so packing it would hide breaches.
+    """
+    mask, canal = canal_phantom(slot=slot)
     ct = np.where(mask > 0, BONE_HU, SOFT_HU).astype(np.int16)
 
     result = refine_vertebra_mask(as_image(mask), as_image(ct))
@@ -444,7 +458,29 @@ def test_the_canal_is_not_packed_by_the_hole_fill():
 
     assert result.per_label[BODY_LABEL].ct_guided_applied is True
     assert int((out & canal).sum()) == 0
-    assert result.per_label[BODY_LABEL].ratio >= 0.90
+    assert result.per_label[BODY_LABEL].ratio >= 0.95
+
+
+def test_a_fully_enclosed_cavity_in_the_band_is_filled():
+    """The other side of the same coin: a cavity with no route out closes.
+
+    A HU threshold speckles the band with holes like this one. Bone runs two
+    voxels past the label on +x, so the soft-tissue pocket at x=48 sits inside
+    the band with candidate voxels on all six sides and no path to the border.
+    """
+    mask = np.zeros(FINE_SHAPE, np.uint8)
+    mask[6:42, 24:48, 24:48] = BODY_LABEL
+    bone = np.zeros(FINE_SHAPE, bool)
+    bone[6:42, 24:48, 24:50] = True             # +2 voxels of cortex on +x
+    ct = np.where(bone, BONE_HU, SOFT_HU).astype(np.int16)
+    cavity = (slice(23, 26), slice(35, 38), slice(48, 49))
+    ct[cavity] = SOFT_HU
+
+    result = refine_vertebra_mask(as_image(mask), as_image(ct))
+    out = label_of(result, BODY_LABEL)
+
+    assert result.per_label[BODY_LABEL].ct_guided_applied is True
+    assert out[cavity].all()
 
 
 def test_a_disconnected_bone_speck_in_the_band_is_dropped():
