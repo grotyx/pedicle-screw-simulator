@@ -284,7 +284,7 @@ def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
         )
 
     assert table.count() == 2
-    assert table.rowText(0) == "1 · L3 · Left · 6.5 · 40.0 · Grade A · Manual"
+    assert table.rowText(0) == "1 · L3 · Left · -- · 6.5 · 40.0 · Grade A · Manual"
     assert "Grade D" in table.rowText(1)
 
     table.setCurrentRow(1)
@@ -367,7 +367,7 @@ def test_screw_plan_table_updates_a_row_in_place(ui_main_window):
     )
 
     assert table.count() == 1
-    assert table.rowText(0) == "1 · L5 · Left · 7.5 · 50.0 · Grade C · Manual"
+    assert table.rowText(0) == "1 · L5 · Left · -- · 7.5 · 50.0 · Grade C · Manual"
 
 
 def _grid_position(window, widget):
@@ -568,10 +568,11 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
         table.horizontalHeaderItem(column).text()
         for column in range(table.columnCount())
     ]
-    assert titles == ["#", "Level", "Side", "Ø", "Len", "Grade", "Source"]
+    assert titles == ["#", "Level", "Side", "Pedicle", "Ø", "Len", "Grade", "Source"]
 
-    assert table.horizontalHeaderItem(3).toolTip() == "Screw diameter (mm)"
-    assert table.horizontalHeaderItem(4).toolTip() == "Screw length (mm)"
+    assert table.horizontalHeaderItem(3).toolTip() == "Measured pedicle width (mm)"
+    assert table.horizontalHeaderItem(4).toolTip() == "Screw diameter (mm)"
+    assert table.horizontalHeaderItem(5).toolTip() == "Screw length (mm)"
     assert all(
         table.horizontalHeaderItem(column).toolTip()
         for column in range(table.columnCount())
@@ -579,13 +580,14 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
 
     fit = QHeaderView.ResizeMode.ResizeToContents
     stretch = QHeaderView.ResizeMode.Stretch
-    assert [header.sectionResizeMode(c) for c in (0, 3, 4, GRADE_COLUMN)] == [
+    assert [header.sectionResizeMode(c) for c in (0, 3, 4, 5, GRADE_COLUMN)] == [
+        fit,
         fit,
         fit,
         fit,
         fit,
     ]
-    assert [header.sectionResizeMode(c) for c in (1, 2, 6)] == [
+    assert [header.sectionResizeMode(c) for c in (1, 2, 7)] == [
         stretch,
         stretch,
         stretch,
@@ -615,4 +617,126 @@ def test_grade_chip_column_is_wide_enough_for_its_text(ui_main_window):
     text_width = table.fontMetrics().horizontalAdvance(chip.text())
     assert table.columnWidth(GRADE_COLUMN) >= text_width
     # The values themselves are unchanged by the shorter headers.
-    assert table.rowText(0) == "1 · L4 · Left · 6.5 · 40.0 · Grade B · Manual"
+    assert table.rowText(0) == "1 · L4 · Left · -- · 6.5 · 40.0 · Grade B · Manual"
+
+
+def test_narrow_screws_render_red_in_3d_and_mpr(ui_main_window):
+    from src.controllers.tool_controller import screw_display_color
+    from src.models.screw import Screw
+    from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
+
+    plain = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0))
+    narrow = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+
+    assert screw_display_color(plain) == pytest.approx(
+        tuple(v / 255.0 for v in COLOR_SCREW)
+    )
+    assert screw_display_color(narrow) == pytest.approx(
+        tuple(v / 255.0 for v in COLOR_SCREW_BREACH)
+    )
+    # A medial breach on a pedicle that is not narrow keeps the normal colour;
+    # the grade chip and the warning carry that finding.
+    breaching = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        metrics={"narrow_pedicle": False, "medial_breach_mm": 1.2},
+    )
+    assert screw_display_color(breaching) == pytest.approx(
+        tuple(v / 255.0 for v in COLOR_SCREW)
+    )
+
+
+def test_screw_plan_table_shows_the_pedicle_width_and_chips_the_narrow_ones(
+    ui_main_window,
+):
+    from PyQt6.QtGui import QColor
+
+    from src.models.screw import Screw
+    from src.ui.screw_plan_table import PEDICLE_COLUMN
+    from src.ui.styles import get_theme
+
+    table = ui_main_window.screw_list_widget
+    table.addScrewRow(
+        Screw(
+            entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0),
+            diameter=4.0, vertebra_level="T11", side="left", grade="B",
+            metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+        ),
+        0,
+    )
+    table.addScrewRow(
+        Screw(
+            entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0),
+            diameter=6.5, vertebra_level="L4", side="right", grade="A",
+            metrics={"narrow_pedicle": False, "pedicle_width_mm": 9.2},
+        ),
+        1,
+    )
+
+    assert table.item(0, PEDICLE_COLUMN).text() == "4.5 mm"
+    assert table.item(1, PEDICLE_COLUMN).text() == "9.2 mm"
+    palette = get_theme("light")
+    ui_main_window.apply_theme("light")
+    assert table.item(0, PEDICLE_COLUMN).background().color() == QColor(
+        palette["grade_d"]
+    )
+    assert table.item(0, PEDICLE_COLUMN).foreground().color() == QColor(
+        palette["grade_text"]
+    )
+    assert table.item(1, PEDICLE_COLUMN).background().color() != QColor(
+        palette["grade_d"]
+    )
+    assert table.rowText(0) == "1 · T11 · Left · 4.5 mm · 4.0 · 40.0 · Grade B · Manual"
+
+
+def test_cockpit_shows_the_pedicle_row_and_the_narrow_legend(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    assert "narrow pedicle" in window.screw_narrow_legend.text().lower()
+
+    narrow = Screw(
+        entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 0.0),
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+    index = window._tool_ctrl.add_existing_screw(narrow, select=True)
+    window.update_selected_screw_inspector(index, narrow, False)
+    assert window.selected_screw_pedicle.text() == "4.5 mm · narrow"
+    assert "color:" in window.selected_screw_pedicle.styleSheet()
+
+    plain = Screw(
+        entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 0.0),
+        metrics={"pedicle_width_mm": 9.2},
+    )
+    window.update_selected_screw_inspector(index, plain, False)
+    assert window.selected_screw_pedicle.text() == "9.2 mm"
+    assert window.selected_screw_pedicle.styleSheet() == ""
+
+    window.update_selected_screw_inspector(-1, None, False)
+    assert window.selected_screw_pedicle.text() == "--"
+
+
+def test_the_narrow_warning_is_listed_first_in_the_cockpit(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 0.0),
+        grade="B", breach_distance=1.5,
+        warnings=[
+            "Narrow pedicle (4.5 mm): 4.0 mm screw is 89 % of the width — "
+            "verify the measurement or accept a lateral (in-out-in) breach",
+            "Breach distance 1.5 mm (grade B)",
+        ],
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+
+    window.update_selected_screw_inspector(index, screw, False)
+
+    lines = window.selected_screw_warning.text().splitlines()
+    assert lines[0].startswith("Narrow pedicle (4.5 mm)")

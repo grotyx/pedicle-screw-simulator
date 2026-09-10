@@ -45,6 +45,7 @@ from src.controllers.screw_mpr_controller import (
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
 from src.controllers.view_controller import ViewController
+from src.utils.screw_metrics import is_narrow_pedicle, pedicle_row_text
 
 from .. import (
     __academic_affiliation__,
@@ -497,6 +498,9 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Trajectory"), 9, 0)
         self.selected_screw_trajectory = QLabel("—")
         selected_screw_details.addWidget(self.selected_screw_trajectory, 9, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Pedicle"), 10, 0)
+        self.selected_screw_pedicle = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_pedicle, 10, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         cockpit_layout.addWidget(self.selected_screw_metrics)
 
@@ -507,6 +511,13 @@ class MainWindow(QMainWindow):
         self.selected_screw_warning.setMinimumHeight(42)
         self.selected_screw_warning.setObjectName("selectedScrewWarning")
         cockpit_layout.addWidget(self.selected_screw_warning)
+
+        self.screw_narrow_legend = QLabel(
+            "Red screw = narrow pedicle: smallest implant, medial wall protected."
+        )
+        self.screw_narrow_legend.setWordWrap(True)
+        self.screw_narrow_legend.setObjectName("screwNarrowLegend")
+        cockpit_layout.addWidget(self.screw_narrow_legend)
 
         self.screw_drag_hint = QLabel(
             "Double-click head, tip, or shaft; move the pointer; double-click again to finish."
@@ -2112,9 +2123,11 @@ class MainWindow(QMainWindow):
             self.selected_screw_wall,
             self.selected_screw_facet,
             self.selected_screw_heary,
+            self.selected_screw_pedicle,
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
+        self.selected_screw_pedicle.setStyleSheet("")
 
     def _update_screw_metric_rows(self, metrics: dict) -> None:
         """Fill the clinical metric rows from a screw's metric bundle."""
@@ -2151,6 +2164,13 @@ class MainWindow(QMainWindow):
         heary = str(metrics.get("heary_direction") or "").strip()
         if heary:
             self.selected_screw_heary.setText(heary)
+
+        self.selected_screw_pedicle.setText(pedicle_row_text(metrics))
+        self.selected_screw_pedicle.setStyleSheet(
+            f"color: {THEMES[self._theme_name]['danger']};"
+            if is_narrow_pedicle(metrics)
+            else ""
+        )
 
     def update_selected_screw_inspector(
         self,
@@ -2197,6 +2217,7 @@ class MainWindow(QMainWindow):
         if not identity:
             identity = f"Screw #{index + 1}"
 
+        from src.core.auto_screw_planner import NARROW_PEDICLE_WARNING_PREFIX
         from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
         convergence = convergence_angle_deg(screw.entry_point, screw.target_point, screw.side or None)
         craniocaudal = craniocaudal_angle_deg(screw.entry_point, screw.target_point)
@@ -2241,6 +2262,9 @@ class MainWindow(QMainWindow):
             lines.insert(
                 0, "No estimated breach — CT review is still required."
             )
+        # The narrow note explains why the screw is the size it is, so it reads
+        # before the breach line rather than after it.
+        lines.sort(key=lambda line: not line.startswith(NARROW_PEDICLE_WARNING_PREFIX))
         self.selected_screw_warning.setText("\n".join(lines))
 
     def update_vertebra_level_checks(self, detected_labels: list) -> None:

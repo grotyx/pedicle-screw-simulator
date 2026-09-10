@@ -11,6 +11,11 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from ..utils.screw_metrics import (
+    is_narrow_pedicle,
+    pedicle_cell_text,
+    screw_metrics,
+)
 from .styles import DEFAULT_THEME, get_theme
 
 #: Column headers, in display order. Kept short so they survive the default
@@ -19,6 +24,7 @@ COLUMN_TITLES = (
     "#",
     "Level",
     "Side",
+    "Pedicle",
     "Ø",
     "Len",
     "Grade",
@@ -30,21 +36,25 @@ COLUMN_TOOLTIPS = (
     "Screw number",
     "Vertebral level",
     "Side (left / right)",
+    "Measured pedicle width (mm)",
     "Screw diameter (mm)",
     "Screw length (mm)",
     "Gertzbein-Robbins breach grade",
     "Auto-planned or manually placed",
 )
 
-#: Index of the column that carries the coloured grade chip.
-GRADE_COLUMN = 5
+#: Index of the column that carries the coloured narrow-pedicle chip.
+PEDICLE_COLUMN = 3
 
-#: Columns sized to their content: the number, the two measurements and the
-#: grade chip, which must never elide to "Gr...".
-_FIT_COLUMNS = (0, 3, 4, GRADE_COLUMN)
+#: Index of the column that carries the coloured grade chip.
+GRADE_COLUMN = 6
+
+#: Columns sized to their content: the number, the three measurements and the
+#: two chips, neither of which may elide.
+_FIT_COLUMNS = (0, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN)
 
 #: Columns that absorb the leftover width.
-_STRETCH_COLUMNS = (1, 2, 6)
+_STRETCH_COLUMNS = (1, 2, 7)
 
 #: Floor under every column. Qt applies one minimum to the whole header, so
 #: this stays modest -- the grade chip gets its full width from
@@ -52,7 +62,7 @@ _STRETCH_COLUMNS = (1, 2, 6)
 MINIMUM_SECTION_WIDTH_PX = 32
 
 #: Columns whose numeric content reads better right-aligned.
-_NUMERIC_COLUMNS = (0, 3, 4)
+_NUMERIC_COLUMNS = (0, 4, 5)
 
 #: Gertzbein grade -> palette token. D and E share the danger colour; anything
 #: else (including "N/A" before segmentation has run) falls back to grey.
@@ -66,7 +76,7 @@ GRADE_TOKENS = {
 
 
 def screw_row_cells(index: int, screw) -> tuple[str, ...]:
-    """Return the seven display strings for one screw, in column order."""
+    """Return the eight display strings for one screw, in column order."""
     level = getattr(screw, "vertebra_level", None) or "Manual"
     side_value = getattr(screw, "side", None)
     side = str(side_value).capitalize() if side_value else "--"
@@ -79,6 +89,7 @@ def screw_row_cells(index: int, screw) -> tuple[str, ...]:
         str(index + 1),
         str(level),
         side,
+        pedicle_cell_text(screw_metrics(screw)),
         f"{float(screw.diameter):.1f}",
         f"{float(screw.length):.1f}",
         f"Grade {screw.grade}",
@@ -197,12 +208,13 @@ class ScrewPlanTable(QTableWidget):
             )
 
     def apply_theme(self, theme_name: str) -> None:
-        """Repaint every grade chip after a palette change."""
+        """Repaint every grade and narrow-pedicle chip after a palette change."""
         self._theme_name = str(theme_name)
         for row in range(self.rowCount()):
             chip = self.item(row, GRADE_COLUMN)
             if chip is not None:
                 self._paint_grade_chip(row, self._grade_of_row(row))
+                self._paint_pedicle_chip(row, self._narrow_of_row(row))
 
     # -- Internals ---------------------------------------------------------
 
@@ -230,6 +242,34 @@ class ScrewPlanTable(QTableWidget):
                 )
             self.setItem(row, column, item)
         self._paint_grade_chip(row, str(screw.grade))
+        self._paint_pedicle_chip(row, is_narrow_pedicle(screw_metrics(screw)))
+
+    def _paint_pedicle_chip(self, row: int, narrow: bool) -> None:
+        """Chip a narrow pedicle in the danger colour; leave the rest plain.
+
+        The flag is stashed on the item so :meth:`apply_theme` can repaint the
+        chip without the screw, exactly as the grade chip is repainted from its
+        own text.
+        """
+        chip = self.item(row, PEDICLE_COLUMN)
+        if chip is None:
+            return
+        chip.setData(Qt.ItemDataRole.UserRole, bool(narrow))
+        if not narrow:
+            chip.setData(Qt.ItemDataRole.BackgroundRole, None)
+            chip.setData(Qt.ItemDataRole.ForegroundRole, None)
+            chip.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            return
+        palette = get_theme(self._theme_name)
+        chip.setBackground(QColor(palette["grade_d"]))
+        chip.setForeground(QColor(palette["grade_text"]))
+        chip.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def _narrow_of_row(self, row: int) -> bool:
+        chip = self.item(row, PEDICLE_COLUMN)
+        return bool(chip is not None and chip.data(Qt.ItemDataRole.UserRole))
 
     def _paint_grade_chip(self, row: int, grade: str) -> None:
         chip = self.item(row, GRADE_COLUMN)

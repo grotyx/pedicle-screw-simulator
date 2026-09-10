@@ -1969,6 +1969,7 @@ def test_inspector_metric_rows_default_to_dashes(ui_main_window):
     assert window.selected_screw_wall.text() == "--"
     assert window.selected_screw_facet.text() == "--"
     assert window.selected_screw_heary.text() == "--"
+    assert window.selected_screw_pedicle.text() == "--"
 
     window.update_selected_screw_inspector(-1, None, False)
 
@@ -1976,6 +1977,7 @@ def test_inspector_metric_rows_default_to_dashes(ui_main_window):
     assert window.selected_screw_wall.text() == "--"
     assert window.selected_screw_facet.text() == "--"
     assert window.selected_screw_heary.text() == "--"
+    assert window.selected_screw_pedicle.text() == "--"
 
 
 # ---------------------------------------------------------------------------
