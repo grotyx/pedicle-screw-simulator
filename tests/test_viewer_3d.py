@@ -939,5 +939,122 @@ class TestTransferFunctionPresets:
         assert viewer._opacity_tf.GetValue(hu) == pytest.approx(base * 0.3, abs=1e-6)
 
 
+class TestVolumeRenderSettings:
+    """Sample distance is unchanged; only the shrink factors gain a mapper axis."""
+
+    def test_small_volume_is_full_resolution_on_the_smart_mapper(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        sample_dist, shrink = volume_render_settings(
+            "small", (0.39, 0.39, 1.0), MAPPER_KIND_SMART
+        )
+        assert shrink == (1, 1, 1)
+        assert sample_dist == pytest.approx(1.0)
+
+    def test_small_volume_keeps_todays_shrink_on_the_cpu_mapper(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        sample_dist, shrink = volume_render_settings(
+            "small", (0.39, 0.39, 1.0), MAPPER_KIND_CPU
+        )
+        assert shrink == (2, 2, 1)
+        assert sample_dist == pytest.approx(1.0)
+
+    def test_sample_distance_is_identical_for_both_mappers(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import (
+            MAPPER_KIND_CPU,
+            MAPPER_KIND_SMART,
+            VOLUME_TIERS,
+        )
+
+        for tier in VOLUME_TIERS:
+            for spacing in ((0.39, 0.39, 1.0), (0.4, 0.4, 0.4), (1.0, 1.0, 1.0)):
+                cpu_dist, _ = volume_render_settings(tier, spacing, MAPPER_KIND_CPU)
+                smart_dist, _ = volume_render_settings(tier, spacing, MAPPER_KIND_SMART)
+                assert cpu_dist == pytest.approx(smart_dist)
+
+    def test_tier_sample_distances_match_the_pre_change_formulas(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        assert volume_render_settings("xl", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(4.0)
+        assert volume_render_settings("xl", (0.3, 0.3, 0.3), MAPPER_KIND_CPU)[0] == pytest.approx(2.0)
+        assert volume_render_settings("large", (0.5, 0.5, 0.5), MAPPER_KIND_CPU)[0] == pytest.approx(1.5)
+        assert volume_render_settings("medium", (0.4, 0.4, 0.4), MAPPER_KIND_CPU)[0] == pytest.approx(1.2)
+        assert volume_render_settings("medium", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(2.5)
+        assert volume_render_settings("small", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(2.0)
+
+    def test_update_volume_uses_the_shared_settings_helper(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D, volume_render_settings
+
+        assert "shrink_factors(" in inspect.getsource(volume_render_settings)
+        source = inspect.getsource(Viewer3D.update_volume)
+        assert "volume_render_settings(" in source
+        assert "self._mapper_kind" in source
+        assert "shrink = (3, 3, 3)" not in source
+
+
+class TestTwoPhaseLodSurvivesTheSmartMapper:
+    """SetSampleDistance is the only LOD knob both mappers share."""
+
+    def _viewer_with(self, kind):
+        from src.ui.viewer_3d import Viewer3D, create_volume_mapper
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume_mapper = create_volume_mapper(kind)
+        viewer._target_sample_dist = 1.0
+        viewer._render_generation = 7
+        viewer._request_render = lambda: None
+        return viewer
+
+    def test_smart_mapper_coarsens_during_interaction_and_restores_after(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._on_interaction_start(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(3.0)
+        viewer._on_interaction_end(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_cpu_mapper_coarsens_during_interaction_and_restores_after(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer = self._viewer_with(MAPPER_KIND_CPU)
+        viewer._on_interaction_start(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(3.0)
+        viewer._on_interaction_end(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_phase2_restores_fine_sampling_for_the_current_generation(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._volume_mapper.SetSampleDistance(2.0)
+        viewer._execute_phase2(7)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_phase2_ignores_a_stale_generation(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._volume_mapper.SetSampleDistance(2.0)
+        viewer._execute_phase2(6)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(2.0)
+
+    def test_phase1_logs_the_mapper_and_the_render_mode(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._deferred_render_phase1)
+        assert "describe_render_mode(self._volume_mapper)" in source
+        assert "self._mapper_kind" in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

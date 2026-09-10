@@ -26,7 +26,7 @@ import math
 import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import vtk
 from PyQt6.QtCore import Qt, QTimer
@@ -51,6 +51,7 @@ from ..utils.vtk_helpers import (
     MAPPER_KIND_CPU,
     MAPPER_KIND_SMART,
     downsample_vtk_image,
+    shrink_factors,
 )
 from .click_detector import DoubleClickDetector
 from .vtk_widget import create_vtk_widget
@@ -124,6 +125,42 @@ def describe_render_mode(mapper) -> str:
     if getter is None:
         return "cpu-fixed-point"
     return RENDER_MODE_NAMES.get(int(getter()), "unknown")
+
+
+# Per-tier target sample distance: (spacing multiplier, absolute floor in mm).
+# These reproduce the pre-GPU formulas exactly and do not depend on the mapper.
+_SAMPLE_DISTANCE_RULES = {
+    "xl": (4.0, 2.0),
+    "large": (3.0, 1.5),
+    "medium": (2.5, 1.2),
+    "small": (2.0, 1.0),
+}
+
+
+def volume_render_settings(
+    tier: str,
+    spacing: Sequence[float],
+    mapper_kind: str,
+) -> Tuple[float, Tuple[int, int, int]]:
+    """Return the fine sample distance (mm) and shrink factors for a volume.
+
+    Args:
+        tier: Tier string from ``assess_volume_scale``.
+        spacing: Volume spacing (x, y, z) in millimetres.
+        mapper_kind: ``MAPPER_KIND_CPU`` or ``MAPPER_KIND_SMART``.
+
+    Returns:
+        ``(sample_distance_mm, (sx, sy, sz))``.
+
+    Raises:
+        ValueError: if the tier or the mapper kind is unknown.
+    """
+    rule = _SAMPLE_DISTANCE_RULES.get(tier)
+    if rule is None:
+        raise ValueError(f"unknown volume tier: {tier!r}")
+    multiplier, floor_mm = rule
+    min_spacing = min(float(value) for value in spacing)
+    return max(min_spacing * multiplier, floor_mm), shrink_factors(tier, mapper_kind)
 
 
 @dataclass
@@ -313,14 +350,13 @@ def _flush_logs():
 
 class Viewer3D(QWidget):
     """
-    3D viewer widget with CPU volume rendering.
+    3D viewer widget for volume rendering.
 
-    Uses vtkFixedPointVolumeRayCastMapper for CPU-based ray casting.
-    No mesh generation, no background threads — volume is rendered
-    directly from vtkImageData with transfer functions.
-
-    CPU rendering avoids the macOS OpenGL→Metal glFinish() hang entirely.
-    Combined with downsampled volume, first render completes in 2-5 seconds.
+    The volume mapper is chosen per platform (see ``select_volume_mapper_kind``):
+    vtkFixedPointVolumeRayCastMapper (CPU) on macOS, to avoid the OpenGL→Metal
+    glFinish() hang, and vtkSmartVolumeMapper (GPU-capable) everywhere else.
+    No mesh generation, no background threads — volume is rendered directly
+    from vtkImageData with transfer functions.
     """
 
     # Render state: GUARD blocks renders during pipeline setup, NORMAL allows them.
@@ -568,7 +604,7 @@ class Viewer3D(QWidget):
         return mapper
 
     def _setup_vtk_pipeline(self):
-        """Setup the VTK CPU volume rendering pipeline."""
+        """Setup the VTK volume rendering pipeline (mapper chosen per platform)."""
         logger.info("_setup_vtk_pipeline: initializing volume renderer")
         # Flat neutral background keeps anatomy and implant colors dominant.
         self._renderer = vtk.vtkRenderer()
@@ -758,25 +794,14 @@ class Viewer3D(QWidget):
         # Quality control per volume tier
         dims = self.volume_manager.dimensions
         spacing = self.volume_manager.spacing
-        min_spacing = min(spacing)
         assessment = assess_volume_scale(dims)
-        logger.info(
-            "  dims=%s spacing=%s tier=%s",
-            dims, spacing, assessment.tier,
+        sample_dist, shrink = volume_render_settings(
+            assessment.tier, spacing, self._mapper_kind
         )
-
-        if assessment.tier == "xl":
-            sample_dist = max(min_spacing * 4.0, 2.0)
-            shrink = (3, 3, 3)
-        elif assessment.tier == "large":
-            sample_dist = max(min_spacing * 3.0, 1.5)
-            shrink = (3, 3, 2)
-        elif assessment.tier == "medium":
-            sample_dist = max(min_spacing * 2.5, 1.2)
-            shrink = (2, 2, 2)
-        else:
-            sample_dist = max(min_spacing * 2.0, 1.0)
-            shrink = (2, 2, 1)
+        logger.info(
+            "  dims=%s spacing=%s tier=%s mapper=%s shrink=%s sample_dist=%.2f",
+            dims, spacing, assessment.tier, self._mapper_kind, shrink, sample_dist,
+        )
 
         self._target_sample_dist = sample_dist
 
@@ -862,7 +887,12 @@ class Viewer3D(QWidget):
         else:
             self.vtk_widget.GetRenderWindow().Render()
         render_sec = time.perf_counter() - t0
-        logger.info("  Phase 1 done: %.3fs", render_sec)
+        logger.info(
+            "  Phase 1 done: %.3fs (mapper=%s, render mode=%s)",
+            render_sec,
+            self._mapper_kind,
+            describe_render_mode(self._volume_mapper),
+        )
 
         # Schedule Phase 2 via QTimer (works now — no Cocoa event loop starvation)
         gen = self._render_generation
