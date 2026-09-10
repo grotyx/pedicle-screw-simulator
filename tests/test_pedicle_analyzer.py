@@ -249,6 +249,29 @@ def _nearest_neighbour_upsample(image: sitk.Image, factor: int) -> sitk.Image:
     return resampler.Execute(image)
 
 
+def _make_narrow_corridor_phantom(label: int = 29) -> sitk.Image:
+    """A lumbar vertebra whose only pedicle corridor is 2 mm wide.
+
+    Anatomically impossible at L3, and fused to the body in every axial slice,
+    so the axial re-check has no second opinion to offer either: exactly the
+    case the gate has to flag rather than let the planner call "too narrow".
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (((xx - 45) / 20.0) ** 2 + ((yy - 35) / 15.0) ** 2 <= 1) & (zz >= 15) & (zz < 45)
+    ped = np.zeros_like(body)
+    for cx in (30, 60):
+        ped |= (
+            (xx >= cx) & (xx < cx + 2)              # exactly 2 voxels = 2.0 mm
+            & (np.abs(zz - 32) <= 6)
+            & (yy >= 44)
+            & (yy < 62)
+        )
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped] = label
+    return sitk.GetImageFromArray(arr)
+
+
 def _make_notched_corridor_phantom(notch_slices: int, label: int = 28) -> sitk.Image:
     """A left corridor interrupted by ``notch_slices`` blank coronal slices.
 
@@ -1056,6 +1079,68 @@ class TestSubvoxelCentroid:
         analyzer = PedicleAnalyzer(img)
         indices = np.array([[0, 0, 0], [0, 0, 1]])  # z, y, x -> mean x = 0.5
         assert analyzer._indices_centroid_lps(indices)[0] == pytest.approx(0.5)
+
+
+class TestWidthPlausibilityGate:
+    """A width outside its level's plausible band is re-checked, then flagged."""
+
+    def test_impossible_lumbar_width_is_flagged_and_warned(self):
+        analyzer = PedicleAnalyzer(_make_narrow_corridor_phantom(label=29))  # L3
+        vertebra = analyzer.get_available_vertebrae()[0]
+
+        result = analyzer.analyze_pedicle(vertebra)
+
+        assert result.left_pedicle_width == pytest.approx(2.0, abs=0.5)
+        assert result.width_flags["left"] == "implausible"
+        assert result.width_flags["right"] == "implausible"
+        assert any(
+            "left pedicle width 2.0 mm outside the expected 5.0–22.0 mm"
+            " — verify manually" == warning
+            for warning in result.warnings
+        )
+
+    def test_thoracic_level_uses_the_thoracic_band(self):
+        """3.5-18.0 mm at T11, so the same 2 mm corridor is still implausible."""
+        analyzer = PedicleAnalyzer(_make_narrow_corridor_phantom(label=33))  # T11
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert any(
+            "outside the expected 3.5–18.0 mm" in warning
+            for warning in result.warnings
+        )
+
+    def test_plausible_widths_are_left_alone(self):
+        analyzer = PedicleAnalyzer(_make_sliver_corridor_phantom(label=28))  # L4
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.width_flags == {}
+        assert result.method == "coronal_isthmus"
+        assert not result.warnings
+
+    def test_s1_is_not_gated(self):
+        """S1's "pedicle" is the sacral ala; no thoracolumbar band applies."""
+        assert PedicleAnalyzer._width_range_for("S1") is None
+        assert PedicleAnalyzer._width_range_for("sacrum") is None
+        assert PedicleAnalyzer._width_range_for("L3") == (5.0, 22.0)
+        assert PedicleAnalyzer._width_range_for("T11") == (3.5, 18.0)
+
+    def test_axial_recheck_replaces_a_width_it_can_measure(self):
+        """When the axial slice can see the pedicle, its width wins."""
+        mask = _make_h_vertebra_mask(label=29)  # L3, pedicles clear of the body
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        result = PedicleAnalysisResult(vertebra=vertebra)
+        result.left_pedicle_center = np.array([43.5, 39.5, 30.0])
+        result.left_pedicle_width = 2.0
+        result.method = "coronal_isthmus"
+
+        analyzer._apply_plausibility_gate(result, binary)
+
+        assert result.left_pedicle_width == pytest.approx(8.0, abs=1.0)
+        assert result.method == "coronal_isthmus+axial_recheck"
+        assert result.width_flags == {}
+        assert not result.warnings
 
 
 if __name__ == "__main__":

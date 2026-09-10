@@ -105,6 +105,12 @@ class PedicleAnalyzer:
     # Fewest labelled voxels on one side before that side is measured.  Below
     # this the label is a speck of leakage rather than a pedicle.
     MIN_LABEL_SIDE_VOXELS: int = 20
+    # Plausible minimum transverse pedicle width per level class (mm).  A
+    # measurement outside its band is a segmentation or measurement artefact,
+    # not a narrow pedicle: the bands are wide enough to contain every real
+    # thoracolumbar pedicle and every dysplastic one worth planning around.
+    LUMBAR_WIDTH_RANGE_MM: Tuple[float, float] = (5.0, 22.0)
+    THORACIC_WIDTH_RANGE_MM: Tuple[float, float] = (3.5, 18.0)
 
     def __init__(
         self,
@@ -379,6 +385,7 @@ class PedicleAnalyzer:
             self._report_held_warnings(result, held_warnings)
             result.method = "+".join(methods)
             result.success = True
+            self._apply_plausibility_gate(result, binary)
             return result
 
         # --- Fallback: axial connected-component search ---------------------
@@ -510,6 +517,9 @@ class PedicleAnalyzer:
             result.method = "+".join(methods)
             result.success = True
 
+        # The gate runs last on both exits: it may append to `method`, so it
+        # has to see the method the detection paths settled on.
+        self._apply_plausibility_gate(result, binary)
         return result
 
     def _report_held_warnings(
@@ -701,13 +711,10 @@ class PedicleAnalyzer:
         isthmus_pos = int(np.flatnonzero(js == isthmus_j)[0])
         neighbour_js = js[max(0, isthmus_pos - 1):isthmus_pos + 2]
         neighbour_slices = [side_voxels[side_voxels[:, 1] == j] for j in neighbour_js]
+        # `widths` already holds each slice's x-extent in mm, so the width
+        # median is a slice of it rather than three more scans of side_voxels.
         width_extent_mm = float(
-            np.median(
-                [
-                    float(sl[:, 2].max() - sl[:, 2].min() + 1) * sx
-                    for sl in neighbour_slices
-                ]
-            )
+            np.median(widths[max(0, isthmus_pos - 1):isthmus_pos + 2])
         )
         height_mm = float(
             np.median(
@@ -754,6 +761,130 @@ class PedicleAnalyzer:
             "isthmus_window_j": (int(js[0]), int(js[-1])),
         }
 
+    @classmethod
+    def _width_range_for(cls, name: str) -> Optional[Tuple[float, float]]:
+        """The plausible width band for a level, or ``None`` when it is not gated.
+
+        Only the named lumbar and thoracic levels have a band.  The sacrum is
+        skipped before analysis starts, and S1's "pedicle" is the sacral ala,
+        whose width has nothing to do with a thoracolumbar pedicle -- gating it
+        against a lumbar band would flag every normal S1.
+        """
+        level = str(name).strip().upper()
+        if len(level) < 2 or not level[1:].isdigit():
+            return None
+        number = int(level[1:])
+        if level[0] == "L" and 1 <= number <= 5:
+            return cls.LUMBAR_WIDTH_RANGE_MM
+        if level[0] == "T" and 1 <= number <= 12:
+            return cls.THORACIC_WIDTH_RANGE_MM
+        return None
+
+    def _axial_recheck_width(
+        self,
+        binary: np.ndarray,
+        result: PedicleAnalysisResult,
+        side: str,
+    ) -> Optional[float]:
+        """Re-measure one pedicle's width on the axial slice through its isthmus.
+
+        The axial route cuts the corridor in a direction the coronal walk never
+        does, so a corridor the coronal search reduced to a stair-step sliver
+        gets a genuinely independent second opinion rather than the same number
+        computed twice.  The vertebral body is the largest component of the
+        slice and is dropped, exactly as the axial fallback in
+        :meth:`analyze_pedicle` does; the pedicle is whichever remaining
+        component is nearest the recorded isthmus centre.
+
+        Returns ``None`` when the slice holds nothing but the body -- a pedicle
+        fused to the body in the axial plane has no second opinion to give, and
+        an answer measured off the body would be worse than none.
+        """
+        center = self._recorded_center(result, side)
+        if center is None:
+            return None
+        index = self._mask_image.TransformPhysicalPointToContinuousIndex(
+            tuple(float(v) for v in center)
+        )
+        z = int(round(index[2]))
+        if not 0 <= z < binary.shape[0]:
+            return None
+        axial_slice = binary[z]
+        labeled, n_components = ndi.label(axial_slice)
+        if n_components < 2:
+            return None
+        sizes = ndi.sum(axial_slice, labeled, index=range(1, n_components + 1))
+        body_id = int(np.argmax(sizes)) + 1
+        target_yx = np.array([float(index[1]), float(index[0])])
+        best: Optional[Tuple[float, np.ndarray]] = None
+        for comp_id in range(1, n_components + 1):
+            if comp_id == body_id:
+                continue
+            coords = np.argwhere(labeled == comp_id)  # (n, 2) -> y, x
+            distance = float(np.linalg.norm(coords.mean(axis=0) - target_yx))
+            if best is None or distance < best[0]:
+                best = (distance, coords)
+        if best is None:
+            return None
+        voxels_zyx = np.column_stack([np.full(best[1].shape[0], z), best[1]])
+        sx, sy, _ = self._spacing
+        return float(self._measure_pedicle_width(voxels_zyx, sx * sy))
+
+    def _apply_plausibility_gate(
+        self,
+        result: PedicleAnalysisResult,
+        binary: np.ndarray,
+    ) -> None:
+        """Check each measured width against its level's plausible band.
+
+        A width outside the band is a measurement failure rather than a narrow
+        pedicle, so it is re-measured axially before it is believed.  A
+        plausible second opinion replaces it and is recorded in
+        :attr:`~src.core.vertebra.PedicleAnalysisResult.method`; when there is
+        none, the original value is kept -- it is still the best number
+        available -- and the side is flagged so the planner reports the level
+        as uncertain instead of as too narrow.
+        """
+        band = self._width_range_for(result.vertebra.name)
+        if band is None:
+            return
+        lo, hi = band
+        rechecked = False
+        for side in ("left", "right"):
+            if self._recorded_center(result, side) is None:
+                continue
+            width = (
+                result.left_pedicle_width
+                if side == "left"
+                else result.right_pedicle_width
+            )
+            if lo <= width <= hi:
+                continue
+            second = self._axial_recheck_width(binary, result, side)
+            if second is not None and lo <= second <= hi:
+                logger.info(
+                    "%s: %s pedicle width %.1f mm re-measured axially as %.1f mm",
+                    result.vertebra.name,
+                    side,
+                    width,
+                    second,
+                )
+                if side == "left":
+                    result.left_pedicle_width = second
+                else:
+                    result.right_pedicle_width = second
+                rechecked = True
+                continue
+            result.width_flags[side] = "implausible"
+            result.warnings.append(
+                f"{side} pedicle width {width:.1f} mm outside the expected "
+                f"{lo}–{hi} mm — verify manually"
+            )
+        if rechecked and "axial_recheck" not in result.method:
+            result.method = (
+                f"{result.method}+axial_recheck" if result.method else "axial_recheck"
+            )
+
     @staticmethod
     def _inscribed_width_mm(
         coords_zx: np.ndarray,
@@ -761,12 +892,16 @@ class PedicleAnalyzer:
     ) -> float:
         """The largest inscribed diameter of one cross-section, in mm.
 
-        A bounding-box extent and an inscribed circle fail in opposite
-        directions: a stair-stepped cross-section can have a wide box with no
-        room inside it, while a cross-section clipped by the slice grid can
-        have a narrow box around a corridor a screw still fits.  Measuring
-        both and keeping the larger is what stops a 7 mm pedicle being
-        reported as 1.6 mm.
+        This is a conservative *floor* under the reported width, never a
+        rescue.  After the one-voxel correction below, twice the largest
+        inscribed radius less one in-plane voxel can never exceed the isthmus
+        slice's own x-extent, so ``max(extent, this)`` is the extent on every
+        cross-section wider than it is tall; the inscribed diameter only speaks
+        up on a section whose bounding box is narrower than the corridor
+        genuinely inside it.  What stops a 7 mm pedicle being reported as
+        1.6 mm is the neighbourhood median over the isthmus and its two
+        neighbours, together with the per-slice area and width floors and the
+        continuity tracking that keeps the walk on the real corridor.
 
         ``coords_zx`` are the component's ``(z, x)`` voxel indices and
         ``sampling`` their ``(sz, sx)`` spacing.  The component is rasterised

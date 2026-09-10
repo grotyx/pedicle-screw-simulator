@@ -9,7 +9,7 @@ morphology analysis.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -81,9 +81,17 @@ class PedicleAnalysisResult:
     # The smaller of the two width estimates (bounding-box extent of the
     # isthmus neighbourhood vs. inscribed diameter of the isthmus slice).  The
     # reported width is the larger; this is the conservative floor a reviewer
-    # can compare it against.
+    # can compare it against.  On the axial-fallback path it equals the width:
+    # that path produces only one estimate, so there is no smaller one.
     left_width_lower_bound_mm: float = 0.0
     right_width_lower_bound_mm: float = 0.0
+
+    # Sides whose measured width failed their level's plausibility band, keyed
+    # by side.  The only value is ``"implausible"``; a believable width leaves
+    # no entry, so ``width_flags.get(side)`` is the whole check.  The planner
+    # uses it to say "uncertain" rather than "too narrow" about a side it
+    # dropped, which are two different messages to a surgeon.
+    width_flags: Dict[str, str] = field(default_factory=dict)
 
     # Pedicle craniocaudal height at the isthmus (mm)
     left_pedicle_height: float = 0.0
