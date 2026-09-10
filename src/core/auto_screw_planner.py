@@ -730,7 +730,9 @@ class AutoScrewPlanner:
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         narrow = self._is_narrow_side(analysis, side)
         recommended = self._compute_diameter(pedicle_width, vertebra.name)
-        if candidate.diameter < recommended - 1e-9:
+        # A narrow side is planned at MIN_SCREW_DIAMETER by policy, not stepped
+        # down for containment, so it must not claim it was.
+        if not narrow and candidate.diameter < recommended - 1e-9:
             warnings.append(
                 f"Diameter reduced from {recommended:.1f} to "
                 f"{candidate.diameter:.1f} mm for cortical containment"

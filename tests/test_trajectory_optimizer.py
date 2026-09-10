@@ -16,6 +16,7 @@ from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.core.screw_grading import BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
+    DEFAULT_WEIGHTS,
     MAX_DIAMETER_STEPS,
     MAX_ENTRY_SHORTFALL_MM,
     SAFETY_CAP_MM,
@@ -289,11 +290,14 @@ def test_plan_all_optimized_does_not_build_a_planner_per_pedicle(monkeypatch):
 
     assert screws
     assert built == []      # the planner lent itself to every pedicle
-def _narrow_setup():
+
+
+# ------------------------------------------------------------- narrow pedicles
+def _narrow_setup(**phantom_kwargs):
     """The narrow phantom plus a matching CT and its analysis."""
     from tests.test_pedicle_analyzer import _make_narrow_pedicle_phantom
 
-    mask = _make_narrow_pedicle_phantom()
+    mask = _make_narrow_pedicle_phantom(**phantom_kwargs)
     arr = sitk.GetArrayFromImage(mask)
     ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
     ct.CopyInformation(mask)
@@ -340,16 +344,98 @@ def test_the_narrow_mode_protects_the_medial_wall(side):
     )
 
 
-def test_every_narrow_candidate_respects_the_lateral_cap():
-    ct, mask, analysis = _narrow_setup()
-    config = PlannerConfig(narrow_lateral_breach_mm=1.0)
+def _stepped_narrow_setup():
+    """A narrow phantom whose candidates breach laterally by *different* amounts.
 
-    ranked = optimize_screw(
-        ScrewGrader(mask, ct), analysis, "left", config, narrow=True, top_k=50
+    The default phantom admits a 4.0 mm screw at exactly one height and one
+    lateral offset, so every feasible candidate breaches by the same 1.5 mm and
+    a cap could only take all of them or none -- which would make a cap test
+    vacuous.  Padding the lateral cortex of the caudal half by 1 mm, in a
+    corridor tall enough for the sweep's craniocaudal offsets to matter, spreads
+    the survivors over several lateral breaches at an unchanged medial wall.
+    """
+    return _narrow_setup(half_height_mm=6.0, lateral_relief_mm=1.0)
+
+
+@pytest.mark.parametrize("cap, expected", [(1.0, {0.0, 0.5, 1.0}), (2.0, {1.5, 2.0})])
+def test_every_narrow_candidate_respects_the_lateral_cap(cap, expected):
+    """The cap is a hard bound, and it is load-bearing: it removes candidates."""
+    ct, mask, analysis = _stepped_narrow_setup()
+    grader = ScrewGrader(mask, ct)
+
+    def ranked_at(limit):
+        return optimize_screw(
+            grader,
+            analysis,
+            "left",
+            PlannerConfig(narrow_lateral_breach_mm=limit),
+            narrow=True,
+            top_k=100000,
+        )
+
+    ranked = ranked_at(cap)
+
+    assert ranked, "the cap test must not pass over an empty candidate list"
+    assert all(c.medial_breach_mm == 0.0 for c in ranked)
+    assert all(c.craniocaudal_breach_mm == 0.0 for c in ranked)
+    assert all(c.lateral_breach_mm <= cap + 1e-9 for c in ranked)
+    breaches = {round(c.lateral_breach_mm, 2) for c in ranked}
+    assert breaches >= expected, "the phantom must offer a spread of lateral breaches"
+    # Tightening the cap really does cut the survivors, rather than the cap
+    # being satisfied vacuously by geometry that could never exceed it.
+    assert 0 < len(ranked_at(cap - 0.5)) < len(ranked)
+
+
+def test_the_lateral_term_prefers_the_smaller_breach():
+    """At an equal medial wall the cheaper lateral breach wins the tie."""
+    ct, mask, analysis = _setup()
+    entries = np.array([[60.0, 58.0, 32.0], [60.0, 58.0, 32.0]])
+    targets = np.array([[60.0, 28.0, 32.0], [60.0, 28.0, 32.0]])
+    lengths = np.array([30.0, 30.0])
+    batch = BatchResult(                                # identical but for lateral
+        breach_mm=np.array([1.5, 0.5]),
+        min_wall_mm=np.zeros(2),
+        mean_hu=np.array([300.0, 300.0]),
+        min_hu=np.array([300.0, 300.0]),
+        medial_breach_mm=np.zeros(2),
+        lateral_breach_mm=np.array([1.5, 0.5]),
+        craniocaudal_breach_mm=np.zeros(2),
+        medial_wall_mm=np.array([1.0, 1.0]),
     )
 
-    assert all(c.medial_breach_mm == 0.0 for c in ranked)
-    assert all(c.lateral_breach_mm <= 1.0 + 1e-9 for c in ranked)
+    ranked = score_candidates(
+        batch, entries, targets, lengths, 4.0, analysis, "left",
+        PlannerConfig(narrow_lateral_breach_mm=2.0), DEFAULT_WEIGHTS, narrow=True,
+    )
+
+    assert [c.lateral_breach_mm for c in ranked] == [0.5, 1.5]
+    assert ranked[0].components["safety"] == ranked[1].components["safety"]
+    assert ranked[0].components["lateral"] == pytest.approx(0.75)
+    assert ranked[1].components["lateral"] == pytest.approx(0.25)
+
+
+def test_a_narrow_side_is_planned_at_the_minimum_diameter():
+    """An implausible width flags a side narrow even when it reads far too wide.
+
+    ``_is_narrow_side`` fires on ``width_flags`` alone, so a 25 mm "measurement"
+    reaches the narrow path with a level recommendation of a full-size screw.
+    The relaxed feasibility rule must never be handed that screw: the narrow
+    policy is the smallest implant, exactly as the legacy planner does it.
+    """
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    planner = make_planner(grader, PlannerConfig())
+    analysis.left_pedicle_width = 25.0
+    analysis.width_flags["left"] = "implausible"
+    assert planner._compute_diameter(25.0, analysis.vertebra.name) > 4.0
+
+    ranked = optimize_screw(grader, analysis, "left", PlannerConfig(), narrow=True)
+
+    assert ranked
+    assert all(c.diameter == pytest.approx(planner.MIN_SCREW_DIAMETER) for c in ranked)
+    assert all(c.diameter == pytest.approx(4.0) for c in ranked)
+    # The minimum is the policy, not a containment step-down, so nothing claims it was.
+    assert not any("Diameter reduced" in w for c in ranked for w in c.warnings)
 
 
 def test_a_normal_pedicle_is_unchanged_by_the_narrow_plumbing():

@@ -138,7 +138,12 @@ def _make_anatomical_phantom(label: int = 28, with_arch: bool = True) -> sitk.Im
     return sitk.GetImageFromArray(arr)
 
 
-def _make_narrow_pedicle_phantom(label: int = 28, waist_mm: float = 3.5) -> sitk.Image:
+def _make_narrow_pedicle_phantom(
+    label: int = 28,
+    waist_mm: float = 3.5,
+    half_height_mm: float = 4.0,
+    lateral_relief_mm: float = 0.0,
+) -> sitk.Image:
     """A vertebra whose pedicle corridor is too narrow for the smallest screw.
 
     Same anatomy as :func:`_make_anatomical_phantom` -- an elliptical body with
@@ -155,6 +160,17 @@ def _make_narrow_pedicle_phantom(label: int = 28, waist_mm: float = 3.5) -> sitk
     With the default 3.5 mm waist the analyser measures 3.5 mm on both sides and
     flags both as implausible for a lumbar level, and no 4.0 mm screw can be
     contained -- which is exactly the case the narrow policy exists for.
+
+    ``half_height_mm`` and ``lateral_relief_mm`` exist for the lateral-cap test
+    and are off by default, so the numbers above are unaffected.  With the
+    default 4 mm half-height a 4 mm screw fits craniocaudally at exactly one
+    height, so every feasible candidate breaches laterally by the same amount
+    and a cap can only accept all of them or none.  A taller corridor lets the
+    sweep's craniocaudal offsets spread real candidates over ``z``, and
+    ``lateral_relief_mm`` then pads the lateral cortex of the caudal half only:
+    a screw riding entirely in that half keeps the same medial wall but breaches
+    ``lateral_relief_mm`` less, which is what gives a cap something to cut and
+    the ``lateral`` score term two candidates to choose between.
     """
     Z, Y, X = 88, 144, 136
     zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
@@ -164,13 +180,20 @@ def _make_narrow_pedicle_phantom(label: int = 28, waist_mm: float = 3.5) -> sitk
         & (z >= 8.0) & (z < 36.0)
     )
     half = float(waist_mm) / 2.0
+    relief = float(lateral_relief_mm)
+    corridor = (np.abs(z - 22.0) <= float(half_height_mm) + 1e-9) & (y >= 26.0) & (y < 42.0)
     ped = np.zeros_like(body)
     for cx in (25.5, 42.5):
-        ped |= (
-            (np.abs(x - cx) <= half + 1e-9)
-            & (np.abs(z - 22.0) <= 4.0 + 1e-9)
-            & (y >= 26.0) & (y < 42.0)
-        )
+        lateral_sign = 1.0 if cx > 34.0 else -1.0     # away from the midline
+        ped |= (np.abs(x - cx) <= half + 1e-9) & corridor
+        if relief > 0.0:
+            # Lateral cortex of the caudal half only, so the two halves differ.
+            ped |= (
+                (lateral_sign * (x - cx) >= half - 1e-9)
+                & (lateral_sign * (x - cx) <= half + relief + 1e-9)
+                & (z < 22.0)
+                & corridor
+            )
     arr = np.zeros((Z, Y, X), dtype=np.uint8)
     arr[body | ped] = label
     image = sitk.GetImageFromArray(arr)

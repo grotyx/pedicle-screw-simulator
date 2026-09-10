@@ -572,8 +572,8 @@ def score_candidates(
             1.0 - np.linalg.norm(perpendicular, axis=1) / half_width, 0.0, 1.0
         )
 
-    #: The lateral cap and the medial wall are two halves of one trade-off, so
-    #: they share the safety weight: raising "safety" tightens both.
+    # The lateral cap and the medial wall are two halves of one trade-off, so
+    # they share the safety weight: raising "safety" tightens both.
     component_weights = {
         "safety": weights.safety,
         "density": weights.density,
@@ -639,11 +639,17 @@ def optimize_screw(
     equivalent exactly when it holds this ``grader``'s mask and this ``config``;
     :func:`make_planner` builds that planner when none is given.
 
-    ``narrow`` plans the pedicle under the narrow policy: the single minimum
-    diameter (the rule already returned it, and there is nothing below it to
-    step down to), the wider :data:`NARROW_ENTRY_GRID_MM` so a lateral shift is
-    reachable, and the relaxed, medial-first feasibility of
-    :func:`score_candidates`.
+    ``narrow`` plans the pedicle under the narrow policy: only
+    ``planner.MIN_SCREW_DIAMETER``, the wider :data:`NARROW_ENTRY_GRID_MM` so a
+    lateral shift is reachable, and the relaxed, medial-first feasibility of
+    :func:`score_candidates`.  The diameter is the minimum rather than the
+    level's recommendation because a side is also flagged narrow when its width
+    could not be trusted at all -- including an implausibly *wide* measurement,
+    whose recommendation would otherwise put a full-size screw through the
+    relaxed feasibility rule.  This matches :meth:`AutoScrewPlanner._plan_screw`,
+    which hard-codes the same minimum for a narrow side, so the two back-ends
+    agree.  A narrow candidate therefore carries no "diameter reduced ... for
+    cortical containment" warning: the minimum is the policy, not a step-down.
     """
     center, _axis, width = _side_data(analysis, side)
     if center is None or not analysis.success:
@@ -654,7 +660,7 @@ def optimize_screw(
     label = int(analysis.vertebra.label)
 
     if narrow:
-        catalogue = [recommended]
+        catalogue = [float(planner.MIN_SCREW_DIAMETER)]
         entry_grid = NARROW_ENTRY_GRID_MM
     else:
         catalogue = sorted(
@@ -692,7 +698,7 @@ def optimize_screw(
             narrow=narrow,
         )
         if ranked:
-            if diameter < recommended:
+            if not narrow and diameter < recommended:
                 warning = (
                     f"Diameter reduced from {recommended:.1f} to {diameter:.1f} mm "
                     "for cortical containment"
