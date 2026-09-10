@@ -19,6 +19,7 @@ from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 
 import src.ui.main_window as main_window_module
+from src.controllers.screw_mpr_controller import SCREW_MPR_CONTROLS_HELP
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
@@ -293,3 +294,61 @@ def test_close_event_cancels_running_auto_placement_instead_of_blocking(
         # window's own teardown close() doesn't hit closeEvent's
         # "still running" path again during qtbot cleanup.
         ctrl._thread = None
+
+
+# ---------------------------------------------------------------------------
+# W5 -- Screw MPR interaction controls
+# ---------------------------------------------------------------------------
+
+
+def test_screw_mpr_rotation_control_has_spec_range_and_starts_disabled(
+    ui_main_window,
+):
+    window = ui_main_window
+
+    assert window.screw_axis_rotation_spin.minimum() == -180
+    assert window.screw_axis_rotation_spin.maximum() == 180
+    assert window.screw_axis_rotation_spin.singleStep() == 5
+    assert window.screw_axis_rotation_spin.value() == 0
+    assert window.screw_axis_rotation_spin.isEnabled() is False
+    assert window.screw_mpr_reset_btn.isEnabled() is False
+    assert "right-hand rule" in window.screw_axis_rotation_spin.toolTip()
+
+
+def test_rotation_spin_and_reset_button_drive_the_screw_mpr_controller(
+    ui_main_window,
+):
+    window = ui_main_window
+    controller = window._screw_mpr_ctrl
+
+    window.screw_axis_rotation_spin.setValue(20)
+    assert controller.rotation_deg == pytest.approx(20.0)
+
+    # Qt drops click() on a disabled button, and the button is disabled
+    # until Screw MPR is entered; enable it so the wiring is exercised.
+    window.screw_mpr_reset_btn.setEnabled(True)
+    window.screw_mpr_reset_btn.click()
+    assert controller.rotation_deg == 0.0
+    assert window.screw_axis_rotation_spin.value() == 0
+    assert window.screw_axis_position_slider.value() == 50
+
+
+def test_screw_mpr_handlers_are_registered_on_the_mpr_viewers(ui_main_window):
+    window = ui_main_window
+    controller = window._screw_mpr_ctrl
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.custom_scroll_handler == controller.handle_scroll
+    assert window.coronal_viewer.custom_rotate_handler == (
+        controller.handle_rotate_drag
+    )
+    assert window.axial_viewer.custom_rotate_handler is None
+    assert window.sagittal_viewer.custom_rotate_handler is None
+
+
+def test_help_menu_exposes_the_screw_mpr_gesture_map(ui_main_window):
+    window = ui_main_window
+
+    assert window._screw_mpr_help_action.text() == "Screw MPR controls"
+    assert "Shift + wheel" in SCREW_MPR_CONTROLS_HELP
+    assert "Middle-button drag" in SCREW_MPR_CONTROLS_HELP

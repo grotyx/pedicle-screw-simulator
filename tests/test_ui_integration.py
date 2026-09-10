@@ -48,6 +48,9 @@ class DummyMPRViewer(QWidget):
         self.measurements = {}
         self.custom_axes = None
         self.custom_title = None
+        self.custom_readout = None
+        self.custom_scroll_handler = None
+        self.custom_rotate_handler = None
         self.review_screw_id = None
         self.screw_overlays = {}
         self.fit_count = 0
@@ -116,9 +119,19 @@ class DummyMPRViewer(QWidget):
         self.custom_axes = axes
         self.custom_title = title
 
+    def set_custom_readout(self, text):
+        self.custom_readout = text
+
+    def set_custom_scroll_handler(self, handler):
+        self.custom_scroll_handler = handler
+
+    def set_custom_rotate_handler(self, handler):
+        self.custom_rotate_handler = handler
+
     def clear_custom_reslice_axes(self):
         self.custom_axes = None
         self.custom_title = None
+        self.custom_readout = None
 
     def set_review_screw(self, screw_id):
         self.review_screw_id = screw_id

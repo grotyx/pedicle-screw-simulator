@@ -36,7 +36,10 @@ from src.controllers.auto_placement_controller import AutoPlacementController
 from src.controllers.dicom_controller import DicomController
 from src.controllers.plan_controller import PlanController
 from src.controllers.screw_edit_controller import ScrewEditController
-from src.controllers.screw_mpr_controller import ScrewMPRController
+from src.controllers.screw_mpr_controller import (
+    SCREW_MPR_CONTROLS_HELP,
+    ScrewMPRController,
+)
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
 from src.controllers.view_controller import ViewController
@@ -919,6 +922,27 @@ class MainWindow(QMainWindow):
         screw_position_layout.addWidget(self.screw_axis_position_slider, 1)
         screw_list_layout.addLayout(screw_position_layout)
 
+        screw_rotation_layout = QHBoxLayout()
+        screw_rotation_layout.addWidget(QLabel("Rotation:"))
+        self.screw_axis_rotation_spin = QSpinBox()
+        self.screw_axis_rotation_spin.setRange(-180, 180)
+        self.screw_axis_rotation_spin.setSingleStep(5)
+        self.screw_axis_rotation_spin.setValue(0)
+        self.screw_axis_rotation_spin.setSuffix(" °")
+        self.screw_axis_rotation_spin.setEnabled(False)
+        self.screw_axis_rotation_spin.setToolTip(
+            "Spin both long-axis cuts about the screw. Positive follows the "
+            "right-hand rule about the entry-to-target axis."
+        )
+        screw_rotation_layout.addWidget(self.screw_axis_rotation_spin, 1)
+        self.screw_mpr_reset_btn = QPushButton("Reset view")
+        self.screw_mpr_reset_btn.setEnabled(False)
+        self.screw_mpr_reset_btn.setToolTip(
+            "Reset Screw MPR position, rotation, and plane offsets"
+        )
+        screw_rotation_layout.addWidget(self.screw_mpr_reset_btn)
+        screw_list_layout.addLayout(screw_rotation_layout)
+
         self.remove_screw_btn = QPushButton("Delete Screw")
         screw_list_layout.addWidget(self.remove_screw_btn)
         screw_list_group.set_content_layout(screw_list_layout)
@@ -971,6 +995,7 @@ class MainWindow(QMainWindow):
             button.setProperty("role", "primary")
         for button in (
             self.standard_mpr_btn,
+            self.screw_mpr_reset_btn,
         ):
             button.setProperty("role", "secondary")
         for button in (
@@ -1081,6 +1106,12 @@ class MainWindow(QMainWindow):
         self.screw_axis_position_slider.valueChanged.connect(
             self._screw_mpr_ctrl.set_position
         )
+        self.screw_axis_rotation_spin.valueChanged.connect(
+            self._screw_mpr_ctrl.set_rotation
+        )
+        self.screw_mpr_reset_btn.clicked.connect(
+            self._screw_mpr_ctrl.reset_view
+        )
         self.selected_screw_diameter.valueChanged.connect(
             self._tool_ctrl.set_selected_screw_diameter
         )
@@ -1188,6 +1219,12 @@ class MainWindow(QMainWindow):
                 on_select=self._tool_ctrl.select_measurement_from_view,
                 on_drag=self._tool_ctrl.update_measurement_point,
             )
+            viewer.set_custom_scroll_handler(self._screw_mpr_ctrl.handle_scroll)
+
+        # Only the cross-section view rotates under Ctrl+left-drag.
+        self.coronal_viewer.set_custom_rotate_handler(
+            self._screw_mpr_ctrl.handle_rotate_drag
+        )
         self.measurement_list_widget.currentRowChanged.connect(
             self._tool_ctrl.on_measurement_selection_changed
         )
@@ -1344,9 +1381,21 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._mpr_focus_layout_action)
 
         help_menu = menubar.addMenu("Help")
+        self._screw_mpr_help_action = QAction("Screw MPR controls", self)
+        self._screw_mpr_help_action.triggered.connect(
+            self.show_screw_mpr_help
+        )
+        help_menu.addAction(self._screw_mpr_help_action)
+        help_menu.addSeparator()
         self._about_action = QAction(f"About {__title__}", self)
         self._about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self._about_action)
+
+    def show_screw_mpr_help(self) -> None:
+        """Show the Screw MPR mouse and keyboard gesture map."""
+        QMessageBox.information(
+            self, "Screw MPR controls", SCREW_MPR_CONTROLS_HELP
+        )
 
     def show_about_dialog(self) -> None:
         """Display version, creator credit, contact, license, and safety scope."""

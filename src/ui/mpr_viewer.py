@@ -1983,7 +1983,11 @@ class MPRViewer(QWidget):
         if self.__dict__.get("_rotate_drag_active", False):
             self._rotate_drag_active = False
             self._rotate_drag_last_display = None
-            self.vtk_widget.setCursor(Qt.CursorShape.ArrowCursor)
+            self.vtk_widget.setCursor(
+                Qt.CursorShape.OpenHandCursor
+                if self.__dict__.get("_mpr_pan_mode_active", False)
+                else Qt.CursorShape.ArrowCursor
+            )
         if self.__dict__.get("_mpr_pan_drag_active", False):
             self._mpr_pan_drag_active = False
             self._mpr_pan_last_display = None
