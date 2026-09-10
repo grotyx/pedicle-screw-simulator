@@ -680,7 +680,7 @@ class TestCoronalIsthmus:
 
     @pytest.mark.parametrize(
         "notch_slices, expected_width_mm, expected_lower_bound_mm",
-        [(1, 6.0, 5.0), (2, 6.0, 5.0), (3, 6.0, 5.0), (4, 8.0, 8.0)],
+        [(1, 5.0, 5.0), (2, 5.0, 5.0), (3, 5.0, 5.0), (4, 8.0, 7.0)],
     )
     def test_short_notch_is_bridged_and_a_long_one_ends_the_walk(
         self, notch_slices, expected_width_mm, expected_lower_bound_mm
@@ -691,12 +691,11 @@ class TestCoronalIsthmus:
         isthmus; the fourth blank slice exhausts the budget and the walk keeps
         only the 8 mm proximal box.
 
-        The distal box is five voxels across, and an inscribed diameter is
-        measured to the centres of the surrounding background voxels, so it
-        reads 6 mm where the extent reads 5 mm.  The reported width is the
-        larger of the two, so it is the lower bound that pins the 5 mm the
-        phantom was drawn with -- and it is the two that together separate the
-        bridged corridor from the 8 mm proximal box.
+        The distal box is an odd five voxels across, so the inscribed diameter
+        agrees with the extent exactly and both the width and its lower bound
+        read 5 mm.  The proximal box is an even eight, where the inscribed
+        diameter is one voxel short by construction, so the extent wins the
+        width at 8 mm and the lower bound sits at 7 mm.
         """
         mask = _make_notched_corridor_phantom(notch_slices)
         analyzer = PedicleAnalyzer(mask)
@@ -782,11 +781,9 @@ class TestSubregionLabelPath:
 
         # The floors must not drop a side outright — they only rank candidates.
         assert result.left_pedicle_center is not None
-        # One voxel across, so the inscribed diameter reads 2 mm (it is
-        # measured to the centres of the background voxels either side) and
-        # the reported width takes the larger of the two estimates.  The lower
-        # bound is the one that still says 1 mm.
-        assert result.left_pedicle_width == pytest.approx(2.0)
+        # One voxel across, an odd width, so the inscribed diameter agrees
+        # with the extent and the cross-check cannot inflate the measurement.
+        assert result.left_pedicle_width == pytest.approx(1.0)
         assert result.left_width_lower_bound_mm == pytest.approx(1.0)
 
     def test_shape_mismatch_is_rejected(self):
@@ -873,6 +870,50 @@ class TestSubregionLabelPath:
 
 
 # ---------------------------------------------------------------------------
+# PedicleAnalyzer: inscribed-diameter cross-check
+# ---------------------------------------------------------------------------
+
+class TestInscribedWidth:
+    """The EDT cross-check must never read wider than the drawn section."""
+
+    @staticmethod
+    def _bar(width_voxels: int, height_voxels: int = 9) -> np.ndarray:
+        """``(z, x)`` indices of a solid ``height x width`` voxel bar."""
+        return np.argwhere(np.ones((height_voxels, width_voxels), bool))
+
+    def test_odd_width_bar_measures_exactly(self):
+        """A five-voxel bar is 5 mm, not the 6 mm a raw EDT would double to.
+
+        ``distance_transform_edt`` measures to the centre of the nearest
+        background voxel, so twice the largest radius over-reads by one voxel.
+        Subtracting one in-plane voxel makes an odd width exact.
+        """
+        edt_mm = PedicleAnalyzer._inscribed_width_mm(self._bar(5), (1.0, 1.0))
+
+        assert edt_mm == pytest.approx(5.0)
+
+    def test_even_width_bar_under_reads_by_one_voxel_and_the_extent_wins(self):
+        """A four-voxel bar reads 3 mm on the EDT, so it is only the floor.
+
+        Erring short is the safe direction for a planner: the reported width
+        is ``max(extent, inscribed)``, so the 4 mm extent is what a four-voxel
+        bar is measured as, with 3 mm kept as the conservative lower bound.
+        """
+        edt_mm = PedicleAnalyzer._inscribed_width_mm(self._bar(4), (1.0, 1.0))
+        extent_mm = 4.0
+
+        assert edt_mm == pytest.approx(3.0)
+        assert max(extent_mm, edt_mm) == pytest.approx(4.0)
+        assert min(extent_mm, edt_mm) == pytest.approx(3.0)
+
+    def test_a_single_voxel_sliver_is_never_inflated(self):
+        """The correction must not let a 1 mm sliver report as 2 mm."""
+        assert PedicleAnalyzer._inscribed_width_mm(
+            self._bar(1), (1.0, 1.0)
+        ) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
 # PedicleAnalyzer: per-side fall-through to the axial pass
 # ---------------------------------------------------------------------------
 
@@ -891,6 +932,12 @@ class TestAxialFallThrough:
         # …and the left one, invisible to the coronal search, comes from axial.
         assert result.left_pedicle_center is not None
         assert result.left_pedicle_center[0] > result.vertebral_body_center[0]
+        # The axial pass has only one width estimate, so it is its own lower
+        # bound: 0.0 must never be left behind to read as a 0 mm pedicle.
+        assert result.left_pedicle_width > 0.0
+        assert result.left_width_lower_bound_mm == pytest.approx(
+            result.left_pedicle_width
+        )
 
     def test_a_side_no_path_can_find_is_reported_but_does_not_fail_the_other(self):
         mask = _make_one_sided_coronal_phantom(with_left=False)

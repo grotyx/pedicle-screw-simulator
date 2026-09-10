@@ -486,15 +486,19 @@ class PedicleAnalyzer:
             # --- Minimum transverse width ---
             width = self._measure_pedicle_width(isthmus_voxels, voxel_area_mm2)
 
-            # Store results.
+            # Store results.  This path has only the one width estimate, so it
+            # is its own lower bound -- leaving the bound at its 0.0 default
+            # would read as a 0 mm pedicle rather than as "not cross-checked".
             if side == "left":
                 result.left_pedicle_center = isthmus_center
                 result.left_pedicle_axis = axis
                 result.left_pedicle_width = width
+                result.left_width_lower_bound_mm = width
             else:
                 result.right_pedicle_center = isthmus_center
                 result.right_pedicle_axis = axis
                 result.right_pedicle_width = width
+                result.right_width_lower_bound_mm = width
 
         if axial_found:
             methods.append("axial_components")
@@ -755,7 +759,7 @@ class PedicleAnalyzer:
         coords_zx: np.ndarray,
         sampling: Tuple[float, float],
     ) -> float:
-        """Twice the largest inscribed radius of one cross-section, in mm.
+        """The largest inscribed diameter of one cross-section, in mm.
 
         A bounding-box extent and an inscribed circle fail in opposite
         directions: a stair-stepped cross-section can have a wide box with no
@@ -770,6 +774,13 @@ class PedicleAnalyzer:
         side, so the transform measures the distance to the real boundary
         rather than to the edge of the array.
         """
+        # The transform measures to the *centre* of the nearest background
+        # voxel rather than to the boundary it shares with the foreground, so
+        # twice the largest radius over-reads by one voxel.  Subtracting one
+        # in-plane voxel makes an odd-voxel width exact and leaves an
+        # even-voxel width one voxel short -- the safe direction to err in for
+        # a planner, and harmless here because the reported width is
+        # max(extent, this) and the extent still wins on regular sections.
         lo = coords_zx.min(axis=0)
         local = coords_zx - lo
         section = np.zeros(
@@ -777,7 +788,7 @@ class PedicleAnalyzer:
         )
         section[local[:, 0] + 1, local[:, 1] + 1] = True
         distances = ndi.distance_transform_edt(section, sampling=sampling)
-        return 2.0 * float(distances.max())
+        return max(0.0, 2.0 * float(distances.max()) - sampling[1])
 
     @staticmethod
     def _track_candidate(
