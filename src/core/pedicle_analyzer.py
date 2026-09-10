@@ -844,6 +844,12 @@ class PedicleAnalyzer:
         none, the original value is kept -- it is still the best number
         available -- and the side is flagged so the planner reports the level
         as uncertain instead of as too narrow.
+
+        A replaced width takes its lower bound with it.  The bound belongs to
+        the estimate that produced it, and the axial route has only the one
+        estimate, so it becomes its own bound exactly as the axial fallback in
+        :meth:`analyze_pedicle` does -- leaving the coronal bound in place
+        would show a reviewer a floor higher than the width it sits under.
         """
         band = self._width_range_for(result.vertebra.name)
         if band is None:
@@ -871,15 +877,18 @@ class PedicleAnalyzer:
                 )
                 if side == "left":
                     result.left_pedicle_width = second
+                    result.left_width_lower_bound_mm = second
                 else:
                     result.right_pedicle_width = second
+                    result.right_width_lower_bound_mm = second
                 rechecked = True
                 continue
+            if side not in result.width_flags:
+                result.warnings.append(
+                    f"{side} pedicle width {width:.1f} mm outside the expected "
+                    f"{lo}–{hi} mm — verify manually"
+                )
             result.width_flags[side] = "implausible"
-            result.warnings.append(
-                f"{side} pedicle width {width:.1f} mm outside the expected "
-                f"{lo}–{hi} mm — verify manually"
-            )
         if rechecked and "axial_recheck" not in result.method:
             result.method = (
                 f"{result.method}+axial_recheck" if result.method else "axial_recheck"
@@ -898,10 +907,13 @@ class PedicleAnalyzer:
         slice's own x-extent, so ``max(extent, this)`` is the extent on every
         cross-section wider than it is tall; the inscribed diameter only speaks
         up on a section whose bounding box is narrower than the corridor
-        genuinely inside it.  What stops a 7 mm pedicle being reported as
-        1.6 mm is the neighbourhood median over the isthmus and its two
-        neighbours, together with the per-slice area and width floors and the
-        continuity tracking that keeps the walk on the real corridor.
+        genuinely inside it.  The max is moreover taken against the *median*
+        extent over the isthmus slice and its two neighbours, not against the
+        isthmus slice's own extent, so the EDT term can win only where the
+        isthmus slice is the widest of the three.  What stops a 7 mm pedicle
+        being reported as 1.6 mm is that neighbourhood median, together with
+        the per-slice area and width floors and the continuity tracking that
+        keeps the walk on the real corridor.
 
         ``coords_zx`` are the component's ``(z, x)`` voxel indices and
         ``sampling`` their ``(sz, sx)`` spacing.  The component is rasterised

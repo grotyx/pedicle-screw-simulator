@@ -1118,11 +1118,22 @@ class TestWidthPlausibilityGate:
         assert not result.warnings
 
     def test_s1_is_not_gated(self):
-        """S1's "pedicle" is the sacral ala; no thoracolumbar band applies."""
+        """S1's "pedicle" is the sacral ala; no thoracolumbar band applies.
+
+        The same 2 mm corridor that is flagged at L3 must pass unremarked when
+        it is labelled S1, so the check is run end to end rather than only
+        against the band table.
+        """
         assert PedicleAnalyzer._width_range_for("S1") is None
         assert PedicleAnalyzer._width_range_for("sacrum") is None
         assert PedicleAnalyzer._width_range_for("L3") == (5.0, 22.0)
         assert PedicleAnalyzer._width_range_for("T11") == (3.5, 18.0)
+
+        analyzer = PedicleAnalyzer(_make_narrow_corridor_phantom(label=26))  # S1
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.width_flags == {}
+        assert not any("outside the expected" in w for w in result.warnings)
 
     def test_axial_recheck_replaces_a_width_it_can_measure(self):
         """When the axial slice can see the pedicle, its width wins."""
@@ -1141,6 +1152,33 @@ class TestWidthPlausibilityGate:
         assert result.method == "coronal_isthmus+axial_recheck"
         assert result.width_flags == {}
         assert not result.warnings
+
+    def test_recheck_above_the_ceiling_also_replaces_the_lower_bound(self):
+        """A replaced width takes its lower bound with it.
+
+        The bound belongs to the estimate that produced it.  Leaving the
+        coronal bound in place beside an axial width would show a reviewer a
+        30 mm "floor" under an 8 mm pedicle, which is not a floor at all.
+        """
+        mask = _make_h_vertebra_mask(label=29)  # L3, pedicles clear of the body
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        result = PedicleAnalysisResult(vertebra=vertebra)
+        result.left_pedicle_center = np.array([43.5, 39.5, 30.0])
+        result.left_pedicle_width = 30.0          # above the 22.0 lumbar ceiling
+        result.left_width_lower_bound_mm = 25.0
+        result.method = "coronal_isthmus"
+
+        analyzer._apply_plausibility_gate(result, binary)
+
+        assert result.left_pedicle_width == pytest.approx(8.0, abs=1.0)
+        assert result.left_width_lower_bound_mm == pytest.approx(
+            result.left_pedicle_width
+        )
+        assert result.left_width_lower_bound_mm <= result.left_pedicle_width
+        assert result.method.endswith("+axial_recheck")
+        assert result.width_flags == {}
 
 
 if __name__ == "__main__":
