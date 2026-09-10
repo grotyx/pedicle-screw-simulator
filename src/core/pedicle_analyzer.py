@@ -110,11 +110,13 @@ class PedicleAnalyzer:
     # voxel of drift is a small angle.
     MIN_AXIS_WINDOW_MM: float = 5.0
     # Largest cranio-caudal rise the fitted axis may have per unit of AP
-    # travel.  A pedicle axis is close to axial; anything past 45 degrees is a
-    # fitting artefact, and following it puts the entry point a centimetre off
-    # the isthmus.  Such a fit is discarded in favour of body centre ->
-    # isthmus.
-    MAX_AXIS_TILT_RATIO: float = 1.0
+    # travel.  Thoracolumbar pedicles run within about 25 degrees of the axial
+    # plane; 0.7 (35 degrees) keeps the margin a lordotic level needs when the
+    # slices are not square to the endplate, and still refuses the fits that
+    # break the planner -- the sample CT's L2-left came back at 42 degrees
+    # caudal, which no L2 pedicle does.  Such a fit is discarded in favour of
+    # body centre -> isthmus.
+    MAX_AXIS_TILT_RATIO: float = 0.7
     # Fewest labelled voxels on one side before that side is measured.  Below
     # this the label is a speck of leakage rather than a pedicle.
     MIN_LABEL_SIDE_VOXELS: int = 20
@@ -502,6 +504,16 @@ class PedicleAnalyzer:
                 pca_voxels = all_voxels
 
             axis = self._compute_pedicle_axis(pca_voxels)
+            if (
+                abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT
+                or self._is_overtilted(axis)
+            ):
+                # The axial pass gathers its cloud slice by slice, so a
+                # stair-stepped or obliquely drawn corridor tips its principal
+                # axis out of the AP direction as readily as the coronal fit --
+                # and this path never had a guard at all.  Same answer as the
+                # other two: body centre -> isthmus, oriented posteriorly.
+                axis = self._body_centre_axis(isthmus_center, body_center)
 
             # --- Minimum transverse width ---
             width = self._measure_pedicle_width(isthmus_voxels, voxel_area_mm2)
@@ -751,11 +763,8 @@ class PedicleAnalyzer:
             # A cloud whose principal axis is not AP enough to trust, or one
             # that climbs out of the axial plane faster than it advances — fall
             # back on body centre -> isthmus, as the coronal search does.
-            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
-            fallback = center - body_center_lps
-            norm = float(np.linalg.norm(fallback))
-            axis = (
-                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            axis = self._body_centre_axis(
+                center, self._continuous_ijk_to_lps(*body_center_ijk)
             )
         if axis[1] < 0:
             axis = -axis
@@ -1166,13 +1175,11 @@ class PedicleAnalyzer:
 
         axis = self._fit_axis_through_centroids(records[lo_index:hi_index + 1])
         if axis is None:
-            # Too few slices, or a corridor whose centroids do not track the
-            # AP direction — fall back on body centre -> isthmus.
-            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
-            fallback = center - body_center_lps
-            norm = float(np.linalg.norm(fallback))
-            axis = (
-                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            # Too few slices, a corridor whose centroids do not track the AP
+            # direction, or one that climbs out of the axial plane faster than
+            # it advances — fall back on body centre -> isthmus.
+            axis = self._body_centre_axis(
+                center, self._continuous_ijk_to_lps(*body_center_ijk)
             )
         if axis[1] < 0:
             axis = -axis
@@ -1222,7 +1229,9 @@ class PedicleAnalyzer:
                 lo_index -= 1
             elif hi_index < last:
                 hi_index += 1
-            else:
+            elif lo_index > 0:
+                # The posterior end is exhausted; keep widening towards the
+                # body.  The break above means this arm always has room.
                 lo_index -= 1
             extend_lo = not extend_lo
         return lo_index, hi_index
@@ -1276,6 +1285,31 @@ class PedicleAnalyzer:
         following it lands the entry point a centimetre off the isthmus.
         """
         return abs(float(axis[2])) > cls.MAX_AXIS_TILT_RATIO * abs(float(axis[1]))
+
+    @staticmethod
+    def _body_centre_axis(
+        isthmus_center_lps: np.ndarray,
+        body_center_lps: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """Body centre -> isthmus, as a posterior-oriented unit vector.
+
+        The direction every path falls back on when its own fit is too short,
+        too lateral or too steep to trust: it cannot be more than a rough
+        estimate of the corridor, but it always points into the pedicle from
+        in front of it.  Degenerates to ``+Y`` when there is no body centre or
+        the isthmus sits on top of it.
+        """
+        if body_center_lps is None:
+            return np.array([0.0, 1.0, 0.0])
+        direction = (
+            np.asarray(isthmus_center_lps, dtype=np.float64)
+            - np.asarray(body_center_lps, dtype=np.float64)
+        )
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-9:
+            return np.array([0.0, 1.0, 0.0])
+        direction = direction / norm
+        return -direction if direction[1] < 0 else direction
 
     def analyze_all(
         self, labels: Optional[List[int]] = None

@@ -300,6 +300,29 @@ def _make_notched_corridor_phantom(notch_slices: int, label: int = 28) -> sitk.I
     return sitk.GetImageFromArray(arr)
 
 
+def _make_diagonal_axial_sliver_phantom(label: int = 28) -> sitk.Image:
+    """A vertebra whose left side is only reachable by the axial pass, drawn diagonally.
+
+    The right pedicle is a solid block joined to the body, so the coronal
+    search records it.  The left one is the same 3 x 3 mm sliver as
+    :func:`_make_one_sided_coronal_phantom` -- 9 mm2 per coronal
+    cross-section, under :attr:`PedicleAnalyzer.MIN_PEDICLE_AREA_MM2`, so the
+    coronal search never sees it and the side falls through to the axial
+    connected-component pass -- except that it climbs one z voxel for every
+    coronal slice it advances.  A PCA over that cloud runs 45 degrees up the
+    tube: AP enough to clear ``MIN_AXIS_AP_COMPONENT``, far too steep to drill.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    body = (xx >= 25) & (xx < 66) & (yy >= 20) & (yy < 50) & (zz >= 10) & (zz < 50)
+    right = (xx >= 26) & (xx < 38) & (yy >= 48) & (yy < 62) & (zz >= 26) & (zz < 38)
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | right] = label
+    for t in range(14):
+        arr[31 + t:34 + t, 52 + t, 57:60] = label
+    return sitk.GetImageFromArray(arr)
+
+
 def _make_fine_corridor_phantom(z_step: bool = False, label: int = 28) -> sitk.Image:
     """A left corridor on a 0.4 mm in-plane grid whose isthmus is three slices.
 
@@ -823,13 +846,17 @@ class TestAxisWindowLength:
                 for j in range(4)
             ]
 
-        # 4 mm of rise over 3 mm of AP travel: more than 45 degrees off-axial,
-        # so the helper refuses it and the caller falls back on body -> isthmus.
+        # 4 mm of rise over 3 mm of AP travel (53 degrees off-axial) and the
+        # boundary case at 0.8 : 1 (38.7 degrees) are both past the 35 degree
+        # limit, so the helper refuses them and the caller falls back on
+        # body -> isthmus.
         assert analyzer._fit_axis_through_centroids(window(4.0 / 3.0)) is None
-        # 2 mm over 3 mm is a real, if steep, pedicle and is still fitted.
-        gentle = analyzer._fit_axis_through_centroids(window(2.0 / 3.0))
+        assert analyzer._fit_axis_through_centroids(window(0.8)) is None
+        # 1 mm of rise per 2 mm of travel (26.6 degrees) is a real, if steep,
+        # pedicle and is still fitted.
+        gentle = analyzer._fit_axis_through_centroids(window(0.5))
         assert gentle is not None
-        assert abs(gentle[2]) < abs(gentle[1])
+        assert abs(gentle[2]) < PedicleAnalyzer.MAX_AXIS_TILT_RATIO * abs(gentle[1])
 
     def test_overtilted_corridor_axis_becomes_the_body_centre_direction(self):
         """The rejected fit reaches the caller as the isthmus fallback."""
@@ -851,6 +878,33 @@ class TestAxisWindowLength:
         assert axis == pytest.approx(expected)
         # The fitted axis had no lateral component at all; this one does.
         assert abs(axis[0]) > 0.3
+
+    @staticmethod
+    def _records(js):
+        """Synthetic ``(j, area, coords)`` records at the given coronal slices."""
+        return [
+            (j, 40.0, np.array([[32.0, 60.0]], dtype=np.float64)) for j in js
+        ]
+
+    def test_a_corridor_shorter_than_the_window_is_fitted_whole(self):
+        """Nothing to extend into: the whole corridor is the window."""
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())  # 1 mm isotropic
+        records = self._records(range(4))  # 4 mm of AP travel, under the 5 mm floor
+
+        assert analyzer._extend_axis_window(records, 1, 2) == (0, 3)
+
+    def test_the_window_spans_by_slice_index_not_by_record_count(self):
+        """A bridged tracking gap is AP travel, so it counts towards the span."""
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())  # 1 mm isotropic
+        # The walk lost y = 41..43 to a stair-step notch and bridged it, so
+        # these two records already span 5 mm of travel between them.  A rule
+        # counting records would have gone on widening; the span rule stops.
+        records = self._records([40, 44, 45, 46, 47, 48])
+
+        assert analyzer._extend_axis_window(records, 0, 1) == (0, 1)
+        # And a window that has to widen across the gap counts the gap: three
+        # steps from (45, 46) reach y = 40, which is 8 mm, not 4 records.
+        assert analyzer._extend_axis_window(records, 2, 3) == (0, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -1105,6 +1159,28 @@ class TestAxialFallThrough:
         assert result.left_width_lower_bound_mm == pytest.approx(
             result.left_pedicle_width
         )
+
+    def test_axial_pass_rejects_an_overtilted_pca_axis(self):
+        """The axial pass's PCA gets the same tilt guard as the other two paths.
+
+        Its cloud is gathered slice by slice, so a corridor drawn diagonally
+        tips the principal axis 45 degrees out of the axial plane — past the
+        AP-component check, which only looks at ``axis[1]`` — and until now
+        this path had no guard on it at all.
+        """
+        analyzer = PedicleAnalyzer(_make_diagonal_axial_sliver_phantom())
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.method == "coronal_isthmus+axial_components"
+        axis = np.asarray(result.left_pedicle_axis, dtype=float)
+        # Not the tube's own direction, which is [0, 0.707, 0.707]…
+        assert abs(axis[2]) <= PedicleAnalyzer.MAX_AXIS_TILT_RATIO * abs(axis[1])
+        assert abs(axis[2]) < 0.3
+        # …but body centre -> isthmus, oriented posteriorly.
+        expected = result.left_pedicle_center - result.vertebral_body_center
+        expected = expected / np.linalg.norm(expected)
+        assert axis == pytest.approx(expected)
+        assert axis[1] > 0
 
     def test_a_side_no_path_can_find_is_reported_but_does_not_fail_the_other(self):
         mask = _make_one_sided_coronal_phantom(with_left=False)
