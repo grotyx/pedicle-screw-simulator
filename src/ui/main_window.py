@@ -4,6 +4,7 @@ import logging
 import sys
 from typing import List, Optional
 
+from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (
@@ -80,6 +81,7 @@ from .styles import (
 )
 from .tool_icons import create_tool_icon
 from .viewer_3d import Viewer3D
+from .workflow_bar import WorkflowBar, WorkflowStep, workflow_states
 
 logger = logging.getLogger(__name__)
 
@@ -287,8 +289,24 @@ class MainWindow(QMainWindow):
         # Splitter: quad-view (left) | controls (right), user-resizable
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left panel: Reconfigurable MPR/3D view
+        # Left panel: the workflow bar above the reconfigurable MPR/3D view.
+        # Each step runs the existing action it names, looked up at click time
+        # so the buttons it presses need not exist yet.
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        self.workflow_bar = WorkflowBar(
+            [
+                WorkflowStep("Open DICOM", lambda: self._dicom_ctrl.open_folder()),
+                WorkflowStep("Segment", lambda: self.seg_run_btn.click()),
+                WorkflowStep("Plan Screws", lambda: self.auto_screw_plan_btn.click()),
+            ]
+        )
+        left_layout.addWidget(self.workflow_bar)
+
         view_container = QWidget()
+        left_layout.addWidget(view_container, 1)
         self._view_layout = QGridLayout(view_container)
         self._view_layout.setSpacing(6)
         self._view_layout.setContentsMargins(6, 6, 6, 6)
@@ -305,7 +323,7 @@ class MainWindow(QMainWindow):
 
         self.set_view_layout("planning")
 
-        splitter.addWidget(view_container)
+        splitter.addWidget(left_panel)
 
         # Right panel: Controls
         control_panel = self._create_control_panel()
@@ -470,12 +488,89 @@ class MainWindow(QMainWindow):
     )
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        """Record which pane a press or wheel landed in; never consume it."""
-        if event.type() in self._FOCUS_EVENT_TYPES:
+        """Track the pane in use and the workflow buttons; never consume anything.
+
+        A press or wheel records which pane it landed in (see
+        :meth:`_install_focus_tracking`).  An enabled-state change on one of the
+        tab buttons the workflow bar presses redraws the bar, which is the one
+        signal that covers every place those buttons are switched: a run
+        starting or ending, levels being selected, a threshold mask.
+        """
+        event_type = event.type()
+        if event_type in self._FOCUS_EVENT_TYPES:
             name = self._pane_name_for(obj)
             if name is not None:
                 self._focused_view_name = name
+        elif event_type == QEvent.Type.EnabledChange and obj in (
+            self.__dict__.get("seg_run_btn"),
+            self.__dict__.get("auto_screw_plan_btn"),
+        ):
+            self._refresh_workflow_bar()
         return super().eventFilter(obj, event)
+
+    def _refresh_workflow_bar(self) -> None:
+        """Redraw the workflow bar from what this session has done so far.
+
+        Reads the state the rest of the window already keeps rather than
+        tracking its own: a loaded volume, a TotalSegmentator mask (a
+        threshold fallback cannot be planned on, so it does not finish step
+        2), auto-planned screws, and whether the two tab buttons the steps
+        press are enabled right now.
+
+        This has several entry points -- the app-wide focus-tracking event
+        filter, controller callbacks, and table-model signals -- so it must
+        be a safe no-op both on a half-built window (called before
+        ``workflow_bar`` or the tab buttons exist) and on a half-destroyed
+        one (called after they have been ``deleteLater``'d but before Qt has
+        finished tearing down this window's C++ side).  ``sip.isdeleted``
+        catches the latter case, which a plain ``hasattr``/``is None`` check
+        cannot: the Python attribute is still there, but touching the
+        underlying C++ object raises.
+        """
+        bar = self.__dict__.get("workflow_bar")
+        seg_run_btn = self.__dict__.get("seg_run_btn")
+        auto_screw_plan_btn = self.__dict__.get("auto_screw_plan_btn")
+        if (
+            bar is None
+            or seg_run_btn is None
+            or auto_screw_plan_btn is None
+            or sip.isdeleted(bar)
+            or sip.isdeleted(seg_run_btn)
+            or sip.isdeleted(auto_screw_plan_btn)
+        ):
+            return
+        seg = self._seg_ctrl
+        has_mask = (
+            getattr(seg, "_last_segmentation_mask_path", None) is not None
+            and getattr(seg, "_last_segmentation_method", None) == "totalsegmentator"
+        )
+        has_plan = any(
+            getattr(screw, "source", "") == "auto"
+            for screw in self._tool_ctrl.screw_tool.get_screws()
+        )
+        bar.set_states(
+            workflow_states(
+                has_volume=self.volume_manager.get_sitk_image() is not None,
+                segment_available=self.seg_run_btn.isEnabled(),
+                has_mask=has_mask,
+                plan_available=self.auto_screw_plan_btn.isEnabled(),
+                has_plan=has_plan,
+            )
+        )
+
+    def _on_screw_rows_changed(self, *_args) -> None:
+        """A screw row appeared or went, so step 3 may have finished or reopened.
+
+        Connected to the screw table's rowsInserted/rowsRemoved/modelReset
+        rather than kept as a lambda: a bound method uses this window as
+        Qt's receiver, so the connection is torn down together with it.  A
+        lambda has no receiver, so it can outlive this window's buttons
+        during teardown -- pytest-qt's deleteLater() on a previous test's
+        window can run its DeferredDelete inside a *later* test's event
+        loop, after seg_run_btn's C++ object is already gone, and a lambda
+        calling _refresh_workflow_bar() then raises on the deleted button.
+        """
+        self._refresh_workflow_bar()
 
     def _pane_name_for(self, obj: QObject) -> Optional[str]:
         """Which maximisable pane contains *obj*, if any.
@@ -1565,6 +1660,20 @@ class MainWindow(QMainWindow):
                 lambda plane, *_unused: self._remember_focused_view(plane)
             )
         self._install_focus_tracking()
+        # The workflow bar follows the study: a finished plan or a removed
+        # screw changes which step comes next. (A new volume is handled by
+        # reset_workspace() itself, once the previous study's mask and
+        # screws are actually cleared -- see _on_screw_rows_changed.)
+        table_model = self.screw_list_widget.model()
+        # A bound method, not a lambda: PyQt uses ``self`` as the receiver
+        # for a bound method, so the connection is torn down together with
+        # this window.  A lambda has no such receiver, so during teardown it
+        # can still fire -- from a table row change queued while this
+        # window's children (including seg_run_btn) are already destroyed --
+        # and raise ``wrapped C/C++ object ... has been deleted``.
+        for signal in (table_model.rowsInserted, table_model.rowsRemoved, table_model.modelReset):
+            signal.connect(self._on_screw_rows_changed)
+        self._refresh_workflow_bar()
         self.screw_list_widget.currentRowChanged.connect(
             lambda *_unused: self.refresh_mode_indicators()
         )
@@ -2620,6 +2729,9 @@ class MainWindow(QMainWindow):
         self.vertebra_show_selected_btn.setEnabled(has_levels)
         self.vertebra_show_all_btn.setEnabled(has_levels)
         self._on_vertebra_level_selection_changed(apply_to_view=False)
+        # Called as segmentation finishes, after its mask is recorded: step 2
+        # is done even when the plan button's enabled state did not change.
+        self._refresh_workflow_bar()
 
     def update_vertebra_checkboxes(self, detected_labels: list) -> None:
         """Compatibility alias for the shared vertebra checkbox set."""
@@ -2673,6 +2785,11 @@ class MainWindow(QMainWindow):
         self.vertebra_show_selected_btn.setEnabled(False)
         self.vertebra_show_all_btn.setEnabled(False)
         self.auto_screw_plan_btn.setEnabled(False)
+        # Mirrors the refresh at the end of update_vertebra_level_checks:
+        # this is where a cleared segmentation lands, and step 2 must reopen
+        # even when the plan button was already disabled (so no
+        # EnabledChange event fires to trigger the refresh on its own).
+        self._refresh_workflow_bar()
 
     def _reset_all_vertebra_checkboxes(self) -> None:
         """Compatibility reset for segmentation clear paths."""
@@ -2741,6 +2858,12 @@ class MainWindow(QMainWindow):
 
         # Reset vertebra checkboxes to show all
         self._reset_all_vertebra_checkboxes()
+
+        # DicomController calls set_volume() before this method runs, which
+        # notifies observers -- including a stale workflow bar reading the
+        # previous study's mask and screws -- before they are cleared above.
+        # Redraw only now that this study is actually a fresh one.
+        self._refresh_workflow_bar()
 
     def closeEvent(self, event):
         """Handle window close."""

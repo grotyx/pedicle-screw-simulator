@@ -529,6 +529,20 @@ QLabel#screwReviewCounter {{
     font-weight: 800;
     padding: 6px 4px;
 }}
+QWidget#workflowBar {{
+    background-color: {t["bg_secondary"]};
+    border-bottom: 1px solid {t["border"]};
+}}
+QPushButton#workflowStep {{
+    min-width: 120px;
+    padding: 6px 14px;
+    font-weight: 600;
+}}
+QLabel#workflowChevron {{
+    background-color: transparent;
+    color: {t["text_secondary"]};
+    font-size: 15px;
+}}
 QPushButton#screwReviewNav {{
     min-width: 78px;
     padding: 5px 8px;

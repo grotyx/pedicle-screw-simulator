@@ -16,7 +16,8 @@ sitk = pytest.importorskip("SimpleITK")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QMessageBox,
@@ -2270,3 +2271,252 @@ def test_screw_mpr_opens_the_3d_view_at_the_cross_section(ui_main_window):
 
     assert window.viewer_3d.screw_mpr_planes is None
     assert window.viewer_3d.screw_mpr_clear_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Workflow bar: MainWindow drives WorkflowBar.set_states() from whatever the
+# study, segmentation and planning state currently is, and must redraw it
+# every time one of those changes -- including the deferred-delete teardown
+# path pytest-qt exercises between fixtures (see the regression test at the
+# bottom of this section).
+# ---------------------------------------------------------------------------
+
+
+def _load_study(window, series_id):
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": series_id, "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+
+
+def _finish_segmentation(window, tmp_path, monkeypatch, method="totalsegmentator"):
+    mask_path = tmp_path / f"{method}_mask.nii.gz"
+    _write_mask(_create_test_image(), mask_path)
+    if method == "threshold_fallback":
+        monkeypatch.setattr(
+            seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+        )
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method=method,
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+
+
+def _add_screw(window, source):
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(8.0, 9.0, 24.0),
+        diameter=6.0,
+        source=source,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+
+def test_workflow_bar_sits_above_the_views_and_starts_at_open_dicom(ui_main_window):
+    window = ui_main_window
+    bar = window.workflow_bar
+    b = bar.buttons
+
+    layout = bar.parentWidget().layout()
+    assert layout.indexOf(bar) == 0
+
+    assert b[0].isEnabled() is True
+    assert b[0].property("role") == "primary"
+    assert b[0].text() == "①  Open DICOM"
+    assert b[1].isEnabled() is False
+    assert b[2].isEnabled() is False
+    assert b[1].toolTip() == "Open a DICOM series first"
+
+
+def test_workflow_bar_advances_to_segment_after_a_study_loads(ui_main_window):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-1")
+    b = window.workflow_bar.buttons
+
+    assert b[0].text() == "✓ Open DICOM"
+    assert b[0].property("role") == "secondary"
+    assert b[1].isEnabled() is True
+    assert b[1].property("role") == "primary"
+    assert b[1].toolTip() == "Run TotalSegmentator on the loaded study"
+    assert b[2].isEnabled() is False
+    assert b[2].toolTip() == "Run segmentation first"
+
+
+def test_workflow_bar_finishes_segment_for_a_totalsegmentator_mask(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-2")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    b = window.workflow_bar.buttons
+
+    assert b[1].text() == "✓ Segment"
+    assert b[2].property("role") == "primary"
+    assert b[2].isEnabled() is False
+    assert b[2].toolTip() == "Select vertebral levels in the Planning tab"
+
+
+def test_workflow_bar_keeps_segment_open_after_a_threshold_fallback(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-3")
+    _finish_segmentation(window, tmp_path, monkeypatch, method="threshold_fallback")
+    b = window.workflow_bar.buttons
+
+    assert b[1].text() == "②  Segment"
+    assert b[1].property("role") == "primary"
+    assert b[2].isEnabled() is False
+
+
+def test_workflow_bar_enables_plan_once_levels_are_selected(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-4")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    window.update_vertebra_level_checks([28, 29, 30])
+    b = window.workflow_bar.buttons
+
+    assert window.auto_screw_plan_btn.isEnabled() is True
+    assert b[2].isEnabled() is True
+    assert b[2].toolTip() == "Plan screws for the selected vertebral levels"
+
+    window._toggle_vertebra_level_checks(False)
+
+    assert b[2].isEnabled() is False
+
+
+def test_workflow_bar_finishes_plan_for_auto_screws_but_not_manual_ones(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-5")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    b = window.workflow_bar.buttons
+
+    _add_screw(window, "manual")
+    assert b[2].text() == "③  Plan Screws"
+
+    _add_screw(window, "auto")
+    assert b[2].text() == "✓ Plan Screws"
+    assert not any(button.property("role") == "primary" for button in b)
+
+    window.screw_list_widget.setCurrentRow(1)
+    window._tool_ctrl.remove_selected_screw()
+
+    assert b[2].text() == "③  Plan Screws"
+    assert b[2].property("role") == "primary"
+
+
+def test_workflow_bar_resets_when_a_new_study_is_loaded(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Regression for the stale-bar bug: set_volume() notifies before
+    reset_workspace() clears the previous study's mask and screws, so the
+    refresh that matters is the one reset_workspace() triggers itself once
+    everything is actually cleared -- not one hung on the volume-loaded
+    notification, which would still see the old state.
+    """
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-6")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    _add_screw(window, "auto")
+    b = window.workflow_bar.buttons
+    assert b[2].text() == "✓ Plan Screws"
+
+    _load_study(window, "WF-STUDY-SECOND")
+
+    assert b[0].text() == "✓ Open DICOM"
+    assert b[1].text() == "②  Segment"
+    assert b[1].property("role") == "primary"
+    assert b[2].text() == "③  Plan Screws"
+    assert b[2].isEnabled() is False
+
+
+def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-7")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+
+    window._seg_ctrl.clear_overlay()
+    b = window.workflow_bar.buttons
+
+    assert b[1].text() == "②  Segment"
+    assert b[1].property("role") == "primary"
+
+
+def test_workflow_bar_steps_run_the_same_actions_as_the_tab_buttons(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    b = window.workflow_bar.buttons
+    calls = []
+
+    monkeypatch.setattr(
+        window._dicom_ctrl, "open_folder", lambda: calls.append("open")
+    )
+    b[0].click()
+    assert calls == ["open"]
+
+    _load_study(window, "WF-STUDY-8")
+    window.seg_run_btn.clicked.disconnect()
+    window.seg_run_btn.clicked.connect(lambda *_: calls.append("segment"))
+    b[1].click()
+    assert calls == ["open", "segment"]
+
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    window.update_vertebra_level_checks([28, 29, 30])
+    window.auto_screw_plan_btn.clicked.disconnect()
+    window.auto_screw_plan_btn.clicked.connect(lambda *_: calls.append("plan"))
+    b[2].click()
+
+    assert calls == ["open", "segment", "plan"]
+
+
+@pytest.mark.parametrize("close_first", [True, False])
+def test_destroying_a_window_with_screw_rows_raises_nothing(
+    monkeypatch, qtbot, isolated_qsettings, close_first
+):
+    """Regression for the teardown crash: a lambda connected to the screw
+    table's row signals had no Qt receiver, so it could still fire -- from a
+    DeferredDelete queued by an earlier test's window -- after this
+    window's buttons were already gone, raising on the deleted C++ object.
+    A bound method dies with the window instead.
+
+    The window is built and torn down by hand rather than through
+    qtbot.addWidget/the ui_main_window fixture: this test owns the exact
+    teardown sequence (close, then deleteLater, then deliver the deferred
+    delete) that reproduced the bug, and qtbot's own fixture teardown would
+    add a second, redundant deleteLater on top of it.
+    """
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "soft_light")
+
+    window = main_window_module.MainWindow()
+    # No _on_dicom_loaded here: it schedules a QTimer.singleShot on the
+    # plain-Python DicomController, which would fire after this window is
+    # gone if it survived to the timer's timeout.
+    _add_screw(window, "auto")
+    _add_screw(window, "manual")
+    button = window.seg_run_btn
+
+    with qtbot.captureExceptions() as exceptions:
+        if close_first:
+            window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        QApplication.processEvents()
+
+    assert exceptions == []
+    assert sip.isdeleted(button)
