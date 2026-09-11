@@ -2242,16 +2242,25 @@ class MainWindow(QMainWindow):
         *afterwards* (1.0 mm included) is respected.  A persisted value that is
         not the old default -- 0.5 or 1.5 mm -- was a deliberate choice and is
         left alone; only the flag is written.
+
+        The one case that does *not* count as a run is an unreadable store.
+        ``load_planner_settings`` empties ``stored`` on the first numeric key it
+        cannot parse, so a single malformed value hides the persisted clearance
+        from this check entirely.  Marking the migration done there retired it
+        permanently while the old 1.0 mm survived -- exactly the state it
+        exists to end -- so the flag is written only once the value has
+        actually been read.
         """
         raw_migrated = settings.value(_PLANNER_CLEARANCE_MIGRATION_KEY, False)
         if str(raw_migrated).strip().lower() in ("true", "1", "yes"):
             return
-        settings.setValue(_PLANNER_CLEARANCE_MIGRATION_KEY, True)
-        if not settings.contains("wall_clearance_mm"):
-            return                       # nothing persisted; the new default applies
         clearance = stored.get("wall_clearance_mm")
-        if not isinstance(clearance, float):
-            return                       # unreadable; the loader already complained
+        persisted = settings.contains("wall_clearance_mm")
+        if persisted and not isinstance(clearance, float):
+            return                       # unreadable; retry on a later launch
+        settings.setValue(_PLANNER_CLEARANCE_MIGRATION_KEY, True)
+        if not persisted or not isinstance(clearance, float):
+            return                       # nothing persisted; the new default applies
         if abs(clearance - _LEGACY_WALL_CLEARANCE_MM) > 1e-6:
             return
         stored["wall_clearance_mm"] = 0.0

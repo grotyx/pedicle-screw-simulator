@@ -733,6 +733,62 @@ def test_the_clearance_migration_does_not_run_twice(planner_window_factory):
     assert _persisted_clearance(isolated) == pytest.approx(1.0)
 
 
+def test_an_unreadable_store_does_not_burn_the_clearance_migration(
+    planner_window_factory,
+):
+    """One malformed key must not retire the migration with the 1.0 mm intact.
+
+    ``load_planner_settings`` empties its parsed mapping on the first numeric
+    key it cannot read, so the persisted clearance never reaches the check.
+    Writing the flag there marked the migration done forever while the value
+    it exists to retire sat untouched in the store.
+    """
+    isolated, build = planner_window_factory
+    _persist_planner(
+        isolated, wall_clearance_mm=1.0, pedicle_fill_ratio="not-a-number"
+    )
+
+    window = build()
+
+    assert _persisted_clearance(isolated) == pytest.approx(1.0)
+    assert not _clearance_flag_is_set(isolated)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        not in window.statusbar.currentMessage()
+    )
+
+
+def test_the_migration_still_runs_once_the_store_is_readable_again(
+    planner_window_factory,
+):
+    isolated, build = planner_window_factory
+    _persist_planner(
+        isolated, wall_clearance_mm=1.0, pedicle_fill_ratio="not-a-number"
+    )
+    build()
+    _persist_planner(isolated, pedicle_fill_ratio=0.8)
+
+    repaired = build()
+
+    assert repaired.plan_wall_clearance_spin.value() == pytest.approx(0.0)
+    assert _persisted_clearance(isolated) == pytest.approx(0.0)
+    assert _clearance_flag_is_set(isolated)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        in repaired.statusbar.currentMessage()
+    )
+
+
+def test_an_empty_store_still_flags_the_clearance_migration(planner_window_factory):
+    """Nothing persisted is a completed run: a 1.0 mm picked later is a choice."""
+    isolated, build = planner_window_factory
+
+    window = build()
+
+    assert window.plan_wall_clearance_spin.value() == pytest.approx(0.0)
+    assert _clearance_flag_is_set(isolated)
+
+
 def test_a_wall_clearance_chosen_after_the_migration_is_respected(
     planner_window_factory,
 ):
