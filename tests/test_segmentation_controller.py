@@ -683,3 +683,43 @@ def test_status_label_names_the_refinement_state(
     assert "Raw mask" in _status_after(
         window, ctrl, tmp_path, monkeypatch, None, [], "c.nii.gz"
     )
+
+
+# ---------------------------------------------------------------------------
+# Re-segmenting drops the pedicle analyses measured on the previous mask
+# ---------------------------------------------------------------------------
+
+
+def test_finished_drops_the_analyses_measured_on_the_old_mask(
+    ui_main_window, tmp_path
+):
+    """One row may not mix a new mask's grade with an old mask's pedicle width.
+
+    Boundary refinement moves exactly the walls the isthmus width is measured
+    between, so re-running segmentation on the same study invalidates every
+    analysis.  Keeping them re-graded each screw against the new mask while
+    re-deriving its width, narrow verdict and endplate angle from the old one.
+    """
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-REGISTRY", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    screw_tool = window._tool_ctrl.screw_tool
+    screw_tool.set_analysis_by_level({29: object()})
+    assert screw_tool._analysis_by_level
+
+    mask_path = tmp_path / "mask_registry.nii.gz"
+    _write_mask(image, mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+    assert screw_tool._analysis_by_level == {}

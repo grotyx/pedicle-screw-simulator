@@ -414,6 +414,15 @@ class SegmentationController:
             # replaced the mask these screws were measured against, and grades
             # taken from the previous one would be presented as current.
             self._window._tool_ctrl.screw_tool.set_grader(grader)
+            # The per-level pedicle analyses were measured on the *old* mask,
+            # and boundary refinement moves exactly the walls their isthmus
+            # width is taken between.  Keeping them would have re-graded each
+            # screw against the new mask while re-deriving its width, narrow
+            # verdict and endplate angle from the old one -- one row, two
+            # masks, nothing on screen saying so.  Dropping them makes those
+            # metrics "not measured" until the next planning run, which the
+            # merge already knows how to carry through.
+            self._window._tool_ctrl.screw_tool.set_analysis_by_level(None)
             self._window.statusbar.showMessage("Re-grading screws…")
             QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
