@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
-from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.auto_screw_planner import (
+    AutoScrewPlanner,
+    PlannedScrew,
+    construct_summary,
+)
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
@@ -403,16 +407,11 @@ class AutoPlacementController:
                 f"Added {len(planned)} editable screws. "
                 f"Grades: {grade_summary}. Select a screw and drag it directly."
             )
-            rod = _rod_misalignment_by_side(planned)
-            # Only the sides that actually have screws: "R 0.0 mm" for a side
-            # with none reads as a perfectly aligned rod that does not exist.
-            measured = [
-                f"{initial} {rod[side]:.1f} mm"
-                for side, initial in (("left", "L"), ("right", "R"))
-                if side in rod
-            ]
-            if measured:
-                status += " Rod misalignment " + " / ".join(measured)
+            # Only the sides that actually have screws: a side with none must
+            # never be reported as a perfectly fitted rod that does not exist.
+            summary = construct_summary(planned)
+            if summary:
+                status += " " + summary
         status += note
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)
@@ -483,24 +482,6 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     if remaining:
         sides += f" and {remaining} more"
     return f" No screw planned: {sides}"
-
-
-def _rod_misalignment_by_side(planned: List[PlannedScrew]) -> Dict[str, float]:
-    """Per-side rod misalignment recorded by the optimiser, if it ran.
-
-    Legacy planning leaves the metric out, in which case the caller omits the
-    readout entirely rather than reporting a misleading 0.0 mm.
-    """
-    rod: Dict[str, float] = {}
-    for ps in planned:
-        value = ps.metrics.get("rod_misalignment_mm")
-        if value is None:
-            continue
-        try:
-            rod[ps.side] = float(value)
-        except (TypeError, ValueError):
-            logger.warning("Ignoring unreadable rod misalignment %r", value)
-    return rod
 
 
 def planned_screw_to_screw(ps: PlannedScrew) -> Screw:

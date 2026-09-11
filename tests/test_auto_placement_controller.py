@@ -745,31 +745,42 @@ def test_planning_thread_pedicle_mask_defaults_to_none():
     assert thread._pedicle_mask is None
 
 
-def test_on_finished_reports_rod_misalignment(controller_with_window):
+def test_on_finished_reports_the_construct_summary(controller_with_window):
     ctrl, window = controller_with_window
     ctrl._on_finished(_current_thread(ctrl), [
-        _planned("L4", "left", metrics={"rod_misalignment_mm": 1.24}),
-        _planned("L4", "right", metrics={"rod_misalignment_mm": 2.75}),
+        _planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        }),
+        _planned("L4", "right", metrics={
+            "rod_misalignment_mm": 0.92, "convergence_spread_deg": 3.44,
+        }),
     ])
-    assert "Rod misalignment L 1.2 mm / R 2.8 mm" in window.auto_screw_status._text
+    assert (
+        "Construct: rod fit 1.2 mm (L), 0.9 mm (R) "
+        "· convergence spread 2.8° (L), 3.4° (R)"
+    ) in window.auto_screw_status._text
 
 
-def test_on_finished_omits_rod_misalignment_when_absent(controller_with_window):
+def test_on_finished_omits_the_summary_without_construct_metrics(
+    controller_with_window,
+):
     ctrl, window = controller_with_window
     ctrl._on_finished(_current_thread(ctrl), [_planned("L4", "left")])
-    assert "Rod misalignment" not in window.auto_screw_status._text
+    assert "Construct:" not in window.auto_screw_status._text
 
 
-def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
+def test_on_finished_omits_a_side_with_no_construct_metrics(controller_with_window):
     """A side with no screws must not be reported as perfectly aligned."""
     ctrl, window = controller_with_window
     ctrl._on_finished(
         _current_thread(ctrl),
-        [_planned("L4", "left", metrics={"rod_misalignment_mm": 1.24})],
+        [_planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        })],
     )
     text = window.auto_screw_status._text
-    assert text.endswith("Rod misalignment L 1.2 mm")
-    assert "R 0.0 mm" not in text
+    assert text.endswith("Construct: rod fit 1.2 mm (L) · convergence spread 2.8° (L)")
+    assert "(R)" not in text
 
 
 # ---------------------------------------------------------------------------

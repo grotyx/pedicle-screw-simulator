@@ -449,3 +449,93 @@ def test_cockpit_endplate_row_is_dash_when_unmeasured(ui_main_window):
     window.screw_list_widget.setCurrentRow(0)
 
     assert window.selected_screw_endplate.text() == "--"
+
+
+# ---------------------------------------------------------------------------
+# W9 -- Optimizer-by-default migration and the cockpit Alignment row
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def planner_window_factory(monkeypatch, qtbot, isolated_qsettings):
+    """Build MainWindows over one isolated settings store, viewers stubbed.
+
+    Separate from ``ui_main_window`` on purpose: the migration only runs once
+    per settings store, so a test about it must control when the *first* window
+    is built.
+    """
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "soft_light")
+
+    def build():
+        window = main_window_module.MainWindow()
+        qtbot.addWidget(window)
+        return window
+
+    return isolated_qsettings, build
+
+
+def test_persisted_legacy_mode_migrates_to_optimizer_once(planner_window_factory):
+    isolated, build = planner_window_factory
+    settings = isolated("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("planner")
+    settings.setValue("mode", "legacy")
+    settings.endGroup()
+    settings.sync()
+
+    migrated = build()
+
+    assert migrated.plan_mode_combo.currentData() == "optimizer"
+    assert (
+        migrated.statusbar.currentMessage()
+        == main_window_module.PLANNER_MODE_MIGRATION_MESSAGE
+    )
+
+    # A user who chooses Legacy after the migration is respected.
+    migrated.plan_mode_combo.setCurrentIndex(migrated.plan_mode_combo.findData("legacy"))
+    respected = build()
+
+    assert respected.plan_mode_combo.currentData() == "legacy"
+    assert (
+        respected.statusbar.currentMessage()
+        != main_window_module.PLANNER_MODE_MIGRATION_MESSAGE
+    )
+
+
+def test_optimizer_mode_is_left_alone_by_the_migration(planner_window_factory):
+    _isolated, build = planner_window_factory
+
+    window = build()
+
+    assert window.plan_mode_combo.currentData() == "optimizer"
+    assert window.statusbar.currentMessage() != main_window_module.PLANNER_MODE_MIGRATION_MESSAGE
+
+
+def test_inspector_shows_the_construct_alignment_row(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"rod_misalignment_mm": 1.24, "convergence_deviation_deg": -2.13},
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert window.selected_screw_alignment.text() == "rod 1.2 mm · conv -2.1°"
+
+
+def test_inspector_alignment_row_defaults_to_a_dash(ui_main_window):
+    window = ui_main_window
+    screw = Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -45.0, 8.0))
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert window.selected_screw_alignment.text() == "--"
+
+    window.update_selected_screw_inspector(-1, None, False)
+
+    assert window.selected_screw_alignment.text() == "--"

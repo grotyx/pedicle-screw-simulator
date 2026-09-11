@@ -1959,6 +1959,16 @@ def test_optimizer_controls_feed_planner_config(ui_main_window):
     assert cfg.weights.rod == pytest.approx(0.0)
 
 
+def test_rod_weight_slider_is_labelled_construct_alignment(ui_main_window):
+    """The slider governs the rod line *and* convergence agreement now."""
+    window = ui_main_window
+
+    caption = window._planner_weight_captions["plan_weight_rod"]
+
+    assert caption.text() == "Construct alignment"
+    assert "convergence" in window.plan_weight_rod.toolTip().lower()
+
+
 def test_optimizer_controls_persist_into_a_new_window(ui_main_window, isolated_qsettings):
     window = ui_main_window
     window.plan_mode_combo.setCurrentIndex(window.plan_mode_combo.findData("legacy"))

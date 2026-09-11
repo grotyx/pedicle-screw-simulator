@@ -92,6 +92,16 @@ _APP_SETTINGS_SCOPE = ("SNUBH", "PedicleScrewSimulator")
 #: Keys copied out of the legacy scope on first use of the unified scope.
 _MIGRATED_SETTINGS_KEYS = ("appearance/theme", "geometry", "windowState")
 
+#: Shown once when a planner mode persisted as Legacy before construct
+#: harmonisation existed is migrated to Optimizer.
+PLANNER_MODE_MIGRATION_MESSAGE = (
+    "Planner mode set to Optimizer (construct alignment needs it); "
+    "change it in Planning parameters."
+)
+
+#: Settings flag recording that the one-time Legacy -> Optimizer migration ran.
+_PLANNER_MODE_MIGRATION_KEY = "mode_migrated_v2"
+
 #: Set once the legacy-scope migration check has run for this process, so
 #: app_settings() only ever opens the legacy scope once, not on every call.
 _migrated = False
@@ -209,6 +219,10 @@ class MainWindow(QMainWindow):
         self._auto_placement_ctrl = AutoPlacementController(self.volume_manager, self)
         self._screw_mpr_ctrl = ScrewMPRController(self.volume_manager, self)
         self._screw_edit_ctrl = ScrewEditController(self.volume_manager, self)
+
+        # load_planner_settings() runs before the status bar exists, so a
+        # migration message waits here until _setup_statusbar can show it.
+        self._planner_mode_migration_message: Optional[str] = None
 
         # Build UI (widgets only, no signal connections to controllers)
         self._setup_ui()
@@ -479,34 +493,41 @@ class MainWindow(QMainWindow):
             "Screw angle relative to the upper endplate; + is tip-cranial, 0 is parallel"
         )
         selected_screw_details.addWidget(self.selected_screw_endplate, 2, 1)
-        selected_screw_details.addWidget(QLabel("Safety"), 3, 0)
+        selected_screw_details.addWidget(QLabel("Alignment"), 3, 0)
+        self.selected_screw_alignment = QLabel("--")
+        self.selected_screw_alignment.setToolTip(
+            "How this screw sits in the construct: rod-line offset and how far "
+            "its convergence differs from its neighbours"
+        )
+        selected_screw_details.addWidget(self.selected_screw_alignment, 3, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Safety"), 4, 0)
         self.selected_screw_grade = QLabel("Grade --")
-        selected_screw_details.addWidget(self.selected_screw_grade, 3, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory HU"), 4, 0)
+        selected_screw_details.addWidget(self.selected_screw_grade, 4, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory HU"), 5, 0)
         self.selected_screw_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_hu, 4, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Source"), 5, 0)
+        selected_screw_details.addWidget(self.selected_screw_hu, 5, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Source"), 6, 0)
         self.selected_screw_source = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_source, 5, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Body HU"), 6, 0)
+        selected_screw_details.addWidget(self.selected_screw_source, 6, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Body HU"), 7, 0)
         self.selected_screw_body_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_body_hu, 6, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Wall margin"), 7, 0)
+        selected_screw_details.addWidget(self.selected_screw_body_hu, 7, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Wall margin"), 8, 0)
         self.selected_screw_wall = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_wall, 7, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Facet"), 8, 0)
+        selected_screw_details.addWidget(self.selected_screw_wall, 8, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Facet"), 9, 0)
         self.selected_screw_facet = QLabel("--")
         self.selected_screw_facet.setWordWrap(True)
-        selected_screw_details.addWidget(self.selected_screw_facet, 8, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Heary"), 9, 0)
+        selected_screw_details.addWidget(self.selected_screw_facet, 9, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Heary"), 10, 0)
         self.selected_screw_heary = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_heary, 9, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory"), 10, 0)
+        selected_screw_details.addWidget(self.selected_screw_heary, 10, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory"), 11, 0)
         self.selected_screw_trajectory = QLabel("—")
-        selected_screw_details.addWidget(self.selected_screw_trajectory, 10, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Pedicle"), 11, 0)
+        selected_screw_details.addWidget(self.selected_screw_trajectory, 11, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Pedicle"), 12, 0)
         self.selected_screw_pedicle = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_pedicle, 11, 1, 1, 3)
+        selected_screw_details.addWidget(self.selected_screw_pedicle, 12, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         cockpit_layout.addWidget(self.selected_screw_metrics)
 
@@ -883,10 +904,12 @@ class MainWindow(QMainWindow):
             ("Safety weight", "safety", "Importance of cortical wall clearance"),
             ("Density weight", "density",
              "Importance of dense bone along the trajectory"),
-            ("Rod weight", "rod",
-             "Importance of lining up the screw heads for the rod"),
+            ("Construct alignment", "rod",
+             "Importance of lining the screw heads up for the rod and of "
+             "agreeing on convergence across levels"),
         )
         self._planner_weight_value_labels = {}
+        self._planner_weight_captions = {}
         for row, (caption, name, tip) in enumerate(weight_rows, start=9):
             attribute = f"plan_weight_{name}"
             slider = QSlider(Qt.Orientation.Horizontal)
@@ -903,7 +926,9 @@ class MainWindow(QMainWindow):
             value_label.setMinimumWidth(34)
             value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._planner_weight_value_labels[attribute] = value_label
-            params_layout.addWidget(QLabel(caption), row, 0)
+            caption_label = QLabel(caption)
+            self._planner_weight_captions[attribute] = caption_label
+            params_layout.addWidget(caption_label, row, 0)
             params_layout.addWidget(slider, row, 1)
             params_layout.addWidget(value_label, row, 2)
         self._refresh_planner_weight_labels()
@@ -1842,6 +1867,9 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage("Ready")
         self.refresh_mode_indicators()
 
+        if self._planner_mode_migration_message:
+            self.statusbar.showMessage(self._planner_mode_migration_message)
+
     def _get_mpr_viewers(self) -> List[MPRViewer]:
         """Return list of active MPR viewers."""
         return [
@@ -2145,7 +2173,17 @@ class MainWindow(QMainWindow):
                 )
                 weights[name] = float(default_weight)
         stored["weights"] = weights
+        raw_migrated = settings.value(_PLANNER_MODE_MIGRATION_KEY, False)
+        if str(raw_migrated).strip().lower() not in ("true", "1", "yes"):
+            # Runs once per settings store, whatever the stored mode is, so a
+            # user who picks Legacy *after* this keeps it.
+            settings.setValue(_PLANNER_MODE_MIGRATION_KEY, True)
+            if stored.get("mode") == "legacy":
+                stored["mode"] = "optimizer"
+                settings.setValue("mode", "optimizer")
+                self._planner_mode_migration_message = PLANNER_MODE_MIGRATION_MESSAGE
         settings.endGroup()
+        settings.sync()
 
         try:
             config = PlannerConfig.from_mapping(stored)
@@ -2211,6 +2249,7 @@ class MainWindow(QMainWindow):
             self.selected_screw_facet,
             self.selected_screw_heary,
             self.selected_screw_pedicle,
+            self.selected_screw_alignment,
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
@@ -2262,6 +2301,18 @@ class MainWindow(QMainWindow):
             if is_narrow_pedicle(metrics)
             else ""
         )
+
+        rod = metrics.get("rod_misalignment_mm")
+        deviation = metrics.get("convergence_deviation_deg")
+        alignment: List[str] = []
+        if rod is not None:
+            alignment.append(f"rod {float(rod):.1f} mm")
+        if deviation is not None:
+            # Signed: which way this level differs from its neighbours is the
+            # part a surgeon acts on.
+            alignment.append(f"conv {float(deviation):+.1f}°")
+        if alignment:
+            self.selected_screw_alignment.setText(" · ".join(alignment))
 
     def update_selected_screw_inspector(
         self,
