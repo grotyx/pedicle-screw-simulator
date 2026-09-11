@@ -42,7 +42,14 @@ def test_pyinstaller_spec_contains_platform_metadata():
     assert 'bundle_identifier="me.sangmin.pedicle-screw-simulator"' in spec
     assert '"VERSION"' in spec
     assert "PSS_VERSION_FILE" in spec
-    assert "0.1.0" not in spec
+    # Whatever the version is *now*, not the one this test was written against:
+    # a guard against hard-coding that stops guarding after the first bump is
+    # no guard at all.
+    assert (
+        (Path(__file__).resolve().parents[1] / "VERSION")
+        .read_text(encoding="utf-8")
+        .strip()
+    ) not in spec
 
 
 def test_pyinstaller_spec_bundles_totalsegmentator_runtime():

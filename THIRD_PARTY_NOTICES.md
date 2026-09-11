@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Pedicle Screw Simulator v0.1.0 includes third-party software in its standalone desktop packages. Each component remains subject to its own license.
+Pedicle Screw Simulator v0.2.0 includes third-party software in its standalone desktop packages. Each component remains subject to its own license.
 
 ## AI segmentation runtime
 

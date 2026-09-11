@@ -1,0 +1,201 @@
+# Changelog
+
+All notable changes to Pedicle Screw Simulator are recorded here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The repository-root `VERSION` file is the single source of truth for the
+current version; every other place the version appears is derived from it.
+
+> **Research and education use only.** Nothing in this changelog implies
+> clinical validation. Every segmentation, screw proposal, dimension, breach
+> grade, and warning requires independent review by a qualified clinician.
+
+## [0.2.0] - 2026-09-11
+
+The first release after the public baseline. It adds automatic trajectory
+optimisation, a clinical policy for narrow pedicles, cortical bone
+trajectories, CT-guided mask refinement, and a substantially reworked
+interface.
+
+### Added
+
+**Planning**
+
+- Multi-objective trajectory optimiser, now the **default** planning mode. It
+  generates candidate trajectories over convergence, craniocaudal angle, entry
+  position, and length, then scores them on safety, bone density, length,
+  endplate agreement, and pedicle centring. The previous rule-based planner
+  remains available as **Legacy** mode and as an automatic per-side fallback.
+- Construct-level harmonisation: entry points on each side are fitted to a rod
+  line and neighbouring convergence angles are pulled together, without letting
+  any screw fall below 90 % of its own best safety score. Reported as
+  `Construct: rod fit … · convergence spread …` in the status bar and as the
+  inspector's **Alignment** row.
+- **Narrow-pedicle policy.** A pedicle is never a reason to skip a side. Below
+  the configurable narrow threshold (5.0 mm by default) the level takes the
+  smallest catalogue implant, is drawn in red, and is planned with the medial
+  (canal-side) wall protected: medial breach 0, lateral breach capped, entry
+  walked laterally until both hold. This is the in-out-in technique made
+  explicit rather than left to the surgeon to discover.
+- **Parallel to upper endplate** planning option (on by default) with a
+  configurable tolerance band, and a signed endplate angle reported per screw.
+- **Cortical bone trajectory (CBT)** planning mode with consensus default
+  diameters and lengths, its own entry landmark at the inferomedial isthmus
+  corner, and a contraindication note on every CBT screw.
+- Editable planning parameters in the UI: pedicle fill ratio, wall clearance,
+  anterior margin, maximum convergence, trajectory HU threshold, narrow-pedicle
+  threshold, narrow lateral-breach cap, endplate tolerance, planner mode,
+  trajectory type, and the three optimiser weights.
+- Gertzbein–Robbins grading from cropped Euclidean distance maps, split by
+  direction into medial, lateral, and craniocaudal breach, plus the remaining
+  medial wall thickness.
+- Bone-quality and breach metrics on every screw: trajectory/pedicle/vertebral
+  body HU with literature thresholds, trajectory-to-body HU ratio, Heary breach
+  direction, and facet violation grade.
+- `scripts/validate_plans.py` and plan comparison metrics (mean absolute
+  deviation, axis angle, cylinder Dice, Bland–Altman) for comparing two plans.
+- `scripts/check_narrow_policy.py`, a Qt-free acceptance CLI that runs the
+  analyser and planner against a real study and fails on a narrow-pedicle
+  policy violation.
+
+**Segmentation and measurement**
+
+- **CT-guided mask refinement** after TotalSegmentator: per-label anti-aliasing,
+  a boundary band re-decided against the CT, 3D hole filling, and largest-
+  component selection. This removes the stair-stepping caused by upsampling a
+  1.5 mm inference mask onto a sub-millimetre CT grid. Cancellable, with a
+  volume-change guard that rejects a refinement that moved too much.
+- Optional locally installed pedicle subregion nnU-Net stage that feeds the
+  analyser label-based isthmus boundaries (source installs only).
+- Robust pedicle width measurement: centroid continuity tracking across slices,
+  sliver area and width floors, a neighbourhood-median width checked against an
+  inscribed-diameter estimate, a per-level plausibility band with an axial
+  second opinion, and a tilt guard on the fitted pedicle axis.
+- Upper endplate plane fitting with a reported RMSE and a warning when the fit
+  is too rough to trust.
+- Cancel button that terminates the TotalSegmentator subprocess.
+
+**Interface**
+
+- Axial view opens anterior-up in radiological convention, with **A / P / L / R**
+  orientation letters on every MPR pane.
+- **Screw MPR panes are now interactive**: rotate the oblique planes around the
+  screw axis, offset them along and across the screw, and scroll or drag
+  without leaving screw-aligned review. Rotation and offset are shown in the
+  pane readout.
+- **Screw Review table** with per-screw level, side, pedicle width, diameter,
+  length, grade chip, and source, replacing the plain list.
+- Planning cockpit above the control tabs: diameter, length, convergence,
+  craniocaudal angle, endplate angle, construct alignment, grade, trajectory
+  HU, body HU, wall margin, facet, Heary direction, trajectory type, and
+  pedicle verdict for the selected screw.
+- Tabbed control panel (Study / Planning / Tools), tool icons, and a dark theme
+  alongside the existing light themes.
+- Pane maximise by header double-click or Ctrl+M, which follows the pane the
+  pointer is working in.
+- JSON plan schema v3 carrying screw metadata, signed angles, and the full
+  metric bundle; CSV export gains pedicle width, narrow-pedicle and
+  width-uncertain flags, directional breaches, and the endplate angle.
+
+**Project**
+
+- macOS and Windows standalone desktop packaging, with TotalSegmentator bundled.
+- Windows PowerShell launcher (`scripts/run_app.ps1`).
+- Continuous integration running ruff and pytest on every push and pull request.
+- MIT license, academic attribution, `CITATION.cff`, and third-party notices.
+- This changelog.
+
+### Changed
+
+- **Default planner mode is now Optimizer.** A persisted `legacy` mode from an
+  earlier build is migrated once, with a note in the status bar; a Legacy mode
+  chosen after that migration is respected.
+- **Default wall clearance is now 0 mm.** At 1 mm the optimiser could not
+  satisfy the containment rule on most sides of a real study and silently fell
+  back to the legacy planner. A persisted clearance of exactly 1.0 mm (the old
+  default, rather than a choice) is reset once, with a note in the status bar;
+  any other persisted value is left alone.
+- A width the analyser cannot stand behind is reported as **not trusted**
+  rather than as narrow, in the plan table, the cockpit, the warnings, and the
+  CSV export. The narrow policy still applies to it; only the wording changed,
+  because the plausibility band rejects implausibly *wide* measurements too.
+- GPU-capable volume rendering (`vtkSmartVolumeMapper`) on every platform except
+  macOS, where the OpenGL-to-Metal translation layer stalls on 3D texture
+  upload and the CPU ray caster stays. A smart mapper that turns out to be ray
+  casting on the CPU re-downsamples rather than grinding at full resolution.
+- Screw diameter is never left unset: a pedicle too small for the smallest
+  catalogue implant still receives one, marked, instead of leaving the side bare.
+- Plan files assert that they carry no patient identifiers.
+- Ruff import sorting and lint rules apply to the whole tree; file-wide ignores
+  were retired.
+
+### Fixed
+
+- **Only a fraction of levels were planned.** The coronal isthmus search kept
+  the component nearest the midline, so a 1.6 mm stair-step sliver could
+  displace the real 7.4 mm pedicle and the level was then dropped as too narrow.
+  On the sample study the measured L3 widths went from 3.1 / 4.7 mm to
+  8.6 / 8.8 mm.
+- **The optimiser fell back to the legacy planner on most sides.** Candidate
+  generation swept convergence as an offset from the pedicle axis while scoring
+  filtered the absolute angle, so levels with a strongly converging axis had
+  every candidate rejected. On the sample study this moved the grades from
+  A:2 / B:10 with ten legacy fallbacks to A:10 / B:2 with one.
+- A pedicle the analyser never found was read back as a 0.0 mm measurement,
+  painting a manually placed screw red and warning that a 4.0 mm implant filled
+  100 % of a pedicle that was never measured.
+- Re-running segmentation on the same study re-graded every screw against the
+  new mask while re-deriving its pedicle width, narrow verdict, and endplate
+  angle from analyses computed on the old one.
+- The axial width re-check accepted the nearest non-body component with no
+  distance or side guard, so a transverse-process fragment could silently
+  replace a real isthmus measurement.
+- Construct alignment metrics were measured once at plan time and never
+  refreshed, so the inspector's Alignment row described a trajectory the user
+  had already dragged away from.
+- CBT screws never carried an upper-endplate normal, so their endplate angle
+  appeared only after the first drag.
+- A one-time settings migration could mark itself done while the value it
+  existed to retire survived, if any other planner key in the store was
+  unreadable.
+- Ctrl+M maximised the last-maximised pane rather than the pane in use.
+- Orientation letters and the Screw MPR rotation pivot used Qt logical pixels
+  instead of device pixels on HiDPI displays.
+- A 3D pane restored from maximise could stay blank until the next interaction.
+- Oblique volume resampling assigned axes in a way that was not always a true
+  permutation.
+- Numerous grading, drag-frame, and plan-lifecycle fixes: grades and metrics no
+  longer blink or go stale during a drag that passes outside the mask, a
+  replaced planning run is stopped, and per-level analyses are dropped when the
+  study they describe is replaced.
+
+### Migration notes
+
+- Two one-time settings migrations run on first launch and announce themselves
+  in the status bar: planner mode `legacy` → `optimizer`, and wall clearance
+  `1.0 mm` → `0 mm`. Both are recorded so they never run twice, and anything
+  you choose afterwards is respected.
+- Plans saved by 0.1.0 load unchanged. Plans saved by 0.2.0 use schema v3 and
+  carry metrics that earlier versions ignore.
+- The CSV export gained columns. They are appended, never reordered, so a
+  reader that keys on the header row keeps working.
+
+## [0.1.0] - 2026-07-12
+
+Initial public baseline.
+
+- Multi-series DICOM CT loading with LPS reorientation and oblique resampling.
+- Synchronized axial, sagittal, and coronal MPR with pan, zoom, and
+  window/level.
+- VTK volume rendering and per-vertebra 3D meshes.
+- Optional GPU-first TotalSegmentator integration with CPU retry.
+- Multi-level vertebra selection and rule-based automatic screw proposals.
+- Standard and screw-aligned oblique MPR review.
+- Direct entry, tip, and whole-screw editing in MPR and 3D.
+- Manual screw placement, distance measurement, and angle measurement.
+- JSON plan save/load, CSV and STL export.
+- Three UI themes.
+
+[0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

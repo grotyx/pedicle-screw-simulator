@@ -4,7 +4,7 @@
 
 Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 
 **Primary tested environment:** macOS, Python 3.12
 
@@ -19,17 +19,20 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 ## Highlights
 
 - Multi-series DICOM CT loading
-- Synchronized axial, sagittal, and coronal MPR
-- CPU-based VTK volume rendering and selectable vertebral meshes
-- Optional GPU-first TotalSegmentator integration with CPU retry
+- Synchronized axial, sagittal, and coronal MPR, anterior-up with A/P/L/R orientation markers
+- GPU-capable VTK volume rendering (CPU ray casting on macOS) and selectable vertebral meshes
+- Optional GPU-first TotalSegmentator integration with CPU retry, and CT-guided mask refinement that removes upsampling stair-steps
 - Optional locally installed pedicle subregion nnU-Net for label-based isthmus refinement (source installs only)
 - Multi-level vertebra selection and automatic screw proposals
 - Multi-objective trajectory optimizer (default) with a legacy planner fallback, plus a cortical bone trajectory (CBT) planning mode
-- Standard and screw-aligned oblique MPR review
+- Narrow-pedicle policy: the smallest implant, the medial wall protected, and the level marked, instead of skipping the side
+- Trajectories aimed parallel to the upper endplate, and construct-level rod-line and convergence harmonisation
+- Gertzbein-Robbins grading with medial/lateral/craniocaudal breach split, bone-quality HU metrics, Heary direction, and facet violation grade
+- Standard and screw-aligned oblique MPR review, with rotatable and offsettable screw MPR planes
 - Direct entry, tip, and whole-screw editing in MPR and 3D
 - Manual screw placement, distance measurement, and angle measurement
 - JSON plan save/load and supported CSV/STL export
-- Three UI themes, MPR pan/zoom, and 3D navigation controls
+- Editable planning parameters, a per-screw review table and inspector, four UI themes, MPR pan/zoom, pane maximise, and 3D navigation controls
 
 ## Quick Start
 
@@ -94,7 +97,7 @@ For exact reproduction of the validated macOS/Python 3.12 environment:
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.1.0 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
+`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.2.0 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
 
 ## Standalone Desktop Packages
 
@@ -155,6 +158,7 @@ Standalone packages include TotalSegmentator 2.12.0, PyTorch, and nnU-Net. No se
 
 - [English User Guide](docs/USER_GUIDE.md)
 - [한국어 사용설명서](docs/USER_GUIDE.ko.md)
+- [Changelog](CHANGELOG.md) · [변경 이력](CHANGELOG.ko.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security and medical-data privacy](SECURITY.md)
 - [Local DICOM data policy](data/README.md)
@@ -195,7 +199,7 @@ data/README.md   local-data privacy instructions; no clinical data
 
 If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
 
-> Park S-M. Pedicle Screw Simulator (Version 0.1.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 
