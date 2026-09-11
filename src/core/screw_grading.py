@@ -33,6 +33,27 @@ MAX_BATCH_SAMPLE_POINTS = 2_000_000
 #: unrankable instead (see :meth:`ScrewGrader.evaluate_batch`).
 MIN_BATCH_CANDIDATE_LENGTH_MM = 1.0
 
+#: Length of the cortical entry (mm): how far past the point where a screw's
+#: axis first enters the vertebra breach grading begins, when a caller asks for
+#: it with ``entry_zone_mm``.
+#:
+#: A screw whose head sits on the dorsal cortex -- where a surgeon actually
+#: starts the drill, at the junction of the transverse process and the superior
+#: articular process -- is half outside the bone at that very point: its
+#: cylinder straddles the surface it is entering.  Graded from the head, such a
+#: screw reads as a breach of up to its own radius; on the sample study 11 of
+#: 12 re-seated screws graded B or C for nothing but the cortex they were
+#: drilled through.  The Gertzbein-Robbins classification grades the *pedicle*
+#: wall, not the entry cortex, so that first stretch of bone is left out.
+#:
+#: Three millimetres covers the straddle for the catalogue's screws entering
+#: the cortex at the angles the planner produces.  It is measured from where the
+#: *axis* enters bone, not from the head, so a head placed proud of the bone
+#: skips its airborne stretch as well, and a head buried in bone still has only
+#: its first 3 mm treated leniently -- far short of the pedicle isthmus, where a
+#: medial breach would matter.
+ENTRY_ZONE_MM = 3.0
+
 #: Cosine of the half-angle of the cone that owns a radial sample.  A sample
 #: within 60 degrees of the medial direction is medial, one within 60 degrees of
 #: its negation is lateral, and the rest are craniocaudal -- so with the default
@@ -299,7 +320,16 @@ class ScrewGrader:
         diameter_mm: float,
         label: Optional[int] = None,
         side: Optional[str] = None,
+        entry_zone_mm: float = 0.0,
     ) -> Optional[GradeResult]:
+        """Grade one screw against ``label``.
+
+        ``entry_zone_mm`` leaves that much of the shaft past the point where its
+        axis first enters the vertebra out of every figure this returns (see
+        :data:`ENTRY_ZONE_MM`).  Pass :data:`ENTRY_ZONE_MM` when grading a whole
+        screw from its head; leave it at 0 for a segment that starts inside the
+        bone, such as the planner's tip test.
+        """
         self._validate_side(side)
         if label is None:
             label = self.detect_label(entry, target)
@@ -311,6 +341,16 @@ class ScrewGrader:
 
         if not np.asarray(unit_trajectory(entry, target), dtype=np.float64).any():
             return None
+        if entry_zone_mm > 0.0:
+            entry = tuple(
+                float(v)
+                for v in self.graded_starts(
+                    np.asarray(entry, dtype=np.float64)[None, :],
+                    np.asarray(target, dtype=np.float64)[None, :],
+                    label,
+                    entry_zone_mm,
+                )[0]
+            )
 
         points = self.cylinder_points(entry, target, diameter_mm)
         idx_zyx, inside = self._indices(points)
@@ -426,6 +466,7 @@ class ScrewGrader:
         diameter_mm: float,
         label: int,
         side: Optional[str] = None,
+        entry_zone_mm: float = 0.0,
     ) -> BatchResult:
         """Grade many candidate trajectories at once.
 
@@ -447,6 +488,8 @@ class ScrewGrader:
         breach into medial, lateral and craniocaudal components and measures the
         wall left on the medial side; without it those four fields mirror
         ``breach_mm``/``min_wall_mm``.
+
+        ``entry_zone_mm`` behaves exactly as in :meth:`grade`, per candidate.
         """
         self._validate_side(side)
         starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
@@ -458,6 +501,8 @@ class ScrewGrader:
         count = starts.shape[0]
         if count == 0:
             return BatchResult(*(np.empty(0, dtype=np.float64) for _ in range(8)))
+        if entry_zone_mm > 0.0:
+            starts = self.graded_starts(starts, ends, label, entry_zone_mm)
 
         deltas = ends - starts
         lengths = np.linalg.norm(deltas, axis=1)
@@ -497,6 +542,48 @@ class ScrewGrader:
             result.mean_hu[unrankable] = np.nan
             result.min_hu[unrankable] = np.nan
         return result
+
+    def graded_starts(
+        self,
+        entries: np.ndarray,
+        targets: np.ndarray,
+        label: int,
+        zone_mm: float = ENTRY_ZONE_MM,
+    ) -> np.ndarray:
+        """Where breach grading begins for each ``(C, 3)`` screw.
+
+        That is ``zone_mm`` past the first centreline point inside ``label``,
+        walking from each entry toward its target -- the cortical entry plus
+        :data:`ENTRY_ZONE_MM`.  A screw whose axis never enters the label keeps
+        its own entry: there is no cortex to excuse, and it should read as the
+        breach it is.  The shift never leaves less than
+        :data:`MIN_BATCH_CANDIDATE_LENGTH_MM` of shaft, so a short screw is
+        still graded rather than collapsing to a point that measures as
+        flawless.
+        """
+        starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
+        ends = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
+        deltas = ends - starts
+        lengths = np.linalg.norm(deltas, axis=1)
+        if starts.shape[0] == 0 or float(lengths.max(initial=0.0)) <= 0.0:
+            return starts.copy()
+        directions = np.zeros_like(deltas)
+        movable = lengths > 1e-12
+        directions[movable] = deltas[movable] / lengths[movable, None]
+
+        steps = np.arange(0.0, float(lengths.max()) + 1e-9, self._step)
+        points = starts[:, None, :] + directions[:, None, :] * steps[None, :, None]
+        d_out, _ = self.distances_at_points(points.reshape(-1, 3), label)
+        inside = (d_out.reshape(starts.shape[0], steps.size) <= 0.0) & (
+            steps[None, :] <= lengths[:, None]
+        )
+        entered = inside.any(axis=1)
+        first = np.where(entered, steps[np.argmax(inside, axis=1)], 0.0)
+        shift = np.where(entered, first + float(zone_mm), 0.0)
+        shift = np.minimum(
+            shift, np.maximum(lengths - MIN_BATCH_CANDIDATE_LENGTH_MM, 0.0)
+        )
+        return starts + directions * shift[:, None]
 
     def _batch_radial_offsets(self, directions: np.ndarray, radius: float) -> np.ndarray:
         """``(C, radial_samples, 3)`` perpendicular offsets, one frame per direction.

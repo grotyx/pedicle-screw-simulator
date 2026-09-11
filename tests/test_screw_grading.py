@@ -754,3 +754,95 @@ class TestEvaluateBatch:
         for i in range(2):
             single = grader.grade(entries[i], targets[i], 6.0, label=28)
             assert batch.mean_hu[i] == pytest.approx(single.mean_hu, rel=0.01)
+
+
+class TestCorticalEntryZone:
+    """The cortex a screw is drilled through is not a breach of the pedicle wall."""
+
+    def test_a_head_on_the_cortex_reads_as_a_breach_without_the_zone(self):
+        mask = _cube_mask()                      # label spans y 20..39 mm
+        grader = ScrewGrader(mask)
+        # The head sits just outside the +Y face, as a surgeon's entry point does.
+        result = grader.grade(
+            entry=(30.0, 42.0, 30.0), target=(30.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28,
+        )
+        assert result.breach_mm > 1.0
+
+    def test_the_zone_excuses_the_entry_cortex(self):
+        from src.core.screw_grading import ENTRY_ZONE_MM
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        result = grader.grade(
+            entry=(30.0, 42.0, 30.0), target=(30.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28, entry_zone_mm=ENTRY_ZONE_MM,
+        )
+        assert result.grade == "A"
+        assert result.breach_mm == 0.0
+
+    def test_a_breach_past_the_zone_is_still_reported(self):
+        """The zone excuses the entry, not a wall the shaft runs along."""
+        from src.core.screw_grading import ENTRY_ZONE_MM
+
+        mask = _cube_mask()                      # x face at 39 mm
+        grader = ScrewGrader(mask)
+        result = grader.grade(
+            entry=(39.0, 42.0, 30.0), target=(39.0, 25.0, 30.0),
+            diameter_mm=6.0, label=28, entry_zone_mm=ENTRY_ZONE_MM,
+        )
+        assert result.breach_mm >= 2.0
+
+    def test_a_screw_that_never_enters_bone_is_not_excused(self):
+        from src.core.screw_grading import ENTRY_ZONE_MM
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        result = grader.grade(
+            entry=(5.0, 5.0, 30.0), target=(5.0, 50.0, 30.0),
+            diameter_mm=6.5, label=28, entry_zone_mm=ENTRY_ZONE_MM,
+        )
+        assert result.grade == "E"
+
+    def test_the_zone_is_measured_from_where_the_axis_enters_bone(self):
+        from src.core.screw_grading import ENTRY_ZONE_MM
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        entries = np.array([[30.0, 45.0, 30.0], [30.0, 35.0, 30.0]])
+        targets = np.array([[30.0, 25.0, 30.0], [30.0, 25.0, 30.0]])
+
+        starts = grader.graded_starts(entries, targets, 28, ENTRY_ZONE_MM)
+
+        # Proud head: skips its 6 mm of air, then 3 mm of bone.
+        assert starts[0, 1] == pytest.approx(39.0 - ENTRY_ZONE_MM, abs=grader._step)
+        # Buried head: the axis is in bone from the start; only 3 mm is excused.
+        assert starts[1, 1] == pytest.approx(35.0 - ENTRY_ZONE_MM, abs=grader._step)
+
+    def test_batch_and_single_grading_agree_under_the_zone(self):
+        from src.core.screw_grading import ENTRY_ZONE_MM
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        entries = np.array([[30.0, 42.0, 30.0], [39.0, 42.0, 30.0]])
+        targets = np.array([[30.0, 25.0, 30.0], [39.0, 25.0, 30.0]])
+
+        batch = grader.evaluate_batch(
+            entries, targets, 6.0, 28, entry_zone_mm=ENTRY_ZONE_MM
+        )
+
+        for i in range(2):
+            single = grader.grade(
+                entries[i], targets[i], 6.0, label=28, entry_zone_mm=ENTRY_ZONE_MM
+            )
+            assert batch.breach_mm[i] == pytest.approx(single.breach_mm, abs=0.3)
+
+    def test_the_zone_is_off_unless_asked_for(self):
+        """The tip test grades a segment that starts inside bone; it must not skip."""
+        mask = _cube_mask()
+        grader = ScrewGrader(mask)
+        with_default = grader.grade((30.0, 42.0, 30.0), (30.0, 25.0, 30.0), 6.0, label=28)
+        explicit_off = grader.grade(
+            (30.0, 42.0, 30.0), (30.0, 25.0, 30.0), 6.0, label=28, entry_zone_mm=0.0
+        )
+        assert with_default.breach_mm == pytest.approx(explicit_off.breach_mm)

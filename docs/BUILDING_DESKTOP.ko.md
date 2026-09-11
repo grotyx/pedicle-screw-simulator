@@ -42,7 +42,7 @@ py -3.12 -m venv venv
 - `windows-2025`: Windows x64
 - `macos-15`: macOS Apple Silicon
 
-GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.0` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
+GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.1` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
 
 ## Standalone 기능 범위
 

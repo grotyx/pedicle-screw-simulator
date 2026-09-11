@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.core.screw_geometry import endplate_angle_deg, endplate_slope_deg
-from src.core.screw_grading import BatchResult, ScrewGrader
+from src.core.screw_grading import ENTRY_ZONE_MM, BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
     DEFAULT_WEIGHTS,
     ENDPLATE_BAND_RELAXED_PREFIX,
@@ -28,6 +28,7 @@ from src.core.trajectory_optimizer import (
     OptimizerWeights,
     _seat_entries,
     _trajectory_angles,
+    anterior_margin_clear,
     endplate_band_relaxed_warning,
     generate_candidates,
     make_planner,
@@ -134,15 +135,21 @@ def test_seated_entry_lies_on_corridor_surface():
 
 
 def test_buried_entry_on_arch_phantom_is_rejected():
-    """The arch phantom's entry is 12+ mm inside the lamina, so nothing is reachable."""
+    """Nothing under the arch phantom's lamina is reachable by a drill.
+
+    The arch touches the pedicle only along a line, with air beneath it
+    elsewhere.  Heads are now seated on the first surface each trajectory meets
+    on the way out, which under the arch is the pedicle's own surface facing
+    that pocket -- a drill would have to go through the lamina and cross the
+    pocket to get there.  :func:`dorsal_approach_clear` discards those heads;
+    this used to be caught only by proxy, through the burial bound.
+    """
     ct, mask, analysis = _setup(with_arch=True)
     grader = ScrewGrader(mask, ct)
     diagnostics = {}
-    entries, _targets, _lengths = generate_candidates(
-        grader, analysis, "left", PlannerConfig(), diagnostics=diagnostics
-    )
-    assert entries.shape[0] > 100
-    assert diagnostics["surface_shortfall_mm"].min() > MAX_ENTRY_SHORTFALL_MM
+    generate_candidates(grader, analysis, "left", PlannerConfig(), diagnostics=diagnostics)
+
+    assert diagnostics["occluded_entries"] > 0
     assert optimize_screw(grader, analysis, "left", PlannerConfig()) == []
 
 
@@ -154,19 +161,30 @@ def test_best_candidate_reaches_the_posterior_cortex():
 
 # --------------------------------------------------------------- runtime bound
 def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
-    """An impossible anterior margin must fail fast, not walk the whole catalogue."""
+    """An impossible anterior margin must fail fast, not walk the whole catalogue.
+
+    Only 45 mm screws, each keeping 15 mm of bone ahead of its tip, needs a
+    60 mm corridor this phantom does not have -- yet every 45 mm candidate still
+    ends inside the vertebra, so each diameter is genuinely graded and rejected.
+    The margin alone used to be enough, while it was demanded of the tip's
+    surface in every direction; measured along the screw, a short screw can
+    keep 15 mm ahead of it.
+    """
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
     tried = []
     graded = grader.evaluate_batch
 
-    def counting(entries, targets, diameter, label, side=None):
+    def counting(entries, targets, diameter, label, side=None, **kwargs):
         tried.append(diameter)
-        return graded(entries, targets, diameter, label, side=side)
+        return graded(entries, targets, diameter, label, side=side, **kwargs)
 
     grader.evaluate_batch = counting
     started = time.perf_counter()
-    result = optimize_screw(grader, analysis, "left", PlannerConfig(anterior_margin_mm=15.0))
+    result = optimize_screw(
+        grader, analysis, "left",
+        PlannerConfig(anterior_margin_mm=15.0, implant_lengths_mm=(45.0,)),
+    )
     elapsed = time.perf_counter() - started
 
     assert result == []
@@ -178,20 +196,38 @@ def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
 
 
 def test_tip_margin_rejects_trajectories_without_anterior_clearance():
+    """The margin is measured along the screw, to the anterior cortex.
+
+    Graded exactly as :func:`optimize_screw` grades it -- from the cortex the
+    head sits on, with the along-axis anterior test -- so the default margin
+    admits the optimiser's own winner and a 15 mm margin does not.
+    """
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
     best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
     entries, targets = best.entry[None, :], best.target[None, :]
     lengths = np.array([best.length])
     direction = (best.target - best.entry) / best.length
-    batch = grader.evaluate_batch(entries, targets, best.diameter, LABEL)
+    batch = grader.evaluate_batch(
+        entries, targets, best.diameter, LABEL, side="left",
+        entry_zone_mm=ENTRY_ZONE_MM,
+    )
     tip = grader.evaluate_batch(
         targets - direction * TIP_SEGMENT_MM, targets, best.diameter, LABEL
     )
     args = (batch, entries, targets, lengths, best.diameter, analysis, "left")
-    assert score_candidates(*args, PlannerConfig(), OptimizerWeights(), tip_batch=tip)
+
+    def clear(config):
+        return anterior_margin_clear(
+            grader, targets, direction[None, :], LABEL, config.anterior_margin_mm
+        )
+
+    default, strict = PlannerConfig(), PlannerConfig(anterior_margin_mm=15.0)
     assert score_candidates(
-        *args, PlannerConfig(anterior_margin_mm=15.0), OptimizerWeights(), tip_batch=tip
+        *args, default, OptimizerWeights(), tip_batch=tip, anterior_clear=clear(default)
+    )
+    assert score_candidates(
+        *args, strict, OptimizerWeights(), tip_batch=tip, anterior_clear=clear(strict)
     ) == []
 
 
@@ -661,13 +697,13 @@ def test_flat_phantom_without_an_endplate_normal_is_unaffected():
     [
         (
             "left",
-            [60.45684167277018, 59.47005701480833, 32.0],
-            [57.193686867268895, 34.68393548046307, 32.0],
+            [60.71789405721029, 61.452946737555955, 32.0],
+            [56.14947732950848, 26.75237658947259, 32.0],
         ),
         (
             "right",
-            [29.54315832722982, 59.47005701480833, 32.0],
-            [32.806313132731105, 34.68393548046307, 32.0],
+            [29.282105942789716, 61.452946737555955, 32.0],
+            [33.85052267049152, 26.75237658947259, 32.0],
         ),
     ],
 )
@@ -676,7 +712,10 @@ def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, targe
 
     The literals moved once since, when the anterior tip test was decoupled from
     the wall clearance (:data:`TIP_MARGIN_RELIEF_MM`): the restored 3 mm margin
-    admits the 6.0 mm implant this phantom used to have to step past.
+    admits the 6.0 mm implant this phantom used to have to step past.  They
+    moved again when heads were seated on the dorsal cortex and the anterior
+    margin was measured along the screw: the same trajectory's head is now
+    2 mm further back on the cortex and the screw is 35 mm instead of 25.
 
     Only the *winner* is pinned, not the whole ranked list: with the option off
     every candidate scores a neutral 1.0 for the endplate component, which adds
@@ -691,7 +730,7 @@ def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, targe
 
     assert best.entry == pytest.approx(entry)
     assert best.target == pytest.approx(target)
-    assert best.score == pytest.approx(1.2242424242424241)
+    assert best.score == pytest.approx(1.2606060606060605)
 
 
 # -------------------------------------------------- convergence recentring
@@ -778,8 +817,8 @@ def test_an_anteroposterior_axis_is_not_recentred_at_all():
 
     best = optimize_screw(ScrewGrader(mask, ct), analysis, "left", config)[0]
 
-    assert best.entry == pytest.approx([60.45684167277018, 59.47005701480833, 32.0])
-    assert best.target == pytest.approx([57.193686867268895, 34.68393548046307, 32.0])
+    assert best.entry == pytest.approx([60.71789405721029, 61.452946737555955, 32.0])
+    assert best.target == pytest.approx([56.14947732950848, 26.75237658947259, 32.0])
 
 
 def test_the_convergence_recentring_is_clamped():
@@ -982,3 +1021,133 @@ def test_candidate_pool_is_unchanged_when_it_already_fits():
     # Identity, not equality: Candidate holds numpy arrays, so `==` on two
     # separately built candidates would raise on the ambiguous array truth value.
     assert [id(c) for c in selection] == [id(c) for c in ranked]
+
+
+# ------------------------------------------------ head on the cortex, tip at the margin
+def _walk_inside(grader, start, direction, step=0.25, limit=80.0):
+    """How far the centreline stays inside LABEL from ``start`` along ``direction``."""
+    travelled = 0.0
+    while travelled < limit:
+        d_out, _ = grader.distances_at_points(
+            (start + direction * (travelled + step))[None, :], LABEL
+        )
+        if d_out[0] > 0.0:
+            return travelled
+        travelled += step
+    return limit
+
+
+def test_seat_on_cortex_lands_on_the_last_bone_point_behind_the_seed():
+    from src.core.trajectory_optimizer import seat_on_cortex
+
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    center = np.asarray(analysis.left_pedicle_center, dtype=np.float64)
+    direction = np.array([0.0, -1.0, 0.0])          # anterior
+
+    heads, travel = seat_on_cortex(grader, center[None, :], direction[None, :], LABEL)
+
+    head = heads[0]
+    d_here, _ = grader.distances_at_points(head[None, :], LABEL)
+    d_behind, _ = grader.distances_at_points((head - direction * 0.5)[None, :], LABEL)
+    assert d_here[0] == 0.0                         # still on bone
+    assert d_behind[0] > 0.0                        # and nothing behind it
+    assert travel[0] == pytest.approx(float(np.linalg.norm(head - center)))
+
+
+def test_a_seed_outside_the_bone_does_not_move():
+    from src.core.trajectory_optimizer import seat_on_cortex
+
+    ct, mask, _analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    outside = np.array([[1.0, 1.0, 1.0]])
+
+    heads, travel = seat_on_cortex(grader, outside, np.array([[0.0, -1.0, 0.0]]), LABEL)
+
+    assert heads[0] == pytest.approx(outside[0])
+    assert travel[0] == 0.0
+
+
+def test_the_optimiser_puts_the_head_on_the_dorsal_cortex():
+    """The head used to sit where the whole cross-section first fitted.
+
+    On the sample study that was 5 to 21 mm inside the lamina, measured along
+    the screw -- which is also why the screws came out at half the length the
+    vertebra held.
+    """
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    direction = (best.target - best.entry) / best.length
+
+    assert _walk_inside(grader, best.entry, -direction) <= 0.5
+
+
+def test_the_optimiser_takes_the_longest_screw_that_keeps_the_margin():
+    config = PlannerConfig()
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    best = optimize_screw(grader, analysis, "left", config)[0]
+    direction = (best.target - best.entry) / best.length
+
+    ahead = _walk_inside(grader, best.target, direction)
+    step = min(
+        b - a for a, b in zip(config.implant_lengths_mm[:-1], config.implant_lengths_mm[1:], strict=True)
+    )
+    # Keeps the margin, and one catalogue step longer would not.
+    assert ahead >= config.anterior_margin_mm - 0.5
+    assert ahead - step < config.anterior_margin_mm
+
+
+def test_anterior_margin_clear_is_measured_along_the_axis():
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    direction = (best.target - best.entry) / best.length
+    ahead = _walk_inside(grader, best.target, direction)
+
+    inside = anterior_margin_clear(
+        grader, best.target[None, :], direction[None, :], LABEL, ahead - 1.0
+    )
+    too_far = anterior_margin_clear(
+        grader, best.target[None, :], direction[None, :], LABEL, ahead + 1.0
+    )
+    assert inside[0] and not too_far[0]
+
+
+def test_dorsal_approach_clear_reports_bone_behind_the_head():
+    from src.core.trajectory_optimizer import dorsal_approach_clear
+
+    arr = np.zeros((40, 40, 40), dtype=np.uint8)
+    arr[5:35, 5:20, 5:35] = LABEL       # the "pedicle" block, y 5..19
+    arr[5:35, 24:28, 5:35] = LABEL      # a "lamina" plate behind it, y 24..27
+    mask = sitk.GetImageFromArray(arr)
+    grader = ScrewGrader(mask)
+    direction = np.array([[0.0, -1.0, 0.0]])
+
+    under_lamina = np.array([[20.0, 19.0, 20.0]])   # on the block's back face
+    on_the_plate = np.array([[20.0, 27.0, 20.0]])   # on the plate's back face
+
+    assert not dorsal_approach_clear(grader, under_lamina, direction, LABEL)[0]
+    assert dorsal_approach_clear(grader, on_the_plate, direction, LABEL)[0]
+
+
+def test_keep_longest_per_trajectory_drops_the_shorter_siblings():
+    from src.core.trajectory_optimizer import Candidate, keep_longest_per_trajectory
+
+    def cand(length, score, entry=(0.0, 0.0, 0.0)):
+        entry = np.array(entry, dtype=float)
+        return Candidate(
+            entry=entry, target=entry + np.array([0.0, -length, 0.0]),
+            length=length, diameter=6.0, breach_mm=0.0, min_wall_mm=2.0,
+            mean_hu=300.0, convergence_deg=0.0, craniocaudal_deg=0.0,
+            score=score, components={},
+        )
+
+    kept = keep_longest_per_trajectory(
+        [cand(30.0, 1.5), cand(45.0, 1.2), cand(40.0, 1.3), cand(35.0, 1.0, entry=(5.0, 0.0, 0.0))]
+    )
+
+    assert sorted(c.length for c in kept) == [35.0, 45.0]
+    # Best first, among what survived.
+    assert [c.score for c in kept] == sorted((c.score for c in kept), reverse=True)

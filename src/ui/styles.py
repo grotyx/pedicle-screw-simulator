@@ -529,6 +529,30 @@ QLabel#screwReviewCounter {{
     font-weight: 800;
     padding: 6px 4px;
 }}
+QWidget#workflowBar {{
+    background-color: {t["bg_secondary"]};
+    border-bottom: 1px solid {t["border"]};
+}}
+QPushButton#workflowStep {{
+    min-width: 120px;
+    padding: 6px 14px;
+    font-weight: 600;
+}}
+/* workflow_bar.py gives the current step role="primary" even while it is
+   disabled (waiting on a prior step), and QPushButton:disabled and
+   QPushButton[role="primary"] have equal specificity with the primary rule
+   defined later, so without this id+attribute+pseudo-class override the
+   disabled current step would be drawn as a live, pressable accent button. */
+QPushButton#workflowStep[role="primary"]:disabled {{
+    background-color: {t["accent_dim"]};
+    border: 1px dashed {t["accent"]};
+    color: {t["text_secondary"]};
+}}
+QLabel#workflowChevron {{
+    background-color: transparent;
+    color: {t["text_secondary"]};
+    font-size: 15px;
+}}
 QPushButton#screwReviewNav {{
     min-width: 78px;
     padding: 5px 8px;

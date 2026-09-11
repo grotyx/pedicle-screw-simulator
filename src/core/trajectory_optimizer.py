@@ -25,7 +25,7 @@ import SimpleITK as sitk
 
 from .planner_config import PlannerConfig
 from .screw_geometry import endplate_slope_deg
-from .screw_grading import BatchResult, ScrewGrader
+from .screw_grading import ENTRY_ZONE_MM, BatchResult, ScrewGrader
 from .vertebra import PedicleAnalysisResult
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,16 @@ _CONSTRUCT_MAX_PASSES = 5
 #: surface of the screw corridor (mm).
 _ANCHOR_STEP_MM = 0.5
 _ANCHOR_MAX_MM = 40.0
+
+#: How far behind a seated head the drill's approach must be free of the same
+#: vertebra's bone (mm).  A head is seated on the first surface its trajectory
+#: meets on the way out, so a head under a lamina with an air pocket between
+#: them lands on the pedicle's own surface, facing the pocket: a real drill
+#: would have to go through the lamina first and then cross the pocket.  Such a
+#: head is unreachable and is discarded.  Fifteen millimetres reaches past any
+#: lamina covering an entry, and stops well short of the distant processes a
+#: lateral-dorsal approach never meets.
+DORSAL_APPROACH_CLEAR_MM = 15.0
 
 @dataclass(frozen=True)
 class OptimizerWeights:
@@ -376,6 +386,129 @@ def _seat_entries(
     return seeds - directions * travel[:, None], travel
 
 
+def seat_on_cortex(
+    grader: ScrewGrader,
+    seeds: np.ndarray,
+    directions: np.ndarray,
+    label: int,
+    reach_mm: float = _ANCHOR_MAX_MM,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Walk each seed back along its own trajectory to the dorsal cortex.
+
+    The head of a pedicle screw belongs on the bone surface the drill enters,
+    measured along the screw's *own* axis.  :func:`_seat_entries` stops where
+    the whole screw cross-section still fits, which near the thin posterior
+    elements is well short of that surface -- on the sample study 5 to 21 mm
+    short, so the screws came out at roughly half the length the vertebra
+    held and their heads were hidden inside the lamina instead of sitting at
+    the facet.
+
+    Marches posteriorly from each seed while the *centreline* stays inside
+    ``label`` and returns the last such point, together with how far each seed
+    moved.  A seed that is not itself inside the label does not move; the
+    caller's containment prune then discards it.  The cross-section is not
+    tested here: the cortex the head sits on straddles the surface by
+    construction, and the grader's :data:`~src.core.screw_grading.ENTRY_ZONE_MM`
+    is what keeps that from reading as a breach while still grading every
+    millimetre past it.
+    """
+    seeds = np.asarray(seeds, dtype=np.float64).reshape(-1, 3)
+    directions = np.asarray(directions, dtype=np.float64).reshape(-1, 3)
+    if seeds.shape[0] == 0:
+        return seeds.copy(), np.zeros(0)
+    steps = np.arange(0.0, float(reach_mm) + 1e-9, _ANCHOR_STEP_MM)
+    points = seeds[:, None, :] - directions[:, None, :] * steps[None, :, None]
+    d_out, _ = grader.distances_at_points(points.reshape(-1, 3), label)
+    inside = (d_out <= 0.0).reshape(seeds.shape[0], steps.size)
+    run = np.logical_and.accumulate(inside, axis=1).sum(axis=1)
+    travel = np.where(run > 0, steps[np.maximum(run - 1, 0)], 0.0)
+    return seeds - directions * travel[:, None], travel
+
+
+def anterior_margin_clear(
+    grader: ScrewGrader,
+    tips: np.ndarray,
+    directions: np.ndarray,
+    label: int,
+    margin_mm: float,
+) -> np.ndarray:
+    """Whether each tip keeps ``margin_mm`` of bone ahead of it along its axis.
+
+    This is the anterior margin as a surgeon states it -- the tip stops that far
+    short of the anterior cortex *along the screw's path* -- and it is what the
+    length is chosen against.  The old test demanded the same clearance of the
+    distal cylinder's whole surface in every direction, which in the rounded
+    front of a vertebral body is set by the side walls long before the anterior
+    cortex: on the sample study it capped screws 5 to 17 mm short of a tip that
+    still had 5 to 9 mm of bone in front of it.  The distal cylinder is still
+    required to be contained, and to keep the configured wall clearance, like
+    every other millimetre of the shaft (see :func:`score_candidates`).
+    """
+    tips = np.asarray(tips, dtype=np.float64).reshape(-1, 3)
+    directions = np.asarray(directions, dtype=np.float64).reshape(-1, 3)
+    if tips.shape[0] == 0 or margin_mm <= 0.0:
+        return np.ones(tips.shape[0], dtype=bool)
+    steps = np.arange(_ANCHOR_STEP_MM, float(margin_mm) + 1e-9, _ANCHOR_STEP_MM)
+    points = tips[:, None, :] + directions[:, None, :] * steps[None, :, None]
+    d_out, _ = grader.distances_at_points(points.reshape(-1, 3), label)
+    return (d_out.reshape(tips.shape[0], steps.size) <= 0.0).all(axis=1)
+
+
+def dorsal_approach_clear(
+    grader: ScrewGrader,
+    heads: np.ndarray,
+    directions: np.ndarray,
+    label: int,
+    reach_mm: float = DORSAL_APPROACH_CLEAR_MM,
+) -> np.ndarray:
+    """Whether the approach behind each head is clear of the same vertebra.
+
+    Samples the ray from just behind each head back along ``-direction`` for
+    ``reach_mm`` and reports ``False`` where it meets ``label`` again -- bone
+    the drill would have to pass through before reaching this head, with the
+    gap between them left as a breach the shaft never gets graded for.  See
+    :data:`DORSAL_APPROACH_CLEAR_MM`.
+    """
+    heads = np.asarray(heads, dtype=np.float64).reshape(-1, 3)
+    directions = np.asarray(directions, dtype=np.float64).reshape(-1, 3)
+    if heads.shape[0] == 0:
+        return np.zeros(0, dtype=bool)
+    steps = np.arange(_ANCHOR_STEP_MM, float(reach_mm) + 1e-9, _ANCHOR_STEP_MM)
+    points = heads[:, None, :] - directions[:, None, :] * steps[None, :, None]
+    d_out, _ = grader.distances_at_points(points.reshape(-1, 3), label)
+    inside = (d_out <= 0.0).reshape(heads.shape[0], steps.size)
+    # The first step behind the head is outside by construction (the head is the
+    # last inside point); bone *after* that first gap is what blocks the drill.
+    left_bone = np.logical_or.accumulate(~inside, axis=1)
+    return ~(left_bone & inside).any(axis=1)
+
+
+def keep_longest_per_trajectory(candidates: List[Candidate]) -> List[Candidate]:
+    """The longest feasible screw for each entry and direction, best first.
+
+    The catalogue is swept for every trajectory, and the score's density term
+    rewards staying in dense pedicle bone, which a longer screw leaves for the
+    softer body -- so, weighed freely, a short screw could outscore a long one
+    on the same trajectory.  The surgeon's rule is simpler: take the longest
+    screw whose tip still keeps the anterior margin.  Every candidate here has
+    already passed the hard feasibility tests (containment, walls, the tip
+    margin), so keeping only the longest per trajectory applies that rule and
+    leaves the score to choose *between* trajectories.
+    """
+    best: Dict[Tuple, Candidate] = {}
+    for candidate in candidates:
+        direction = _unit(np.asarray(candidate.target) - np.asarray(candidate.entry))
+        key = (
+            tuple(np.round(np.asarray(candidate.entry, dtype=np.float64), 3)),
+            tuple(np.round(direction, 4)),
+            float(candidate.diameter),
+        )
+        kept = best.get(key)
+        if kept is None or candidate.length > kept.length:
+            best[key] = candidate
+    return sorted(best.values(), key=lambda c: c.score, reverse=True)
+
+
 # ------------------------------------------------------------------ generation
 def generate_candidates(
     grader: ScrewGrader,
@@ -542,6 +675,36 @@ def generate_candidates(
                 entries.append(anchor + a * lateral_axis + b * tangent)
                 entry_directions.append(direction)
                 shortfall.append(short)
+    # The anchors above sit where the whole cross-section first fits, which is
+    # the right place to spread the tangential grid but the wrong place for a
+    # head.  Each entry now climbs back along its own direction to the dorsal
+    # cortex, which is where the drill starts: the screw gains the length the
+    # buried head was hiding, and the head lands at the facet instead of inside
+    # the lamina.  ``shortfall`` measured burial against a cortex found along
+    # the *pedicle axis*; a head on its own trajectory's cortex has none left.
+    entries, climb = seat_on_cortex(
+        grader,
+        np.asarray(entries, dtype=np.float64),
+        np.asarray(entry_directions, dtype=np.float64),
+        label,
+    )
+    # A head with the same vertebra's bone behind it sits in a pocket the drill
+    # cannot reach without crossing that bone first -- discard it here, where
+    # the old burial bound used to reject the same geometry by proxy.
+    reachable = dorsal_approach_clear(
+        grader, entries, np.asarray(entry_directions, dtype=np.float64), label
+    )
+    entries = entries[reachable]
+    climb = climb[reachable]
+    entry_directions = [d for d, ok in zip(entry_directions, reachable, strict=True) if ok]
+    if entries.shape[0] == 0:
+        if diagnostics is not None:
+            diagnostics["surface_shortfall_mm"] = np.zeros(0)
+            diagnostics["cortical_climb_mm"] = np.zeros(0)
+            diagnostics["occluded_entries"] = int((~reachable).sum())
+        return empty
+    shortfall = np.zeros(len(entries), dtype=np.float64)
+
     entry_count = len(entries)
     per_entry = lengths_catalogue.size
     entries = np.repeat(np.asarray(entries, dtype=np.float64), per_entry, axis=0)
@@ -549,6 +712,7 @@ def generate_candidates(
         np.asarray(entry_directions, dtype=np.float64), per_entry, axis=0
     )
     shortfall = np.repeat(np.asarray(shortfall, dtype=np.float64), per_entry)
+    climb = np.repeat(np.asarray(climb, dtype=np.float64), per_entry)
     lengths = np.tile(lengths_catalogue, entry_count)
     targets = entries + entry_directions * lengths[:, None]
 
@@ -558,6 +722,8 @@ def generate_candidates(
     keep = (entry_out <= 0.0) & (tip_out <= 0.0)
     if diagnostics is not None:
         diagnostics["surface_shortfall_mm"] = shortfall[keep]
+        diagnostics["cortical_climb_mm"] = climb[keep]
+        diagnostics["occluded_entries"] = int((~reachable).sum())
     return entries[keep], targets[keep], lengths[keep]
 
 
@@ -576,11 +742,17 @@ def score_candidates(
     surface_shortfall_mm: Optional[np.ndarray] = None,
     grader: Optional[ScrewGrader] = None,
     narrow: bool = False,
+    anterior_clear: Optional[np.ndarray] = None,
 ) -> List[Candidate]:
     """Filter graded candidates to the feasible ones and rank them.
 
     ``tip_batch`` is the grading of each candidate's distal
-    :data:`TIP_SEGMENT_MM`; when given it enforces the anterior safety margin.
+    :data:`TIP_SEGMENT_MM`.  Given ``anterior_clear`` as well (from
+    :func:`anterior_margin_clear`), the anterior margin is that along-axis test
+    and the distal cylinder only has to be contained with the configured wall
+    clearance, like the rest of the shaft.  Given ``tip_batch`` alone, the
+    older all-around test applies: the distal cylinder's surface must keep the
+    anterior margin (less :data:`TIP_MARGIN_RELIEF_MM`) in every direction.
     ``surface_shortfall_mm`` (from ``generate_candidates(..., diagnostics=...)``)
     rejects entries buried more than :data:`MAX_ENTRY_SHORTFALL_MM` inside the
     posterior cortex.
@@ -659,8 +831,13 @@ def score_candidates(
             & (convergence <= config.max_convergence_deg + 1e-6)
         )
     if tip_batch is not None:
-        tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
+        if anterior_clear is None:
+            tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
+        else:
+            tip_margin = config.wall_clearance_mm
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
+    if anterior_clear is not None:
+        feasible &= np.asarray(anterior_clear, dtype=bool).reshape(-1)
     if surface_shortfall_mm is not None:
         shortfall = np.asarray(surface_shortfall_mm, dtype=np.float64).reshape(-1)
         feasible &= shortfall <= MAX_ENTRY_SHORTFALL_MM + 1e-9
@@ -875,7 +1052,13 @@ def optimize_screw(
         )
         if entries.shape[0] == 0:
             continue
-        batch = grader.evaluate_batch(entries, targets, diameter, label, side=side)
+        # Graded from the cortex the head sits on, not from the head: see
+        # ENTRY_ZONE_MM.  The tip test below grades a segment that starts deep
+        # inside the body, so it takes no entry zone.
+        batch = grader.evaluate_batch(
+            entries, targets, diameter, label, side=side,
+            entry_zone_mm=ENTRY_ZONE_MM,
+        )
         directions = targets - entries
         norms = np.linalg.norm(directions, axis=1)
         norms[norms <= 1e-12] = 1.0
@@ -889,7 +1072,11 @@ def optimize_screw(
             surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
             grader=grader,
             narrow=narrow,
+            anterior_clear=anterior_margin_clear(
+                grader, targets, directions, label, config.anterior_margin_mm
+            ),
         )
+        ranked = keep_longest_per_trajectory(ranked)
         if ranked:
             if not narrow and diameter < recommended:
                 warning = (

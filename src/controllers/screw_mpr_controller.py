@@ -143,6 +143,9 @@ class ScrewMPRController:
             for viewer in self._window._get_mpr_viewers():
                 viewer.clear_custom_reslice_axes()
             self._set_review_filter(None)
+            clear = getattr(self._viewer_3d(), "clear_screw_mpr", None)
+            if callable(clear):
+                clear()
         self._set_slider_value(50)
         self._window.screw_axis_position_label.setText("Position: 50%")
         self.refresh_selected_screw()
@@ -432,6 +435,16 @@ class ScrewMPRController:
             f"Position: {self.position_percent}% "
             f"({axes.distance_from_entry_mm:.1f} mm from entry)"
         )
+        # The same three matrices, into 3D: the screw-aligned planes replace the
+        # standard indicators, and the volume opens at the cross-section so the
+        # slice in the cross-section pane can be found in the model.
+        show = getattr(self._viewer_3d(), "show_screw_mpr", None)
+        if callable(show):
+            show(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+    def _viewer_3d(self):
+        """The window's 3D viewer, or ``None`` for a stand-in window without one."""
+        return getattr(self._window, "viewer_3d", None)
 
     @staticmethod
     def _set_plane(viewer, axes, title, readout) -> None:

@@ -478,11 +478,18 @@ class ScrewTool:
             self._clear_grading(screw)
             screw.warnings.append("Not graded: run segmentation first")
             return
+        from ..core.screw_grading import ENTRY_ZONE_MM
+
+        # From the cortex the head sits on, exactly as the planner grades the
+        # screw it proposes -- otherwise the first drag of a planned screw
+        # would re-grade it by a stricter rule and the grade would drop for a
+        # screw that had not moved.
         result = self._grader.grade(
             screw.entry_point,
             screw.target_point,
             screw.diameter,
             side=self._screw_side(screw),
+            entry_zone_mm=ENTRY_ZONE_MM,
         )
         if result is None:
             self._clear_grading(screw)

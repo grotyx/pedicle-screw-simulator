@@ -120,3 +120,30 @@ def test_the_narrow_pedicle_legend_is_muted_secondary_text_in_every_theme():
         rule = stylesheet.split("QLabel#screwNarrowLegend {", 1)[1].split("}", 1)[0]
         assert f'color: {palette["text_secondary"]};' in rule
         assert "font-size:" in rule
+
+
+def _rule(stylesheet: str, selector: str) -> dict[str, str]:
+    """Parse the ``prop: value;`` declarations of one QSS rule into a dict."""
+    body = stylesheet.split(selector + " {", 1)[1].split("}", 1)[0]
+    declarations: dict[str, str] = {}
+    for line in body.splitlines():
+        line = line.strip().rstrip(";")
+        if not line or ":" not in line:
+            continue
+        prop, _, value = line.partition(":")
+        declarations[prop.strip()] = value.strip()
+    return declarations
+
+
+def test_a_disabled_current_workflow_step_does_not_look_pressable_in_every_theme():
+    for theme_name, palette in THEMES.items():
+        stylesheet = load_stylesheet(theme_name)
+        selector = 'QPushButton#workflowStep[role="primary"]:disabled'
+        assert f"{selector} {{" in stylesheet
+
+        rule = _rule(stylesheet, selector)
+        enabled = _rule(stylesheet, 'QPushButton[role="primary"]')
+        assert enabled["background-color"] == palette["accent"]
+        assert rule["background-color"] != palette["accent"]
+        assert rule["color"] != enabled["color"]
+        assert rule != _rule(stylesheet, "QPushButton:disabled")

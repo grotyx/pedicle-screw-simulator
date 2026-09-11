@@ -4,7 +4,7 @@
 
 Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
 
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 **Primary tested environment:** macOS, Python 3.12
 
@@ -32,7 +32,7 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 - Direct entry, tip, and whole-screw editing in MPR and 3D
 - Manual screw placement, distance measurement, and angle measurement
 - JSON plan save/load and supported CSV/STL export
-- Editable planning parameters, a per-screw review table and inspector, four UI themes, MPR pan/zoom, pane maximise, and 3D navigation controls
+- Editable planning parameters, a per-screw review table and inspector, three UI themes (one light, two dark), MPR pan/zoom, pane maximise, and 3D navigation controls
 
 ## Quick Start
 
@@ -97,7 +97,7 @@ For exact reproduction of the validated macOS/Python 3.12 environment:
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.2.0 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
+`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.2.1 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
 
 ## Standalone Desktop Packages
 
@@ -199,7 +199,7 @@ data/README.md   local-data privacy instructions; no clinical data
 
 If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.1) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 
