@@ -551,9 +551,9 @@ class MainWindow(QMainWindow):
         bar.set_states(
             workflow_states(
                 has_volume=self.volume_manager.get_sitk_image() is not None,
-                segment_available=self.seg_run_btn.isEnabled(),
+                segment_available=seg_run_btn.isEnabled(),
                 has_mask=has_mask,
-                plan_available=self.auto_screw_plan_btn.isEnabled(),
+                plan_available=auto_screw_plan_btn.isEnabled(),
                 has_plan=has_plan,
             )
         )
@@ -1663,7 +1663,7 @@ class MainWindow(QMainWindow):
         # The workflow bar follows the study: a finished plan or a removed
         # screw changes which step comes next. (A new volume is handled by
         # reset_workspace() itself, once the previous study's mask and
-        # screws are actually cleared -- see _on_screw_rows_changed.)
+        # screws are actually cleared -- see the end of reset_workspace().)
         table_model = self.screw_list_widget.model()
         # A bound method, not a lambda: PyQt uses ``self`` as the receiver
         # for a bound method, so the connection is torn down together with
@@ -2859,10 +2859,11 @@ class MainWindow(QMainWindow):
         # Reset vertebra checkboxes to show all
         self._reset_all_vertebra_checkboxes()
 
-        # DicomController calls set_volume() before this method runs, which
-        # notifies observers -- including a stale workflow bar reading the
-        # previous study's mask and screws -- before they are cleared above.
-        # Redraw only now that this study is actually a fresh one.
+        # DicomController sets the new volume before it calls this method, so
+        # until the clearing above has run this window still holds the
+        # previous study's mask and screws, and a redraw then would open the
+        # new study with step 2 already ticked. This is where the bar is
+        # redrawn, now that the study is actually a fresh one.
         self._refresh_workflow_bar()
 
     def closeEvent(self, event):

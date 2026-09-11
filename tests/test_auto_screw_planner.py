@@ -138,6 +138,77 @@ def _make_sloped_lamina_phantom(
     return _make_image(ct_arr), _make_image(mask_arr)
 
 
+def _make_narrow_ridge_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+) -> tuple:
+    """A block with a 3 mm ridge the centreline follows but a 6 mm shaft breaches.
+
+    ``_longest_length_from`` only samples the centreline, so it cannot see that
+    a ridge just wide enough for the axis is too narrow for the full-diameter
+    screw around it. The block occupies z=[10:30], y=[30:60], x=[20:41]; the
+    ridge, same label, runs anteriorly from the block along x=[29:32] at
+    z=[19:22], y=[5:30] -- 3 mm wide, so a 6 mm screw centred on it hangs a
+    breach on either side while the centreline itself stays inside.
+    """
+    shape = (40, 80, 60)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 30:60, 20:41] = hu_value
+    mask_arr[10:30, 30:60, 20:41] = label
+
+    ct_arr[19:22, 5:30, 29:32] = hu_value
+    mask_arr[19:22, 5:30, 29:32] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
+def _make_lamina_over_air_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+) -> tuple:
+    """A block with a same-label lamina sitting behind a 3 mm air gap.
+
+    ``seat_on_cortex`` walks back along the trajectory to the first bone
+    surface it meets, which is the lamina -- but the drill cannot reach that
+    surface without first crossing the air pocket, so ``dorsal_approach_clear``
+    must reject it. Block z=[10:30], y=[5:50], x=[20:41]; lamina, same label,
+    at y=[53:56]; air gap at y=[50:53].
+    """
+    shape = (40, 80, 60)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:50, 20:41] = hu_value
+    mask_arr[10:30, 5:50, 20:41] = label
+
+    ct_arr[10:30, 53:56, 20:41] = hu_value
+    mask_arr[10:30, 53:56, 20:41] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
+def _make_open_box_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+) -> tuple:
+    """A single block with no ridge, no lamina, and no medial wall to breach.
+
+    Pins the preference order when every candidate is equally safe: the
+    re-seated head with the longest fitting tip should win the tie. Block
+    z=[10:30], y=[5:50], x=[20:41].
+    """
+    shape = (40, 80, 60)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:50, 20:41] = hu_value
+    mask_arr[10:30, 5:50, 20:41] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
 def _make_vertebra(
     label: int = 27,
     name: str = "L5",
@@ -2075,3 +2146,79 @@ class TestHeadOnTheCortex:
         regraded = tool.get_screws()[0]
         assert regraded.grade == planned.gertzbein_grade
         assert regraded.breach_distance == pytest.approx(planned.breach_mm, abs=0.3)
+
+    def test_the_legacy_screw_is_kept_unextended_when_extending_would_breach(self):
+        """A trajectory the centreline check cannot see through is left alone.
+
+        ``_longest_length_from`` only samples the centreline, so it is blind to
+        the ridge narrowing to 3 mm around a 6 mm shaft. Extending down the
+        ridge would breach; the unchanged, already-validated screw must win.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_narrow_ridge_phantom()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        entry = np.array([30.0, 55.0, 20.0])
+        target = np.array([30.0, 35.0, 20.0])
+        direction = np.array([0.0, -1.0, 0.0])
+
+        # Precondition: an extension is available -- the centreline check alone
+        # sees only bone all the way down the ridge.
+        assert planner._longest_length_from(entry, direction, 27) is not None
+
+        head, tip = planner._seat_head_and_extend(entry, target, 6.0, 27, "left")
+
+        assert np.allclose(head, entry, atol=1e-6)
+        assert np.allclose(tip, target, atol=1e-6)
+        assert planner._medial_breach_key(head, tip, 6.0, 27, "left") == (0.0, 0.0)
+
+    def test_the_legacy_head_is_not_seated_behind_an_unreachable_approach(self):
+        """A head re-seated behind an air pocket is unreachable; keep the original head.
+
+        ``seat_on_cortex`` walks back to the first bone surface it meets, which
+        is the lamina beyond the air gap -- but the drill cannot cross that gap,
+        so ``dorsal_approach_clear`` must reject the re-seated head and the
+        original head's tip is extended instead.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+        from src.core.trajectory_optimizer import dorsal_approach_clear, seat_on_cortex
+
+        ct, mask = _make_lamina_over_air_phantom()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        entry = np.array([30.0, 45.0, 20.0])
+        target = np.array([30.0, 25.0, 20.0])
+        direction = np.array([0.0, -1.0, 0.0])
+
+        # Precondition: seat_on_cortex moves the head onto the lamina, and that
+        # head is not dorsally reachable through the intervening air.
+        heads, _ = seat_on_cortex(planner._grader, entry[None, :], direction[None, :], 27)
+        assert np.allclose(heads[0], [30.0, 49.0, 20.0], atol=1e-6)
+        assert not bool(dorsal_approach_clear(planner._grader, heads, direction[None, :], 27)[0])
+
+        head, tip = planner._seat_head_and_extend(entry, target, 6.0, 27, "left")
+
+        assert np.allclose(head, entry, atol=1e-6)
+        assert np.allclose(tip, [30.0, 10.0, 20.0], atol=1e-6)
+
+    def test_the_legacy_screw_prefers_the_seated_head_and_longest_tip_when_all_are_equally_safe(
+        self,
+    ):
+        """When nothing is breached either way, prefer the longer, cortex-seated screw.
+
+        Pins the preference order so the fix for the two tests above cannot
+        degrade into always keeping the original head or the unchanged screw.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_open_box_phantom()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        entry = np.array([30.0, 45.0, 20.0])
+        target = np.array([30.0, 25.0, 20.0])
+
+        head, tip = planner._seat_head_and_extend(entry, target, 6.0, 27, "left")
+
+        assert np.allclose(head, [30.0, 49.0, 20.0], atol=1e-6)
+        assert np.allclose(tip, [30.0, 9.0, 20.0], atol=1e-6)

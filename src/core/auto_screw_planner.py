@@ -457,7 +457,9 @@ class AutoScrewPlanner:
 
         # 6. Head on the dorsal cortex, tip at the anterior margin -- the same
         #    rule the optimiser applies, so a fallback screw is not the short,
-        #    buried one the optimiser was changed to stop producing.
+        #    buried one the optimiser was changed to stop producing. Applied
+        #    only when the result is no less safe than the validated screw
+        #    above.
         entry, target = self._seat_head_and_extend(
             entry, target, diameter, vertebra.label, side
         )
@@ -524,13 +526,30 @@ class AutoScrewPlanner:
         direction, so measured along the screw itself the head was buried and
         the tip stopped short of the anterior margin.
 
-        Never trades safety for length: the re-seated screw is kept only if it
-        breaches no more -- medially or at all -- than the same trajectory with
-        its head left where it was.  Otherwise only the tip is extended, from
-        the original head.  A trajectory the catalogue cannot fit either way is
-        returned unchanged.
+        The trajectory itself -- the (entry, target) pair handed in -- was
+        already chosen and validated by the legacy search: containment, the
+        diameter step-down, or the narrow policy's lateral slide.  That
+        unchanged, unextended screw is therefore the safety baseline, never
+        the thing being improved on.  Re-seating the head and extending the
+        tip only makes the screw longer along the *same* line, and
+        ``_longest_length_from`` checks only that the centreline stays in
+        bone -- so an extension can walk the full-diameter shaft into a wall
+        the 0-radius centreline never touches, and a head re-seated onto the
+        first surface ``seat_on_cortex`` finds can land behind an air pocket
+        (a lamina beyond a gap under the facet) that the drill can never
+        actually reach.
+
+        So each candidate head is tried in order of preference -- the
+        re-seated head first (only when :func:`dorsal_approach_clear` confirms
+        the approach behind it is clear of the vertebra), then the original
+        head -- each with its tip extended to :meth:`_longest_length_from`'s
+        longest fitting catalogue length, and the first one graded no worse
+        than the baseline (lexicographic ``(medial_breach_mm, breach_mm)``,
+        no tolerance) is returned.  If neither is as safe as the baseline, the
+        validated screw is returned unchanged: a legacy screw is never made
+        less safe in order to make it longer or move its head.
         """
-        from .trajectory_optimizer import seat_on_cortex
+        from .trajectory_optimizer import dorsal_approach_clear, seat_on_cortex
 
         entry = np.asarray(entry, dtype=np.float64)
         target = np.asarray(target, dtype=np.float64)
@@ -539,28 +558,31 @@ class AutoScrewPlanner:
         if norm <= 1e-9:
             return entry, target
         direction = axis / norm
+        label = int(vertebra_label)
+
+        base_key = self._medial_breach_key(entry, target, diameter, label, side)
 
         heads, _travel = seat_on_cortex(
-            self._grader, entry[None, :], direction[None, :], int(vertebra_label)
+            self._grader, entry[None, :], direction[None, :], label
         )
-        options = []
-        for head in (heads[0], entry):
-            length = self._longest_length_from(head, direction, vertebra_label)
-            if length is not None:
-                options.append((head, head + direction * length))
-        if not options:
-            return entry, target
+        reseated_clear = bool(
+            dorsal_approach_clear(self._grader, heads, direction[None, :], label)[0]
+        )
 
-        def breach_key(pair):
-            return self._medial_breach_key(
-                pair[0], pair[1], diameter, vertebra_label, side
-            )
+        candidate_heads = []
+        if reseated_clear:
+            candidate_heads.append(heads[0])
+        candidate_heads.append(entry)
 
-        seated = options[0]
-        if len(options) == 1:
-            return seated
-        kept = options[1]
-        return seated if breach_key(seated) <= breach_key(kept) else kept
+        for head in candidate_heads:
+            length = self._longest_length_from(head, direction, label)
+            if length is None:
+                continue
+            tip = head + direction * length
+            if self._medial_breach_key(head, tip, diameter, label, side) <= base_key:
+                return head, tip
+
+        return entry, target
 
     def _least_medial_entry(
         self,
