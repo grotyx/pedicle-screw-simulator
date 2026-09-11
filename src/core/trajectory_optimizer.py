@@ -24,6 +24,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from .planner_config import PlannerConfig
+from .screw_geometry import endplate_slope_deg
 from .screw_grading import BatchResult, ScrewGrader
 from .vertebra import PedicleAnalysisResult
 
@@ -38,6 +39,25 @@ DENSITY_HIGH_HU = 600.0
 
 #: Deviation from the endplate plane that drives the endplate objective to 0.
 ENDPLATE_TOLERANCE_DEG = 15.0
+
+#: How far the craniocaudal sweep may be shifted off the pedicle axis to follow
+#: the endplate (degrees).  A thoracolumbar endplate is within about 20 degrees
+#: of the pedicle axis; a larger offset means the plane fit is wrong, and
+#: chasing it would sweep the whole grid out of the vertebra.
+MAX_ENDPLATE_RECENTRE_DEG = 20.0
+
+#: Prefix of the note left on every candidate when the endplate band had to be
+#: dropped.  Callers match on the prefix; the text carries the tolerance.
+ENDPLATE_BAND_RELAXED_PREFIX = "Endplate band relaxed"
+
+
+def endplate_band_relaxed_warning(tolerance_deg: float) -> str:
+    """The single wording for a dropped endplate band."""
+    return (
+        f"{ENDPLATE_BAND_RELAXED_PREFIX}: no trajectory within "
+        f"±{tolerance_deg:.0f}° of the upper endplate"
+    )
+
 
 #: Length of the distal segment the anterior-margin check is measured over (mm).
 TIP_SEGMENT_MM = 4.0
@@ -334,6 +354,11 @@ def generate_candidates(
     aligned with the return value; it currently carries
     ``"surface_shortfall_mm"``, how far anterior of the posterior cortex each
     entry had to be seated.
+
+    When ``config.endplate_parallel`` is on and the analysis carries an
+    upper-endplate normal, the craniocaudal window is centred on the
+    endplate-parallel direction rather than on the pedicle axis, so
+    ``craniocaudal_range_deg`` reads as "how far either side of the endplate".
     """
     empty = (np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
     center, axis, width = _side_data(analysis, side)
@@ -355,6 +380,31 @@ def generate_candidates(
     # Rotating about ``+lateral_axis`` tips the trajectory caudally, so the
     # craniocaudal sweep uses its negation to keep "positive = cranial".
     craniocaudal_axis = -lateral_axis
+    # The (-10, 10) window is a window around the *endplate* direction, not
+    # around the pedicle axis: an endplate-parallel trajectory that the hard
+    # band in ``score_candidates`` demands has to be in the grid to be found.
+    # ``cc`` rotates about ``craniocaudal_axis``, which is perpendicular to the
+    # base direction's horizontal projection, so ``cc`` is an elevation offset
+    # from the base direction (exactly at zero convergence, compressed by
+    # cos(convergence) elsewhere -- close enough to populate the band, and the
+    # band itself is applied to the measured angle, not to this offset).
+    craniocaudal_center = 0.0
+    slope_deg = (
+        endplate_slope_deg(analysis.upper_endplate_normal)
+        if config.endplate_parallel
+        else None
+    )
+    if slope_deg is not None:
+        base_elevation = math.degrees(
+            math.atan2(float(base[2]), float(math.hypot(base[0], base[1])))
+        )
+        craniocaudal_center = float(
+            np.clip(
+                slope_deg - base_elevation,
+                -MAX_ENDPLATE_RECENTRE_DEG,
+                MAX_ENDPLATE_RECENTRE_DEG,
+            )
+        )
     medial_sign = -1.0 if side == "left" else 1.0
 
     directions = np.array(
@@ -364,7 +414,9 @@ def generate_candidates(
                 config.min_convergence_deg, config.max_convergence_deg + 1e-9, convergence_step_deg
             )
             for cc in np.arange(
-                craniocaudal_range_deg[0], craniocaudal_range_deg[1] + 1e-9, craniocaudal_step_deg
+                craniocaudal_center + craniocaudal_range_deg[0],
+                craniocaudal_center + craniocaudal_range_deg[1] + 1e-9,
+                craniocaudal_step_deg,
             )
         ]
     )
@@ -474,6 +526,13 @@ def score_candidates(
     Narrow and normal scores are never compared with each other (every
     comparison is within one screw's own candidate list), so the two objectives
     do not have to be on the same scale.
+
+    With ``config.endplate_parallel`` on and a fitted endplate plane, a
+    candidate is feasible only while its endplate angle stays inside
+    ``config.endplate_tolerance_deg``.  If that empties the set the band is
+    dropped for this call and every returned candidate carries
+    :func:`endplate_band_relaxed_warning`.  With the option off the soft
+    ``endplate`` objective is pinned to 1.0, which is rank-neutral.
     """
     entries = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -531,6 +590,25 @@ def score_candidates(
         feasible &= shortfall <= MAX_ENTRY_SHORTFALL_MM + 1e-9
     else:
         shortfall = np.zeros(count)
+
+    # Hard endplate band.  A band that admits nothing is dropped for this side
+    # with a note rather than costing it a screw: an off-parallel screw the
+    # surgeon can see is better than a missing one they have to explain.
+    band_relaxed = False
+    endplate_slope = (
+        endplate_slope_deg(analysis.upper_endplate_normal)
+        if config.endplate_parallel
+        else None
+    )
+    if endplate_slope is not None:
+        within_band = feasible & (
+            np.abs(craniocaudal - endplate_slope)
+            <= config.endplate_tolerance_deg + 1e-9
+        )
+        if within_band.any():
+            feasible = within_band
+        else:
+            band_relaxed = True
     if not feasible.any():
         return []
 
@@ -543,7 +621,10 @@ def score_candidates(
         1.0,
     )
     length_score = np.clip(lengths / max_length, 0.0, 1.0)
-    if normal is None:
+    if normal is None or not config.endplate_parallel:
+        # Neutral, not absent: a constant 1.0 adds ``weights.endplate`` to every
+        # score, which leaves the ranking exactly as if the weight were zero,
+        # while keeping the component present in every candidate's breakdown.
         endplate = np.ones(count)
     else:
         tilt = np.degrees(np.arcsin(np.clip(directions @ normal, -1.0, 1.0)))
@@ -609,6 +690,10 @@ def score_candidates(
         )
         for i in np.flatnonzero(feasible)
     ]
+    if band_relaxed:
+        warning = endplate_band_relaxed_warning(config.endplate_tolerance_deg)
+        for candidate in candidates:
+            candidate.warnings.append(warning)
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates
 

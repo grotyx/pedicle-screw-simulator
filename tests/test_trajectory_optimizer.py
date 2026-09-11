@@ -14,21 +14,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
+from src.core.screw_geometry import endplate_angle_deg, endplate_slope_deg
 from src.core.screw_grading import BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
     DEFAULT_WEIGHTS,
+    ENDPLATE_BAND_RELAXED_PREFIX,
     MAX_DIAMETER_STEPS,
     MAX_ENTRY_SHORTFALL_MM,
     SAFETY_CAP_MM,
     TIP_SEGMENT_MM,
     OptimizerWeights,
     _seat_entries,
+    endplate_band_relaxed_warning,
     generate_candidates,
     make_planner,
     optimize_screw,
     score_candidates,
 )
-from tests.test_pedicle_analyzer import _make_anatomical_phantom
+from tests.test_pedicle_analyzer import (
+    _make_anatomical_phantom,
+    _make_tilted_endplate_phantom,
+)
 
 LABEL = 28
 
@@ -451,3 +457,130 @@ def test_a_normal_pedicle_is_unchanged_by_the_narrow_plumbing():
     }
     assert best.medial_breach_mm == 0.0 and best.lateral_breach_mm == 0.0
     assert best.medial_wall_mm >= best.min_wall_mm - 1e-9
+
+
+def _tilted_setup(tilt_deg=10.0):
+    """Tilted-endplate phantom + flat CT + analysis, for the endplate tests."""
+    mask = _make_tilted_endplate_phantom(tilt_deg=tilt_deg)
+    arr = sitk.GetArrayFromImage(mask)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+    analyzer = PedicleAnalyzer(mask)
+    analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+    return ct, mask, analysis
+
+
+def _endplate_angles(candidates, analysis):
+    return [
+        endplate_angle_deg(c.entry, c.target, analysis.upper_endplate_normal)
+        for c in candidates
+    ]
+
+
+def test_endplate_band_holds_every_candidate_inside_the_tolerance():
+    """Without the band this phantom yields trajectories 14 degrees off."""
+    ct, mask, analysis = _tilted_setup()
+    assert endplate_slope_deg(analysis.upper_endplate_normal) == pytest.approx(10.0, abs=1.5)
+
+    ranked = optimize_screw(
+        ScrewGrader(mask, ct), analysis, "left", PlannerConfig(), top_k=500
+    )
+
+    assert ranked
+    angles = _endplate_angles(ranked, analysis)
+    assert max(abs(a) for a in angles) <= 10.0 + 1e-6
+    assert not any(w.startswith(ENDPLATE_BAND_RELAXED_PREFIX) for w in ranked[0].warnings)
+
+
+def test_recentred_sweep_covers_the_band_symmetrically():
+    """The generated grid brackets the endplate direction instead of the axis.
+
+    Measured on this phantom (independent of the corridor radius): centred on
+    the pedicle axis the grid spans -19.37 to +0.63 degrees of endplate angle;
+    centred on the endplate it spans -10.0 to +10.0.
+    """
+    ct, mask, analysis = _tilted_setup()
+    grader = ScrewGrader(mask, ct)
+    normal = analysis.upper_endplate_normal
+
+    on_entries, on_targets, _ = generate_candidates(
+        grader, analysis, "left", PlannerConfig(), corridor_radius_mm=2.5
+    )
+    off_entries, off_targets, _ = generate_candidates(
+        grader, analysis, "left", PlannerConfig(endplate_parallel=False), corridor_radius_mm=2.5
+    )
+    on_angles = [endplate_angle_deg(e, t, normal) for e, t in zip(on_entries, on_targets, strict=True)]
+    off_angles = [endplate_angle_deg(e, t, normal) for e, t in zip(off_entries, off_targets, strict=True)]
+
+    assert max(on_angles) > max(off_angles) + 4.0
+    assert min(on_angles) > min(off_angles) + 4.0
+    assert max(on_angles) == pytest.approx(-min(on_angles), abs=1.0)
+
+
+def test_recentred_sweep_reaches_trajectories_parallel_to_a_tilted_endplate():
+    """Because the band is populated, the winner is very nearly parallel.
+
+    On the axis-centred grid the best feasible 7.0 mm candidate sits 4.4 degrees
+    caudal of the endplate; with the sweep recentred it sits 0.1 degrees off.
+    """
+    ct, mask, analysis = _tilted_setup()
+
+    ranked = optimize_screw(
+        ScrewGrader(mask, ct), analysis, "left", PlannerConfig(), top_k=500
+    )
+
+    best = endplate_angle_deg(ranked[0].entry, ranked[0].target, analysis.upper_endplate_normal)
+    assert abs(best) <= 2.0
+
+
+def test_endplate_option_off_leaves_the_component_neutral_and_the_band_open():
+    ct, mask, analysis = _tilted_setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(endplate_parallel=False)
+
+    ranked = optimize_screw(grader, analysis, "left", config, top_k=500)
+
+    assert ranked
+    assert all(c.components["endplate"] == pytest.approx(1.0) for c in ranked)
+    # Not banded: this phantom's un-recentred sweep reaches 14 degrees off.
+    assert max(abs(a) for a in _endplate_angles(ranked, analysis)) > 10.0
+
+
+def test_neutral_endplate_component_does_not_change_the_ranking():
+    """Setting the component to 1.0 for everyone must be rank-neutral, which is
+    what makes "off" equivalent to today's behaviour on a flat phantom."""
+    ct, mask, analysis = _tilted_setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(endplate_parallel=False)
+
+    with_weight = optimize_screw(grader, analysis, "left", config, OptimizerWeights(), top_k=5)
+    without_weight = optimize_screw(
+        grader, analysis, "left", config, OptimizerWeights(endplate=0.0), top_k=5
+    )
+
+    assert np.allclose(with_weight[0].entry, without_weight[0].entry)
+    assert np.allclose(with_weight[0].target, without_weight[0].target)
+
+
+def test_impossible_band_is_relaxed_with_a_warning_instead_of_dropping_the_side():
+    ct, mask, analysis = _tilted_setup()
+    config = PlannerConfig(endplate_tolerance_deg=0.0)
+
+    ranked = optimize_screw(ScrewGrader(mask, ct), analysis, "left", config, top_k=500)
+
+    assert ranked, "a band nothing satisfies must not cost the side its screw"
+    warning = endplate_band_relaxed_warning(0.0)
+    assert warning == "Endplate band relaxed: no trajectory within ±0° of the upper endplate"
+    assert all(warning in c.warnings for c in ranked)
+
+
+def test_flat_phantom_without_an_endplate_normal_is_unaffected():
+    """The band and the recentring are no-ops when there is no plane to use."""
+    ct, mask, analysis = _setup()
+    analysis.upper_endplate_normal = None
+
+    ranked = optimize_screw(ScrewGrader(mask, ct), analysis, "left", PlannerConfig(), top_k=10)
+
+    assert ranked
+    assert all(c.components["endplate"] == pytest.approx(1.0) for c in ranked)
+    assert not any(w.startswith(ENDPLATE_BAND_RELAXED_PREFIX) for w in ranked[0].warnings)
