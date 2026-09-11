@@ -1426,3 +1426,16 @@ def test_a_run_with_no_analyses_clears_a_previous_runs_registry(
     ctrl._on_finished(_current_thread(ctrl), [_planned()])
 
     assert tool._analysis_by_level == {}
+
+
+def test_reset_state_clears_the_endplate_analysis_registry(controller_with_window):
+    """A new study's vertebrae must not be graded against the old study's
+    endplates: reset_state runs on every new DICOM load, well before the
+    next planning run would otherwise refresh the registry."""
+    ctrl, window = controller_with_window
+    tool = window._tool_ctrl.screw_tool
+    tool.set_analysis_by_level({28: object()})
+
+    ctrl.reset_state()
+
+    assert tool._analysis_by_level == {}

@@ -274,6 +274,10 @@ class AutoPlacementController:
         self._close_progress_dialog()
         self._cancel_requested = False
         self._last_planned = []
+        # A new study's vertebrae are not the old study's: keeping the old
+        # per-level analyses around would let a regrade measure a screw
+        # against an endplate that belonged to a different patient.
+        self._window._tool_ctrl.screw_tool.set_analysis_by_level(None)
         if hasattr(self._window, 'auto_screw_status'):
             self._window.auto_screw_status.setText("No auto plan")
 

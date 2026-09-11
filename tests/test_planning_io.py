@@ -450,7 +450,9 @@ def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
 
     rows = list(_csv.reader(path.open(encoding="utf-8")))
     header = rows[0]
-    assert header[-4:] == [
+    # Endplate angle (W8) is appended after these four (W7), so they are the
+    # last four before the final column rather than the last four overall.
+    assert header[-5:-1] == [
         "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
     ]
     row = dict(zip(header, rows[1], strict=True))
@@ -480,3 +482,22 @@ def test_plan_json_round_trips_the_narrow_metrics(tmp_path):
     assert metrics["narrow_pedicle"] is True
     assert metrics["pedicle_width_mm"] == 4.5
     assert metrics["lateral_breach_mm"] == 1.5
+
+
+def test_csv_has_an_endplate_angle_column(tmp_path):
+    screws = [
+        Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 5.0),
+              diameter=6.0, vertebra_level="L3", side="left",
+              metrics={"endplate_angle_deg": 2.4}),
+        Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0),
+              diameter=6.0, vertebra_level="L4", side="left"),
+    ]
+    path = tmp_path / "plan.csv"
+
+    export_screws_csv(str(path), screws)
+
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    header = rows[0]
+    assert "endplate_angle_deg" in header
+    assert dict(zip(header, rows[1], strict=True))["endplate_angle_deg"] == "2.400"
+    assert dict(zip(header, rows[2], strict=True))["endplate_angle_deg"] == ""

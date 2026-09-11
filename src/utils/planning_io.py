@@ -295,6 +295,9 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             # Appended, per the plan-file contract: readers key on the header.
             "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
             "lateral_breach_mm",
+            # Appended last, per the plan-file contract: existing readers index
+            # by header name, and new columns must never shift an old one.
+            "endplate_angle_deg",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -335,4 +338,5 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_flag(metrics, "narrow_pedicle"),
                 _metric_number(metrics, "medial_breach_mm"),
                 _metric_number(metrics, "lateral_breach_mm"),
+                _metric_number(metrics, "endplate_angle_deg"),
             ])

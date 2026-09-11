@@ -473,34 +473,40 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Craniocaudal"), 1, 2)
         self.selected_screw_craniocaudal = QLabel("--")
         selected_screw_details.addWidget(self.selected_screw_craniocaudal, 1, 3)
-        selected_screw_details.addWidget(QLabel("Safety"), 2, 0)
+        selected_screw_details.addWidget(QLabel("Endplate"), 2, 0)
+        self.selected_screw_endplate = QLabel("--")
+        self.selected_screw_endplate.setToolTip(
+            "Screw angle relative to the upper endplate; + is tip-cranial, 0 is parallel"
+        )
+        selected_screw_details.addWidget(self.selected_screw_endplate, 2, 1)
+        selected_screw_details.addWidget(QLabel("Safety"), 3, 0)
         self.selected_screw_grade = QLabel("Grade --")
-        selected_screw_details.addWidget(self.selected_screw_grade, 2, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory HU"), 3, 0)
+        selected_screw_details.addWidget(self.selected_screw_grade, 3, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory HU"), 4, 0)
         self.selected_screw_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_hu, 3, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Source"), 4, 0)
+        selected_screw_details.addWidget(self.selected_screw_hu, 4, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Source"), 5, 0)
         self.selected_screw_source = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_source, 4, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Body HU"), 5, 0)
+        selected_screw_details.addWidget(self.selected_screw_source, 5, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Body HU"), 6, 0)
         self.selected_screw_body_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_body_hu, 5, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Wall margin"), 6, 0)
+        selected_screw_details.addWidget(self.selected_screw_body_hu, 6, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Wall margin"), 7, 0)
         self.selected_screw_wall = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_wall, 6, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Facet"), 7, 0)
+        selected_screw_details.addWidget(self.selected_screw_wall, 7, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Facet"), 8, 0)
         self.selected_screw_facet = QLabel("--")
         self.selected_screw_facet.setWordWrap(True)
-        selected_screw_details.addWidget(self.selected_screw_facet, 7, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Heary"), 8, 0)
+        selected_screw_details.addWidget(self.selected_screw_facet, 8, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Heary"), 9, 0)
         self.selected_screw_heary = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_heary, 8, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory"), 9, 0)
+        selected_screw_details.addWidget(self.selected_screw_heary, 9, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory"), 10, 0)
         self.selected_screw_trajectory = QLabel("—")
-        selected_screw_details.addWidget(self.selected_screw_trajectory, 9, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Pedicle"), 10, 0)
+        selected_screw_details.addWidget(self.selected_screw_trajectory, 10, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Pedicle"), 11, 0)
         self.selected_screw_pedicle = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_pedicle, 10, 1, 1, 3)
+        selected_screw_details.addWidget(self.selected_screw_pedicle, 11, 1, 1, 3)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         cockpit_layout.addWidget(self.selected_screw_metrics)
 
@@ -902,8 +908,30 @@ class MainWindow(QMainWindow):
             params_layout.addWidget(value_label, row, 2)
         self._refresh_planner_weight_labels()
 
+        # Rows are taken from the grid rather than hard-coded, so this block
+        # keeps working whatever rows the parameter list above grows.
+        endplate_row = params_layout.rowCount()
+        self.plan_endplate_parallel_check = QCheckBox("Parallel to upper endplate")
+        self.plan_endplate_parallel_check.setChecked(planner_defaults.endplate_parallel)
+        self.plan_endplate_parallel_check.setToolTip(
+            "Aim the trajectory along the upper endplate instead of horizontally"
+        )
+        params_layout.addWidget(self.plan_endplate_parallel_check, endplate_row, 0, 1, 3)
+
+        self.plan_endplate_tolerance_spin = QDoubleSpinBox()
+        self.plan_endplate_tolerance_spin.setRange(0.0, 30.0)
+        self.plan_endplate_tolerance_spin.setSingleStep(1.0)
+        self.plan_endplate_tolerance_spin.setDecimals(1)
+        self.plan_endplate_tolerance_spin.setSuffix(" °")
+        self.plan_endplate_tolerance_spin.setValue(planner_defaults.endplate_tolerance_deg)
+        self.plan_endplate_tolerance_spin.setToolTip(
+            "How far from the endplate direction the optimizer may angle the screw"
+        )
+        params_layout.addWidget(QLabel("Endplate band"), endplate_row + 1, 0)
+        params_layout.addWidget(self.plan_endplate_tolerance_spin, endplate_row + 1, 1, 1, 2)
+
         self.plan_reset_defaults_btn = QPushButton("Reset Defaults")
-        params_layout.addWidget(self.plan_reset_defaults_btn, 12, 0, 1, 3)
+        params_layout.addWidget(self.plan_reset_defaults_btn, params_layout.rowCount(), 0, 1, 3)
 
         plan_params_group.set_content_layout(params_layout)
         layout.addWidget(plan_params_group)
@@ -1366,6 +1394,8 @@ class MainWindow(QMainWindow):
             spin_box.valueChanged.connect(self._on_planner_parameter_changed)
         for combo in self._planner_choice_combos().values():
             combo.currentIndexChanged.connect(self._on_planner_parameter_changed)
+        for check_box in self._planner_check_boxes().values():
+            check_box.toggled.connect(self._on_planner_parameter_changed)
         for slider in self._planner_weight_sliders().values():
             slider.valueChanged.connect(self._on_planner_weight_changed)
         self.plan_reset_defaults_btn.clicked.connect(
@@ -1917,7 +1947,14 @@ class MainWindow(QMainWindow):
         "trajectory_hu_threshold",
         "narrow_pedicle_mm",
         "narrow_lateral_breach_mm",
+        "endplate_tolerance_deg",
     )
+
+    #: Planner settings whose widget is a check box.  Kept apart from
+    #: PLANNER_SETTINGS_KEYS because that tuple's loader coerces with float(),
+    #: and because QSettings gives a bool back as the string "true"/"false" --
+    #: PlannerConfig.from_mapping does that coercion.
+    PLANNER_BOOL_SETTINGS_KEYS = ("endplate_parallel",)
 
     #: Views that "maximize:<name>" accepts.
     MAXIMIZABLE_VIEWS = ("axial", "sagittal", "coronal", "3d")
@@ -2008,6 +2045,7 @@ class MainWindow(QMainWindow):
             "trajectory_hu_threshold": self.plan_hu_threshold_spin,
             "narrow_pedicle_mm": self.plan_narrow_pedicle_spin,
             "narrow_lateral_breach_mm": self.plan_narrow_lateral_spin,
+            "endplate_tolerance_deg": self.plan_endplate_tolerance_spin,
         }
 
     def _planner_choice_combos(self) -> dict:
@@ -2016,6 +2054,10 @@ class MainWindow(QMainWindow):
             "mode": self.plan_mode_combo,
             "trajectory": self.plan_trajectory_combo,
         }
+
+    def _planner_check_boxes(self) -> dict:
+        """Map PlannerConfig boolean field names to their check boxes."""
+        return {"endplate_parallel": self.plan_endplate_parallel_check}
 
     def _planner_weight_sliders(self) -> dict:
         """Map OptimizerWeights field names to their percent sliders."""
@@ -2039,6 +2081,8 @@ class MainWindow(QMainWindow):
         }
         for key, combo in self._planner_choice_combos().items():
             data[key] = combo.currentData()
+        for key, check_box in self._planner_check_boxes().items():
+            data[key] = check_box.isChecked()
         # Sliders hold percents; the optimiser wants plain multipliers.
         data["weights"] = {
             name: slider.value() / 100.0
@@ -2060,6 +2104,8 @@ class MainWindow(QMainWindow):
         for key in self.PLANNER_SETTINGS_KEYS:
             settings.setValue(key, values[key])
         for key in self._planner_choice_combos():
+            settings.setValue(key, values[key])
+        for key in self.PLANNER_BOOL_SETTINGS_KEYS:
             settings.setValue(key, values[key])
         for name in self._planner_weight_sliders():
             settings.setValue(f"weights/{name}", values["weights"][name])
@@ -2083,6 +2129,10 @@ class MainWindow(QMainWindow):
                 break
         for key in self._planner_choice_combos():
             stored[key] = str(settings.value(key, defaults[key]) or defaults[key])
+        for key in self.PLANNER_BOOL_SETTINGS_KEYS:
+            # Handed to PlannerConfig.from_mapping as-is: QSettings returns
+            # "false" as a string, and bool("false") is True.
+            stored[key] = settings.value(key, defaults[key])
         weights = {}
         for name in self._planner_weight_sliders():
             default_weight = defaults["weights"][name]
@@ -2129,6 +2179,10 @@ class MainWindow(QMainWindow):
             previous = combo.blockSignals(True)
             combo.setCurrentIndex(index)
             combo.blockSignals(previous)
+        for key, check_box in self._planner_check_boxes().items():
+            previous = check_box.blockSignals(True)
+            check_box.setChecked(bool(values[key]))
+            check_box.blockSignals(previous)
         for name, slider in self._planner_weight_sliders().items():
             previous = slider.blockSignals(True)
             slider.setValue(int(round(float(values["weights"][name]) * 100.0)))
@@ -2151,6 +2205,7 @@ class MainWindow(QMainWindow):
     def _clear_screw_metric_rows(self) -> None:
         """Reset the clinical metric rows of the screw inspector."""
         for label in (
+            self.selected_screw_endplate,
             self.selected_screw_body_hu,
             self.selected_screw_wall,
             self.selected_screw_facet,
@@ -2182,6 +2237,10 @@ class MainWindow(QMainWindow):
         min_wall = metrics.get("min_wall_mm")
         if min_wall is not None:
             self.selected_screw_wall.setText(f"{float(min_wall):.1f} mm")
+
+        endplate_angle = metrics.get("endplate_angle_deg")
+        if isinstance(endplate_angle, (int, float)) and not isinstance(endplate_angle, bool):
+            self.selected_screw_endplate.setText(f"{float(endplate_angle):+.1f}°")
 
         facet_grade = metrics.get("facet_grade")
         facet_text = str(metrics.get("facet_text") or "").strip()

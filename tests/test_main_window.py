@@ -352,3 +352,100 @@ def test_help_menu_exposes_the_screw_mpr_gesture_map(ui_main_window):
     assert window._screw_mpr_help_action.text() == "Screw MPR controls"
     assert "Shift + wheel" in SCREW_MPR_CONTROLS_HELP
     assert "Middle-button drag" in SCREW_MPR_CONTROLS_HELP
+
+
+# ---------------------------------------------------------------------------
+# W8 -- Endplate-parallel option and cockpit row
+# ---------------------------------------------------------------------------
+
+
+def test_endplate_widgets_start_from_the_planner_defaults(ui_main_window):
+    window = ui_main_window
+    defaults = PlannerConfig()
+
+    assert window.plan_endplate_parallel_check.isChecked() is defaults.endplate_parallel
+    assert window.plan_endplate_tolerance_spin.value() == pytest.approx(
+        defaults.endplate_tolerance_deg
+    )
+
+
+def test_endplate_widgets_feed_the_planner_config(ui_main_window):
+    window = ui_main_window
+    window.plan_endplate_parallel_check.setChecked(False)
+    window.plan_endplate_tolerance_spin.setValue(6.5)
+
+    config = window.planner_config()
+
+    assert config.endplate_parallel is False
+    assert config.endplate_tolerance_deg == pytest.approx(6.5)
+
+
+def test_endplate_settings_round_trip_through_qsettings(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_endplate_parallel_check.setChecked(False)
+    window.plan_endplate_tolerance_spin.setValue(4.0)
+    window.save_planner_settings()
+
+    # Both widgets are wired (Step 5) to autosave on every change, so setting
+    # them through the normal setters here would immediately overwrite the
+    # (False, 4.0) just persisted above, defeating the round trip this test
+    # means to check. Block signals to leave the widgets showing stale
+    # values without touching QSettings, then prove load_planner_settings()
+    # pulls the persisted values back in regardless.
+    window.plan_endplate_parallel_check.blockSignals(True)
+    window.plan_endplate_parallel_check.setChecked(True)
+    window.plan_endplate_parallel_check.blockSignals(False)
+    window.plan_endplate_tolerance_spin.blockSignals(True)
+    window.plan_endplate_tolerance_spin.setValue(10.0)
+    window.plan_endplate_tolerance_spin.blockSignals(False)
+    window.load_planner_settings()
+
+    assert window.plan_endplate_parallel_check.isChecked() is False
+    assert window.plan_endplate_tolerance_spin.value() == pytest.approx(4.0)
+    assert window.planner_config().endplate_parallel is False
+
+
+def test_reset_defaults_restores_the_endplate_option(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_endplate_parallel_check.setChecked(False)
+    window.plan_endplate_tolerance_spin.setValue(1.0)
+
+    window.reset_planner_settings()
+
+    assert window.plan_endplate_parallel_check.isChecked() is True
+    assert window.plan_endplate_tolerance_spin.value() == pytest.approx(10.0)
+
+
+def test_cockpit_shows_the_endplate_angle(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"endplate_angle_deg": 2.4},
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_endplate.text() == "+2.4°"
+
+
+def test_cockpit_endplate_row_is_dash_when_unmeasured(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.0,
+        vertebra_level="L3",
+        side="left",
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_endplate.text() == "--"
