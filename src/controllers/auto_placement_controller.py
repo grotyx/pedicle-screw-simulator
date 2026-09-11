@@ -55,6 +55,9 @@ class _PlanningThread(QThread):
         self.skipped_sides: List[Tuple[str, str, str]] = []
         #: Whether the planner stopped early on :meth:`request_cancel`.
         self.cancelled = False
+        #: The pedicle analyses this run planned from, for the screw tool to
+        #: re-measure analysis-derived metrics after the user edits a screw.
+        self.analyses: List = []
 
     def request_cancel(self) -> None:
         """Ask the planner to stop at the next (level, side) (GUI thread safe)."""
@@ -67,6 +70,7 @@ class _PlanningThread(QThread):
                 self._mask, self._ct, pedicle_mask=self._pedicle_mask
             )
             analyses = analyzer.analyze_all(labels=self._labels)
+            self.analyses = list(analyses)
 
             successful = [a for a in analyses if a.success]
             self.progress.emit(
@@ -350,6 +354,14 @@ class AutoPlacementController:
             logger.info("Planner dropped %d side(s): %s", len(skipped), skipped)
 
         self._last_planned = list(planned)
+        # Before the empty-plan early return: a run that placed nothing still
+        # measured the endplates the user's own screws are graded against.
+        self._window._tool_ctrl.screw_tool.set_analysis_by_level(
+            {
+                int(analysis.vertebra.label): analysis
+                for analysis in (getattr(thread, "analyses", None) or ())
+            }
+        )
 
         if not planned:
             if cancelled:

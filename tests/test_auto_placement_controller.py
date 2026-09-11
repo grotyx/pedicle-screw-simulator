@@ -159,9 +159,13 @@ class _DummyViewer3D:
 class _DummyScrewTool:
     def __init__(self):
         self._screws = []
+        self._analysis_by_level = {}
 
     def add_screw(self, screw):
         self._screws.append(screw)
+
+    def set_analysis_by_level(self, analyses):
+        self._analysis_by_level = dict(analyses or {})
 
     def get_screws(self):
         return list(self._screws)
@@ -1389,3 +1393,36 @@ def test_dropped_sides_note_names_only_the_level_and_side():
     )
 
     assert note == " No screw planned: L2 right, L3 left"
+
+
+def test_finished_run_hands_its_analyses_to_the_screw_tool(controller_with_window):
+    """A manual edit after planning can only re-measure what the tool was told."""
+    ctrl, window = controller_with_window
+
+    class _Vertebra:
+        label = 28
+
+    class _Analysis:
+        vertebra = _Vertebra()
+        upper_endplate_normal = (0.0, 0.0, 1.0)
+
+    analysis = _Analysis()
+    thread = _current_thread(ctrl)
+    thread.analyses = [analysis]
+
+    ctrl._on_finished(thread, [])
+
+    assert window._tool_ctrl.screw_tool._analysis_by_level[28] is analysis
+
+
+def test_a_run_with_no_analyses_clears_a_previous_runs_registry(
+    controller_with_window,
+):
+    """Stale analyses would re-measure a new study against old endplates."""
+    ctrl, window = controller_with_window
+    tool = window._tool_ctrl.screw_tool
+    tool.set_analysis_by_level({28: object()})
+
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
+
+    assert tool._analysis_by_level == {}

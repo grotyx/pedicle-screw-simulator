@@ -9,10 +9,11 @@ Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from src.models.screw import Screw
 
+from ..core.screw_geometry import endplate_angle_deg
 from ..utils.constants import (
     CORTICAL_WALL_CLEARANCE_MM,
     DEFAULT_SCREW_DIAMETER,
@@ -65,6 +66,11 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     "pedicle_mean_hu",
     "body_mean_hu",
     "trajectory_body_ratio",
+    # Needs the level's upper-endplate plane, which only a pedicle analysis has.
+    # Deliberately *not* in _GRADER_MEASURED_METRIC_KEYS: a mid-drag frame
+    # outside the mask must not delete a planner measurement this tool may have
+    # no way to reproduce (see _clear_grading).
+    "endplate_angle_deg",
 )
 
 #: The metrics this tool measures from the trajectory in front of it, and so
@@ -134,6 +140,11 @@ class ScrewTool:
         # Segmentation-based grader (None until a mask is available)
         self._grader: Optional["ScrewGrader"] = None
 
+        # Pedicle analyses keyed by mask label, handed over by the planning
+        # controller after a run.  The tool reads only ``upper_endplate_normal``
+        # from them, so any object with that attribute works.
+        self._analysis_by_level: Dict[int, Any] = {}
+
         # Callbacks
         self._on_screw_placed: Optional[Callable[[Screw], None]] = None
         self._on_state_changed: Optional[Callable[[str], None]] = None
@@ -158,6 +169,33 @@ class ScrewTool:
     @property
     def grader(self) -> Optional["ScrewGrader"]:
         return self._grader
+
+    def set_analysis_by_level(self, analyses: Optional[Mapping[int, Any]]) -> None:
+        """Register the pedicle analyses behind the current plan, by mask label.
+
+        A manually placed screw has no analysis of its own, so without this the
+        tool cannot re-measure anything that needs one.  ``None`` clears it (a
+        new study's analyses do not describe the old study's vertebrae).
+        """
+        self._analysis_by_level = dict(analyses or {})
+
+    def _analysis_for(self, label: int) -> Optional[Any]:
+        """The analysis for one mask label, from this registry or the grader's."""
+        analysis = self._analysis_by_level.get(int(label))
+        if analysis is not None:
+            return analysis
+        # The grader may carry an analysis cache instead; prefer this tool's own
+        # registry, then fall back to whatever the grader offers.
+        lookup = getattr(self._grader, "analysis_for", None)
+        return lookup(int(label)) if callable(lookup) else None
+
+    def _endplate_angle(self, screw: Screw, label: int) -> Optional[float]:
+        """Signed angle to the level's upper endplate, or None if unknown."""
+        analysis = self._analysis_for(label)
+        normal = getattr(analysis, "upper_endplate_normal", None)
+        if normal is None:
+            return None
+        return endplate_angle_deg(screw.entry_point, screw.target_point, normal)
 
     def set_screw_parameters(
         self,
@@ -419,6 +457,11 @@ class ScrewTool:
         spine the screw is on.  A screw with no side leaves all four ``None`` —
         "not measured", which is what :meth:`_merge_metrics` writes through, so
         an auto screw that loses its side never keeps a stale canal number.
+
+        ``endplate_angle_deg`` needs the level's endplate plane, which arrives
+        through :meth:`set_analysis_by_level`; without it the value is ``None``
+        ("not measured") and :meth:`_merge_metrics` keeps whatever the planner
+        recorded.
         """
         from ..core.bone_quality import assess_bone_quality
         from ..core.breach_classification import facet_violation_grade, medial_breach_warning
@@ -456,6 +499,7 @@ class ScrewTool:
             "body_mean_hu": quality.body_mean_hu,
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
+            "endplate_angle_deg": self._endplate_angle(screw, result.label),
             **directional,
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
@@ -509,12 +553,12 @@ class ScrewTool:
         ``rod_misalignment_mm``, and ``trajectory_type`` /
         ``cbt_cranial_angle_deg``.
 
-        The three :data:`_PEDICLE_ANALYSIS_METRIC_KEYS` need centres this tool
-        never has, so a ``None`` from that cause is not allowed to overwrite a
-        planner measurement.  ``trajectory_body_ratio`` is the exception among
-        them: it is purely derived, so it is recomputed from the new trajectory
-        HU against the preserved body HU rather than left behind describing the
-        old trajectory.
+        The :data:`_PEDICLE_ANALYSIS_METRIC_KEYS` need centres (or an endplate
+        plane) this tool may not have, so a ``None`` from that cause is not
+        allowed to overwrite a planner measurement.  ``trajectory_body_ratio``
+        is the exception among them: it is purely derived, so it is recomputed
+        from the new trajectory HU against the preserved body HU rather than
+        left behind describing the old trajectory.
         """
         merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
         for key, value in measured.items():

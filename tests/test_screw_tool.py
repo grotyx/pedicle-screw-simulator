@@ -9,6 +9,8 @@ regenerated so a re-graded screw can never display a note that contradicts the
 trajectory it now has.
 """
 
+import math
+
 import numpy as np
 import pytest
 import SimpleITK as sitk
@@ -470,3 +472,86 @@ class TestDirectionalRegrade:
         assert screw.metrics["medial_breach_mm"] is None
         assert screw.metrics["lateral_breach_mm"] is None
         assert not any(w.startswith("Medial breach") for w in screw.warnings)
+
+
+class _Analysis:
+    """Duck-typed stand-in: ScrewTool only reads upper_endplate_normal."""
+
+    def __init__(self, normal):
+        self.upper_endplate_normal = normal
+
+
+_TEN_DEGREE_ENDPLATE = (0.0, math.sin(math.radians(10.0)), math.cos(math.radians(10.0)))
+
+
+def test_regrade_measures_the_endplate_angle_when_the_level_is_registered():
+    tool = _split_density_tool()
+    tool.set_analysis_by_level({28: _Analysis(_TEN_DEGREE_ENDPLATE)})
+    screw = Screw(
+        entry_point=(35.0, 38.0, 30.0),
+        target_point=(35.0, 22.0, 30.0),   # horizontal: 10 degrees caudal of the endplate
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(-10.0, abs=0.5)
+
+
+def test_regrade_leaves_a_planner_endplate_angle_alone_without_a_registry():
+    tool = _split_density_tool()
+    screw = Screw(
+        entry_point=(35.0, 38.0, 30.0),
+        target_point=(35.0, 22.0, 30.0),
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"endplate_angle_deg": 2.4},
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(2.4)
+
+
+def test_regrade_refreshes_a_stale_endplate_angle_when_the_level_is_registered():
+    tool = _split_density_tool()
+    tool.set_analysis_by_level({28: _Analysis(_TEN_DEGREE_ENDPLATE)})
+    screw = Screw(
+        entry_point=(35.0, 38.0, 30.0),
+        target_point=(35.0, 22.0, 30.0),
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"endplate_angle_deg": 99.0},
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(-10.0, abs=0.5)
+
+
+def test_an_ungradable_frame_does_not_erase_the_endplate_angle():
+    """A screw dragged briefly outside the mask must come back with its metric."""
+    tool = _split_density_tool()
+    # The same clear-of-every-label trajectory the drag test above uses; a
+    # far-off-volume point is clamped back into the mask by the grader.
+    screw = Screw(
+        entry_point=(2.0, 2.0, 2.0),
+        target_point=(2.0, 10.0, 2.0),
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"endplate_angle_deg": 2.4},
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.grade == "N/A"
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(2.4)
