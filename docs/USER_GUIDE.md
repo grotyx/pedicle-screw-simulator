@@ -93,7 +93,7 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 
 ### Themes
 
-**View → Theme** offers one dark and three light themes. The choice is remembered between sessions.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions.
 
 ## 5. Standard Planning Workflow
 

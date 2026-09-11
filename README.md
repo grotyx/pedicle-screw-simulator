@@ -32,7 +32,7 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 - Direct entry, tip, and whole-screw editing in MPR and 3D
 - Manual screw placement, distance measurement, and angle measurement
 - JSON plan save/load and supported CSV/STL export
-- Editable planning parameters, a per-screw review table and inspector, four UI themes, MPR pan/zoom, pane maximise, and 3D navigation controls
+- Editable planning parameters, a per-screw review table and inspector, three UI themes (one light, two dark), MPR pan/zoom, pane maximise, and 3D navigation controls
 
 ## Quick Start
 

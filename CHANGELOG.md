@@ -90,8 +90,7 @@ interface.
   craniocaudal angle, endplate angle, construct alignment, grade, trajectory
   HU, body HU, wall margin, facet, Heary direction, trajectory type, and
   pedicle verdict for the selected screw.
-- Tabbed control panel (Study / Planning / Tools), tool icons, and a dark theme
-  alongside the existing light themes.
+- Tabbed control panel (Study / Planning / Tools) and tool icons.
 - Pane maximise by header double-click or Ctrl+M, which follows the pane the
   pointer is working in.
 - JSON plan schema v3 carrying screw metadata, signed angles, and the full
@@ -126,6 +125,9 @@ interface.
   casting on the CPU re-downsamples rather than grinding at full resolution.
 - Screw diameter is never left unset: a pedicle too small for the smallest
   catalogue implant still receives one, marked, instead of leaving the side bare.
+- The default theme is now the dark Graphite Blue; it was the light Soft
+  Light.  The same three themes are offered, and a theme you already chose
+  is kept.
 - Plan files assert that they carry no patient identifiers.
 - Ruff import sorting and lint rules apply to the whole tree; file-wide ignores
   were retired.
