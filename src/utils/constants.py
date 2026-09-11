@@ -228,7 +228,6 @@ IMPLANT_DIAMETERS_MM = (4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
 # Sizing rules (Götschi 2026, Wang 2024): diameter <= 80 % of isthmus width and
 # >= 1 mm cortical clearance each side; tip >= 4 mm behind the anterior cortex.
 PEDICLE_FILL_RATIO = 0.80
-CORTICAL_WALL_CLEARANCE_MM = 1.0
 ANTERIOR_SAFETY_MARGIN_MM = 4.0
 
 # Trajectory HU below which screw loosening risk rises (Yamamoto 2025, Dhar 2026)
