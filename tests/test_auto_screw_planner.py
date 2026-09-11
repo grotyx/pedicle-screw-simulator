@@ -1384,6 +1384,12 @@ class TestOptimizerMode:
         assert len(results) == 1
         assert "Optimizer found no feasible trajectory; legacy planner used" in results[0].warnings
 
+    def test_construct_pool_is_wide_enough_to_move_angles(self):
+        """10 near-identical bests cannot harmonise anything; the pool is 40."""
+        from src.core import auto_screw_planner as module
+
+        assert module._CONSTRUCT_TOP_K == 40
+
 
 class TestPlanAllProgressAndCancel:
     """``plan_all`` narrates each ``(level, side)`` and can stop between them."""

@@ -585,6 +585,41 @@ def test_flat_phantom_without_an_endplate_normal_is_unaffected():
     assert all(c.components["endplate"] == pytest.approx(1.0) for c in ranked)
     assert not any(w.startswith(ENDPLATE_BAND_RELAXED_PREFIX) for w in ranked[0].warnings)
 
+
+@pytest.mark.parametrize(
+    "side, entry, target",
+    [
+        (
+            "left",
+            [60.60776862183425, 59.446827135542726, 32.0],
+            [55.398323291826344, 29.902594545176484, 32.0],
+        ),
+        (
+            "right",
+            [29.392231378165743, 59.446827135542726, 32.0],
+            [34.601676708173656, 29.902594545176484, 32.0],
+        ),
+    ],
+)
+def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, target):
+    """With the option off the chosen screw is bit-for-bit what it was before W8.
+
+    Only the *winner* is pinned, not the whole ranked list: with the option off
+    every candidate scores a neutral 1.0 for the endplate component, which adds
+    the same constant to every score and so reorders the tail wherever two
+    candidates previously tied.  ``optimize_construct`` can see that tail, so
+    the pin deliberately stops at ``[0]``.
+    """
+    ct, mask, analysis = _setup()
+    config = PlannerConfig(endplate_parallel=False)
+
+    best = optimize_screw(ScrewGrader(mask, ct), analysis, side, config)[0]
+
+    assert best.entry == pytest.approx(entry)
+    assert best.target == pytest.approx(target)
+    assert best.score == pytest.approx(1.2424242424242422)
+
+
 # ------------------------------------------------------- convergence spread
 def test_convergence_spread_is_zero_below_two_screws():
     from src.core.trajectory_optimizer import convergence_spread_deg
@@ -643,3 +678,119 @@ def test_neighbouring_levels_count_double_in_the_median():
     assert convergence_deviations_deg(angles, levels) == pytest.approx(
         [0.0, 0.0, 0.0, -7.5, 0.0]
     )
+
+
+# ------------------------------------------------- construct harmonisation
+def _construct_candidate(entry, convergence_deg, score):
+    """A synthetic feasible candidate: only entry, convergence and score matter."""
+    from src.core.trajectory_optimizer import Candidate
+
+    entry = np.asarray(entry, dtype=np.float64)
+    return Candidate(
+        entry=entry,
+        target=entry + np.array([0.0, -40.0, 0.0]),
+        length=40.0,
+        diameter=6.0,
+        breach_mm=0.0,
+        min_wall_mm=2.0,
+        mean_hu=300.0,
+        convergence_deg=float(convergence_deg),
+        craniocaudal_deg=0.0,
+        score=float(score),
+        components={},
+    )
+
+
+def test_construct_pulls_convergence_angles_together():
+    """A 25 deg outlier moves to 10 deg when a near-best candidate is there."""
+    from src.core.trajectory_optimizer import OptimizerWeights, optimize_construct
+
+    per = {
+        ("L3", "left"): [
+            _construct_candidate([20.0, 30.0, 60.0], 5.0, 1.00),
+            _construct_candidate([20.0, 30.0, 60.0], 9.0, 0.95),
+        ],
+        ("L4", "left"): [
+            _construct_candidate([20.0, 30.0, 30.0], 25.0, 1.00),
+            _construct_candidate([20.0, 30.0, 30.0], 10.0, 0.95),
+        ],
+        ("L5", "left"): [_construct_candidate([20.0, 30.0, 0.0], 8.0, 1.00)],
+    }
+    levels = {("L3", "left"): 29, ("L4", "left"): 28, ("L5", "left"): 27}
+
+    chosen = optimize_construct(per, OptimizerWeights(rod=1.0), levels=levels)
+
+    assert chosen[("L4", "left")].convergence_deg == pytest.approx(10.0)
+    assert chosen[("L3", "left")].convergence_deg == pytest.approx(9.0)
+    # Safety is never traded past the eligibility floor.
+    for key, candidate in chosen.items():
+        best = max(c.score for c in per[key])
+        assert candidate.score >= 0.9 * best
+
+
+def test_construct_keeps_the_per_screw_bests_without_a_rod_weight():
+    from src.core.trajectory_optimizer import OptimizerWeights, optimize_construct
+
+    per = {
+        ("L3", "left"): [
+            _construct_candidate([20.0, 30.0, 60.0], 5.0, 1.00),
+            _construct_candidate([20.0, 30.0, 60.0], 9.0, 0.95),
+        ],
+        ("L4", "left"): [
+            _construct_candidate([20.0, 30.0, 30.0], 25.0, 1.00),
+            _construct_candidate([20.0, 30.0, 30.0], 10.0, 0.95),
+        ],
+    }
+    levels = {("L3", "left"): 29, ("L4", "left"): 28}
+
+    chosen = optimize_construct(per, OptimizerWeights(rod=0.0), levels=levels)
+
+    assert chosen[("L3", "left")].convergence_deg == pytest.approx(5.0)
+    assert chosen[("L4", "left")].convergence_deg == pytest.approx(25.0)
+
+
+def test_construct_leaves_the_sacral_angle_alone():
+    """S1 keeps its own best: it is not asked to agree with the lumbar levels."""
+    from src.core.trajectory_optimizer import OptimizerWeights, optimize_construct
+
+    per = {
+        ("L4", "left"): [_construct_candidate([20.0, 30.0, 60.0], 10.0, 1.00)],
+        ("L5", "left"): [_construct_candidate([20.0, 30.0, 30.0], 8.0, 1.00)],
+        ("S1", "left"): [
+            _construct_candidate([20.0, 30.0, 0.0], 40.0, 1.00),
+            _construct_candidate([20.0, 30.0, 0.0], 9.0, 0.95),
+        ],
+    }
+    levels = {("L4", "left"): 28, ("L5", "left"): 27, ("S1", "left"): 26}
+
+    chosen = optimize_construct(per, OptimizerWeights(rod=1.0), levels=levels)
+
+    assert chosen[("S1", "left")].convergence_deg == pytest.approx(40.0)
+
+
+def test_candidate_pool_keeps_one_trajectory_per_convergence_bin():
+    from src.core.trajectory_optimizer import _cover_convergence_bins
+
+    ranked = [_construct_candidate([0.0, 0.0, 0.0], 1.0, 1.00 - 0.01 * i) for i in range(5)]
+    ranked.append(_construct_candidate([0.0, 0.0, 0.0], 12.0, 0.50))
+
+    selection = _cover_convergence_bins(ranked, 3)
+
+    assert len(selection) == 3
+    assert [c.score for c in selection] == sorted(
+        (c.score for c in selection), reverse=True
+    )
+    assert selection[0].score == pytest.approx(1.00)          # the overall best survives
+    assert any(c.convergence_deg == pytest.approx(12.0) for c in selection)
+
+
+def test_candidate_pool_is_unchanged_when_it_already_fits():
+    from src.core.trajectory_optimizer import _cover_convergence_bins
+
+    ranked = [_construct_candidate([0.0, 0.0, 0.0], 1.0, 1.00 - 0.01 * i) for i in range(3)]
+
+    selection = _cover_convergence_bins(ranked, 10)
+
+    # Identity, not equality: Candidate holds numpy arrays, so `==` on two
+    # separately built candidates would raise on the ambiguous array truth value.
+    assert [id(c) for c in selection] == [id(c) for c in ranked]

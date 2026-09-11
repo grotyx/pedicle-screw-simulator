@@ -79,7 +79,10 @@ def narrow_pedicle_warning(pedicle_width_mm: float, diameter_mm: float) -> str:
 
 
 #: How many ranked trajectories per pedicle the construct stage may choose from.
-_CONSTRUCT_TOP_K = 10
+#: Wide enough that the pool spans several convergence bins (see
+#: :func:`~src.core.trajectory_optimizer._cover_convergence_bins`): a construct
+#: cannot harmonise angles it was never offered.
+_CONSTRUCT_TOP_K = 40
 
 
 @dataclass
@@ -653,6 +656,7 @@ class AutoScrewPlanner:
         """
         per_screw: Dict[Tuple[str, str], List[Candidate]] = {}
         keys: Dict[Tuple[int, str], Tuple[str, str]] = {}
+        construct_levels: Dict[Tuple[str, str], int] = {}
         visited: List[Tuple[PedicleAnalysisResult, str]] = []
 
         # `optimize_screw` otherwise builds itself an AutoScrewPlanner per
@@ -696,10 +700,15 @@ class AutoScrewPlanner:
                 if candidates:
                     per_screw[key] = candidates
                     keys[(vertebra.label, side)] = key
+                    construct_levels[key] = int(vertebra.label)
             if reporter.cancelled:
                 break
 
-        chosen = optimize_construct(per_screw, self.config.weights) if per_screw else {}
+        chosen = (
+            optimize_construct(per_screw, self.config.weights, levels=construct_levels)
+            if per_screw
+            else {}
+        )
 
         results: List[PlannedScrew] = []
         for analysis, side in visited:

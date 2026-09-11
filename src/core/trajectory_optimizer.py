@@ -18,7 +18,7 @@ import logging
 import math
 import weakref
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -55,7 +55,7 @@ def endplate_band_relaxed_warning(tolerance_deg: float) -> str:
     """The single wording for a dropped endplate band."""
     return (
         f"{ENDPLATE_BAND_RELAXED_PREFIX}: no trajectory within "
-        f"±{tolerance_deg:.0f}° of the upper endplate"
+        f"±{tolerance_deg:g}° of the upper endplate"
     )
 
 
@@ -716,6 +716,38 @@ def score_candidates(
 
 
 # ---------------------------------------------------------------------- driver
+def _cover_convergence_bins(ranked: List[Candidate], top_k: int) -> List[Candidate]:
+    """The best ``top_k`` candidates, but never all from one convergence bin.
+
+    ``ranked`` is score-descending, so the first candidate seen in a bin is that
+    bin's best.  Taking those representatives first guarantees the construct
+    stage is handed a trajectory at a genuinely different angle for every angle
+    that is feasible at all -- otherwise a pedicle whose 40 best candidates sit
+    within half a degree of each other can never join a harmonised construct,
+    however cheap the alternative would be.  The remaining slots go to the next
+    best overall, and the result is re-sorted by score so callers keep reading
+    ``[0]`` as "this screw's own best".
+    """
+    if top_k <= 0 or len(ranked) <= top_k:
+        return list(ranked)
+    representatives: Dict[int, Candidate] = {}
+    for candidate in ranked:
+        representatives.setdefault(
+            int(math.floor(candidate.convergence_deg / CONVERGENCE_BIN_DEG)), candidate
+        )
+    # dict preserves insertion order, which here is score order.
+    selection = list(representatives.values())[:top_k]
+    picked = {id(c) for c in selection}
+    for candidate in ranked:
+        if len(selection) >= top_k:
+            break
+        if id(candidate) not in picked:
+            selection.append(candidate)
+            picked.add(id(candidate))
+    selection.sort(key=lambda c: c.score, reverse=True)
+    return selection
+
+
 def optimize_screw(
     grader: ScrewGrader,
     analysis: PedicleAnalysisResult,
@@ -807,7 +839,7 @@ def optimize_screw(
                 )
                 for candidate in ranked:
                     candidate.warnings.append(warning)
-            return ranked[:top_k]
+            return _cover_convergence_bins(ranked, top_k)
     return []
 
 
@@ -931,21 +963,31 @@ def convergence_spread_deg(
 def optimize_construct(
     per_screw_candidates: Dict[Tuple[str, str], List[Candidate]],
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
+    levels: Optional[Mapping[Tuple[str, str], int]] = None,
 ) -> Dict[Tuple[str, str], Candidate]:
-    """Re-rank per-screw candidates so the heads of each side line up.
+    """Re-rank per-screw candidates so each side agrees with itself.
 
-    Keys are ``(level_name, side)``.  Starting from every screw's own best
-    trajectory, greedy coordinate descent sweeps the screws (at most
-    :data:`_CONSTRUCT_MAX_PASSES` times, stopping early once a pass changes
-    nothing) and swaps in the candidate minimising
+    Keys are ``(level_name, side)``; ``levels`` maps those keys to
+    TotalSegmentator vertebra labels so the convergence term knows which levels
+    are neighbours and which screw is sacral.  Without it every screw is an
+    unknown level: the convergence median is then the plain side median and no
+    screw is excluded.
 
-    ``-score + weights.rod * rod_misalignment_mm(side heads) / ROD_TOLERANCE_MM``
+    Starting from every screw's own best trajectory, greedy coordinate descent
+    sweeps the screws (at most :data:`_CONSTRUCT_MAX_PASSES` times, stopping
+    early once a pass changes nothing) and swaps in the candidate minimising
 
-    Only candidates whose own score stays within
-    :data:`CONSTRUCT_SCORE_TOLERANCE` of that screw's best are eligible, so rod
-    alignment can never buy a materially worse screw.  Levels are only ever
-    compared against the same side's heads; the other side's term is constant
-    for that screw and cannot change the choice.
+    ``-score
+      + weights.rod * rod_misalignment_mm(side heads) / ROD_TOLERANCE_MM
+      + weights.rod * convergence_spread_deg(side angles) / CONVERGENCE_TOLERANCE_DEG``
+
+    One weight governs both terms because they are one surgical property: a
+    construct whose heads line up but whose angles fight each other is not
+    harmonised.  Only candidates whose own score stays within
+    :data:`CONSTRUCT_SCORE_TOLERANCE` of that screw's best are eligible, so
+    neither alignment term can ever buy a materially worse screw.  Levels are
+    only ever compared against the same side's screws; the other side's terms
+    are constant for that screw and cannot change the choice.
     """
     chosen: Dict[Tuple[str, str], Candidate] = {}
     eligible: Dict[Tuple[str, str], List[Candidate]] = {}
@@ -957,26 +999,31 @@ def optimize_construct(
         chosen[key] = best
         eligible[key] = [c for c in candidates if c.score >= floor - 1e-12]
 
-    def side_misalignment(side: str, key: Tuple[str, str], candidate: Candidate) -> float:
-        heads = [
-            (candidate if k == key else c).entry
-            for k, c in chosen.items()
-            if k[1] == side
-        ]
-        return rod_misalignment_mm(np.asarray(heads, dtype=np.float64)) if heads else 0.0
+    def alignment_cost(side: str, key: Tuple[str, str], candidate: Candidate) -> float:
+        heads: List[np.ndarray] = []
+        angles: List[float] = []
+        side_levels: List[Optional[int]] = []
+        for other, current in chosen.items():
+            if other[1] != side:
+                continue
+            pick = candidate if other == key else current
+            heads.append(pick.entry)
+            angles.append(pick.convergence_deg)
+            side_levels.append(None if levels is None else levels.get(other))
+        rod = rod_misalignment_mm(np.asarray(heads, dtype=np.float64)) if heads else 0.0
+        spread = convergence_spread_deg(angles, side_levels)
+        return weights.rod * (
+            rod / ROD_TOLERANCE_MM + spread / CONVERGENCE_TOLERANCE_DEG
+        )
 
     for _ in range(_CONSTRUCT_MAX_PASSES):
         changed = False
         for key in list(chosen):
             side = key[1]
             best_candidate = chosen[key]
-            best_cost = -best_candidate.score + weights.rod * side_misalignment(
-                side, key, best_candidate
-            ) / ROD_TOLERANCE_MM
+            best_cost = -best_candidate.score + alignment_cost(side, key, best_candidate)
             for candidate in eligible[key]:
-                cost = -candidate.score + weights.rod * side_misalignment(
-                    side, key, candidate
-                ) / ROD_TOLERANCE_MM
+                cost = -candidate.score + alignment_cost(side, key, candidate)
                 if cost < best_cost - 1e-12:
                     best_cost, best_candidate = cost, candidate
             if best_candidate is not chosen[key]:
