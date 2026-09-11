@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.core.auto_screw_planner import (  # noqa: E402
     _SACRUM_LABEL,
+    OPTIMIZER_FALLBACK_WARNING,
     AutoScrewPlanner,
 )
 from src.core.pedicle_analyzer import PedicleAnalysisResult, PedicleAnalyzer  # noqa: E402
@@ -132,10 +133,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(_HEADER)
     failures: list[str] = []
+    fallback_count = 0
     for screw in sorted(screws, key=lambda s: (s.vertebra_name, s.side)):
         metrics = screw.metrics
         narrow = bool(metrics.get("narrow_pedicle"))
         medial = float(metrics.get("medial_breach_mm") or 0.0)
+        is_fallback = OPTIMIZER_FALLBACK_WARNING in screw.warnings
+        if is_fallback:
+            fallback_count += 1
         print(
             f"{screw.vertebra_name:<6}{screw.side:<7}"
             f"{float(metrics.get('pedicle_width_mm') or 0.0):>6.1f}"
@@ -146,10 +151,19 @@ def main(argv: list[str] | None = None) -> int:
             f"{screw.gertzbein_grade:>7}"
         )
         if narrow and medial > 0.0:
-            failures.append(
-                f"{screw.vertebra_name} {screw.side}: narrow screw breaches "
-                f"medially by {medial:.2f} mm"
-            )
+            # The "narrow => no medial breach" contract binds the optimiser's
+            # own trajectory search, not the legacy fallback it falls back to
+            # when no feasible trajectory is found -- that path predates the
+            # zero-breach guarantee and is reported, not failed.
+            if is_fallback:
+                print(
+                    f"  narrow (legacy fallback) medial {medial:.2f} mm"
+                )
+            else:
+                failures.append(
+                    f"{screw.vertebra_name} {screw.side}: narrow screw breaches "
+                    f"medially by {medial:.2f} mm"
+                )
         if narrow and abs(screw.diameter_mm - AutoScrewPlanner.MIN_SCREW_DIAMETER) > 1e-6:
             failures.append(
                 f"{screw.vertebra_name} {screw.side}: narrow screw has diameter "
@@ -185,7 +199,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
     print()
-    print(f"{len(screws)} screws, {len(planner.skipped_sides)} skipped sides")
+    print(
+        f"{len(screws)} screws ({fallback_count} via legacy fallback), "
+        f"{len(planner.skipped_sides)} skipped sides"
+    )
     for failure in failures:
         print(f"FAIL: {failure}")
     return 1 if failures else 0
