@@ -69,6 +69,19 @@ PLANE_INDICATOR_COLORS = {
 PLANE_INDICATOR_OPACITY = 0.14
 PLANE_OUTLINE_OPACITY = 0.48
 
+#: Screw MPR plane -> the standard plane whose pane shows it, so an oblique
+#: indicator in 3D takes the colour of the MPR header the user is reading.
+SCREW_MPR_PLANE_COLORS = {
+    "oblique_axial": PLANE_INDICATOR_COLORS["axial"],
+    "oblique_sagittal": PLANE_INDICATOR_COLORS["sagittal"],
+    "cross_section": PLANE_INDICATOR_COLORS["coronal"],
+}
+
+#: Half the side of the square drawn for each screw-aligned plane (mm).  The
+#: planes are unbounded; 40 mm either side of the screw covers a vertebra
+#: without an oblique quad sprawling across the whole volume.
+SCREW_MPR_PLANE_HALF_SIZE_MM = 40.0
+
 # vtkSmartVolumeMapper render-mode enum -> log-friendly name.
 RENDER_MODE_NAMES = {
     0: "default",
@@ -423,6 +436,12 @@ class Viewer3D(QWidget):
         self._plane_actors: dict = {}
         self._plane_actors_added: bool = False
         self._planes_visible: bool = True
+        # Screw MPR in 3D: the three screw-aligned plane indicators (created on
+        # first use) and the clipping plane that opens the volume at the
+        # cross-section.  While active the standard indicators are hidden.
+        self._screw_mpr_actors: dict = {}
+        self._screw_mpr_active: bool = False
+        self._screw_mpr_clip: Optional[vtk.vtkPlane] = None
 
         # Screw visualization
         self._screw_actors: List[ScrewVisual] = []
@@ -1186,11 +1205,24 @@ class Viewer3D(QWidget):
             }
 
     def set_plane_indicators_visible(self, visible: bool) -> None:
-        """Show or hide all three MPR planes in the 3D viewport."""
+        """Show or hide the MPR planes in the 3D viewport.
+
+        While Screw MPR is active those are the three screw-aligned planes; the
+        standard ones stay hidden, because they no longer describe any pane.
+        """
         self._planes_visible = bool(visible)
+        # Read through __dict__, as _log_render_mode does: a Viewer3D built with
+        # __new__ (the tests do) has none of the Screw MPR state yet.
+        state = self.__dict__
+        screw_mpr_active = bool(state.get("_screw_mpr_active", False))
+        standard_visible = self._planes_visible and not screw_mpr_active
         for plane_data in self._plane_actors.values():
-            plane_data["actor"].SetVisibility(self._planes_visible)
-            plane_data["outline_actor"].SetVisibility(self._planes_visible)
+            plane_data["actor"].SetVisibility(standard_visible)
+            plane_data["outline_actor"].SetVisibility(standard_visible)
+        oblique_visible = self._planes_visible and screw_mpr_active
+        for plane_data in state.get("_screw_mpr_actors", {}).values():
+            plane_data["actor"].SetVisibility(oblique_visible)
+            plane_data["outline_actor"].SetVisibility(oblique_visible)
 
         toggle = getattr(self, "plane_visibility_toggle", None)
         if toggle is not None:
@@ -1858,6 +1890,10 @@ class Viewer3D(QWidget):
 
         self._renderer.AddActor(actor)
         self._vertebral_mesh_actor = actor
+        clip = self.__dict__.get("_screw_mpr_clip")
+        if clip is not None:
+            # A mesh rebuilt while Screw MPR is open must open at the same cut.
+            actor.GetMapper().AddClippingPlane(clip)
         self._request_render()
 
         logger.info(
@@ -1883,9 +1919,131 @@ class Viewer3D(QWidget):
     def set_plane_visibility(self, plane: str, visible: bool):
         """Set visibility of a plane indicator."""
         if plane in self._plane_actors:
+            visible = bool(visible) and not self.__dict__.get("_screw_mpr_active", False)
             self._plane_actors[plane]["actor"].SetVisibility(visible)
             self._plane_actors[plane]["outline_actor"].SetVisibility(visible)
             self._request_render()
+
+    # --- Screw MPR in 3D ---
+
+    def show_screw_mpr(
+        self,
+        oblique_axial: vtk.vtkMatrix4x4,
+        oblique_sagittal: vtk.vtkMatrix4x4,
+        cross_section: vtk.vtkMatrix4x4,
+    ) -> None:
+        """Show the screw-aligned planes and open the volume at the cross-section.
+
+        Screw MPR used to change only the three MPR panes; the 3D view went on
+        drawing the standard axial, sagittal and coronal planes, which no pane
+        showed any more, and the volume stayed closed, so there was nothing in
+        3D to relate the oblique slices to.
+
+        Each argument is a reslice-axes matrix exactly as the MPR panes receive
+        it -- columns are screen-right, screen-up and the normal, and the last
+        column is the plane centre -- so the 3D indicators and the panes are
+        drawn from the same numbers.  The volume and the vertebra meshes are
+        clipped by the cross-section plane, keeping the tip side: looking in
+        from behind, the cut face is the slice in the cross-section pane, and
+        it follows **Position** from entry to tip.  Screws are not clipped.
+        """
+        if self._renderer is None:
+            return
+        self._screw_mpr_active = True
+        for name, axes in (
+            ("oblique_axial", oblique_axial),
+            ("oblique_sagittal", oblique_sagittal),
+            ("cross_section", cross_section),
+        ):
+            self._place_screw_mpr_plane(name, axes)
+        for plane_data in self._plane_actors.values():
+            plane_data["actor"].SetVisibility(False)
+            plane_data["outline_actor"].SetVisibility(False)
+        for plane_data in self._screw_mpr_actors.values():
+            plane_data["actor"].SetVisibility(self._planes_visible)
+            plane_data["outline_actor"].SetVisibility(self._planes_visible)
+
+        centre = [cross_section.GetElement(row, 3) for row in range(3)]
+        normal = [cross_section.GetElement(row, 2) for row in range(3)]
+        if self._screw_mpr_clip is None:
+            self._screw_mpr_clip = vtk.vtkPlane()
+            for mapper in self._clippable_mappers():
+                mapper.AddClippingPlane(self._screw_mpr_clip)
+        self._screw_mpr_clip.SetOrigin(*centre)
+        self._screw_mpr_clip.SetNormal(*normal)
+        self._screw_mpr_clip.Modified()
+        self._request_render()
+
+    def clear_screw_mpr(self) -> None:
+        """Put the standard planes back and close the volume again."""
+        if not self._screw_mpr_active and self._screw_mpr_clip is None:
+            return
+        self._screw_mpr_active = False
+        if self._screw_mpr_clip is not None:
+            for mapper in self._clippable_mappers():
+                mapper.RemoveClippingPlane(self._screw_mpr_clip)
+            self._screw_mpr_clip = None
+        for plane_data in self._screw_mpr_actors.values():
+            plane_data["actor"].SetVisibility(False)
+            plane_data["outline_actor"].SetVisibility(False)
+        for plane_data in self._plane_actors.values():
+            plane_data["actor"].SetVisibility(self._planes_visible)
+            plane_data["outline_actor"].SetVisibility(self._planes_visible)
+        if self._renderer is not None:
+            self._request_render()
+
+    @property
+    def screw_mpr_active(self) -> bool:
+        """Whether the 3D view is showing the screw-aligned planes."""
+        return self._screw_mpr_active
+
+    def _clippable_mappers(self) -> List[vtk.vtkAbstractMapper]:
+        """The mappers the screw MPR cut applies to: the volume and the meshes."""
+        mappers: List[vtk.vtkAbstractMapper] = []
+        if self._volume_mapper is not None:
+            mappers.append(self._volume_mapper)
+        mesh = self._vertebral_mesh_actor
+        if mesh is not None and mesh.GetMapper() is not None:
+            mappers.append(mesh.GetMapper())
+        return mappers
+
+    def _place_screw_mpr_plane(self, name: str, axes: vtk.vtkMatrix4x4) -> None:
+        """Create (once) and position one screw-aligned plane indicator."""
+        data = self._screw_mpr_actors.get(name)
+        if data is None:
+            color = SCREW_MPR_PLANE_COLORS[name]
+            source = vtk.vtkPlaneSource()
+            source.SetResolution(1, 1)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(source.GetOutputPort())
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(*(c / 255.0 for c in color))
+            actor.GetProperty().SetOpacity(PLANE_INDICATOR_OPACITY)
+            actor.GetProperty().SetLighting(False)
+            outline = vtk.vtkOutlineFilter()
+            outline.SetInputConnection(source.GetOutputPort())
+            outline_mapper = vtk.vtkPolyDataMapper()
+            outline_mapper.SetInputConnection(outline.GetOutputPort())
+            outline_actor = vtk.vtkActor()
+            outline_actor.SetMapper(outline_mapper)
+            outline_actor.GetProperty().SetColor(*(c / 255.0 for c in color))
+            outline_actor.GetProperty().SetOpacity(PLANE_OUTLINE_OPACITY)
+            outline_actor.GetProperty().SetLineWidth(1.5)
+            self._renderer.AddActor(actor)
+            self._renderer.AddActor(outline_actor)
+            data = {"source": source, "actor": actor, "outline_actor": outline_actor}
+            self._screw_mpr_actors[name] = data
+
+        centre = [axes.GetElement(row, 3) for row in range(3)]
+        right = [axes.GetElement(row, 0) for row in range(3)]
+        up = [axes.GetElement(row, 1) for row in range(3)]
+        half = SCREW_MPR_PLANE_HALF_SIZE_MM
+        source = data["source"]
+        source.SetOrigin(*(centre[i] - half * right[i] - half * up[i] for i in range(3)))
+        source.SetPoint1(*(centre[i] + half * right[i] - half * up[i] for i in range(3)))
+        source.SetPoint2(*(centre[i] - half * right[i] + half * up[i] for i in range(3)))
+        source.Update()
 
     # --- Events ---
 

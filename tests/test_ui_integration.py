@@ -181,6 +181,16 @@ class DummyViewer3D(QWidget):
         self.vertebral_mesh_labels = None
         self.volume_visible = True
         self.screw_interaction_cancelled = 0
+        # Screw MPR in 3D: the last planes shown, or None once cleared.
+        self.screw_mpr_planes = None
+        self.screw_mpr_clear_count = 0
+
+    def show_screw_mpr(self, oblique_axial, oblique_sagittal, cross_section):
+        self.screw_mpr_planes = (oblique_axial, oblique_sagittal, cross_section)
+
+    def clear_screw_mpr(self):
+        self.screw_mpr_planes = None
+        self.screw_mpr_clear_count += 1
 
     def add_screw(
         self, entry_point, target_point, radius=3.0, color=None, screw_id=None
@@ -2226,3 +2236,37 @@ def test_dragging_a_narrow_screw_into_a_wide_level_repaints_it(ui_main_window):
     assert window.viewer_3d.screws[0].color == pytest.approx(
         tuple(value / 255.0 for value in COLOR_SCREW)
     )
+
+
+def test_screw_mpr_opens_the_3d_view_at_the_cross_section(ui_main_window):
+    """The 3D view follows Screw MPR instead of drawing planes no pane shows."""
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-SCREW-MPR-3D", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(entry_point=(2.0, 3.0, 4.0), target_point=(8.0, 9.0, 24.0), diameter=6.0)
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    window.screw_axis_mpr_btn.click()
+
+    planes = window.viewer_3d.screw_mpr_planes
+    assert planes is not None
+    cross_section = planes[2]
+    centre = [cross_section.GetElement(row, 3) for row in range(3)]
+    # Position starts at 50 %: the cut is at the screw's midpoint.
+    assert centre == pytest.approx([5.0, 6.0, 14.0])
+
+    window._screw_mpr_ctrl.set_position(100)
+
+    centre = [window.viewer_3d.screw_mpr_planes[2].GetElement(row, 3) for row in range(3)]
+    assert centre == pytest.approx([8.0, 9.0, 24.0])     # follows Position to the tip
+
+    window.standard_mpr_btn.click()
+
+    assert window.viewer_3d.screw_mpr_planes is None
+    assert window.viewer_3d.screw_mpr_clear_count == 1

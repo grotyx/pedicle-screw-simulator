@@ -1364,3 +1364,122 @@ class TestCpuRaycastFallback:
         viewer._log_render_mode("Phase 2")
 
         assert len(calls["input_dims"]) == 1
+
+
+class TestScrewMprIn3D:
+    """Screw MPR shows its own planes in 3D and opens the volume at the cut."""
+
+    @staticmethod
+    def _viewer():
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+        mesh_mapper = vtk.vtkPolyDataMapper()
+        viewer._vertebral_mesh_actor = vtk.vtkActor()
+        viewer._vertebral_mesh_actor.SetMapper(mesh_mapper)
+        viewer._plane_actors = {
+            plane: {"actor": vtk.vtkActor(), "outline_actor": vtk.vtkActor()}
+            for plane in ("axial", "sagittal", "coronal")
+        }
+        viewer._planes_visible = True
+        viewer._screw_mpr_actors = {}
+        viewer._screw_mpr_active = False
+        viewer._screw_mpr_clip = None
+        viewer.vtk_widget = SimpleNamespace(safe_render=lambda: None)
+        viewer.plane_visibility_toggle = None
+        return viewer
+
+    @staticmethod
+    def _axes():
+        from src.core.mpr_geometry import build_screw_mpr_axes
+
+        return build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), 0.25)
+
+    def test_the_screw_planes_replace_the_standard_ones(self):
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        assert all(
+            data["actor"].GetVisibility() == 0 for data in viewer._plane_actors.values()
+        )
+        assert set(viewer._screw_mpr_actors) == {
+            "oblique_axial", "oblique_sagittal", "cross_section",
+        }
+        assert all(
+            data["actor"].GetVisibility() == 1
+            for data in viewer._screw_mpr_actors.values()
+        )
+
+    def test_the_volume_and_mesh_are_cut_at_the_cross_section(self):
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        clip = viewer._screw_mpr_clip
+        assert viewer._volume_mapper.GetClippingPlanes().GetNumberOfItems() == 1
+        assert (
+            viewer._vertebral_mesh_actor.GetMapper().GetClippingPlanes().GetNumberOfItems()
+            == 1
+        )
+        # 25 % along a 40 mm screw from y=40 toward y=0, keeping the tip side.
+        assert clip.GetOrigin() == pytest.approx((0.0, 30.0, 0.0))
+        assert clip.GetNormal() == pytest.approx((0.0, -1.0, 0.0))
+
+    def test_moving_the_cut_does_not_stack_clipping_planes(self):
+        from src.core.mpr_geometry import build_screw_mpr_axes
+
+        viewer = self._viewer()
+        for fraction in (0.25, 0.5, 0.75):
+            axes = build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), fraction)
+            viewer.show_screw_mpr(
+                axes.oblique_axial, axes.oblique_sagittal, axes.cross_section
+            )
+
+        assert viewer._volume_mapper.GetClippingPlanes().GetNumberOfItems() == 1
+        assert viewer._screw_mpr_clip.GetOrigin() == pytest.approx((0.0, 10.0, 0.0))
+
+    def test_clearing_restores_the_standard_view(self):
+        viewer = self._viewer()
+        axes = self._axes()
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        viewer.clear_screw_mpr()
+
+        planes = viewer._volume_mapper.GetClippingPlanes()
+        assert planes is None or planes.GetNumberOfItems() == 0
+        assert viewer.screw_mpr_active is False
+        assert all(
+            data["actor"].GetVisibility() == 1 for data in viewer._plane_actors.values()
+        )
+        assert all(
+            data["actor"].GetVisibility() == 0
+            for data in viewer._screw_mpr_actors.values()
+        )
+
+    def test_planes_off_hides_the_screw_planes_too(self):
+        viewer = self._viewer()
+        axes = self._axes()
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        viewer.set_plane_indicators_visible(False)
+
+        assert all(
+            data["actor"].GetVisibility() == 0
+            for data in viewer._screw_mpr_actors.values()
+        )
+        # ...and turning them back on shows the screw planes, not the standard ones.
+        viewer.set_plane_indicators_visible(True)
+        assert all(
+            data["actor"].GetVisibility() == 1
+            for data in viewer._screw_mpr_actors.values()
+        )
+        assert all(
+            data["actor"].GetVisibility() == 0 for data in viewer._plane_actors.values()
+        )
