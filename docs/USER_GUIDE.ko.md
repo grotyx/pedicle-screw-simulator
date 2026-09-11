@@ -187,7 +187,7 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 - **Convergence(수렴각):** 정중선 방향으로의 axial 각도이며 부호가 있습니다. 양수는 medial(팁이 정중선을 향함), 음수는 lateral을 의미합니다.
 - **Craniocaudal(두미측각):** axial 평면 위로의 궤적 상승각이며 부호가 있습니다. 양수는 cranial입니다. 스크류가 수렴하는 경우 이 값은 sagittal 투영각과 약간 다를 수 있습니다.
 - **Endplate(종판각):** 상위 종판(upper endplate) 대비 궤적의 부호 있는 각도이며, 양수는 팁이 cranial 쪽, 0은 평행을 뜻합니다. "Parallel to upper endplate" 계획 옵션을 켜면 설정된 endplate band 안에서 0°를 직접 목표로 삼습니다.
-- **Alignment(정렬):** 이 스크류가 다중 스크류 construct 안에서 어떻게 놓이는지 — 로드 선 대비 오프셋(`rod _x_ mm`)과 이웃 레벨과의 수렴각 차이(`conv ±_y_°`)를 나타냅니다. Optimizer가 construct를 조정한 경우에만 채워지며(5.6절 참고), Legacy 모드 스크류는 이 행이 비어 있습니다.
+- **Alignment(정렬):** 이 스크류가 다중 스크류 construct 안에서 어떻게 놓이는지 — 로드 선 대비 오프셋(`rod _x_ mm`)과 이웃 레벨과의 수렴각 차이(`conv ±_y_°`)를 나타냅니다. 두 값 모두 개별 스크류가 아니라 해당 쪽 전체를 설명하므로, 스크류를 하나라도 끌면 같은 쪽 모든 스크류에 대해 다시 측정되고, 하나를 지우면 남은 것들로 로드 선을 다시 맞춥니다. Optimizer가 construct를 조정한 경우에만 채워지며(5.6절 참고), Legacy 모드 스크류와 사용자가 직접 배치한 스크류는 이 행이 비어 있습니다.
 - **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급입니다. 등급 계산에는 HU가 전혀 사용되지 않으며, 함께 표시되는 궤적의 평균·최소 HU는 참고용 정보일 뿐입니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
 - **Pedicle(척추경):** 측정된 척추경 협부(isthmus) 폭입니다. 해당 레벨이 "Narrow pedicle" 임계값보다 좁으면 빨간색으로 표시되며, 이는 플래너가 카탈로그에서 가장 작은 직경을 사용하고 medial 벽을 보호하기 위해 lateral(in-out-in) 천공 허용치를 제한했다는 뜻입니다. 폭 뒤에 `?`가 붙고 행에 "width not trusted"라고 표시되면서 같은 빨간색이 나타나는 경우는, 분석기가 그 측정값 자체를 신뢰할 수 없다고 판단한 것입니다(해당 레벨의 타당 범위를 위아래 어느 쪽으로든 벗어난 경우). 두 경우 모두 narrow 정책이 적용되지만, 신뢰할 수 있는 폭만 임상 수치로 인용됩니다.
 

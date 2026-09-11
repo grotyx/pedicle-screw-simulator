@@ -410,6 +410,7 @@ class ScrewTool:
 
         # Add to list
         self._screws.append(screw)
+        self._restamp_construct_alignment()
 
         # Notify callback
         if self._on_screw_placed:
@@ -804,12 +805,44 @@ class ScrewTool:
     def add_screw(self, screw: Screw):
         """Append an existing screw (used for plan restore)."""
         self._screws.append(screw)
+        self._restamp_construct_alignment()
 
     def regrade_all(self) -> List[Screw]:
         """Re-evaluate every stored screw against the current grader."""
         for screw in self._screws:
             self._evaluate_screw(screw)
+        self._restamp_construct_alignment()
         return self._screws.copy()
+
+    def _restamp_construct_alignment(self) -> None:
+        """Re-measure the construct metrics for the screws that carry them.
+
+        ``rod_misalignment_mm`` and the two convergence numbers describe the
+        *set*, not the screw: move one head and all three change for every
+        screw on that rod.  The planner stamped them once at the end of its
+        run and nothing refreshed them, so the first drag of an auto screw
+        left the cockpit's Alignment row quoting the rod offset of a
+        trajectory the user had already replaced.
+
+        Only the screws that already carry them are updated, and the rod line
+        is refitted over those alone -- see
+        :func:`src.core.construct_alignment.restamp_carriers` for why a
+        hand-placed screw must not acquire an alignment it was never part of.
+        """
+        from ..core.construct_alignment import restamp_carriers
+        from ..core.pedicle_analyzer import VERTEBRA_LABELS
+
+        labels = {name: label for label, name in VERTEBRA_LABELS.items()}
+        restamp_carriers(
+            self._screws,
+            side_of=lambda s: s.side,
+            entry_of=lambda s: s.entry_point,
+            # ``Screw.medial_angle`` is the same signed convergence the planner
+            # records, so the two agree about the same trajectory.
+            convergence_of=lambda s: s.medial_angle,
+            level_of=lambda s: labels.get(s.vertebra_level),
+            metrics_of=lambda s: s.metrics,
+        )
 
     def replace_screw(
         self,
@@ -838,6 +871,7 @@ class ScrewTool:
         )
         self._evaluate_screw(updated)
         self._screws[index] = updated
+        self._restamp_construct_alignment()
         return updated
 
     @staticmethod
@@ -876,11 +910,15 @@ class ScrewTool:
         """Replace screw list with existing screws (used for plan restore)."""
         self._screws = screws.copy()
         self._reset_state()
+        self._restamp_construct_alignment()
 
     def remove_screw(self, index: int):
         """Remove a screw by index."""
         if 0 <= index < len(self._screws):
             del self._screws[index]
+            # One fewer head on that rod: the line the others are measured
+            # against has moved.
+            self._restamp_construct_alignment()
 
     def clear_screws(self):
         """Remove all screws."""

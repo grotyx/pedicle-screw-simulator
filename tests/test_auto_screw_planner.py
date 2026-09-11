@@ -1485,7 +1485,7 @@ class TestConstructAlignmentMetrics:
             _alignment_screw("L5", "left", 15.0),
         ]
 
-        AutoScrewPlanner._stamp_convergence_alignment(screws)
+        AutoScrewPlanner._stamp_construct_alignment(screws)
 
         assert [s.metrics["convergence_deviation_deg"] for s in screws] == pytest.approx(
             [-5.0, 0.0, 5.0]
@@ -1502,7 +1502,7 @@ class TestConstructAlignmentMetrics:
             _alignment_screw("S1", "left", 40.0),
         ]
 
-        AutoScrewPlanner._stamp_convergence_alignment(screws)
+        AutoScrewPlanner._stamp_construct_alignment(screws)
 
         assert "convergence_deviation_deg" not in screws[2].metrics
         assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(0.0)
@@ -1515,7 +1515,7 @@ class TestConstructAlignmentMetrics:
             _alignment_screw("L5", "right", 25.0),
         ]
 
-        AutoScrewPlanner._stamp_convergence_alignment(screws)
+        AutoScrewPlanner._stamp_construct_alignment(screws)
 
         assert screws[0].metrics["convergence_spread_deg"] == pytest.approx(0.0)
         assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(10.0)
