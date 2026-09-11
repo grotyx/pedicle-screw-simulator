@@ -450,20 +450,47 @@ def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
 
     rows = list(_csv.reader(path.open(encoding="utf-8")))
     header = rows[0]
-    # Endplate angle (W8) is appended after these four (W7), so they are the
-    # last four before the final column rather than the last four overall.
-    assert header[-5:-1] == [
+    # Each wave appends its own columns and never reorders an earlier one, so
+    # these four (W7) sit before the endplate angle (W8) and the uncertainty
+    # flag, not at the end of the row.
+    assert header[-6:-2] == [
         "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
     ]
+    assert header[-2:] == ["endplate_angle_deg", "width_uncertain"]
     row = dict(zip(header, rows[1], strict=True))
     assert row["pedicle_width_mm"] == "4.500"
     assert row["narrow_pedicle"] == "true"
     assert row["medial_breach_mm"] == "0.000"
     assert row["lateral_breach_mm"] == "1.500"
+    assert row["width_uncertain"] == ""
 
     blank = dict(zip(header, rows[2], strict=True))
     assert blank["pedicle_width_mm"] == ""
     assert blank["narrow_pedicle"] == ""
+
+
+def test_csv_distinguishes_an_untrusted_width_from_a_narrow_one(tmp_path):
+    """``narrow_pedicle`` alone cannot explain a 24 mm "narrow" pedicle."""
+    import csv as _csv
+
+    from src.utils.planning_io import export_screws_csv
+
+    flagged = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={
+            "pedicle_width_mm": 24.0,
+            "narrow_pedicle": True,
+            "width_uncertain": True,
+        },
+    )
+    path = tmp_path / "flagged.csv"
+
+    export_screws_csv(str(path), [flagged])
+
+    rows = list(_csv.reader(path.open(encoding="utf-8")))
+    row = dict(zip(rows[0], rows[1], strict=True))
+    assert row["narrow_pedicle"] == "true"
+    assert row["width_uncertain"] == "true"
 
 
 def test_plan_json_round_trips_the_narrow_metrics(tmp_path):

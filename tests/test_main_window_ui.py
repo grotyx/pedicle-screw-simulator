@@ -720,6 +720,33 @@ def test_cockpit_shows_the_pedicle_row_and_the_narrow_legend(ui_main_window):
     assert window.selected_screw_pedicle.text() == "--"
 
 
+def test_the_cockpit_says_untrusted_rather_than_narrow_for_a_flagged_width(
+    ui_main_window,
+):
+    """An out-of-band width is flagged in either direction, so "narrow" lies.
+
+    The level is still marked -- same red, same policy -- but the row says why
+    it is marked, and the number carries a "?" instead of being quoted as a
+    measurement.
+    """
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    wide = Screw(
+        entry_point=(0.0, 30.0, 0.0), target_point=(0.0, -10.0, 0.0),
+        metrics={
+            "narrow_pedicle": True,
+            "width_uncertain": True,
+            "pedicle_width_mm": 24.0,
+        },
+    )
+    index = window._tool_ctrl.add_existing_screw(wide, select=True)
+    window.update_selected_screw_inspector(index, wide, False)
+
+    assert window.selected_screw_pedicle.text() == "24.0 mm? · width not trusted"
+    assert "color:" in window.selected_screw_pedicle.styleSheet()
+
+
 def test_the_narrow_warning_is_listed_first_in_the_cockpit(ui_main_window):
     from src.models.screw import Screw
 

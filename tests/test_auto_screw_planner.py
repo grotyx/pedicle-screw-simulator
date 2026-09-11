@@ -1659,6 +1659,53 @@ class TestNarrowPedicle:
         assert screw.diameter_mm == pytest.approx(4.0)
         assert screw.metrics["narrow_pedicle"] is True
 
+    def test_a_flagged_width_is_not_described_as_narrow(self):
+        """The gate flags a width outside its band in either direction.
+
+        An implausibly *wide* side used to produce "Narrow pedicle (24.0 mm):
+        4.0 mm screw is 17 % of the width" -- a sentence that contradicts its
+        own number.  The policy is unchanged; only the words are.
+        """
+        from src.core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            WIDTH_UNCERTAIN_SCREW_WARNING,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=24.0)
+        analysis.width_flags["left"] = "implausible"
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["width_uncertain"] is True
+        assert not any(
+            warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+            for warning in screw.warnings
+        )
+        # Stated once, and first: it is why the screw looks the way it does.
+        assert screw.warnings[0] == WIDTH_UNCERTAIN_SCREW_WARNING
+        assert screw.warnings.count(WIDTH_UNCERTAIN_SCREW_WARNING) == 1
+
+    def test_a_trusted_narrow_width_still_quotes_itself(self):
+        """The narrow note is only retired for widths that were not believed."""
+        from src.core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["width_uncertain"] is False
+        assert screw.warnings[0].startswith(NARROW_PEDICLE_WARNING_PREFIX)
+
     def test_a_narrow_side_is_planned_with_the_smallest_screw(self):
         from src.core.auto_screw_planner import AutoScrewPlanner
         from src.core.planner_config import PlannerConfig

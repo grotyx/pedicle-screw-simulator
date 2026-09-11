@@ -366,6 +366,16 @@ def _plan_cbt_screw(
         # out in ``pedicle_width_mm``, and CBT's own contraindication note is
         # what marks the level.
         narrow=False,
+        # The width is still the analyser's, so its verdict still travels: a
+        # flagged number must not read as a measurement here either.
+        width_uncertain=analysis.width_flags.get(side) == "implausible",
+        # Measured, not aimed along: CBT's cranial trajectory is deliberately
+        # not endplate-parallel, but the inspector's Endplate row is a
+        # measurement of the chosen trajectory.  Omitting it left the row
+        # blank until the first drag, when ``ScrewTool._endplate_angle``
+        # computed it from this same normal -- a number that appeared because
+        # the user nudged the screw.
+        upper_endplate_normal=analysis.upper_endplate_normal,
     )
     # ``span`` is the catalogue length by construction; recomputing it from the
     # end points would only add float noise to a nominal implant size.

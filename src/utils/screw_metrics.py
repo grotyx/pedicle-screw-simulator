@@ -19,6 +19,12 @@ from typing import Any, Dict, Mapping, Optional
 NARROW_PEDICLE_KEY = "narrow_pedicle"
 PEDICLE_WIDTH_KEY = "pedicle_width_mm"
 
+#: Set when the analyser's plausibility gate rejected the width (in either
+#: direction).  The narrow *policy* still applies -- smallest screw, medial
+#: wall guarded, marked for review -- but the number itself is not a finding
+#: about the patient, so nothing may present it as one.
+WIDTH_UNCERTAIN_KEY = "width_uncertain"
+
 #: Shown wherever a width was never measured.
 UNKNOWN_TEXT = "--"
 
@@ -30,8 +36,19 @@ def screw_metrics(screw: Any) -> Dict[str, Any]:
 
 
 def is_narrow_pedicle(metrics: Mapping[str, Any]) -> bool:
-    """Whether the planner marked this screw's pedicle narrow."""
+    """Whether the planner marked this screw's pedicle for review.
+
+    True for a genuinely narrow pedicle *and* for one whose width the analyser
+    rejected: both are planned under the same policy and both are drawn in the
+    danger colour, because both mean "look at this level yourself".  Use
+    :func:`is_width_uncertain` to tell the two apart in words.
+    """
     return bool(metrics.get(NARROW_PEDICLE_KEY))
+
+
+def is_width_uncertain(metrics: Mapping[str, Any]) -> bool:
+    """Whether the analyser refused to stand behind this screw's width."""
+    return bool(metrics.get(WIDTH_UNCERTAIN_KEY))
 
 
 def pedicle_width_mm(metrics: Mapping[str, Any]) -> Optional[float]:
@@ -46,14 +63,28 @@ def pedicle_width_mm(metrics: Mapping[str, Any]) -> Optional[float]:
 
 
 def pedicle_cell_text(metrics: Mapping[str, Any]) -> str:
-    """The plan table's Pedicle cell: just the width, since the chip says narrow."""
+    """The plan table's Pedicle cell: the width, flagged when it is not trusted.
+
+    A rejected width keeps a trailing ``?`` so the column never presents a
+    number the analyser disowned as if it were a measurement; the chip beside
+    it already says the level needs review.
+    """
     width = pedicle_width_mm(metrics)
-    return UNKNOWN_TEXT if width is None else f"{width:.1f} mm"
+    if width is None:
+        return UNKNOWN_TEXT
+    suffix = "?" if is_width_uncertain(metrics) else ""
+    return f"{width:.1f} mm{suffix}"
 
 
 def pedicle_row_text(metrics: Mapping[str, Any]) -> str:
     """The cockpit's Pedicle row, which has room to spell the verdict out."""
     text = pedicle_cell_text(metrics)
-    if text != UNKNOWN_TEXT and is_narrow_pedicle(metrics):
+    if text == UNKNOWN_TEXT:
+        return text
+    if is_width_uncertain(metrics):
+        # Checked first: an out-of-band width is flagged in *either* direction,
+        # so "narrow" would be plain wrong for the wide half of those.
+        return f"{text} · width not trusted"
+    if is_narrow_pedicle(metrics):
         return f"{text} · narrow"
     return text

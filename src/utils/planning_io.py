@@ -298,6 +298,11 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             # Appended last, per the plan-file contract: existing readers index
             # by header name, and new columns must never shift an old one.
             "endplate_angle_deg",
+            # ``narrow_pedicle`` is true for an untrustworthy width as well as
+            # a small one, because both are planned under the same policy.
+            # This column is what tells a reader which of the two it is
+            # looking at, so a 24 mm "narrow" pedicle can be read correctly.
+            "width_uncertain",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -339,4 +344,5 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "medial_breach_mm"),
                 _metric_number(metrics, "lateral_breach_mm"),
                 _metric_number(metrics, "endplate_angle_deg"),
+                _metric_flag(metrics, "width_uncertain"),
             ])

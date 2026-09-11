@@ -324,8 +324,9 @@ class AutoScrewPlanner:
 
         # 1. Determine optimal screw diameter.  A width is never a reason to
         #    drop the side: a narrow pedicle takes the smallest implant.
+        uncertain = self._is_width_uncertain(analysis, side)
         narrow = self._is_narrow_side(analysis, side)
-        if analysis.width_flags.get(side) == "implausible":
+        if uncertain:
             # The number is not a finding about the patient, so the warning may
             # not present it as one.
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
@@ -468,6 +469,7 @@ class AutoScrewPlanner:
             pedicle_width,
             upper_endplate_normal=analysis.upper_endplate_normal,
             narrow=narrow,
+            width_uncertain=uncertain,
         )
         return planned, None
 
@@ -601,6 +603,7 @@ class AutoScrewPlanner:
         pedicle_width: float = 0.0,
         upper_endplate_normal: Optional[np.ndarray] = None,
         narrow: bool = False,
+        width_uncertain: bool = False,
     ) -> PlannedScrew:
         """Grade an accepted trajectory and wrap it in a :class:`PlannedScrew`.
 
@@ -614,6 +617,11 @@ class AutoScrewPlanner:
         even when ``config.endplate_parallel`` is off: the endplate angle is a
         measurement of the trajectory that was chosen, not a record of the
         setting that chose it, so the inspector shows it either way.
+
+        ``narrow`` and ``width_uncertain`` both mean "this side was planned
+        under the narrow policy", and both mark it for review, but only
+        ``narrow`` licenses quoting the width as a finding about the patient
+        (see :meth:`_is_width_uncertain`).
         """
         warnings: List[str] = list(extra_warnings or [])
         length = float(np.linalg.norm(target - entry))
@@ -673,6 +681,7 @@ class AutoScrewPlanner:
             "medial_wall_mm": medial_wall,
             "pedicle_width_mm": float(pedicle_width),
             "narrow_pedicle": bool(narrow),
+            "width_uncertain": bool(width_uncertain),
             "heary_direction": heary,
             "facet_grade": facet_grade,
             "facet_text": facet_text,
@@ -684,7 +693,16 @@ class AutoScrewPlanner:
             # Absent, not 0.0, when the endplate could not be fitted: a missing
             # measurement must never read as a perfectly parallel screw.
             metrics["endplate_angle_deg"] = float(endplate_angle)
-        if narrow:
+        if width_uncertain:
+            # First in the list, for the same reason the narrow note is: it
+            # explains why this screw looks the way it does.  It replaces the
+            # narrow note rather than joining it -- a width the analyser
+            # rejected may not be quoted back as a millimetre finding, even
+            # when it happens to fall below the narrow threshold.
+            if WIDTH_UNCERTAIN_SCREW_WARNING in warnings:
+                warnings.remove(WIDTH_UNCERTAIN_SCREW_WARNING)
+            warnings.insert(0, WIDTH_UNCERTAIN_SCREW_WARNING)
+        elif narrow:
             # First in the list: it is the reason this screw looks the way it
             # does, and the cockpit reads the block top down.
             warnings.insert(0, narrow_pedicle_warning(pedicle_width, diameter))
@@ -962,7 +980,8 @@ class AutoScrewPlanner:
             and analysis.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
         ):
             warnings.append(endplate_fit_warning(analysis.endplate_fit_rmse_mm))
-        if analysis.width_flags.get(side) == "implausible":
+        uncertain = self._is_width_uncertain(analysis, side)
+        if uncertain:
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         narrow = self._is_narrow_side(analysis, side)
         recommended = self._compute_diameter(pedicle_width, vertebra.name)
@@ -986,6 +1005,7 @@ class AutoScrewPlanner:
             pedicle_width,
             upper_endplate_normal=analysis.upper_endplate_normal,
             narrow=narrow,
+            width_uncertain=uncertain,
         )
         for message in candidate.warnings:
             # The optimiser explains how a trajectory was chosen; the planner
@@ -1453,6 +1473,23 @@ class AutoScrewPlanner:
                 analysis.right_pedicle_width,
             )
 
+    @staticmethod
+    def _is_width_uncertain(
+        analysis: PedicleAnalysisResult,
+        side: str,
+    ) -> bool:
+        """Whether the analyser refused to stand behind this side's width.
+
+        Distinct from narrowness on purpose.  The plausibility gate flags a
+        width *outside* its level's band in either direction, so a 24 mm L3 is
+        flagged too -- and calling that "narrow" in the warning, the plan
+        table and the cockpit produced the self-contradicting note "Narrow
+        pedicle (24.0 mm): 4.0 mm screw is 17 % of the width".  The policy is
+        the same for both (smallest screw, medial wall guarded, marked for
+        review); only the words differ, and they have to be true.
+        """
+        return analysis.width_flags.get(side) == "implausible"
+
     def _is_narrow_side(
         self,
         analysis: PedicleAnalysisResult,
@@ -1463,12 +1500,13 @@ class AutoScrewPlanner:
         Either the measurement is below :attr:`PlannerConfig.narrow_pedicle_mm`,
         or the analyser could not trust it at all -- in which case the smallest
         screw and the medial-wall guard are the safe assumption, not the level's
-        diameter preset.
+        diameter preset.  :meth:`_is_width_uncertain` separates the second case
+        for everything the surgeon reads.
         """
         _center, _axis, width = self._get_side_data(analysis, side)
         return (
             float(width) < self.config.narrow_pedicle_mm
-            or analysis.width_flags.get(side) == "implausible"
+            or self._is_width_uncertain(analysis, side)
         )
 
     def _compute_diameter(

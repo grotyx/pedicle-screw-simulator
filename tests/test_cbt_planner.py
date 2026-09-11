@@ -192,6 +192,41 @@ def test_a_cbt_screw_on_a_narrow_pedicle_is_not_flagged_narrow():
     assert CBT_CONTRAINDICATION_NOTE in screw.warnings
 
 
+def test_a_cbt_screw_reports_its_endplate_angle():
+    """The Endplate row is a measurement, not a record of the aiming rule.
+
+    CBT deliberately does not aim parallel to the endplate, but the angle it
+    ends up at is still a property of the chosen trajectory.  Omitting the
+    normal left the row blank until the first drag, at which point
+    ``ScrewTool._endplate_angle`` computed it from the same analysis -- a
+    number that appeared because the user nudged the screw.
+    """
+    ct, mask, analysis = _setup()
+    assert analysis.upper_endplate_normal is not None
+
+    screw = plan_cbt_screw(
+        ScrewGrader(mask, ct), analysis, "left", LABEL, PlannerConfig(trajectory="cbt")
+    )
+
+    assert screw is not None
+    assert "endplate_angle_deg" in screw.metrics
+    # Cranially angled by construction, so it cannot read as endplate-parallel.
+    assert screw.metrics["endplate_angle_deg"] > 5.0
+
+
+def test_a_cbt_screw_on_a_flagged_width_marks_it_untrusted():
+    ct, mask, analysis = _setup()
+    analysis.width_flags["left"] = "implausible"
+
+    screw = plan_cbt_screw(
+        ScrewGrader(mask, ct), analysis, "left", LABEL, PlannerConfig(trajectory="cbt")
+    )
+
+    assert screw is not None
+    assert screw.metrics["width_uncertain"] is True
+    assert screw.metrics["narrow_pedicle"] is False
+
+
 def test_cbt_screw_diverges_laterally_on_both_sides():
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
