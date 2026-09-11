@@ -107,6 +107,37 @@ def _make_thin_medial_wall_phantom(
     return _make_image(ct_arr), _make_image(mask_arr)
 
 
+def _make_sloped_lamina_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+) -> tuple:
+    """A left corridor whose posterior cortex recedes (slopes) with x.
+
+    Like :func:`_make_thin_medial_wall_phantom`, the vertebral body is
+    generous (x = 15..59, y = 5..31) so only the pedicle corridor can ever
+    breach.  The corridor's posterior surface is not flat here, though: at
+    the pedicle centre (x = 40) it sits at y = 44, and it steps 2 mm closer
+    to the body for every millimetre lateral out to x = 43 (y = 38), then
+    holds flat.  A lateral shift that merely translates an already-seated
+    entry keeps its old y and so lands in the air behind the receded
+    cortex at every one of the three shifts; only a shift that re-seats on
+    the cortex with ``_find_entry_point`` finds a valid entry at all.
+    """
+    shape = (40, 60, 70)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:32, 15:60] = hu_value
+    mask_arr[10:30, 5:32, 15:60] = label
+
+    for x in range(39, 60):
+        y_top = max(46 - 2 * (min(x, 43) - 39), 32)
+        ct_arr[14:27, 30:y_top, x] = hu_value
+        mask_arr[14:27, 30:y_top, x] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
 def _make_vertebra(
     label: int = 27,
     name: str = "L5",
@@ -1758,6 +1789,61 @@ class TestNarrowPedicle:
         assert screw is not None
         assert screw.metrics["medial_breach_mm"] > 0.0
         assert medial_breach_warning(screw.metrics["medial_breach_mm"]) in screw.warnings
+
+    def test_a_shift_re_seats_on_the_cortex_of_a_sloped_lamina(self):
+        """C1 fix: a shift re-seats with ``_find_entry_point``, not a translate.
+
+        On the sloped corridor of ``_make_sloped_lamina_phantom``, translating
+        the already-seated unshifted entry sideways lands it in the air past
+        the receded cortex at every one of the three lateral shifts -- the bug
+        this fix corrects.  Re-seating each shift on the pedicle centre with
+        ``_find_entry_point`` finds the real surface instead, and the
+        resulting trajectory clears the medial wall with no breach anywhere.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_sloped_lamina_phantom()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        label = 27
+        pedicle_center = np.array([40.0, 37.0, 20.0])
+        oriented_axis = np.array([0.0, 1.0, 0.0])
+        body_center = np.array([40.0, 18.0, 20.0])
+        diameter = 4.0
+
+        entry = planner._find_entry_point(pedicle_center, oriented_axis, label)
+        assert entry is not None
+        lateral = planner._lateral_direction(oriented_axis, "left")
+        assert lateral is not None
+
+        for shift in (1.0, 2.0, 3.0):
+            translated = entry + lateral * shift
+            assert not planner._is_point_inside_mask(translated, label), (
+                "the phantom must put a naive lateral translate off the cortex"
+            )
+
+        target = planner._find_best_target(
+            entry, oriented_axis, body_center, label, diameter, None
+        )
+        assert target is not None
+        on_axis = planner._grader.grade(
+            entry, target, diameter, label=label, side="left"
+        )
+        assert on_axis is not None and on_axis.medial_breach_mm > 0.0, (
+            "the phantom must breach medially on the unshifted entry"
+        )
+
+        new_entry, new_target, shift_used = planner._least_medial_entry(
+            "left", entry, target, oriented_axis, pedicle_center, body_center,
+            label, diameter, None,
+        )
+
+        assert shift_used == pytest.approx(3.0)
+        result = planner._grader.grade(
+            new_entry, new_target, diameter, label=label, side="left"
+        )
+        assert result is not None
+        assert result.breach_mm == 0.0
+        assert result.medial_breach_mm == 0.0
 
     def test_no_planner_path_still_says_too_narrow(self):
         """The width-based skip is gone from the product; nothing may put it back."""

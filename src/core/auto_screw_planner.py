@@ -380,6 +380,7 @@ class AutoScrewPlanner:
                 entry,
                 target,
                 oriented_axis,
+                pedicle_center,
                 body_center,
                 vertebra.label,
                 diameter,
@@ -476,6 +477,7 @@ class AutoScrewPlanner:
         entry: np.ndarray,
         target: np.ndarray,
         oriented_axis: np.ndarray,
+        pedicle_center: np.ndarray,
         body_center: np.ndarray,
         vertebra_label: int,
         diameter: float,
@@ -488,6 +490,14 @@ class AutoScrewPlanner:
         the smallest total breach so a shift is only taken when it buys
         something.  The unshifted entry is graded first and wins every tie,
         which makes this a no-op on a side whose axis already clears the canal.
+
+        Each shift moves the *pedicle centre*, not the already-seated entry,
+        and re-seats it on the posterior cortex with :meth:`_find_entry_point`.
+        Translating the seated entry directly would slide it along a fixed
+        plane, which buries it under bone on a sloped lamina; re-seating keeps
+        every candidate on the surface.  All shifts are evaluated -- there is
+        no early exit -- since the cortex is not assumed convex, so a nearer
+        shift finding no entry does not mean a farther one won't.
         """
         best_key = self._medial_breach_key(entry, target, diameter, vertebra_label, side)
         best = (entry, target, 0.0)
@@ -498,11 +508,14 @@ class AutoScrewPlanner:
         for shift in self.NARROW_LATERAL_SHIFTS_MM:
             if shift <= 0.0:
                 continue
-            shifted_entry = entry + lateral * float(shift)
-            if not self._is_point_inside_mask(shifted_entry, vertebra_label):
-                # Off the entry surface entirely; a further shift only leaves
-                # the bone behind, so there is nothing more to try.
-                break
+            shifted_center = pedicle_center + lateral * float(shift)
+            shifted_entry = self._find_entry_point(
+                shifted_center, oriented_axis, vertebra_label
+            )
+            if shifted_entry is None:
+                # No posterior cortex under this shift; try the next one
+                # rather than assuming farther shifts fare no better.
+                continue
             shifted_target = self._find_best_target(
                 shifted_entry,
                 oriented_axis,
@@ -519,8 +532,6 @@ class AutoScrewPlanner:
             if key < best_key:
                 best_key = key
                 best = (shifted_entry, shifted_target, float(shift))
-                if best_key == (0.0, 0.0):
-                    break
         return best
 
     def _medial_breach_key(
