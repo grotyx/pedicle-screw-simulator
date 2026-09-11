@@ -177,7 +177,7 @@ A candidate is discarded as unreachable when the head still has the same vertebr
 
 Once the head is seated, length is the longest catalogue length whose tip still keeps the configured Anterior margin (4.0 mm by default) of bone ahead of it, measured from the tip along the screw's own axis to the anterior vertebral-body cortex — the margin the way a surgeon states it, not clearance measured all around the distal cylinder. Only the longest feasible length on each trajectory is kept, because scoring a shorter screw on the same trajectory would let the density objective reward it for staying inside dense pedicle bone; the planner's score, including the Length weight (5.6), then chooses between trajectories, not between lengths on one trajectory.
 
-The **Legacy** planner and the automatic per-side legacy fallback (5.6) re-seat the head on the dorsal cortex the same way and extend the tip to the same Anterior margin, but without the 15 mm dorsal-approach test — and they keep the re-seated head only when the screw breaches no more — medially or in total — than it did with the head where it was; length is never bought at the cost of safety. **Cortical bone trajectory (CBT)** mode is unaffected: it keeps its own entry landmark (5.7) and selects candidates with its own full-length feasibility test.
+The **Legacy** planner and the automatic per-side legacy fallback (5.6) move the head and tip only after their own search has chosen and validated a trajectory (entry, target and diameter). They then use the first of three options that breaches no more than that validated screw. The first is the head re-seated on the dorsal cortex along the screw's own axis, considered only if it passes the same 15 mm dorsal-approach test, with the tip extended to the longest catalogue length that still keeps the Anterior margin ahead of it. The second is the original head with the tip extended the same way. The third is the validated screw unchanged. "No more" means less medial breach than the unchanged screw, or the same medial breach and no more breach in total. The unchanged screw always qualifies, so a legacy screw is never made less safe to make it longer or to move its head. **Cortical bone trajectory (CBT)** mode is unaffected: it keeps its own entry landmark (5.7) and selects candidates with its own full-length feasibility test.
 
 On the project's sample study, with the refined mask and default settings, this moved screw count from 12 to 13 (S1-left is now planned), legacy fallbacks from 1 to 0, grades from A 10 / B 2 to A 13, the L5-right medial breach from 1.41 mm to 0 everywhere, and head burial from 5–21 mm to 0–0.2 mm. Lengths (left / right) became L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm, where most sides had been 25 mm before (L1, L2, and L4 on the left among them).
 
@@ -288,7 +288,7 @@ Loaded volumes are reoriented to LPS (identity direction) before display. An obl
 
 Once a screw is graded against a segmentation, the **Selected Screw** panel (Body HU, Wall margin, Facet, Heary rows) and the CSV/JSON export report a bundle of literature-based bone-quality and safety measurements:
 
-- **Trajectory HU (mean / min):** the mean and minimum Hounsfield Unit sampled along the screw's whole cylindrical trajectory, entry zone included — unlike the grade-related figures in 5.9, this sampling starts at the head.
+- **Trajectory HU (mean / min), exported as `trajectory_mean_hu` (CSV and JSON) and `trajectory_min_hu` (JSON `metrics` only):** the mean and minimum HU (Hounsfield units) sampled along the screw's whole cylindrical trajectory, entry zone included. This is a separate figure from the **Trajectory HU** row of the Selected Screw panel (CSV `mean_hu` / `min_hu`, see 5.9), which excludes the 3 mm entry zone.
 - **Pedicle HU:** mean HU restricted to trajectory samples within 10 mm of the pedicle isthmus centre. Auto-planned screws only — a manually placed screw has no isthmus centre to sample around.
 - **Vertebral body HU:** mean HU of an 8×8×6 mm ellipsoidal region of interest at the vertebral body centre, intersected with that vertebra's segmentation label. Auto-planned screws only, for the same reason.
 - **Trajectory/body HU ratio:** trajectory mean HU divided by vertebral body HU.
@@ -300,7 +300,7 @@ The panel and export also warn when a measurement crosses a literature threshold
 
 | Metric | Threshold | Warning | Reference |
 |---|---|---|---|
-| Trajectory HU | below 123 HU | Loosening risk | Yamamoto 2025; Dhar 2026 |
+| Trajectory HU (`trajectory_mean_hu`) | below 123 HU | Loosening risk | Yamamoto 2025; Dhar 2026 |
 | Vertebral body HU | below 132 HU | Osteoporosis | Sankar 2026 |
 | Vertebral body HU | below 141 HU (and not already osteoporotic) | Low bone density | Sankar 2026 |
 | Trajectory/body HU ratio | below 1.0 | Loosening risk | Yang 2026 |

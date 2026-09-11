@@ -171,15 +171,15 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 #### 진입점과 스크류 길이
 
-모든 후보의 head는 스크류 자체 축을 따라 뒤로 옮겨져, 그 중심선이 마지막으로 만나는 뼈 — 실제로 드릴이 시작될 후방 피질골(dorsal cortex) — 위에 놓입니다. traditional 궤적에서는 이것이 후면(posterior surface)의 lateral facet 영역, 즉 횡돌기(transverse process)와 상관절돌기(superior articular process)가 만나는 전형적인 지점에 놓입니다. 플래너는 이 지점을 segmentation mask 위에서 기하학적으로 찾는 것이며, **facet이나 transverse process를 해부학적 랜드마크로 인식하는 것이 아닙니다 — 이 지점을 신뢰하기 전에 반드시 MPR에서 entry를 확인하십시오.**
+모든 후보의 헤드는 스크류 자체 축을 따라 뒤로 옮겨져, 그 중심선이 마지막으로 만나는 뼈 — 실제로 드릴이 시작될 후방 피질골(dorsal cortex) — 위에 놓입니다. traditional 궤적에서는 이것이 후면(posterior surface)의 lateral facet 영역, 즉 횡돌기(transverse process)와 상관절돌기(superior articular process)가 만나는 전형적인 지점에 놓입니다. 플래너는 이 지점을 segmentation mask 위에서 기하학적으로 찾는 것이며, **facet이나 transverse process를 해부학적 랜드마크로 인식하는 것이 아닙니다 — 이 지점을 신뢰하기 전에 반드시 MPR에서 entry를 확인하십시오.**
 
-head 뒤쪽으로 스크류 축을 따라 15 mm 이내에 같은 척추의 뼈가 있으면(예: lamina 밑에 있고 그 사이에 공기층이 있는 경우) 도달 불가능한 것으로 보고 후보에서 제외합니다. 실제 드릴은 그 뼈를 먼저 통과해야 하기 때문입니다. 이것이 후방 접근로(dorsal approach) 규칙이며, **Optimizer**가 후보 head 위치에 적용하는 유일한 도달 가능성 검사입니다.
+헤드 뒤쪽으로 스크류 축을 따라 15 mm 이내에 같은 척추의 뼈가 있으면(예: lamina 밑에 있고 그 사이에 공기층이 있는 경우) 도달 불가능한 것으로 보고 후보에서 제외합니다. 실제 드릴은 그 뼈를 먼저 통과해야 하기 때문입니다. 이것이 후방 접근로(dorsal approach) 규칙이며, **Optimizer**가 후보 헤드 위치에 적용하는 유일한 도달 가능성 검사입니다.
 
-head가 정해지면, 길이는 팁이 설정된 Anterior margin(기본 4.0 mm)만큼의 뼈를 여전히 앞쪽에 남기는 가장 긴 카탈로그 길이입니다. 이 margin은 팁에서 anterior 척추체 피질골까지 스크류 자체 축을 따라 잰 거리이며, 원위 원통 전체를 둘러싼 여유거리가 아니라 술자가 말하는 그대로의 margin입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 남기는데, 그렇지 않으면 같은 궤적 위의 더 짧은 스크류가 밀도가 높은 척추경 뼈에 머무른다는 이유로 density 목적함수에서 더 좋은 점수를 받기 때문입니다. 플래너의 점수(Length 가중치 포함, 5.6절 참고)는 궤적 사이의 선택에만 쓰이며, 한 궤적 안에서 길이를 고르는 데는 쓰이지 않습니다.
+헤드가 정해지면, 길이는 팁이 설정된 Anterior margin(기본 4.0 mm)만큼의 뼈를 여전히 앞쪽에 남기는 가장 긴 카탈로그 길이입니다. 이 margin은 팁에서 anterior 척추체 피질골까지 스크류 자체 축을 따라 잰 거리이며, 원위 원통 전체를 둘러싼 여유거리가 아니라 술자가 말하는 그대로의 margin입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 남기는데, 그렇지 않으면 같은 궤적 위의 더 짧은 스크류가 밀도가 높은 척추경 뼈에 머무른다는 이유로 density 목적함수에서 더 좋은 점수를 받기 때문입니다. 플래너의 점수(Length 가중치 포함, 5.6절 참고)는 궤적 사이의 선택에만 쓰이며, 한 궤적 안에서 길이를 고르는 데는 쓰이지 않습니다.
 
-**Legacy** 플래너와 자동 per-side legacy fallback(5.6절)도 자신의 궤적을 고른 뒤 같은 방식으로 head를 후방 피질골에 재배치하고 같은 margin까지 tip을 늘리지만, 15 mm 후방 접근로 검사는 거치지 않습니다. 재배치한 head는 스크류의 천공이 원래 head 위치일 때보다 — medial이든 전체든 — 늘지 않을 때만 유지합니다. 길이를 안전과 맞바꾸는 일은 없습니다. **Cortical bone trajectory(CBT)** 모드는 영향받지 않습니다 — CBT는 자신의 진입 랜드마크(5.7절)를 그대로 유지하며, 자체 full-length 실현 가능성 검사로 후보를 선택합니다.
+**Legacy** 플래너와 자동 per-side legacy fallback(5.6절)은 자체 탐색으로 궤적(entry, target, 직경)을 고르고 검증한 다음에야 헤드와 팁을 옮깁니다. 이때 세 가지 후보를 차례로 검토해, 검증된 스크류보다 천공이 늘지 않는 첫 번째 후보를 사용합니다. 첫째는 헤드를 스크류 자체 축을 따라 후방 피질골(dorsal cortex)에 재배치하고 팁을 Anterior margin을 남기는 가장 긴 카탈로그 길이까지 늘린 스크류로, 재배치한 헤드가 Optimizer와 같은 15 mm 후방 접근로 검사를 통과할 때만 후보가 됩니다. 둘째는 원래 헤드에서 팁만 같은 방식으로 늘린 스크류이고, 마지막은 검증된 스크류 그대로입니다. 천공이 늘지 않는다는 것은 medial 천공이 검증된 스크류보다 작거나, 같으면서 전체 천공도 늘지 않는다는 뜻입니다. 검증된 스크류는 항상 이 조건을 만족하므로, 길이를 늘리거나 헤드를 옮기려고 legacy 스크류의 안전성을 낮추는 일은 없습니다. **Cortical bone trajectory(CBT)** 모드는 영향받지 않습니다. CBT는 자신의 진입 랜드마크(5.7절)를 그대로 유지하며, 자체 full-length 실현 가능성 검사로 후보를 선택합니다.
 
-정제된 mask와 기본 설정을 사용한 프로젝트 샘플 연구에서, 이 변경으로 스크류 수는 12개에서 13개로(S1-left가 새로 계획됨), legacy fallback은 1건에서 0건으로, 등급은 A 10 / B 2에서 A 13으로 바뀌었습니다. L5-right의 1.41 mm medial breach가 사라져 모든 스크류에서 0이 되었고, head 매몰은 5–21 mm에서 0–0.2 mm로 줄었습니다. 길이(좌/우)는 L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm가 되었으며, 이전에는 대부분의 side가 25 mm로 제한되어 있었습니다(좌측 L1, L2, L4 포함).
+정제된 mask와 기본 설정을 사용한 프로젝트 샘플 연구에서, 이 변경으로 스크류 수는 12개에서 13개로(S1-left가 새로 계획됨), legacy fallback은 1건에서 0건으로, 등급은 A 10 / B 2에서 A 13으로 바뀌었습니다. L5-right의 1.41 mm medial breach가 사라져 모든 스크류에서 0이 되었고, 헤드 매몰은 5–21 mm에서 0–0.2 mm로 줄었습니다. 길이(좌/우)는 L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm가 되었으며, 이전에는 대부분의 side가 25 mm로 제한되어 있었습니다(좌측 L1, L2, L4 포함).
 
 ### 5.5 계획 매개변수(Planning Parameters)
 
@@ -189,7 +189,7 @@ head가 정해지면, 길이는 팁이 설정된 Anterior margin(기본 4.0 mm)�
 |---|---:|---|
 | Pedicle fill | 0.80 | 측정된 척추경 협부(isthmus) 폭 대비 스크류 직경의 비율 |
 | Wall clearance | 0.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
-| Anterior margin | 4.0 mm | 팁 앞쪽에 남기는 뼈의 두께이며, 스크류 축을 따라 anterior 척추체 피질골까지 측정 |
+| Anterior margin | 4.0 mm | 팁에서 anterior 척추체 피질골까지 남겨 두는 거리(스크류 축을 따라 측정) |
 | Max convergence | 35° | 플래너가 사용할 수 있는 최대 medial 수렴각 |
 | HU threshold | 123 HU | 이완(loosening) 위험 경고가 표시되는 궤적 HU 기준값 |
 | Narrow pedicle (mm) | 5.0 mm | 이보다 좁으면 카탈로그의 가장 작은 스크류를 계획하고 해당 레벨을 narrow로 표시하는 척추경 폭 기준값 |
@@ -214,7 +214,7 @@ Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 
 
 기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Construct alignment**(기본값 30% / 0.3, 내부적으로는 `rod` 가중치)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추고 수렴하는 레벨들의 각도를 서로 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Construct alignment 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
 
-어떤 후보가 실현 가능하려면 설정된 최소 벽 여유거리를 유지해야 하고, 수렴각이 설정 범위 안에 있어야 하며, 팁 앞쪽에 설정된 Anterior margin만큼의 뼈를 스크류 자체 축을 따라 anterior 척추체 피질골까지 확보해야 합니다 — 원위부 shaft도 나머지 shaft와 마찬가지로 포함 조건과 설정된 Wall clearance만 만족하면 됩니다(5.4절 "진입점과 스크류 길이" 참고). 척추경 폭이 정상 범위이면 여기에 더해 피질골 천공이 전혀 없어야 하지만, "Narrow pedicle (mm)" 임계값(기본 5.0 mm)보다 좁은 narrow 척추경에서는 대신 최적화기가 카탈로그에서 가장 작은 직경(4.0 mm, **Selected Screw** 패널에 빨간색으로 표시)의 스크류를 배치하며, medial(척추관 쪽) 벽은 그대로 유지하면서 "Lateral breach cap (mm)" 한도(기본 2.0 mm)까지 lateral(in-out-in) 천공을 허용합니다 — 두 스핀박스는 모두 Planning parameters의 Wall clearance 옆에 있습니다. head 자체는 스크류 축을 따라 후방 피질골(dorsal cortex)에 배치되며(5.4절 참고), 그 축을 따라 뒤쪽 15 mm 이내에 같은 척추의 뼈가 여전히 있으면 도달 불가능한 것으로 제외합니다. 실제 드릴이 그 뼈를 먼저 통과해야 하기 때문입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 순위 산정에 포함되므로, 위의 Length 가중치는 같은 궤적 위의 길이가 아니라 궤적들 사이를 비교합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. narrow 척추경의 경우 이 legacy 대체 경로도 해당 side를 포기하지 않습니다 — lateral shift 탐색이 찾아낸 것 중 medial 쪽으로 가장 덜 치우친 entry를 그대로 배치하며, 그 탐색 후에도 척추관 쪽 천공이 남아 있으면 조용히 받아들이거나 버리는 대신 스크류에 "Medial breach _x_.x mm — canal side" 경고를 표시합니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
+어떤 후보가 실현 가능하려면 설정된 최소 벽 여유거리를 유지해야 하고, 수렴각이 설정 범위 안에 있어야 하며, 팁 앞쪽에 설정된 Anterior margin만큼의 뼈를 스크류 자체 축을 따라 anterior 척추체 피질골까지 확보해야 합니다 — 원위부 shaft도 나머지 shaft와 마찬가지로 골내 포함(containment) 조건과 설정된 Wall clearance만 만족하면 됩니다(5.4절 "진입점과 스크류 길이" 참고). 척추경 폭이 정상 범위이면 여기에 더해 피질골 천공이 전혀 없어야 하지만, "Narrow pedicle (mm)" 임계값(기본 5.0 mm)보다 좁은 narrow 척추경에서는 대신 최적화기가 카탈로그에서 가장 작은 직경(4.0 mm, **Selected Screw** 패널에 빨간색으로 표시)의 스크류를 배치하며, medial(척추관 쪽) 벽은 그대로 유지하면서 "Lateral breach cap (mm)" 한도(기본 2.0 mm)까지 lateral(in-out-in) 천공을 허용합니다 — 두 스핀박스는 모두 Planning parameters의 Wall clearance 옆에 있습니다. 헤드 자체는 스크류 축을 따라 후방 피질골(dorsal cortex)에 배치되며(5.4절 참고), 그 축을 따라 뒤쪽 15 mm 이내에 같은 척추의 뼈가 여전히 있으면 도달 불가능한 것으로 제외합니다. 실제 드릴이 그 뼈를 먼저 통과해야 하기 때문입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 순위 산정에 포함되므로, 위의 Length 가중치는 같은 궤적 위의 길이가 아니라 궤적들 사이를 비교합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. narrow 척추경의 경우 이 legacy 대체 경로도 해당 side를 포기하지 않습니다 — lateral shift 탐색이 찾아낸 것 중 medial 쪽으로 가장 덜 치우친 entry를 그대로 배치하며, 그 탐색 후에도 척추관 쪽 천공이 남아 있으면 조용히 받아들이거나 버리는 대신 스크류에 "Medial breach _x_.x mm — canal side" 경고를 표시합니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
 
 같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이고 이웃 레벨의 수렴각이 서로 맞도록 조정합니다 — 이는 로드를 얼마나 구부리고 비틀어야 하는지를 대신 나타내는 값입니다. 이때 Construct alignment 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`, `convergence_deviation_deg`가 함께 기록됩니다. Legacy 방식은 스크류를 각각 따로 배치하므로 조화시킬 대상이 없습니다 — 이 경우 상태 줄에는 대신 "Construct alignment needs Optimizer mode"가 표시됩니다.
 
@@ -263,7 +263,7 @@ Oblique 단면은 고정되어 있지 않습니다. 스크류 정렬 검토를 �
 
 Screw MPR이 활성화되어 있는 동안 3D 화면은 이 모드에서는 어느 창에도 나오지 않는 표준 axial/sagittal/coronal plane 표시를 세 개의 스크류 정렬 plane으로 대체합니다. 각 plane은 스크류를 중심으로 한 80 mm 정사각형으로 그려지며, 그것을 보여주는 창의 머리글 색과 같은 색으로 표시됩니다: Oblique Axial은 axial 창의 색, Oblique Sagittal은 sagittal 창의 색, Cross-section은 coronal 창의 색입니다.
 
-CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다. 뒤에서 바라볼 때 절단면(cut face)은 Cross-section 창에 표시되는 단면과 같습니다. 절단면은 **Position**을 entry에서 tip 방향으로 옮길 때(또는 Cross-section 창에서 마우스 휠을 돌려도 1 mm씩) 함께 이동하며, 3D의 plane들은 회전, 옆으로의 오프셋, 스크류 수정 등 창을 움직이는 모든 조작을 따라갑니다. 스크류 자체는 절대 잘리지 않습니다. Screw MPR이 열려 있는 동안 다시 만들어진 척추 메시(예: segmentation을 다시 실행한 경우)도 같은 평면에서 잘립니다.
+CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다. 뒤에서 바라볼 때 절단면(cut face)은 Cross-section 창에 표시되는 단면과 같습니다. 절단면은 **Position**을 entry에서 tip 방향으로 옮길 때(Cross-section 창에서 마우스 휠을 한 칸 돌릴 때마다 1 mm씩) 함께 이동하며, 3D의 plane들은 회전, 옆으로의 오프셋, 스크류 수정 등 창을 움직이는 모든 조작을 따라갑니다. 스크류 자체는 절대 잘리지 않습니다. Screw MPR이 열려 있는 동안 다시 만들어진 척추 메시(예: segmentation을 다시 실행한 경우)도 같은 평면에서 잘립니다.
 
 **Planes On / Off**(8절)는 현재 표시 중인 plane 세트가 표준이든 스크류 정렬이든 그대로 표시하거나 숨깁니다. **Std MPR**은 절단을 없애고 표준 plane으로 되돌립니다.
 
@@ -278,7 +278,7 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 - **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급입니다. 등급 계산에는 HU가 전혀 사용되지 않으며, 함께 표시되는 궤적의 평균·최소 HU는 참고용 정보일 뿐입니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
 - **Pedicle(척추경):** 측정된 척추경 협부(isthmus) 폭입니다. 해당 레벨이 "Narrow pedicle" 임계값보다 좁으면 빨간색으로 표시되며, 이는 플래너가 카탈로그에서 가장 작은 직경을 사용하고 medial 벽을 보호하기 위해 lateral(in-out-in) 천공 허용치를 제한했다는 뜻입니다. 폭 뒤에 `?`가 붙고 행에 "width not trusted"라고 표시되면서 같은 빨간색이 나타나는 경우는, 분석기가 그 측정값 자체를 신뢰할 수 없다고 판단한 것입니다(해당 레벨의 타당 범위를 위아래 어느 쪽으로든 벗어난 경우). 두 경우 모두 narrow 정책이 적용되지만, 신뢰할 수 있는 폭만 임상 수치로 인용됩니다.
 
-**진입부 피질골.** 등급 산정은 head가 아니라, 스크류의 축이 척추에 처음 들어가는 지점에서 3 mm 지난 곳부터 시작합니다. 후방 피질골(dorsal cortex)에 배치된 head(5.4절)는 뼈에 들어가는 표면에 걸쳐 있으므로, head를 기준으로 등급을 매기면 척추경에 도달하기도 전에 모든 스크류가 최대 자기 반경만큼의 breach로 읽히게 됩니다 — 프로젝트 샘플 연구에서 재배치된 12개 스크류 중 11개가 진입부 피질골만으로 B 또는 C 등급을 받았습니다. Gertzbein-Robbins는 척추경 벽을 평가하는 등급이며 진입부 피질골을 평가하는 것이 아니므로, 이 3 mm 진입 구간은 검사에서 제외됩니다. 이 구간은 head가 아니라 축이 실제로 뼈에 들어가는 지점을 기준으로 측정됩니다 — 뼈 밖으로 나와 있는 head는 축이 척추에 들어가기 전의 공중 구간까지 건너뛰게 되고, 뼈에 묻힌 head는 medial breach가 실제로 문제가 되는 협부에 한참 못 미치는 처음 3 mm만 관대하게 처리됩니다. 축이 척추 안으로 전혀 들어가지 않는 스크류는 head를 기준으로 등급이 매겨지므로, 그 자체로 breach로 읽힙니다. 같은 3 mm는 등급 산정에서 나오는 모든 수치 — 등급 자체, breach distance와 방향 구분, Wall margin, Trajectory HU 행의 평균/최소 HU(CSV `mean_hu` / `min_hu`) — 에서 동일하게 제외됩니다. 이는 등급이 매겨지는 모든 스크류에 적용됩니다: Optimizer와 Legacy 플래너의 자동 제안, CBT 스크류에 표시되는 등급, 수동으로 배치한 스크류, 드래그나 다른 방식으로 수정한 스크류, segmentation 이후나 계획 불러오기 시 다시 등급이 매겨지는 스크류 — 그러므로 계획된 스크류를 드래그한다고 해서 처음 계획했을 때보다 더 엄격한 규칙으로 다시 등급이 매겨지지 않습니다. 한 가지 결과로, 예전 빌드가 저장한 계획을 지금 다시 등급 매기면(이미 segmentation이 있는 상태에서 불러올 때, 또는 segmentation을 다시 실행한 뒤) 진입부 피질골이 더 이상 채점되지 않으므로 더 좋은 등급이 나올 수 있습니다(9절도 참고).
+**진입부 피질골.** 등급 산정은 헤드가 아니라, 스크류의 축이 척추에 처음 들어가는 지점에서 3 mm 지난 곳부터 시작합니다. 후방 피질골(dorsal cortex)에 배치된 헤드(5.4절)는 뼈에 들어가는 표면에 걸쳐 있으므로, 헤드를 기준으로 등급을 매기면 척추경에 도달하기도 전에 모든 스크류가 최대 자기 반경만큼의 breach로 읽히게 됩니다 — 프로젝트 샘플 연구에서 재배치된 12개 스크류 중 11개가 진입부 피질골만으로 B 또는 C 등급을 받았습니다. Gertzbein-Robbins는 척추경 벽을 평가하는 등급이며 진입부 피질골을 평가하는 것이 아니므로, 이 3 mm 진입 구간은 검사에서 제외됩니다. 이 구간은 헤드가 아니라 축이 실제로 뼈에 들어가는 지점을 기준으로 측정됩니다 — 뼈 밖으로 나와 있는 헤드는 축이 척추에 들어가기 전의 공중 구간까지 건너뛰게 되고, 뼈에 묻힌 헤드는 medial breach가 실제로 문제가 되는 협부에 한참 못 미치는 처음 3 mm만 관대하게 처리됩니다. 축이 척추 안으로 전혀 들어가지 않는 스크류는 헤드를 기준으로 등급이 매겨지므로, 그 자체로 breach로 읽힙니다. 같은 3 mm는 등급 산정에서 나오는 모든 수치 — 등급 자체, breach distance와 방향 구분, Wall margin, Trajectory HU 행의 평균/최소 HU(CSV `mean_hu` / `min_hu`) — 에서 동일하게 제외됩니다. 이는 등급이 매겨지는 모든 스크류에 적용됩니다: Optimizer와 Legacy 플래너의 자동 제안, CBT 스크류에 표시되는 등급, 수동으로 배치한 스크류, 드래그나 다른 방식으로 수정한 스크류, segmentation 이후나 계획 불러오기 시 다시 등급이 매겨지는 스크류 — 그러므로 계획된 스크류를 드래그한다고 해서 처음 계획했을 때보다 더 엄격한 규칙으로 다시 등급이 매겨지지 않습니다. 한 가지 결과로, 예전 빌드가 저장한 계획을 지금 다시 등급 매기면(이미 segmentation이 있는 상태에서 불러올 때, 또는 segmentation을 다시 실행한 뒤) 진입부 피질골이 더 이상 채점되지 않으므로 더 좋은 등급이 나올 수 있습니다(9절도 참고).
 
 자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하로 유지하고, 팁을 스크류 자체 축을 따라 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. Wall clearance의 기본값은 이제 0 mm이며, 위에서 설명한 무천공(zero-breach) 요건보다 더 넉넉한 여유를 두고 싶다면 Planning parameters에서 값을 올리면 됩니다. 예전 빌드가 저장한 1.0 mm는 사용자가 고른 값이 아니라 당시 기본값이므로 최초 1회에 한해 0 mm로 이관되며 상태 표시줄에 안내가 나옵니다. 그 밖의 저장값(0.5 mm, 1.5 mm 등)과 이관 이후 사용자가 직접 지정한 1.0 mm는 그대로 존중되어 해당 스핀박스에 계속 표시됩니다. "Parallel to upper endplate" 체크박스와 그 허용오차 스핀박스(endplate band, 기본 10°)는 스크류 크기와 별개로 궤적을 수평 대신 상위 종판(upper endplate)에 맞춰 정렬하며, 두 항목 모두 Planning parameters의 크기 관련 필드 옆에 있습니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
 
@@ -288,7 +288,7 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 
 스크류가 segmentation을 기준으로 등급이 매겨지면, **Selected Screw** 패널(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
 
-- **Trajectory HU(평균/최소):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 Hounsfield Unit의 평균값과 최소값이며, head부터 측정한다는 점에서 5.9절의 등급 관련 수치와 다릅니다.
+- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값입니다. 이는 3 mm 진입 구간을 제외하는 Selected Screw 패널의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
 - **Pedicle HU:** 척추경 협부(isthmus) 중심에서 10 mm 이내에 있는 궤적 샘플만으로 계산한 평균 HU입니다. 자동 계획된 스크류에서만 제공됩니다 — 수동 스크류는 기준이 될 isthmus 중심이 없기 때문입니다.
 - **Vertebral body HU(척추체 HU):** 척추체 중심에 위치한 8×8×6 mm 타원체 관심영역을 해당 척추의 segmentation label과 교차시켜 계산한 평균 HU입니다. 같은 이유로 자동 계획된 스크류에서만 제공됩니다.
 - **Trajectory/body HU 비율:** 궤적 평균 HU를 척추체 HU로 나눈 값입니다.
@@ -300,7 +300,7 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 
 | 지표 | 기준값 | 경고 | 참고문헌 |
 |---|---|---|---|
-| Trajectory HU | 123 HU 미만 | 이완(loosening) 위험 | Yamamoto 2025; Dhar 2026 |
+| Trajectory HU (`trajectory_mean_hu`) | 123 HU 미만 | 이완(loosening) 위험 | Yamamoto 2025; Dhar 2026 |
 | Vertebral body HU | 132 HU 미만 | 골다공증 | Sankar 2026 |
 | Vertebral body HU | 141 HU 미만(골다공증에 해당하지 않는 경우) | 저골밀도 | Sankar 2026 |
 | Trajectory/body HU 비율 | 1.0 미만 | 이완 위험 | Yang 2026 |

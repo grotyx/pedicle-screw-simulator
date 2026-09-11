@@ -20,13 +20,13 @@ from the head.
 
 ### Added
 
-- A workflow bar above the MPR/3D views reading "① Open DICOM → ② Segment →
-  ③ Plan Screws". Each step runs the existing action it names. A finished
-  step shows a check mark; the next step is highlighted even while disabled,
-  and a disabled step's tooltip says what unlocks it. Step 2 needs a real
-  TotalSegmentator mask to count as done (a threshold fallback does not);
-  step 3 needs automatically planned screws, and deleting them reopens it.
-  Loading a new study resets the bar.
+- A workflow bar above the MPR/3D views reading
+  "① Open DICOM → ② Segment → ③ Plan Screws". Each step runs the existing
+  action it names. A finished step shows a check mark; the next step is
+  highlighted even while disabled, and a disabled step's tooltip says what
+  unlocks it. Step 2 needs a real TotalSegmentator mask to count as done
+  (a threshold fallback does not); step 3 needs automatically planned
+  screws, and deleting them reopens it. Loading a new study resets the bar.
 - Screw MPR now has a 3D counterpart: the 3D view shows the three
   screw-aligned planes, each an 80 mm square coloured like the pane header
   that displays it, in place of the standard axial/sagittal/coronal
@@ -54,11 +54,15 @@ from the head.
   containment and the configured Wall clearance, like the rest of the shaft.
   Only the longest feasible length per trajectory is ranked, so the Length
   weight compares trajectories rather than lengths on one trajectory.
-- The Legacy planner and the automatic per-side legacy fallback re-seat the
-  head on the dorsal cortex and extend it to the same margin, but without
-  the 15 mm dorsal-approach test, and keep the re-seated head only when it
-  breaches no more -- medially or in total -- than the head it replaced.
-  Cortical bone trajectory (CBT) selection is unchanged.
+- The Legacy planner and the automatic per-side legacy fallback validate a
+  trajectory first, then try, in order: the head re-seated on the dorsal
+  cortex (only if it passes the same 15 mm dorsal-approach test) with the
+  tip run out to the Anterior margin; the original head with the tip run
+  out the same way; the validated screw unchanged. The first option that
+  breaches no more than the validated screw, medially first and then in
+  total, is used, so a legacy screw is never made less safe to make it
+  longer or to move its head. Cortical bone trajectory (CBT) selection is
+  unchanged.
 - `Planes On / Off` now applies to whichever plane set is currently shown,
   standard or screw-aligned.
 - A plan re-graded on load or after re-running segmentation may show better

@@ -27,11 +27,11 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
   TotalSegmentator mask가 있어야 완료로 인정됩니다(threshold fallback은
   인정하지 않음). ③ 단계는 자동으로 계획된 나사가 있어야 완료로 인정되며,
   이를 지우면 다시 열립니다. 새 study를 불러오면 표시줄이 초기화됩니다.
-- Screw MPR에 이제 3D 대응 화면이 있습니다. 3D 화면은 표준 axial/sagittal/
-  coronal 표시 대신, 나사 축에 정렬된 세 plane을 보여줍니다. 각 plane은
-  이를 보여주는 창의 머리글과 같은 색의 80 mm 정사각형입니다. CT volume과
-  척추 메시는 cross-section에서 잘려 tip 쪽만 남으며, 절단면은 Position을
-  따라 이동합니다. 나사 자체는 절대 잘리지 않습니다.
+- Screw MPR에 이제 3D 대응 화면이 있습니다. 3D 화면은 표준
+  axial/sagittal/coronal 표시 대신, 나사 축에 정렬된 세 plane을 보여줍니다.
+  각 plane은 이를 보여주는 창의 머리글과 같은 색의 80 mm 정사각형입니다.
+  CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남으며, 절단면은
+  Position을 따라 이동합니다. 나사 자체는 절대 잘리지 않습니다.
 
 ### 변경
 
@@ -54,11 +54,14 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
   설정된 Wall clearance만 만족하면 됩니다. 각 궤적에서는 실현 가능한 가장
   긴 길이만 순위 산정에 포함되므로, Length 가중치는 한 궤적 위의 길이가
   아니라 궤적들 사이를 비교합니다.
-- Legacy 플래너와 자동 per-side legacy fallback도 head를 후방 피질골에
-  재배치하고 같은 margin까지 tip을 늘리지만, 15 mm 후방 접근로 검사는
-  거치지 않습니다. 재배치한 head는 나사의 천공이 원래 head 위치일 때보다
-  — medial이든 전체든 — 늘지 않을 때만 유지합니다. Cortical bone
-  trajectory(CBT) 선택 방식은 변경되지 않았습니다.
+- Legacy 플래너와 자동 per-side legacy fallback은 먼저 궤적을 검증한 뒤,
+  다음 순서로 시도합니다: head를 후방 피질골에 재배치하고(같은 15 mm
+  후방 접근로 검사를 통과할 때만) tip을 Anterior margin까지 늘린 나사,
+  원래 head에서 tip만 같은 방식으로 늘린 나사, 검증된 나사 그대로. 이
+  중 검증된 나사보다 천공이 늘지 않는(medial 천공을 먼저 비교하고,
+  같으면 전체 천공을 비교) 첫 번째 나사를 사용하므로, 길이를 늘리거나
+  head를 옮기려고 legacy 나사의 안전성을 낮추는 일은 없습니다.
+  Cortical bone trajectory(CBT) 선택 방식은 변경되지 않았습니다.
 - `Planes On / Off`는 이제 표준이든 나사 정렬이든 현재 표시 중인 plane
   세트에 그대로 적용됩니다.
 - 불러올 때나 segmentation을 다시 실행한 뒤 다시 등급을 매긴 계획은 진입부
