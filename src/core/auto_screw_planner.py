@@ -36,7 +36,7 @@ from .pedicle_analyzer import (
 )
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg, endplate_angle_deg
-from .screw_grading import ScrewGrader, resample_mask_to_ct
+from .screw_grading import ENTRY_ZONE_MM, ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
     Candidate,
     RunProgress,
@@ -455,6 +455,13 @@ class AutoScrewPlanner:
                 f"{diameter:.1f} mm for cortical containment"
             )
 
+        # 6. Head on the dorsal cortex, tip at the anterior margin -- the same
+        #    rule the optimiser applies, so a fallback screw is not the short,
+        #    buried one the optimiser was changed to stop producing.
+        entry, target = self._seat_head_and_extend(
+            entry, target, diameter, vertebra.label, side
+        )
+
         planned = self._finalise_screw(
             vertebra,
             side,
@@ -470,6 +477,90 @@ class AutoScrewPlanner:
             width_uncertain=uncertain,
         )
         return planned, None
+
+    def _longest_length_from(
+        self,
+        head: np.ndarray,
+        direction: np.ndarray,
+        vertebra_label: int,
+    ) -> Optional[float]:
+        """The longest catalogue length from ``head`` that keeps the anterior margin.
+
+        Walks forward along ``direction`` to where the centreline leaves the
+        vertebra, takes off :attr:`PlannerConfig.anterior_margin_mm`, and returns
+        the longest :attr:`PlannerConfig.implant_lengths_mm` entry that still
+        fits -- or ``None`` when not even the shortest does.  Measured along the
+        screw's own axis: the old target search measured toward the vertebral
+        body centre instead, which is not the direction the screw goes.
+        """
+        step = self.TRAJECTORY_SAMPLE_STEP
+        steps = np.arange(step, self.MAX_BONE_CORRIDOR_SCAN + 1e-9, step)
+        points = head[None, :] + direction[None, :] * steps[:, None]
+        d_out, _ = self._grader.distances_at_points(points, int(vertebra_label))
+        outside = np.nonzero(d_out > 0.0)[0]
+        reach = float(steps[outside[0] - 1]) if outside.size and outside[0] > 0 else (
+            0.0 if outside.size else float(steps[-1])
+        )
+        available = reach - float(self.config.anterior_margin_mm)
+        fitting = [
+            float(length)
+            for length in self.config.implant_lengths_mm
+            if float(length) <= available + 1e-9
+        ]
+        return max(fitting) if fitting else None
+
+    def _seat_head_and_extend(
+        self,
+        entry: np.ndarray,
+        target: np.ndarray,
+        diameter: float,
+        vertebra_label: int,
+        side: str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Move the head out to the dorsal cortex and the tip up to the margin.
+
+        The legacy entry is found along the *pedicle axis* and backed 1 mm into
+        bone, and the chosen trajectory then leaves along a different
+        direction, so measured along the screw itself the head was buried and
+        the tip stopped short of the anterior margin.
+
+        Never trades safety for length: the re-seated screw is kept only if it
+        breaches no more -- medially or at all -- than the same trajectory with
+        its head left where it was.  Otherwise only the tip is extended, from
+        the original head.  A trajectory the catalogue cannot fit either way is
+        returned unchanged.
+        """
+        from .trajectory_optimizer import seat_on_cortex
+
+        entry = np.asarray(entry, dtype=np.float64)
+        target = np.asarray(target, dtype=np.float64)
+        axis = target - entry
+        norm = float(np.linalg.norm(axis))
+        if norm <= 1e-9:
+            return entry, target
+        direction = axis / norm
+
+        heads, _travel = seat_on_cortex(
+            self._grader, entry[None, :], direction[None, :], int(vertebra_label)
+        )
+        options = []
+        for head in (heads[0], entry):
+            length = self._longest_length_from(head, direction, vertebra_label)
+            if length is not None:
+                options.append((head, head + direction * length))
+        if not options:
+            return entry, target
+
+        def breach_key(pair):
+            return self._medial_breach_key(
+                pair[0], pair[1], diameter, vertebra_label, side
+            )
+
+        seated = options[0]
+        if len(options) == 1:
+            return seated
+        kept = options[1]
+        return seated if breach_key(seated) <= breach_key(kept) else kept
 
     def _least_medial_entry(
         self,
@@ -549,7 +640,8 @@ class AutoScrewPlanner:
         ranked as the worst possible rather than as a clean one.
         """
         result = self._grader.grade(
-            entry, target, diameter, label=int(vertebra_label), side=side
+            entry, target, diameter, label=int(vertebra_label), side=side,
+            entry_zone_mm=ENTRY_ZONE_MM,
         )
         if result is None:
             margin = float(self._grader.crop_margin_mm)
@@ -625,8 +717,11 @@ class AutoScrewPlanner:
         length = float(np.linalg.norm(target - entry))
 
         # 6. Grade the accepted trajectory once: containment plus HU statistics.
+        #    From the cortex the head sits on, like every whole-screw grade, so
+        #    this and the screw tool's re-grade of the same screw agree.
         result = self._grader.grade(
-            entry, target, diameter, label=vertebra.label, side=side
+            entry, target, diameter, label=vertebra.label, side=side,
+            entry_zone_mm=ENTRY_ZONE_MM,
         )
         if result is None:
             grade = "E"
@@ -1254,7 +1349,9 @@ class AutoScrewPlanner:
         """
         if label is None:
             label = self._grader.detect_label(entry, target)
-        result = self._grader.grade(entry, target, diameter, label=label)
+        result = self._grader.grade(
+            entry, target, diameter, label=label, entry_zone_mm=ENTRY_ZONE_MM
+        )
         if result is None or result.mean_hu is None:
             return 0.0, 0.0, []
         return result.mean_hu, result.min_hu, []
@@ -1279,7 +1376,10 @@ class AutoScrewPlanner:
         breach_distance_mm : float
             Maximum distance of the screw envelope outside the vertebra mask.
         """
-        result = self._grader.grade(entry, target, diameter, label=int(vertebra_label))
+        result = self._grader.grade(
+            entry, target, diameter, label=int(vertebra_label),
+            entry_zone_mm=ENTRY_ZONE_MM,
+        )
         if result is None:
             return "E", float(self._grader.crop_margin_mm)
         return result.grade, result.breach_mm

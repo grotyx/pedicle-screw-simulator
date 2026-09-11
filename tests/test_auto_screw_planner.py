@@ -1984,3 +1984,94 @@ class TestEndplateOptionAndMetric:
 
         assert result is not None
         assert not any("Upper endplate fit is rough" in w for w in result.warnings)
+
+
+class TestHeadOnTheCortex:
+    """Both back-ends put the head on the dorsal cortex and the tip at the margin."""
+
+    @staticmethod
+    def _walk_inside(grader, start, direction, label, step=0.25, limit=80.0):
+        travelled = 0.0
+        while travelled < limit:
+            d_out, _ = grader.distances_at_points(
+                (start + direction * (travelled + step))[None, :], label
+            )
+            if d_out[0] > 0.0:
+                return travelled
+            travelled += step
+        return limit
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_the_head_sits_on_the_dorsal_cortex(self, mode):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+        screw = planner.plan_all([_make_analysis()], sides="left")[0]
+        direction = (screw.target_lps - screw.entry_lps) / screw.length_mm
+
+        behind = self._walk_inside(
+            planner._grader, np.asarray(screw.entry_lps), -direction, 27
+        )
+        assert behind <= 0.5
+
+    def test_the_legacy_screw_reaches_the_anterior_margin(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        config = PlannerConfig(mode="legacy")
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=config)
+        screw = planner.plan_all([_make_analysis()], sides="left")[0]
+        direction = (screw.target_lps - screw.entry_lps) / screw.length_mm
+
+        ahead = self._walk_inside(
+            planner._grader, np.asarray(screw.target_lps), direction, 27
+        )
+        assert ahead >= config.anterior_margin_mm - 0.5
+        assert ahead - 5.0 < config.anterior_margin_mm
+
+    def test_re_seating_never_adds_a_medial_breach(self):
+        """Length is never bought with safety: the re-seat is kept only if no worse."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        entry = np.array([40.0, 40.0, 20.0])
+        target = np.array([36.0, 15.0, 20.0])
+
+        head, tip = planner._seat_head_and_extend(entry, target, 6.0, 27, "left")
+
+        before = planner._medial_breach_key(entry, target, 6.0, 27, "left")
+        after = planner._medial_breach_key(head, tip, 6.0, 27, "left")
+        assert after[0] <= before[0] + 1e-9
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_the_screw_tool_re_grades_a_planned_screw_to_the_same_grade(self, mode):
+        """Planner and screw tool grade from the cortex by the same rule.
+
+        Otherwise the first drag of a planned screw -- one frame, nothing moved
+        -- would re-grade it from its head, count the cortex it sits on as a
+        breach, and drop its grade.
+        """
+        from src.controllers.auto_placement_controller import planned_screw_to_screw
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+        from src.tools.screw_tool import ScrewTool
+        from tests.test_screw_tool import _VolumeManager
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+        planned = planner.plan_all([_make_analysis()], sides="left")[0]
+        tool = ScrewTool(_VolumeManager())
+        tool.set_grader(planner._grader)
+        screw = planned_screw_to_screw(planned)
+        tool.add_screw(screw)
+
+        tool.regrade_all()
+
+        regraded = tool.get_screws()[0]
+        assert regraded.grade == planned.gertzbein_grade
+        assert regraded.breach_distance == pytest.approx(planned.breach_mm, abs=0.3)
