@@ -290,13 +290,38 @@ class AutoPlacementController:
         # A new study's vertebrae are not the old study's: keeping the old
         # per-level analyses around would let a regrade measure a screw
         # against an endplate that belonged to a different patient.
-        self._window._tool_ctrl.screw_tool.set_analysis_by_level(None)
+        self._set_analysis_registry(None)
         if hasattr(self._window, 'auto_screw_status'):
             self._window.auto_screw_status.setText("No auto plan")
 
     # ------------------------------------------------------------------
     # Private: planning callbacks
     # ------------------------------------------------------------------
+
+    def _set_analysis_registry(self, analyses) -> None:
+        """Hand the screw tool this run's analyses and the config behind them.
+
+        The tool re-measures an edited screw, and two of the things it
+        re-measures are thresholds rather than geometry: the cortical clearance
+        that decides whether a thin wall is worth a note, and the width below
+        which a pedicle counts as narrow.  Both live in the active
+        :class:`PlannerConfig`, so they travel with the analyses -- otherwise a
+        drag would be judged by the tool's defaults and the edit itself would
+        look like it had changed the screw.
+
+        Guarded the way the neighbouring ``auto_screw_status`` accesses are:
+        the real :class:`MainWindow` always has a tool controller, but a
+        lightweight stand-in need not, and a missing one must not cost a status
+        update.
+        """
+        if not hasattr(self._window, "_tool_ctrl"):
+            return
+        screw_tool = self._window._tool_ctrl.screw_tool
+        screw_tool.set_analysis_by_level(analyses)
+        config_of = getattr(self._window, "planner_config", None)
+        config = config_of() if callable(config_of) else PlannerConfig()
+        screw_tool.set_wall_clearance_mm(config.wall_clearance_mm)
+        screw_tool.set_narrow_pedicle_mm(config.narrow_pedicle_mm)
 
     def _close_progress_dialog(self):
         """Close the planning dialog without re-entering the cancel path.
@@ -373,7 +398,7 @@ class AutoPlacementController:
         self._last_planned = list(planned)
         # Before the empty-plan early return: a run that placed nothing still
         # measured the endplates the user's own screws are graded against.
-        self._window._tool_ctrl.screw_tool.set_analysis_by_level(
+        self._set_analysis_registry(
             {
                 int(analysis.vertebra.label): analysis
                 for analysis in (getattr(thread, "analyses", None) or ())

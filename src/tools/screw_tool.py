@@ -15,7 +15,6 @@ from src.models.screw import Screw
 
 from ..core.screw_geometry import endplate_angle_deg
 from ..utils.constants import (
-    CORTICAL_WALL_CLEARANCE_MM,
     DEFAULT_SCREW_DIAMETER,
     DEFAULT_SCREW_LENGTH,
     GRADE_A_DESCRIPTION,
@@ -71,6 +70,15 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     # outside the mask must not delete a planner measurement this tool may have
     # no way to reproduce (see _clear_grading).
     "endplate_angle_deg",
+    # The isthmus width of the level the screw is *now* in, and the verdict
+    # drawn from it.  Both need the analysis registry, and both are read by
+    # something the surgeon looks at rather than reads -- the plan table's
+    # Pedicle column, the cockpit's Pedicle row and the colour of the screw in
+    # 3D and on the MPR planes -- so a screw dragged from a narrow level to a
+    # wide one has to stop being red.  Also kept out of
+    # _GRADER_MEASURED_METRIC_KEYS, for the same reason as the endplate angle.
+    "pedicle_width_mm",
+    "narrow_pedicle",
 )
 
 #: The metrics this tool measures from the trajectory in front of it, and so
@@ -98,6 +106,19 @@ _GRADER_MEASURED_METRIC_KEYS = (
 #: (:meth:`src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`), so a
 #: manual and an auto screw are flagged at the same convergence.
 _HIGH_CONVERGENCE_ANGLE_DEG = 30.0
+
+#: Thresholds an untouched tool judges a screw against.  They mirror
+#: :class:`~src.core.planner_config.PlannerConfig`'s own defaults rather than
+#: importing it: constructing a ``PlannerConfig`` pulls in the optimiser (for
+#: its default weights), which this module has no other reason to load.
+#: ``tests/test_screw_tool.py`` asserts the two stay equal.  Whoever owns the
+#: active config -- the planning controller after a run, the main window
+#: whenever the Planning-parameters panel changes -- pushes the real values in
+#: through :meth:`ScrewTool.set_wall_clearance_mm` and
+#: :meth:`ScrewTool.set_narrow_pedicle_mm`, so a manual edit and an auto screw
+#: are never judged against different numbers.
+DEFAULT_WALL_CLEARANCE_MM = 0.0
+DEFAULT_NARROW_PEDICLE_MM = 5.0
 
 if TYPE_CHECKING:
     from ..core.screw_grading import GradeResult, ScrewGrader
@@ -145,6 +166,13 @@ class ScrewTool:
         # from them, so any object with that attribute works.
         self._analysis_by_level: Dict[int, Any] = {}
 
+        # Thresholds the active PlannerConfig owns, pushed in by whoever holds
+        # it.  Without them a manual edit and an auto screw would be judged
+        # against different numbers -- the drag itself would then appear to
+        # have changed the screw.
+        self._wall_clearance_mm = float(DEFAULT_WALL_CLEARANCE_MM)
+        self._narrow_pedicle_mm = float(DEFAULT_NARROW_PEDICLE_MM)
+
         # Callbacks
         self._on_screw_placed: Optional[Callable[[Screw], None]] = None
         self._on_state_changed: Optional[Callable[[str], None]] = None
@@ -179,6 +207,28 @@ class ScrewTool:
         """
         self._analysis_by_level = dict(analyses or {})
 
+    def set_wall_clearance_mm(self, value: float) -> None:
+        """Adopt the active plan's cortical clearance for the manual note.
+
+        The planner only writes ``"Cortical clearance ..."`` when a screw's
+        wall falls below :attr:`PlannerConfig.wall_clearance_mm`; at the
+        shipped default of 0 mm it never does.  Reading a fixed constant here
+        instead made the *first drag* of an auto screw invent a note the plan
+        never carried -- a warning that appeared because the user nudged the
+        screw, not because anything about it changed.
+        """
+        self._wall_clearance_mm = max(0.0, float(value))
+
+    def set_narrow_pedicle_mm(self, value: float) -> None:
+        """Adopt the active plan's narrow-pedicle threshold.
+
+        Used when a re-grade re-reads the width of the level the screw is now
+        in; the verdict has to be the one the planner would have reached for
+        that width, or a drag between levels could recolour a screw by a rule
+        the plan was never made under.
+        """
+        self._narrow_pedicle_mm = float(value)
+
     def _analysis_for(self, label: int) -> Optional[Any]:
         """The analysis for one mask label, from this registry or the grader's."""
         analysis = self._analysis_by_level.get(int(label))
@@ -196,6 +246,36 @@ class ScrewTool:
         if normal is None:
             return None
         return endplate_angle_deg(screw.entry_point, screw.target_point, normal)
+
+    def _pedicle_width(
+        self, screw: Screw, label: int
+    ) -> Tuple[Optional[float], Optional[bool]]:
+        """This side's isthmus width at ``label``, and whether it counts narrow.
+
+        ``(None, None)`` -- "not measured" -- whenever the level is not in the
+        registry or the screw has no side, so :meth:`_merge_metrics` keeps
+        whatever the planner recorded.  A drag *between* levels is the case
+        that matters: without this the screw would keep the width of the
+        vertebra it left, and stay red for a pedicle it is no longer in.
+
+        The verdict mirrors
+        :meth:`src.core.auto_screw_planner.AutoScrewPlanner._is_narrow_side`
+        exactly, threshold included, or an edited screw and a planned one would
+        disagree about the same pedicle.
+        """
+        side = self._screw_side(screw)
+        analysis = self._analysis_for(label)
+        if side is None or analysis is None:
+            return None, None
+        width = getattr(analysis, f"{side}_pedicle_width", None)
+        if not isinstance(width, (int, float)) or isinstance(width, bool):
+            return None, None
+        flags = getattr(analysis, "width_flags", None)
+        implausible = (
+            isinstance(flags, Mapping) and flags.get(side) == "implausible"
+        )
+        width = float(width)
+        return width, bool(width < self._narrow_pedicle_mm or implausible)
 
     def set_screw_parameters(
         self,
@@ -403,15 +483,15 @@ class ScrewTool:
             screw.warnings.append(
                 f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
             )
-        # ScrewTool holds no PlannerConfig, so it reads the raw constant that
-        # PlannerConfig.wall_clearance_mm defaults to. Once planner configs are
-        # user-editable this must follow the active config instead (or take an
-        # optional threshold from whoever installs the grader), or a manual and
-        # an auto screw will be judged against different clearances.
-        if 0 < result.min_wall_mm < CORTICAL_WALL_CLEARANCE_MM:
+        # The active plan's clearance, not a fixed constant: the planner only
+        # writes this note below its own `wall_clearance_mm`, so at the shipped
+        # default of 0 mm there is no threshold to fall below and no note to
+        # write.  Judging a dragged screw by a stricter number than the one
+        # that planned it made the drag itself look like the problem.
+        if 0 < result.min_wall_mm < self._wall_clearance_mm:
             screw.warnings.append(
                 f"Cortical clearance {result.min_wall_mm:.1f} mm below "
-                f"{CORTICAL_WALL_CLEARANCE_MM:.0f} mm"
+                f"{self._wall_clearance_mm:.1f} mm"
             )
 
     @staticmethod
@@ -461,7 +541,10 @@ class ScrewTool:
         ``endplate_angle_deg`` needs the level's endplate plane, which arrives
         through :meth:`set_analysis_by_level`; without it the value is ``None``
         ("not measured") and :meth:`_merge_metrics` keeps whatever the planner
-        recorded.
+        recorded.  ``pedicle_width_mm`` / ``narrow_pedicle`` come from the same
+        registry and behave the same way, but for a louder reason: they decide
+        the colour of the screw, so a drag that moves it to another level has
+        to move the width with it.
         """
         from ..core.bone_quality import assess_bone_quality
         from ..core.breach_classification import facet_violation_grade, medial_breach_warning
@@ -492,6 +575,7 @@ class ScrewTool:
                 "medial_wall_mm": float(result.medial_wall_mm),
             }
 
+        pedicle_width, narrow = self._pedicle_width(screw, result.label)
         metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -500,6 +584,8 @@ class ScrewTool:
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
             "endplate_angle_deg": self._endplate_angle(screw, result.label),
+            "pedicle_width_mm": pedicle_width,
+            "narrow_pedicle": narrow,
             **directional,
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,

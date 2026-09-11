@@ -539,3 +539,107 @@ def test_inspector_alignment_row_defaults_to_a_dash(ui_main_window):
     window.update_selected_screw_inspector(-1, None, False)
 
     assert window.selected_screw_alignment.text() == "--"
+
+
+# ---------------------------------------------------------------------------
+# The cockpit survives a plan file it did not write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["n/a", "", None, True, [1.0]])
+def test_inspector_alignment_row_dashes_on_an_unreadable_value(ui_main_window, bad):
+    """A hand-edited plan JSON must not crash the inspector on selection."""
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.0,
+        metrics={"rod_misalignment_mm": bad, "convergence_deviation_deg": bad},
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert window.selected_screw_alignment.text() == "--"
+
+
+def test_inspector_alignment_row_keeps_the_half_it_can_read(ui_main_window):
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -45.0, 8.0),
+        diameter=6.0,
+        metrics={"rod_misalignment_mm": 1.24, "convergence_deviation_deg": "n/a"},
+    )
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.update_selected_screw_inspector(index, screw, False)
+
+    assert window.selected_screw_alignment.text() == "rod 1.2 mm"
+
+
+# ---------------------------------------------------------------------------
+# The narrow-pedicle colour follows the palette
+# ---------------------------------------------------------------------------
+
+
+def test_the_pedicle_row_is_repainted_when_the_theme_changes(ui_main_window):
+    """An inline colour is not in the stylesheet, so nothing else repaints it."""
+    from src.ui.styles import THEMES
+
+    window = ui_main_window
+    narrow = Screw(
+        entry_point=(0.0, 30.0, 0.0),
+        target_point=(0.0, -10.0, 0.0),
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+    index = window._tool_ctrl.add_existing_screw(narrow, select=True)
+    window.update_selected_screw_inspector(index, narrow, False)
+    assert THEMES["soft_light"]["danger"] in window.selected_screw_pedicle.styleSheet()
+
+    window.apply_theme("graphite_blue", persist=False)
+
+    assert THEMES["graphite_blue"]["danger"] in window.selected_screw_pedicle.styleSheet()
+
+
+def test_a_theme_change_does_not_colour_a_normal_pedicle(ui_main_window):
+    window = ui_main_window
+    plain = Screw(
+        entry_point=(0.0, 30.0, 0.0),
+        target_point=(0.0, -10.0, 0.0),
+        metrics={"pedicle_width_mm": 9.2},
+    )
+    index = window._tool_ctrl.add_existing_screw(plain, select=True)
+    window.update_selected_screw_inspector(index, plain, False)
+
+    window.apply_theme("graphite_blue", persist=False)
+
+    assert window.selected_screw_pedicle.styleSheet() == ""
+
+
+# ---------------------------------------------------------------------------
+# The screw tool is judged by the parameters the panel shows
+# ---------------------------------------------------------------------------
+
+
+def test_the_panel_parameters_reach_the_screw_tool(ui_main_window):
+    """A manual drag and an auto screw must meet the same thresholds."""
+    window = ui_main_window
+    tool = window._tool_ctrl.screw_tool
+
+    window.plan_wall_clearance_spin.setValue(1.5)
+    window.plan_narrow_pedicle_spin.setValue(6.5)
+
+    assert tool._wall_clearance_mm == pytest.approx(1.5)
+    assert tool._narrow_pedicle_mm == pytest.approx(6.5)
+
+
+def test_resetting_the_planner_defaults_resets_the_screw_tool(ui_main_window):
+    from src.core.planner_config import PlannerConfig
+
+    window = ui_main_window
+    window.plan_wall_clearance_spin.setValue(1.5)
+
+    window.reset_planner_settings()
+
+    assert window._tool_ctrl.screw_tool._wall_clearance_mm == pytest.approx(
+        PlannerConfig().wall_clearance_mm
+    )

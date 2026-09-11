@@ -2168,3 +2168,61 @@ def test_empty_pedicle_mask_is_reported_as_no_voxels(
     assert "pedicle model ran but found no pedicle voxels" in (
         window.seg_status_label.text()
     )
+
+
+def test_dragging_a_narrow_screw_into_a_wide_level_repaints_it(ui_main_window):
+    """The one visual cue for a narrow pedicle has to follow the drag.
+
+    End to end through the path an edit really takes: the tool re-grades, reads
+    the width of the level the screw is now in, and the tool controller redraws
+    the 3D actor from the refreshed bundle.
+    """
+    import numpy as np
+
+    from src.core.screw_grading import ScrewGrader
+    from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
+
+    class _Analysis:
+        """Duck-typed pedicle analysis: only the widths are read here."""
+
+        def __init__(self, width):
+            self.left_pedicle_width = width
+            self.right_pedicle_width = width
+            self.width_flags = {}
+            self.upper_endplate_normal = None
+
+    window = ui_main_window
+    # (z, y, x) at 1 mm with a zero origin: label 28 below z = 30 mm, 29 above.
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[20:30, 20:40, 20:40] = 28
+    arr[30:40, 20:40, 20:40] = 29
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+
+    tool = window._tool_ctrl.screw_tool
+    tool.set_grader(ScrewGrader(mask, ct))
+    tool.set_analysis_by_level({28: _Analysis(4.5), 29: _Analysis(9.2)})
+
+    narrow = Screw(
+        entry_point=(30.0, 38.0, 25.0),
+        target_point=(30.0, 22.0, 25.0),
+        diameter=5.0,
+        side="left",
+        vertebra_level="L2",
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+    index = window._tool_ctrl.add_existing_screw(narrow, select=True)
+    assert window.viewer_3d.screws[0].color == pytest.approx(
+        tuple(value / 255.0 for value in COLOR_SCREW_BREACH)
+    )
+
+    moved = tool.replace_screw(
+        index, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+    window._tool_ctrl.refresh_screw(index, moved)
+
+    assert moved.metrics["pedicle_width_mm"] == pytest.approx(9.2)
+    assert window.viewer_3d.screws[0].color == pytest.approx(
+        tuple(value / 255.0 for value in COLOR_SCREW)
+    )

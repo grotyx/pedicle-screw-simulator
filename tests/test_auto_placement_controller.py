@@ -160,12 +160,20 @@ class _DummyScrewTool:
     def __init__(self):
         self._screws = []
         self._analysis_by_level = {}
+        self._wall_clearance_mm = None
+        self._narrow_pedicle_mm = None
 
     def add_screw(self, screw):
         self._screws.append(screw)
 
     def set_analysis_by_level(self, analyses):
         self._analysis_by_level = dict(analyses or {})
+
+    def set_wall_clearance_mm(self, value):
+        self._wall_clearance_mm = float(value)
+
+    def set_narrow_pedicle_mm(self, value):
+        self._narrow_pedicle_mm = float(value)
 
     def get_screws(self):
         return list(self._screws)
@@ -1499,3 +1507,58 @@ def test_planning_thread_records_the_mode_it_ran_in():
 
     assert thread.planner_mode == "legacy"
     assert _thread_for().planner_mode == "optimizer"
+
+
+def test_a_finished_run_hands_its_thresholds_to_the_screw_tool(
+    controller_with_window,
+):
+    """A manual edit must be judged by the config that planned the screw.
+
+    Without this the tool falls back to its own defaults, and the first drag of
+    an auto screw can add a cortical-clearance note the plan never carried.
+    """
+    from src.core.planner_config import PlannerConfig
+
+    ctrl, window = controller_with_window
+    window.planner_config_value = PlannerConfig(
+        wall_clearance_mm=1.0, narrow_pedicle_mm=6.5
+    )
+
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
+
+    tool = window._tool_ctrl.screw_tool
+    assert tool._wall_clearance_mm == pytest.approx(1.0)
+    assert tool._narrow_pedicle_mm == pytest.approx(6.5)
+
+
+def test_reset_state_restores_the_panel_thresholds(controller_with_window):
+    """A new study has no plan yet, but the panel's numbers still apply."""
+    from src.core.planner_config import PlannerConfig
+
+    ctrl, window = controller_with_window
+    window.planner_config_value = PlannerConfig(wall_clearance_mm=2.0)
+
+    ctrl.reset_state()
+
+    assert window._tool_ctrl.screw_tool._wall_clearance_mm == pytest.approx(2.0)
+
+
+def test_a_window_without_a_tool_controller_survives_a_run(controller_with_window):
+    """The screw tool is optional plumbing here; the status text is not."""
+    ctrl, window = controller_with_window
+    del window._tool_ctrl
+
+    ctrl.reset_state()
+
+    assert window.auto_screw_status._text == "No auto plan"
+
+
+def test_a_window_without_a_tool_controller_survives_an_empty_plan(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    del window._tool_ctrl
+
+    ctrl._on_finished(_current_thread(ctrl), [])
+
+    assert "no valid trajectories" in window.auto_screw_status._text

@@ -555,3 +555,234 @@ def test_an_ungradable_frame_does_not_erase_the_endplate_angle():
 
     assert screw.grade == "N/A"
     assert screw.metrics["endplate_angle_deg"] == pytest.approx(2.4)
+
+
+# --------------------------------------------------------------------------
+# The thresholds a manual edit is judged against follow the planner's config
+# --------------------------------------------------------------------------
+
+
+def _thin_wall_tool():
+    """A 0.2 mm-spaced cube, so a sub-millimetre cortical wall is measurable.
+
+    At 1 mm spacing the distance map can only resolve whole millimetres, and
+    the clearance note is about fractions of one.  The label spans 4.0-19.8 mm
+    on every axis.
+    """
+    arr = np.zeros((120, 120, 120), dtype=np.uint8)
+    arr[20:100, 20:100, 20:100] = 28
+    mask = sitk.GetImageFromArray(arr)
+    mask.SetSpacing((0.2, 0.2, 0.2))
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+    tool = ScrewTool(_VolumeManager())
+    tool.set_grader(ScrewGrader(mask, ct))
+    return tool
+
+
+def _thin_wall_screw():
+    """A contained screw whose cylinder leaves exactly 0.4 mm of cortex."""
+    return Screw(
+        entry_point=(16.5, 14.0, 12.0),
+        target_point=(16.5, 8.0, 12.0),
+        diameter=6.0,
+        vertebra_level="L3",
+        side="left",
+    )
+
+
+def test_the_tool_thresholds_default_to_the_planner_config_defaults():
+    """A default-configured run and an untouched tool must judge alike."""
+    from src.core.planner_config import PlannerConfig
+    from src.tools import screw_tool as screw_tool_module
+
+    config = PlannerConfig()
+
+    assert screw_tool_module.DEFAULT_WALL_CLEARANCE_MM == config.wall_clearance_mm
+    assert screw_tool_module.DEFAULT_NARROW_PEDICLE_MM == config.narrow_pedicle_mm
+
+
+def test_a_zero_clearance_adds_no_cortical_note_on_the_first_drag():
+    """The planner would not have written one, so neither may a regrade."""
+    tool = _thin_wall_tool()
+    screw = _thin_wall_screw()
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["min_wall_mm"] == pytest.approx(0.4)
+    assert not any(w.startswith("Cortical clearance") for w in screw.warnings)
+
+
+def test_the_configured_clearance_is_the_one_the_note_reports():
+    tool = _thin_wall_tool()
+    tool.set_wall_clearance_mm(1.0)
+    screw = _thin_wall_screw()
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert "Cortical clearance 0.4 mm below 1.0 mm" in screw.warnings
+
+
+def test_lowering_the_clearance_retracts_the_note_it_authored():
+    tool = _thin_wall_tool()
+    tool.set_wall_clearance_mm(1.0)
+    screw = _thin_wall_screw()
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert any(w.startswith("Cortical clearance") for w in screw.warnings)
+
+    tool.set_wall_clearance_mm(0.0)
+    tool.regrade_all()
+
+    assert not any(w.startswith("Cortical clearance") for w in screw.warnings)
+
+
+# --------------------------------------------------------------------------
+# The pedicle width follows the level the screw is actually in
+# --------------------------------------------------------------------------
+
+
+class _WidthAnalysis:
+    """Duck-typed stand-in carrying the two width fields the tool re-reads."""
+
+    def __init__(self, left, right, flags=None, normal=None):
+        self.left_pedicle_width = left
+        self.right_pedicle_width = right
+        self.width_flags = dict(flags or {})
+        self.upper_endplate_normal = normal
+
+
+def _two_level_tool():
+    """A cube split into an inferior label 28 and a superior label 29.
+
+    Array indices are ``(z, y, x)`` at 1 mm spacing with a zero origin, so a
+    screw at z = 25 mm is in label 28 and one at z = 35 mm is in label 29 --
+    the drag that moves a screw from one level to the next.
+    """
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[20:30, 20:40, 20:40] = 28
+    arr[30:40, 20:40, 20:40] = 29
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+    tool = ScrewTool(_VolumeManager())
+    tool.set_grader(ScrewGrader(mask, ct))
+    return tool
+
+
+def _narrow_l2_screw(z):
+    return Screw(
+        entry_point=(30.0, 38.0, z),
+        target_point=(30.0, 22.0, z),
+        diameter=5.0,
+        vertebra_level="L2",
+        side="left",
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5, "score": 1.25},
+    )
+
+
+def test_dragging_a_narrow_screw_into_a_wide_level_re_measures_the_width():
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(4.5, 4.5), 29: _WidthAnalysis(9.2, 9.2)}
+    )
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert screw.metrics["narrow_pedicle"] is True
+
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+
+    assert moved.metrics["narrow_pedicle"] is False
+    assert moved.metrics["pedicle_width_mm"] == pytest.approx(9.2)
+    # Still the optimiser's, still untouched by the grader.
+    assert moved.metrics["score"] == 1.25
+
+
+def test_without_a_registry_the_planner_width_survives_the_drag():
+    """Never blank a number the tool has no way to re-measure."""
+    tool = _two_level_tool()
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+
+    assert moved.metrics["narrow_pedicle"] is True
+    assert moved.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+
+
+def test_the_re_measured_width_uses_the_screws_own_side():
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(4.5, 9.2)})
+    screw = _narrow_l2_screw(25.0)
+    screw.side = "right"
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(9.2)
+    assert screw.metrics["narrow_pedicle"] is False
+
+
+def test_an_implausible_width_still_counts_as_narrow():
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(21.0, 21.0, flags={"left": "implausible"})}
+    )
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(21.0)
+    assert screw.metrics["narrow_pedicle"] is True
+
+
+def test_the_narrow_threshold_follows_the_configured_one():
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(6.0, 6.0)})
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert screw.metrics["narrow_pedicle"] is False
+
+    tool.set_narrow_pedicle_mm(7.0)
+    tool.regrade_all()
+
+    assert screw.metrics["narrow_pedicle"] is True
+
+
+def test_a_screw_with_no_side_keeps_the_planner_width():
+    """The width is per side; without one there is nothing to re-read."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(9.2, 9.2)})
+    screw = _narrow_l2_screw(25.0)
+    screw.side = ""
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["narrow_pedicle"] is True
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+
+
+def test_an_ungradable_frame_does_not_erase_the_pedicle_width():
+    """Mid-drag, outside every label: the colour must not flicker to normal."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(4.5, 4.5)})
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    screw.entry_point = (2.0, 2.0, 2.0)
+    screw.target_point = (2.0, 10.0, 2.0)
+    tool.regrade_all()
+
+    assert screw.grade == "N/A"
+    assert screw.metrics["narrow_pedicle"] is True
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)

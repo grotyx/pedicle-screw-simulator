@@ -1895,6 +1895,10 @@ class MainWindow(QMainWindow):
         self._refresh_themed_icons()
         if hasattr(self, "screw_list_widget"):
             self.screw_list_widget.apply_theme(theme_name)
+        # An inline colour the application stylesheet cannot reach, so the
+        # previous palette's red would otherwise stay on the narrow-pedicle row
+        # until the next selection.
+        self._repaint_pedicle_row()
         pan_icon_color = THEMES[theme_name]["viewer_foreground"]
         for viewer in self._get_mpr_viewers():
             viewer.refresh_orientation_markers(render=True)
@@ -2226,10 +2230,33 @@ class MainWindow(QMainWindow):
             slider.setValue(int(round(float(values["weights"][name]) * 100.0)))
             slider.blockSignals(previous)
         self._refresh_planner_weight_labels()
+        self._push_screw_tool_thresholds()
+
+    def _push_screw_tool_thresholds(self) -> None:
+        """Judge an edited screw by the parameters the panel currently shows.
+
+        The screw tool re-grades on every drag and every diameter change, and
+        two of its verdicts are thresholds rather than geometry: the cortical
+        clearance worth a note, and the width below which a pedicle is narrow.
+        Left on its own defaults the tool would disagree with the planner that
+        produced the screw, and the *edit* would appear to have changed it.
+
+        Called from both directions a parameter can move -- a config written
+        into the panel, and a user turning a spin box -- so the tool is never
+        a step behind.  Guarded because ``load_planner_settings`` runs during
+        construction, when the tool controller may not exist yet.
+        """
+        tool_ctrl = getattr(self, "_tool_ctrl", None)
+        screw_tool = getattr(tool_ctrl, "screw_tool", None)
+        if screw_tool is None:
+            return
+        screw_tool.set_wall_clearance_mm(self.plan_wall_clearance_spin.value())
+        screw_tool.set_narrow_pedicle_mm(self.plan_narrow_pedicle_spin.value())
 
     def _on_planner_parameter_changed(self, _value=None) -> None:
         """Persist planner parameters whenever the user edits one."""
         self.save_planner_settings()
+        self._push_screw_tool_thresholds()
 
     def _on_planner_weight_changed(self, _value=None) -> None:
         """Refresh the weight readouts and persist the new objective weights."""
@@ -2253,7 +2280,24 @@ class MainWindow(QMainWindow):
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
-        self.selected_screw_pedicle.setStyleSheet("")
+        self._pedicle_row_narrow = False
+        self._repaint_pedicle_row()
+
+    #: Whether the cockpit's Pedicle row is currently showing a narrow pedicle.
+    #: Its colour is an inline style, so the application stylesheet cannot
+    #: repaint it on a theme change; remembering the verdict is what lets
+    #: :meth:`apply_theme` redraw it without a fresh selection.
+    _pedicle_row_narrow = False
+
+    def _repaint_pedicle_row(self) -> None:
+        """Paint the cockpit's Pedicle row in the active palette's danger colour."""
+        if not hasattr(self, "selected_screw_pedicle"):
+            return
+        self.selected_screw_pedicle.setStyleSheet(
+            f"color: {THEMES[self._theme_name]['danger']};"
+            if self._pedicle_row_narrow
+            else ""
+        )
 
     def _update_screw_metric_rows(self, metrics: dict) -> None:
         """Fill the clinical metric rows from a screw's metric bundle."""
@@ -2296,18 +2340,18 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary.setText(heary)
 
         self.selected_screw_pedicle.setText(pedicle_row_text(metrics))
-        self.selected_screw_pedicle.setStyleSheet(
-            f"color: {THEMES[self._theme_name]['danger']};"
-            if is_narrow_pedicle(metrics)
-            else ""
-        )
+        self._pedicle_row_narrow = is_narrow_pedicle(metrics)
+        self._repaint_pedicle_row()
 
+        # Type-guarded like the endplate angle above: these arrive from a plan
+        # file, which the app does not own -- a hand-edited or third-party JSON
+        # with a string here used to raise straight out of screw selection.
         rod = metrics.get("rod_misalignment_mm")
         deviation = metrics.get("convergence_deviation_deg")
         alignment: List[str] = []
-        if rod is not None:
+        if isinstance(rod, (int, float)) and not isinstance(rod, bool):
             alignment.append(f"rod {float(rod):.1f} mm")
-        if deviation is not None:
+        if isinstance(deviation, (int, float)) and not isinstance(deviation, bool):
             # Signed: which way this level differs from its neighbours is the
             # part a surgeon acts on.
             alignment.append(f"conv {float(deviation):+.1f}°")
