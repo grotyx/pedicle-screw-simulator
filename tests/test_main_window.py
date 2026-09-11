@@ -643,3 +643,124 @@ def test_resetting_the_planner_defaults_resets_the_screw_tool(ui_main_window):
     assert window._tool_ctrl.screw_tool._wall_clearance_mm == pytest.approx(
         PlannerConfig().wall_clearance_mm
     )
+
+
+# ---------------------------------------------------------------------------
+# The persisted 1.0 mm wall clearance is retired once
+# ---------------------------------------------------------------------------
+
+
+def _persisted_planner(isolated):
+    """A fresh QSettings handle inside the planner group of the shared store."""
+    settings = isolated("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("planner")
+    return settings
+
+
+def _persist_planner(isolated, **values):
+    settings = _persisted_planner(isolated)
+    for key, value in values.items():
+        settings.setValue(key, value)
+    settings.endGroup()
+    settings.sync()
+
+
+def _clearance_flag_is_set(isolated):
+    settings = _persisted_planner(isolated)
+    raw = settings.value(main_window_module._PLANNER_CLEARANCE_MIGRATION_KEY)
+    settings.endGroup()
+    return str(raw).strip().lower() in ("true", "1", "yes")
+
+
+def _persisted_clearance(isolated):
+    settings = _persisted_planner(isolated)
+    raw = settings.value("wall_clearance_mm")
+    settings.endGroup()
+    return float(raw)
+
+
+def test_a_persisted_legacy_wall_clearance_is_reset_to_the_new_default(
+    planner_window_factory,
+):
+    """1.0 mm was the old default; kept, it starves the optimiser of solutions."""
+    isolated, build = planner_window_factory
+    _persist_planner(isolated, wall_clearance_mm=1.0)
+
+    migrated = build()
+
+    assert migrated.plan_wall_clearance_spin.value() == pytest.approx(0.0)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        in migrated.statusbar.currentMessage()
+    )
+    assert _persisted_clearance(isolated) == pytest.approx(0.0)
+    assert _clearance_flag_is_set(isolated)
+
+
+def test_a_hand_picked_wall_clearance_is_left_alone_but_still_flagged(
+    planner_window_factory,
+):
+    isolated, build = planner_window_factory
+    _persist_planner(isolated, wall_clearance_mm=0.5)
+
+    window = build()
+
+    assert window.plan_wall_clearance_spin.value() == pytest.approx(0.5)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        not in window.statusbar.currentMessage()
+    )
+    assert _persisted_clearance(isolated) == pytest.approx(0.5)
+    # Set either way, so the check never runs a second time.
+    assert _clearance_flag_is_set(isolated)
+
+
+def test_the_clearance_migration_does_not_run_twice(planner_window_factory):
+    isolated, build = planner_window_factory
+    _persist_planner(
+        isolated,
+        wall_clearance_mm=1.0,
+        **{main_window_module._PLANNER_CLEARANCE_MIGRATION_KEY: True},
+    )
+
+    window = build()
+
+    assert window.plan_wall_clearance_spin.value() == pytest.approx(1.0)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        not in window.statusbar.currentMessage()
+    )
+    assert _persisted_clearance(isolated) == pytest.approx(1.0)
+
+
+def test_a_wall_clearance_chosen_after_the_migration_is_respected(
+    planner_window_factory,
+):
+    isolated, build = planner_window_factory
+    _persist_planner(isolated, wall_clearance_mm=1.0)
+
+    migrated = build()
+    assert migrated.plan_wall_clearance_spin.value() == pytest.approx(0.0)
+
+    # The user wants the buffer back; the migration must not take it again.
+    migrated.plan_wall_clearance_spin.setValue(1.0)
+    respected = build()
+
+    assert respected.plan_wall_clearance_spin.value() == pytest.approx(1.0)
+    assert (
+        main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE
+        not in respected.statusbar.currentMessage()
+    )
+
+
+def test_both_migration_messages_reach_the_status_bar_together(
+    planner_window_factory,
+):
+    isolated, build = planner_window_factory
+    _persist_planner(isolated, mode="legacy", wall_clearance_mm=1.0)
+
+    migrated = build()
+
+    message = migrated.statusbar.currentMessage()
+    assert main_window_module.PLANNER_MODE_MIGRATION_MESSAGE in message
+    assert main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE in message

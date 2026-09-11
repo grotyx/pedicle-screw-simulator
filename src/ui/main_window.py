@@ -102,6 +102,22 @@ PLANNER_MODE_MIGRATION_MESSAGE = (
 #: Settings flag recording that the one-time Legacy -> Optimizer migration ran.
 _PLANNER_MODE_MIGRATION_KEY = "mode_migrated_v2"
 
+#: The wall clearance older builds shipped as the planner default.  W7 moved
+#: it to 0 mm because the optimiser could not satisfy ``min_wall >= 1.0`` on
+#: most sides of a real study and fell back to the legacy planner; a store
+#: written by one of those builds still carries it, so it has to be retired
+#: rather than simply out-defaulted.
+_LEGACY_WALL_CLEARANCE_MM = 1.0
+
+#: Shown once when that persisted 1.0 mm clearance is reset to the new default.
+PLANNER_CLEARANCE_MIGRATION_MESSAGE = (
+    "Wall clearance reset to 0.0 mm (the new default); raise it in "
+    "Planning parameters if you want a buffer."
+)
+
+#: Settings flag recording that the one-time clearance reset ran.
+_PLANNER_CLEARANCE_MIGRATION_KEY = "clearance_migrated_v2"
+
 #: Set once the legacy-scope migration check has run for this process, so
 #: app_settings() only ever opens the legacy scope once, not on every call.
 _migrated = False
@@ -223,6 +239,7 @@ class MainWindow(QMainWindow):
         # load_planner_settings() runs before the status bar exists, so a
         # migration message waits here until _setup_statusbar can show it.
         self._planner_mode_migration_message: Optional[str] = None
+        self._planner_clearance_migration_message: Optional[str] = None
 
         # Build UI (widgets only, no signal connections to controllers)
         self._setup_ui()
@@ -1867,8 +1884,19 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage("Ready")
         self.refresh_mode_indicators()
 
-        if self._planner_mode_migration_message:
-            self.statusbar.showMessage(self._planner_mode_migration_message)
+        # Both one-time migrations can fire on the same first launch, and the
+        # user has to learn about both -- the second must not silently replace
+        # the first.
+        migrations = [
+            message
+            for message in (
+                self._planner_mode_migration_message,
+                self._planner_clearance_migration_message,
+            )
+            if message
+        ]
+        if migrations:
+            self.statusbar.showMessage(" · ".join(migrations))
 
     def _get_mpr_viewers(self) -> List[MPRViewer]:
         """Return list of active MPR viewers."""
@@ -2186,6 +2214,7 @@ class MainWindow(QMainWindow):
                 stored["mode"] = "optimizer"
                 settings.setValue("mode", "optimizer")
                 self._planner_mode_migration_message = PLANNER_MODE_MIGRATION_MESSAGE
+        self._migrate_wall_clearance(settings, stored)
         settings.endGroup()
         settings.sync()
 
@@ -2197,6 +2226,37 @@ class MainWindow(QMainWindow):
             )
             config = PlannerConfig()
         self._apply_planner_config(config)
+
+    def _migrate_wall_clearance(self, settings: QSettings, stored: dict) -> None:
+        """Retire the 1.0 mm wall clearance older builds persisted as the default.
+
+        W7 moved the planner default to 0 mm: at 1 mm the optimiser could not
+        satisfy ``min_wall >= 1.0`` on most sides of a real study (8 of 12
+        measured) and silently fell back to the legacy planner, so a user
+        upgrading from an older build would keep getting legacy trajectories
+        from a number they never chose.  Out-defaulting it is not enough -- the
+        old value is *persisted*, so it wins over the new default forever.
+
+        Mirrors the Legacy -> Optimizer migration next to it: it runs once per
+        settings store, whatever is stored, so a clearance the user picks
+        *afterwards* (1.0 mm included) is respected.  A persisted value that is
+        not the old default -- 0.5 or 1.5 mm -- was a deliberate choice and is
+        left alone; only the flag is written.
+        """
+        raw_migrated = settings.value(_PLANNER_CLEARANCE_MIGRATION_KEY, False)
+        if str(raw_migrated).strip().lower() in ("true", "1", "yes"):
+            return
+        settings.setValue(_PLANNER_CLEARANCE_MIGRATION_KEY, True)
+        if not settings.contains("wall_clearance_mm"):
+            return                       # nothing persisted; the new default applies
+        clearance = stored.get("wall_clearance_mm")
+        if not isinstance(clearance, float):
+            return                       # unreadable; the loader already complained
+        if abs(clearance - _LEGACY_WALL_CLEARANCE_MM) > 1e-6:
+            return
+        stored["wall_clearance_mm"] = 0.0
+        settings.setValue("wall_clearance_mm", 0.0)
+        self._planner_clearance_migration_message = PLANNER_CLEARANCE_MIGRATION_MESSAGE
 
     def reset_planner_settings(self) -> None:
         """Restore the built-in planner defaults and persist them."""
