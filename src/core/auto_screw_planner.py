@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -28,13 +28,19 @@ import SimpleITK as sitk
 from .bone_quality import assess_bone_quality
 from .breach_classification import facet_violation_grade, heary_direction, medial_breach_warning
 from .cbt_planner import plan_cbt_screws
-from .pedicle_analyzer import ENDPLATE_FIT_RMSE_WARNING_MM, endplate_fit_warning
+from .pedicle_analyzer import (
+    ENDPLATE_FIT_RMSE_WARNING_MM,
+    VERTEBRA_LABELS,
+    endplate_fit_warning,
+)
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg, endplate_angle_deg
 from .screw_grading import ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
     Candidate,
     RunProgress,
+    convergence_deviations_deg,
+    convergence_spread_deg,
     optimize_construct,
     optimize_screw,
     rod_misalignment_mm,
@@ -78,11 +84,50 @@ def narrow_pedicle_warning(pedicle_width_mm: float, diameter_mm: float) -> str:
     )
 
 
+def construct_summary(screws: Sequence[PlannedScrew]) -> str:
+    """How well the finished construct agrees with itself, as the status line words it.
+
+    Reads the metrics the construct stage stamped rather than re-measuring, so
+    the number the surgeon reads is the one the optimiser actually minimised.
+    Returns ``""`` when no screw carries them -- legacy planning never runs the
+    construct stage, and reporting "rod fit 0.0 mm" for a construct that was
+    never harmonised would be a lie in the safest-looking direction.
+    """
+    rod: Dict[str, float] = {}
+    spread: Dict[str, float] = {}
+    for screw in screws:
+        for bucket, key in ((rod, "rod_misalignment_mm"), (spread, "convergence_spread_deg")):
+            value = screw.metrics.get(key)
+            if value is None:
+                continue
+            try:
+                bucket[screw.side] = float(value)
+            except (TypeError, ValueError):
+                logger.warning("Ignoring unreadable construct metric %s=%r", key, value)
+
+    sides = (("left", "L"), ("right", "R"))
+    parts: List[str] = []
+    rod_text = ", ".join(f"{rod[s]:.1f} mm ({i})" for s, i in sides if s in rod)
+    if rod_text:
+        parts.append(f"rod fit {rod_text}")
+    spread_text = ", ".join(f"{spread[s]:.1f}° ({i})" for s, i in sides if s in spread)
+    if spread_text:
+        parts.append(f"convergence spread {spread_text}")
+    if not parts:
+        return ""
+    return "Construct: " + " · ".join(parts)
+
+
 #: How many ranked trajectories per pedicle the construct stage may choose from.
 #: Wide enough that the pool spans several convergence bins (see
 #: :func:`~src.core.trajectory_optimizer._cover_convergence_bins`): a construct
 #: cannot harmonise angles it was never offered.
 _CONSTRUCT_TOP_K = 40
+
+#: Level name -> TotalSegmentator label, so a construct assembled from
+#: :class:`PlannedScrew` (which carries the name, not the label) still knows
+#: which levels are neighbours and which one is sacral.
+_LEVEL_LABELS: Dict[str, int] = {name: label for label, name in VERTEBRA_LABELS.items()}
 
 
 @dataclass
@@ -606,6 +651,7 @@ class AutoScrewPlanner:
             self.skipped_sides = skipped
             self.last_run_cancelled = reporter.cancelled
             self._stamp_rod_misalignment(screws)
+            self._stamp_convergence_alignment(screws)
             return screws
 
         reporter = RunProgress(
@@ -646,9 +692,10 @@ class AutoScrewPlanner:
 
         Each pedicle contributes its best :data:`_CONSTRUCT_TOP_K` trajectories;
         :func:`~src.core.trajectory_optimizer.optimize_construct` then picks one
-        per screw so the heads of each side line up.  A pedicle the optimiser
-        cannot solve falls back to :meth:`plan_screw`; one neither can place is
-        appended to :attr:`skipped_sides` with the legacy planner's reason.
+        per screw so that each side's heads line up *and* its convergence angles
+        agree with their neighbours.  A pedicle the optimiser cannot solve falls
+        back to :meth:`plan_screw`; one neither can place is appended to
+        :attr:`skipped_sides` with the legacy planner's reason.
 
         ``reporter`` narrates and cancels the candidate search — the pass that
         actually costs the time.  A cancelled run assembles a construct from the
@@ -725,6 +772,7 @@ class AutoScrewPlanner:
                 self._record_skip(analysis.vertebra.name, side, reason)
 
         self._stamp_rod_misalignment(results)
+        self._stamp_convergence_alignment(results)
         return results
 
     @staticmethod
@@ -834,6 +882,28 @@ class AutoScrewPlanner:
             )
             for screw in on_side:
                 screw.metrics["rod_misalignment_mm"] = deviation
+
+    @staticmethod
+    def _stamp_convergence_alignment(screws: List[PlannedScrew]) -> None:
+        """Record how far each screw's convergence sits from its side's agreement.
+
+        Each side is measured on its own: the two rods are bent independently
+        and a left-side outlier says nothing about the right.  A screw whose
+        level is excluded from the term (S1) gets the side's spread but no
+        deviation of its own, because it was never asked to agree.
+        """
+        for side in ("left", "right"):
+            on_side = [s for s in screws if s.side == side]
+            if not on_side:
+                continue
+            angles = [float(s.convergence_angle) for s in on_side]
+            levels = [_LEVEL_LABELS.get(s.vertebra_name) for s in on_side]
+            spread = convergence_spread_deg(angles, levels)
+            deviations = convergence_deviations_deg(angles, levels)
+            for screw, deviation in zip(on_side, deviations, strict=True):
+                screw.metrics["convergence_spread_deg"] = spread
+                if deviation is not None:
+                    screw.metrics["convergence_deviation_deg"] = float(deviation)
 
     # =====================================================================
     # Entry / target point finding

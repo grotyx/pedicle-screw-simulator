@@ -1391,6 +1391,116 @@ class TestOptimizerMode:
         assert module._CONSTRUCT_TOP_K == 40
 
 
+# ---------------------------------------------------------------------------
+# Construct alignment metrics and summary
+# ---------------------------------------------------------------------------
+
+def _alignment_screw(vertebra_name, side, convergence_angle, **overrides):
+    """A PlannedScrew carrying only what the construct stamping reads."""
+    defaults = dict(
+        vertebra_name=vertebra_name,
+        side=side,
+        entry_lps=np.array([20.0, 30.0, 0.0]),
+        target_lps=np.array([20.0, -10.0, 0.0]),
+        length_mm=40.0,
+        diameter_mm=6.0,
+        convergence_angle=float(convergence_angle),
+        craniocaudal_angle=0.0,
+        mean_bone_density=400.0,
+        min_bone_density=200.0,
+        gertzbein_grade="A",
+        confidence=0.8,
+    )
+    defaults.update(overrides)
+    return PlannedScrew(**defaults)
+
+
+class TestConstructAlignmentMetrics:
+    def test_stamping_records_deviation_and_side_spread(self):
+        screws = [
+            _alignment_screw("L3", "left", 5.0),
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 15.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert [s.metrics["convergence_deviation_deg"] for s in screws] == pytest.approx(
+            [-5.0, 0.0, 5.0]
+        )
+        for screw in screws:
+            assert screw.metrics["convergence_spread_deg"] == pytest.approx(
+                math.sqrt(50.0 / 3.0)
+            )
+
+    def test_stamping_leaves_the_sacral_screw_without_a_deviation(self):
+        screws = [
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 10.0),
+            _alignment_screw("S1", "left", 40.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert "convergence_deviation_deg" not in screws[2].metrics
+        assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(0.0)
+
+    def test_stamping_keeps_the_two_sides_apart(self):
+        screws = [
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 10.0),
+            _alignment_screw("L4", "right", 5.0),
+            _alignment_screw("L5", "right", 25.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert screws[0].metrics["convergence_spread_deg"] == pytest.approx(0.0)
+        assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(10.0)
+
+
+class TestConstructSummary:
+    def test_summary_reports_rod_fit_and_convergence_for_both_sides(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        screws = [
+            _alignment_screw(
+                "L4", "left", 10.0,
+                metrics={"rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81},
+            ),
+            _alignment_screw(
+                "L4", "right", 10.0,
+                metrics={"rod_misalignment_mm": 0.92, "convergence_spread_deg": 3.44},
+            ),
+        ]
+
+        assert construct_summary(screws) == (
+            "Construct: rod fit 1.2 mm (L), 0.9 mm (R) "
+            "· convergence spread 2.8° (L), 3.4° (R)"
+        )
+
+    def test_summary_names_only_the_sides_that_have_screws(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        screws = [
+            _alignment_screw(
+                "L4", "left", 10.0,
+                metrics={"rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81},
+            )
+        ]
+
+        summary = construct_summary(screws)
+
+        assert summary == "Construct: rod fit 1.2 mm (L) · convergence spread 2.8° (L)"
+        assert "(R)" not in summary
+
+    def test_summary_is_empty_without_construct_metrics(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        assert construct_summary([_alignment_screw("L4", "left", 10.0)]) == ""
+        assert construct_summary([]) == ""
+
+
 class TestPlanAllProgressAndCancel:
     """``plan_all`` narrates each ``(level, side)`` and can stop between them."""
 
