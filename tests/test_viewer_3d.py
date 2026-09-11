@@ -1268,3 +1268,99 @@ class TestThe3DHeaderFollowsTheTheme:
         for name, palette in THEMES.items():
             rule = load_stylesheet(name).split("QLabel#viewerHeader")[1]
             assert palette["viewer_foreground"] in rule.split("}")[0]
+
+
+class TestCpuRaycastFallback:
+    """A smart mapper that ends up on the CPU must stop being fed full-res."""
+
+    @staticmethod
+    def _viewer(dims=(64, 64, 48), spacing=(0.39, 0.39, 1.0)):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        image = vtk.vtkImageData()
+        image.SetDimensions(*dims)
+        image.SetSpacing(*spacing)
+        image.AllocateScalars(vtk.VTK_SHORT, 1)
+
+        calls = {"input_dims": [], "sample_distance": [], "auto_adjust": [],
+                 "renders": 0}
+
+        class _Mapper:
+            def SetAutoAdjustSampleDistances(self, value):
+                calls["auto_adjust"].append(bool(value))
+
+            def SetInputData(self, data):
+                calls["input_dims"].append(data.GetDimensions())
+
+            def SetSampleDistance(self, value):
+                calls["sample_distance"].append(float(value))
+
+            def GetLastUsedRenderMode(self):
+                return vtk.vtkSmartVolumeMapper.RayCastRenderMode
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._mapper_kind = MAPPER_KIND_SMART
+        viewer._shrink_kind = MAPPER_KIND_SMART
+        viewer._volume_mapper = _Mapper()
+        viewer._volume_added = True
+        viewer._render_mode_logged = False
+        viewer.volume_manager = SimpleNamespace(
+            get_vtk_image=lambda: image,
+            dimensions=dims,
+            spacing=spacing,
+        )
+        viewer.vtk_widget = SimpleNamespace(
+            safe_render=lambda: calls.__setitem__("renders", calls["renders"] + 1)
+        )
+        return viewer, calls
+
+    def test_the_fallback_re_downsamples_by_the_cpu_table(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer, calls = self._viewer()
+
+        viewer._apply_cpu_raycast_fallback()
+
+        assert viewer._shrink_kind == MAPPER_KIND_CPU
+        # "small" on the smart table is (1, 1, 1) -- no downsampling at all --
+        # which is exactly what a CPU ray caster cannot afford.
+        assert calls["input_dims"] == [(32, 32, 48)]
+        assert calls["auto_adjust"] == [True]
+        assert calls["renders"] == 1
+
+    def test_reading_a_cpu_raycast_mode_triggers_the_fallback(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer, calls = self._viewer()
+
+        viewer._log_render_mode("Phase 1")
+
+        assert viewer._shrink_kind == MAPPER_KIND_CPU
+        assert calls["input_dims"] == [(32, 32, 48)]
+
+    def test_a_gpu_mode_leaves_the_smart_table_alone(self):
+        import vtk
+
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer, calls = self._viewer()
+        viewer._volume_mapper.GetLastUsedRenderMode = (
+            lambda: vtk.vtkSmartVolumeMapper.GPURenderMode
+        )
+
+        viewer._log_render_mode("Phase 1")
+
+        assert viewer._shrink_kind == MAPPER_KIND_SMART
+        assert calls["input_dims"] == []
+
+    def test_the_fallback_runs_only_once(self):
+        viewer, calls = self._viewer()
+        viewer._apply_cpu_raycast_fallback()
+        viewer._render_mode_logged = False
+
+        viewer._log_render_mode("Phase 2")
+
+        assert len(calls["input_dims"]) == 1

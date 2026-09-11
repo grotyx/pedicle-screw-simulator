@@ -133,6 +133,10 @@ def describe_render_mode(mapper) -> str:
 #: should wait for a real frame rather than report them.
 PENDING_RENDER_MODES = frozenset({"undefined", "unknown"})
 
+#: The mode a ``vtkSmartVolumeMapper`` reports when it found no usable GPU
+#: context and fell back to its own CPU ray caster.
+CPU_RAYCAST_MODE = "cpu-raycast"
+
 
 # Per-tier target sample distance: (spacing multiplier, absolute floor in mm).
 # These reproduce the pre-GPU formulas exactly and do not depend on the mapper.
@@ -402,6 +406,10 @@ class Viewer3D(QWidget):
         self._volume: Optional[vtk.vtkVolume] = None
         self._volume_mapper: Optional[vtk.vtkVolumeMapper] = None
         self._mapper_kind: str = select_volume_mapper_kind(sys.platform)
+        # Which shrink table the volume is downsampled by.  Normally the
+        # mapper's own, but a smart mapper that turns out to be ray casting on
+        # the CPU is demoted to the CPU table (see _apply_cpu_raycast_fallback).
+        self._shrink_kind: str = self._mapper_kind
         self._volume_property: Optional[vtk.vtkVolumeProperty] = None
         self._color_tf: Optional[vtk.vtkColorTransferFunction] = None
         self._opacity_tf: Optional[vtk.vtkPiecewiseFunction] = None
@@ -605,6 +613,7 @@ class Viewer3D(QWidget):
     def _build_volume_mapper(self) -> vtk.vtkVolumeMapper:
         """Select and configure the volume mapper for the current platform."""
         self._mapper_kind = select_volume_mapper_kind(sys.platform)
+        self._shrink_kind = self._mapper_kind
         mapper = create_volume_mapper(self._mapper_kind)
         logger.info(
             "_setup_vtk_pipeline: volume mapper=%s (kind=%s, platform=%s)",
@@ -807,11 +816,12 @@ class Viewer3D(QWidget):
         spacing = self.volume_manager.spacing
         assessment = assess_volume_scale(dims)
         sample_dist, shrink = volume_render_settings(
-            assessment.tier, spacing, self._mapper_kind
+            assessment.tier, spacing, self._shrink_kind
         )
         logger.info(
-            "  dims=%s spacing=%s tier=%s mapper=%s shrink=%s sample_dist=%.2f",
-            dims, spacing, assessment.tier, self._mapper_kind, shrink, sample_dist,
+            "  dims=%s spacing=%s tier=%s mapper=%s shrink=%s(%s) sample_dist=%.2f",
+            dims, spacing, assessment.tier, self._mapper_kind, shrink,
+            self._shrink_kind, sample_dist,
         )
 
         self._target_sample_dist = sample_dist
@@ -939,6 +949,51 @@ class Viewer3D(QWidget):
             mode,
             state.get("_mapper_kind", "?"),
         )
+        _flush_logs()
+        if mode == CPU_RAYCAST_MODE and state.get("_shrink_kind") == MAPPER_KIND_SMART:
+            self._apply_cpu_raycast_fallback()
+
+    def _apply_cpu_raycast_fallback(self) -> None:
+        """Re-downsample after the smart mapper falls back to its CPU ray caster.
+
+        ``vtkSmartVolumeMapper`` picks GPU ray casting only when it finds a
+        usable context; over RDP, in a VM and on software GL it silently uses
+        its own CPU caster instead.  The smart shrink table assumes the GPU is
+        not the bottleneck and hands the "small" tier the volume at full
+        resolution, so that fallback meant full-resolution CPU ray casting with
+        ``AutoAdjustSampleDistances`` off -- several times the load the old
+        fixed-point path ever carried, and a frozen GUI on every camera move.
+
+        Detecting the mode and only logging it, which is what this used to do,
+        told the log what the user was already suffering.  The volume is
+        re-downsampled by the CPU table instead and the mapper is allowed to
+        drop sample distances during interaction, which is exactly the deal the
+        macOS fixed-point path takes.  Runs once: ``_shrink_kind`` is the flag.
+        """
+        self._shrink_kind = MAPPER_KIND_CPU
+        mapper = self.__dict__.get("_volume_mapper")
+        if mapper is None:
+            return
+        # The GPU path pins the sample distance for a stable frame time; a CPU
+        # cast cannot afford that while the camera is moving.
+        mapper.SetAutoAdjustSampleDistances(True)
+        vtk_image = self.volume_manager.get_vtk_image()
+        if vtk_image is None or not self.__dict__.get("_volume_added", False):
+            return                       # nothing loaded yet; update_volume will use the new table
+        tier = assess_volume_scale(self.volume_manager.dimensions).tier
+        sample_dist, shrink = volume_render_settings(
+            tier, self.volume_manager.spacing, MAPPER_KIND_CPU
+        )
+        logger.warning(
+            "  smart mapper is ray casting on the CPU; re-downsampling "
+            "tier=%s with shrink=%s sample_dist=%.2f",
+            tier, shrink, sample_dist,
+        )
+        self._downsampled_image = downsample_vtk_image(vtk_image, shrink)
+        mapper.SetInputData(self._downsampled_image)
+        self._target_sample_dist = sample_dist
+        mapper.SetSampleDistance(sample_dist)
+        self._request_render()
         _flush_logs()
 
     def _execute_phase2(self, generation: int):
