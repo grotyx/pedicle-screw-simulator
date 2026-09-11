@@ -11,6 +11,81 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 > 검증을 뜻하지 않습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와
 > 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
+## [Unreleased]
+
+세 가지 주요 계획 단계를 안내하는 작업 단계 표시줄(workflow bar), 3D에서 보는
+Screw MPR, 그리고 나사 head를 후방 피질골(dorsal cortex)에 배치하고 각 나사를
+anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들어간 지점부터
+매기는 플래너 수정이 포함됩니다.
+
+### 추가
+
+- MPR/3D 화면 위에 "① Open DICOM → ② Segment → ③ Plan Screws"를 표시하는
+  작업 단계 표시줄. 각 단계는 이름이 가리키는 기존 동작을 그대로 실행합니다.
+  완료된 단계에는 체크 표시가 붙고, 다음 단계는 비활성 상태라도 강조되며,
+  비활성 단계의 tooltip은 무엇이 있어야 풀리는지 알려줍니다. ② 단계는 실제
+  TotalSegmentator mask가 있어야 완료로 인정됩니다(threshold fallback은
+  인정하지 않음). ③ 단계는 자동으로 계획된 나사가 있어야 완료로 인정되며,
+  이를 지우면 다시 열립니다. 새 study를 불러오면 표시줄이 초기화됩니다.
+- Screw MPR에 이제 3D 대응 화면이 있습니다. 3D 화면은 표준 axial/sagittal/
+  coronal 표시 대신, 나사 축에 정렬된 세 plane을 보여줍니다. 각 plane은
+  이를 보여주는 창의 머리글과 같은 색의 80 mm 정사각형입니다. CT volume과
+  척추 메시는 cross-section에서 잘려 tip 쪽만 남으며, 절단면은 Position을
+  따라 이동합니다. 나사 자체는 절대 잘리지 않습니다.
+
+### 변경
+
+- **나사 head가 이제 나사 자체 축을 따라 후방 피질골(dorsal cortex)에
+  배치됩니다** — 중심선이 마지막으로 만나는 뼈, 즉 실제로 드릴이 시작될
+  위치입니다 — 이전에는 단면 전체가 처음 들어맞는 위치에 배치되었습니다.
+  그 축을 따라 뒤쪽 15 mm 이내에 같은 척추의 뼈가 여전히 있으면 도달
+  불가능한 것으로 제외합니다. 이는 예전의 6 mm posterior cortex 매몰 한계를
+  대체합니다.
+- **등급 산정은 이제 head가 아니라, 나사 축이 뼈에 들어가는 지점에서 3 mm
+  지난 곳부터 시작합니다**(`ENTRY_ZONE_MM`). 피질골에 배치된 head는 뼈에
+  들어가는 표면에 걸쳐 있어 자기 반경만큼의 breach로 읽혔기 때문입니다.
+  이는 등급이 매겨지는 모든 나사에 적용됩니다: Optimizer와 Legacy의 자동
+  제안(CBT 나사에 표시되는 등급 포함), 수동·수정된 나사, segmentation
+  또는 계획 불러오기 후 다시 매기는 등급.
+- **나사 길이는 이제 팁 앞쪽에 Anterior margin(기본 4 mm)만큼의 뼈를 남기는
+  가장 긴 카탈로그 길이이며, 팁에서 anterior 척추체 피질골까지 나사
+  자체 축을 따라 측정합니다.** 원위 원통 전체를 둘러싼 여유거리를 요구하던
+  이전 방식 대신, 원위부 shaft는 이제 나머지 shaft와 마찬가지로 포함 조건과
+  설정된 Wall clearance만 만족하면 됩니다. 각 궤적에서는 실현 가능한 가장
+  긴 길이만 순위 산정에 포함되므로, Length 가중치는 한 궤적 위의 길이가
+  아니라 궤적들 사이를 비교합니다.
+- Legacy 플래너와 자동 per-side legacy fallback도 head를 후방 피질골에
+  재배치하고 같은 margin까지 tip을 늘리지만, 15 mm 후방 접근로 검사는
+  거치지 않습니다. 재배치한 head는 나사의 천공이 원래 head 위치일 때보다
+  — medial이든 전체든 — 늘지 않을 때만 유지합니다. Cortical bone
+  trajectory(CBT) 선택 방식은 변경되지 않았습니다.
+- `Planes On / Off`는 이제 표준이든 나사 정렬이든 현재 표시 중인 plane
+  세트에 그대로 적용됩니다.
+- 불러올 때나 segmentation을 다시 실행한 뒤 다시 등급을 매긴 계획은 진입부
+  피질골이 더 이상 채점되지 않으므로, 예전 빌드가 저장했을 때보다 더 좋은
+  등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다.
+
+### 수정
+
+- 계획된 나사가 짧고 head가 뼈에 묻혀 있었습니다. 샘플 연구에서 각 나사
+  자체 축을 따라 측정했을 때 head는 lamina 안쪽 5–21 mm에 있었고 tip은
+  anterior cortex보다 5–20 mm 못 미치는 곳에서 멈췄습니다. 샘플 연구(정제된
+  mask, 기본 설정)에서:
+
+  |            | 이전               | 이후                    |
+  |------------|--------------------|--------------------------|
+  | 나사 수    | 12개               | 13개(S1-left 새로 계획)  |
+  | legacy 대체 | 1건               | 0건                      |
+  | 등급       | A 10 / B 2         | A 13                     |
+  | medial breach | L5-right 1.41 mm | 모든 곳에서 0           |
+  | head 매몰  | 5–21 mm            | 0–0.2 mm                 |
+
+  길이(좌/우)는 L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35,
+  T12 35/25 mm가 되었으며, 이전에는 대부분의 side가 25 mm로 제한되어
+  있었습니다(좌측 L1, L2, L4 포함).
+- Screw MPR이 활성화된 동안 3D 화면이 volume을 자르지 않은 채 표준
+  axial/sagittal/coronal plane을 계속 그리던 문제.
+
 ## [0.2.0] - 2026-09-11
 
 공개 baseline 이후 첫 번째 릴리스입니다. 자동 궤적 최적화, 좁은 척추경에 대한
@@ -176,5 +251,6 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

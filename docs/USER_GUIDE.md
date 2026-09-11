@@ -71,11 +71,32 @@ The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The firs
 
 The Planning workspace contains:
 
+- **Workflow bar:** a bar above the MPR/3D views that steps through Open DICOM, Segment, and Plan Screws in order
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
-- **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes
+- **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8)
 - **Selected Screw inspector:** a pinned summary of the screw you are working on — size, angles, endplate angle, construct alignment, grade, HU statistics, facet and Heary classification, and the pedicle verdict
 - **Control tabs:** **Study** (series, display, segmentation), **Planning** (level selection, planning parameters, proposals, screw review), and **Tools** (manual placement and measurement)
 - **Tools palette:** Select, Add Screw, Distance, and Angle
+
+### Workflow bar
+
+A bar above the MPR/3D views reads "① Open DICOM → ② Segment → ③ Plan Screws." Each step runs exactly the existing action it names — it is a shortcut to that action, not a separate workflow — and the tab buttons it points at remain in place and behave as before:
+
+| Step | Runs |
+|---|---|
+| ① Open DICOM | **Open DICOM Folder** (`Ctrl+O`), the same folder dialog as 5.1 |
+| ② Segment | **Run Auto Segmentation** on the **Study** tab, as in 5.2 |
+| ③ Plan Screws | **Plan Screws** on the **Planning** tab, as in 5.4 |
+
+A finished step shows a check mark ("✓ Open DICOM"). The next step still to do is highlighted as the primary action even while it remains disabled, so the bar always points at what to do next; a step is greyed out while its action is unavailable — no study loaded yet, segmentation still running, or no vertebral levels selected. Hovering a step shows a tooltip; for a step that is still waiting, the tooltip says what unlocks it.
+
+| Step | Tooltip |
+|---|---|
+| ① Open DICOM | "Open a DICOM series folder" |
+| ② Segment | "Run TotalSegmentator on the loaded study" or, before a study is open, "Open a DICOM series first" |
+| ③ Plan Screws | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Planning tab", or "Run segmentation first" |
+
+② counts as finished only once a TotalSegmentator mask exists — a threshold fallback cannot be planned on, so the step stays open until a real segmentation succeeds. ③ counts as finished only once automatically planned screws exist; a manually placed screw does not count, and deleting the automatic screws reopens the step. A later step never shows finished while an earlier one is not. Loading a new study resets the whole bar, and clearing the current segmentation reopens step ②.
 
 ### Layouts
 
@@ -96,6 +117,8 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions.
 
 ## 5. Standard Planning Workflow
+
+The workflow bar (see section 4) mirrors this section: step ① is 5.1, step ② is 5.2, and step ③ is 5.4, once the levels to plan are checked in 5.3. Reviewing and editing the resulting proposals follow in 5.8 onward and in section 6.
 
 ### 5.1 Open a CT Study
 
@@ -140,12 +163,23 @@ Select **Plan Screws**. Proposals appear immediately in the screw list and remai
 
 Current defaults:
 
-- Lengths are proposed in 5 mm increments, normally up to 50 mm.
-- A 55 mm screw is allowed only when the safe in-bone corridor is at least 60 mm.
+- Length is the longest catalogue length (25–55 mm in 5 mm steps) whose tip still keeps the configured Anterior margin of bone ahead of it, measured along the screw's own axis — see below.
 - Preferred diameter is 6.5 mm for S1 and L3–L5, 6.0 mm for L1–L2, and 5.5 mm for T1–T12.
 - Automatic diameter is limited to 7.0 mm; manual adjustment is limited to 7.5 mm.
 
 These values are workflow presets, not universal clinical recommendations.
+
+#### Entry point and screw length
+
+Every candidate's head is carried back along the screw's own axis to the last bone its centreline meets — the dorsal cortex where a drill would actually start. On a traditional trajectory this lands the head on the posterior surface at the lateral facet region, the classic junction of the transverse process and the superior articular process. The planner finds this point geometrically on the segmentation mask; **it does not detect the facet or transverse process as anatomical landmarks — always confirm the entry on the MPR before relying on it.**
+
+A candidate is discarded as unreachable when the head still has the same vertebra's bone within 15 mm behind it along the screw axis (for example, under a lamina with an air pocket in between): a real drill would have to pass through that bone first. This is the dorsal-approach rule, and it is the only reachability test the **Optimizer** applies to a candidate head position.
+
+Once the head is seated, length is the longest catalogue length whose tip still keeps the configured Anterior margin (4.0 mm by default) of bone ahead of it, measured from the tip along the screw's own axis to the anterior vertebral-body cortex — the margin the way a surgeon states it, not clearance measured all around the distal cylinder. Only the longest feasible length on each trajectory is kept, because scoring a shorter screw on the same trajectory would let the density objective reward it for staying inside dense pedicle bone; the planner's score, including the Length weight (5.6), then chooses between trajectories, not between lengths on one trajectory.
+
+The **Legacy** planner and the automatic per-side legacy fallback (5.6) re-seat the head on the dorsal cortex the same way and extend the tip to the same Anterior margin, but without the 15 mm dorsal-approach test — and they keep the re-seated head only when the screw breaches no more — medially or in total — than it did with the head where it was; length is never bought at the cost of safety. **Cortical bone trajectory (CBT)** mode is unaffected: it keeps its own entry landmark (5.7) and selects candidates with its own full-length feasibility test.
+
+On the project's sample study, with the refined mask and default settings, this moved screw count from 12 to 13 (S1-left is now planned), legacy fallbacks from 1 to 0, grades from A 10 / B 2 to A 13, the L5-right medial breach from 1.41 mm to 0 everywhere, and head burial from 5–21 mm to 0–0.2 mm. Lengths (left / right) became L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm, where most sides had been 25 mm before (L1, L2, and L4 on the left among them).
 
 ### 5.5 Planning Parameters
 
@@ -155,7 +189,7 @@ The collapsible **Planning parameters** group below **Planning** exposes the set
 |---|---:|---|
 | Pedicle fill | 0.80 | Screw diameter as a fraction of the narrowest measured pedicle (isthmus) width |
 | Wall clearance | 0.0 mm | Minimum distance kept between the screw and the cortical wall |
-| Anterior margin | 4.0 mm | Safety margin kept behind the anterior vertebral body cortex |
+| Anterior margin | 4.0 mm | Bone kept ahead of the tip, measured along the screw's axis to the anterior vertebral body cortex |
 | Max convergence | 35° | Largest medial convergence angle the planner may use |
 | HU threshold | 123 HU | Trajectory HU below which the loosening-risk warning is flagged |
 | Narrow pedicle (mm) | 5.0 mm | Pedicle width below which the smallest catalogue screw is planned and the level is marked narrow |
@@ -180,7 +214,7 @@ The **Planner** combo in Planning Parameters selects between two back-ends for *
 
 Default weights (shown as a percentage of the nominal weight, 0–300%, in the panel): Safety 100% (1.0), Density 50% (0.5), Length 20% (0.2), Endplate 30% (0.3), Centering 30% (0.3). A sixth weight, **Construct alignment** (default 30% / 0.3, internally the `rod` weight), does not affect single-screw scoring; it only governs how much a multi-screw plan may trade an individual screw's score to line up the screw heads on the same side and to bring converging levels' angles into agreement (see below). Only the Safety, Density, and Construct alignment weights are exposed as sliders in the panel; Length, Endplate, and Centering stay at their defaults in this version.
 
-A candidate is feasible only when it keeps at least the configured wall clearance, keeps its convergence angle within the configured range, and keeps the configured anterior margin over its distal 4 mm segment. For a normal-width pedicle it must also have zero cortical breach; for a narrow pedicle -- narrower than the "Narrow pedicle (mm)" threshold, 5.0 mm by default -- the optimizer instead places the smallest catalogue screw (4.0 mm, drawn red in the Selected Screw panel), keeps the medial, canal-side wall intact, and accepts a lateral, in-out-in breach up to the "Lateral breach cap (mm)" limit (2.0 mm by default); both spin boxes sit in Planning Parameters next to Wall clearance. An entry point that would have to be seated more than 6 mm inside the posterior cortex to fit the screw's cross-section is also rejected as unreachable, since a real drill cannot pass through that much bone to reach the corridor. If no diameter within two catalogue steps below the pedicle's recommended diameter admits a feasible trajectory, the pedicle is planned by the legacy method instead and the screw's warnings include "Optimizer found no feasible trajectory; legacy planner used." For a narrow pedicle specifically, that legacy fallback never drops the side either: it still places whichever entry the lateral-shift search finds least medial, and if a breach into the canal remains even after that search, the screw carries a "Medial breach _x_.x mm — canal side" warning rather than being silently accepted or discarded. In testing, Optimizer-mode screws never score a worse Gertzbein grade or meaningfully less wall clearance than the same case planned in Legacy mode.
+A candidate is feasible only when it keeps at least the configured wall clearance, keeps its convergence angle within the configured range, and keeps the configured Anterior margin of bone ahead of its tip, measured along the screw's own axis to the anterior vertebral-body cortex — the distal shaft, like the rest of the shaft, otherwise only needs to stay contained and keep the configured Wall clearance (see 5.4, "Entry point and screw length"). For a normal-width pedicle it must also have zero cortical breach; for a narrow pedicle -- narrower than the "Narrow pedicle (mm)" threshold, 5.0 mm by default -- the optimizer instead places the smallest catalogue screw (4.0 mm, drawn red in the Selected Screw panel), keeps the medial, canal-side wall intact, and accepts a lateral, in-out-in breach up to the "Lateral breach cap (mm)" limit (2.0 mm by default); both spin boxes sit in Planning Parameters next to Wall clearance. The head itself is seated on the dorsal cortex along the screw's own axis (see 5.4) and rejected as unreachable when the same vertebra's bone still lies within 15 mm behind it along that axis, since a real drill would have to pass through that bone first. Only the longest feasible length on each trajectory is ranked, so the Length weight above compares trajectories against each other rather than lengths on the same trajectory. If no diameter within two catalogue steps below the pedicle's recommended diameter admits a feasible trajectory, the pedicle is planned by the legacy method instead and the screw's warnings include "Optimizer found no feasible trajectory; legacy planner used." For a narrow pedicle specifically, that legacy fallback never drops the side either: it still places whichever entry the lateral-shift search finds least medial, and if a breach into the canal remains even after that search, the screw carries a "Medial breach _x_.x mm — canal side" warning rather than being silently accepted or discarded. In testing, Optimizer-mode screws never score a worse Gertzbein grade or meaningfully less wall clearance than the same case planned in Legacy mode.
 
 When more than one screw is planned on the same side, the optimizer re-ranks each pedicle's top candidates so the screw heads line up along a common line and neighbouring levels' convergence angles agree — a proxy for how much the rod has to be bent and twisted. It may trade away at most 10% of a screw's own best score to reduce this misalignment, weighted by the Construct alignment slider. After planning, the status bar and the auto-screw status line report the result as "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)," and each screw's metrics carry `score`, `score_components`, `rod_misalignment_mm`, and `convergence_deviation_deg`. Legacy planning places each screw on its own, so there is nothing to harmonise: the status line instead reads "Construct alignment needs Optimizer mode."
 
@@ -225,6 +259,14 @@ Each pane's readout shows the current rotation and offset, so a view you have mo
 
 Selecting a different screw, or returning to **Std MPR** and back, resets rotation and offset to zero.
 
+#### Screw MPR in 3D
+
+While Screw MPR is active, the 3D view replaces the standard axial/sagittal/coronal plane indicators — which no pane shows any more in this mode — with the three screw-aligned planes, each drawn as an 80 mm square centred on the screw and coloured like the header of the pane showing it: Oblique Axial in the axial pane's colour, Oblique Sagittal in the sagittal pane's, Cross-section in the coronal pane's.
+
+The CT volume and the vertebra meshes are cut at the cross-section, keeping the tip side: looking in from behind, the cut face is the slice shown in the Cross-section pane. The cut follows **Position** as you move it from entry to tip (or the mouse wheel over the Cross-section pane, 1 mm per notch), and the 3D planes follow everything that moves the panes — rotation, sideways offset, or an edit to the screw. Screws themselves are never cut. A vertebra mesh rebuilt while Screw MPR is open — for example after re-running segmentation — is cut at the same plane.
+
+**Planes On / Off** (section 8) shows or hides whichever set of planes is current, standard or screw-aligned. **Std MPR** removes the cut and restores the standard planes.
+
 ### 5.9 Screw Metrics and Grading
 
 The **Selected Screw** panel reports:
@@ -236,7 +278,9 @@ The **Selected Screw** panel reports:
 - **Safety (grade):** a Gertzbein-Robbins grade computed from the cylinder-surface distance to the vertebra boundary on the TotalSegmentator mask. HU plays no role in the grade; the reported mean and minimum HU along the trajectory are informational only. The grade reads `N/A` until a TotalSegmentator mask exists for the screw's vertebra.
 - **Pedicle:** the measured pedicle isthmus width. It is shown in red when the level fell below the "Narrow pedicle" threshold, meaning the planner used the smallest catalogue diameter and capped the lateral (in-out-in) breach to protect the medial wall. The same red marking, with the width followed by `?` and the row reading "width not trusted", means the analyser rejected the measurement itself (it fell outside the plausible band for that level, in either direction). The narrow policy is applied either way, but only a trusted width is quoted as a finding.
 
-Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width, keeps the tip at least 4 mm behind the anterior cortex, and selects lengths from the 25-55 mm catalogue in 5 mm steps. Wall clearance now defaults to 0 mm; raise it in Planning parameters if you want a buffer beyond the zero-breach requirement described above. A clearance of exactly 1.0 mm saved by an older build is reset to 0 mm once, with a note in the status bar, because that value was the old default rather than a choice; any other saved value (0.5 mm, 1.5 mm) is respected and stays visible in that spin box, as is a 1.0 mm you set yourself afterwards. The "Parallel to upper endplate" checkbox and its tolerance spin box (the endplate band, 10° by default) aim the trajectory at the upper endplate instead of horizontally; both live in Planning parameters alongside the sizing fields. These values are workflow presets, not universal clinical recommendations.
+**Entry cortex.** Grading starts 3 mm past the point where the screw's axis first enters the vertebra, not at the head. A head seated on the dorsal cortex (5.4) straddles the surface it enters, so grading it from the head would read every screw as a breach of up to its own radius before it ever reaches the pedicle — on the project's sample study, 11 of the 12 re-seated screws graded B or C for nothing but the entry cortex. Gertzbein-Robbins grades the pedicle wall, not the entry cortex, so this 3 mm entry zone is excluded from the check. It is measured from where the axis enters bone rather than from the head itself: a head placed proud of the bone also skips its own stretch in air before the axis enters the vertebra, and a head buried in bone gets only its first 3 mm treated leniently — far short of the isthmus, where a medial breach actually matters. A screw whose axis never enters the vertebra is graded from its head, so it still reads as the breach it is. The same 3 mm is excluded from every figure taken from grading — the grade itself, breach distance and direction split, the Wall margin, and the mean/min HU in the Trajectory HU row (CSV `mean_hu` / `min_hu`). This applies to every graded screw: automatic proposals from the Optimizer and Legacy planners and the displayed grade of CBT screws, manually placed screws, screws you drag or otherwise edit, and screws re-graded after segmentation or on plan load — so dragging a planned screw never re-grades it by a stricter rule than the one it was planned under. One consequence: a plan saved by an earlier build may show better grades when it is re-graded now — on load while a segmentation is available, or after running segmentation again — because the entry cortex is no longer graded (see also section 9).
+
+Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width, keeps the tip at least 4 mm behind the anterior cortex measured along the screw's own axis, and selects lengths from the 25-55 mm catalogue in 5 mm steps. Wall clearance now defaults to 0 mm; raise it in Planning parameters if you want a buffer beyond the zero-breach requirement described above. A clearance of exactly 1.0 mm saved by an older build is reset to 0 mm once, with a note in the status bar, because that value was the old default rather than a choice; any other saved value (0.5 mm, 1.5 mm) is respected and stays visible in that spin box, as is a 1.0 mm you set yourself afterwards. The "Parallel to upper endplate" checkbox and its tolerance spin box (the endplate band, 10° by default) aim the trajectory at the upper endplate instead of horizontally; both live in Planning parameters alongside the sizing fields. These values are workflow presets, not universal clinical recommendations.
 
 Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
 
@@ -244,11 +288,11 @@ Loaded volumes are reoriented to LPS (identity direction) before display. An obl
 
 Once a screw is graded against a segmentation, the **Selected Screw** panel (Body HU, Wall margin, Facet, Heary rows) and the CSV/JSON export report a bundle of literature-based bone-quality and safety measurements:
 
-- **Trajectory HU (mean / min):** the mean and minimum Hounsfield Unit sampled along the screw's cylindrical trajectory.
+- **Trajectory HU (mean / min):** the mean and minimum Hounsfield Unit sampled along the screw's whole cylindrical trajectory, entry zone included — unlike the grade-related figures in 5.9, this sampling starts at the head.
 - **Pedicle HU:** mean HU restricted to trajectory samples within 10 mm of the pedicle isthmus centre. Auto-planned screws only — a manually placed screw has no isthmus centre to sample around.
 - **Vertebral body HU:** mean HU of an 8×8×6 mm ellipsoidal region of interest at the vertebral body centre, intersected with that vertebra's segmentation label. Auto-planned screws only, for the same reason.
 - **Trajectory/body HU ratio:** trajectory mean HU divided by vertebral body HU.
-- **Minimum cortical wall distance ("Wall margin"):** the closest approach, in mm, between the screw and the cortical wall.
+- **Minimum cortical wall distance ("Wall margin"):** the closest approach, in mm, between the screw and the cortical wall (past the 3 mm entry zone, see 5.9).
 - **Heary breach direction:** the anatomical direction of the worst cortical breach — medial, lateral, anterior, posterior, superior, or inferior (Heary 2004). Reported as "mediolateral" for a medial/lateral breach on a manually placed screw with no known side, and "none" when there is no breach.
 - **Facet-joint violation grade (0-3):** an approximation of the Babu (2012) grading, measured from the proximal third of the screw to the cephalad vertebra's segmentation label — 0 no contact, 1 abuts the facet within 1 mm, 2 enters it by less than 1 mm, 3 penetrates it by 1 mm or more.
 
@@ -349,8 +393,10 @@ In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; se
 | Double-click anatomy | Focus on a point |
 | `Reset View` | Restore sagittal startup orientation |
 | `Vertebra Transparency` | Reveal or obscure internal screws |
-| `Planes On / Off` | Show or hide MPR planes |
+| `Planes On / Off` | Show or hide the MPR planes — the screw-aligned ones while Screw MPR is active |
 | Double-click header, or `Ctrl+M` | Maximise the 3D pane; repeat to restore |
+
+See 5.8 for how Screw MPR changes what these planes show and cut.
 
 Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
 
@@ -360,7 +406,7 @@ Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on mac
 - Export supported planning tables as CSV.
 - Export supported bone surfaces as STL.
 
-Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, and the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`.
+Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. A plan saved by an earlier build may show better grades once re-graded this way, because the entry cortex is no longer graded (see 5.9) — nothing in the plan file itself changes. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, and the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`.
 
 Planning files, screenshots, and meshes may still be identifiable derivatives. Review them before sharing.
 

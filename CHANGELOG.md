@@ -11,6 +11,81 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
+## [Unreleased]
+
+A workflow bar for the three main planning steps, a 3D view of Screw MPR, and
+a planner fix that seats screw heads on the dorsal cortex, runs each screw to
+the anterior margin, and grades from where the axis enters bone rather than
+from the head.
+
+### Added
+
+- A workflow bar above the MPR/3D views reading "① Open DICOM → ② Segment →
+  ③ Plan Screws". Each step runs the existing action it names. A finished
+  step shows a check mark; the next step is highlighted even while disabled,
+  and a disabled step's tooltip says what unlocks it. Step 2 needs a real
+  TotalSegmentator mask to count as done (a threshold fallback does not);
+  step 3 needs automatically planned screws, and deleting them reopens it.
+  Loading a new study resets the bar.
+- Screw MPR now has a 3D counterpart: the 3D view shows the three
+  screw-aligned planes, each an 80 mm square coloured like the pane header
+  that displays it, in place of the standard axial/sagittal/coronal
+  indicators. The CT volume and vertebra meshes are cut at the cross-section,
+  keeping the tip side, and the cut follows Position; screws are never cut.
+
+### Changed
+
+- **Screw heads are now seated on the dorsal cortex, along the screw's own
+  axis** -- the last bone the centreline meets, where a drill would start --
+  instead of where the whole cross-section first fitted. A head is rejected
+  as unreachable when the same vertebra's bone still lies within 15 mm
+  behind it along that axis; this replaces the old 6 mm posterior-cortex
+  burial bound.
+- **Grading now starts 3 mm past where the screw's axis enters bone**
+  (`ENTRY_ZONE_MM`), not at the head, because a head seated on the cortex
+  straddled the surface it entered and read as a breach of its own radius.
+  This applies to every graded screw: automatic proposals (Optimizer,
+  Legacy, and the displayed grade of CBT screws), manual and edited screws,
+  and re-grading on segmentation or plan load.
+- **Screw length is the longest catalogue length that keeps the Anterior
+  margin (4 mm by default) ahead of the tip, measured along the screw's own
+  axis** to the anterior vertebral-body cortex, rather than clearance
+  required all around the distal cylinder; the distal shaft now only needs
+  containment and the configured Wall clearance, like the rest of the shaft.
+  Only the longest feasible length per trajectory is ranked, so the Length
+  weight compares trajectories rather than lengths on one trajectory.
+- The Legacy planner and the automatic per-side legacy fallback re-seat the
+  head on the dorsal cortex and extend it to the same margin, but without
+  the 15 mm dorsal-approach test, and keep the re-seated head only when it
+  breaches no more -- medially or in total -- than the head it replaced.
+  Cortical bone trajectory (CBT) selection is unchanged.
+- `Planes On / Off` now applies to whichever plane set is currently shown,
+  standard or screw-aligned.
+- A plan re-graded on load or after re-running segmentation may show better
+  grades than when it was saved by an earlier build, because the entry
+  cortex is no longer graded -- nothing in the plan file itself changes.
+
+### Fixed
+
+- Planned screws were short with buried heads: measured along each screw's
+  own axis on the sample study, heads sat 5-21 mm inside the lamina and tips
+  stopped 5-20 mm short of the anterior cortex. On the sample study (refined
+  mask, default settings):
+
+  |                  | before           | after                    |
+  |------------------|------------------|--------------------------|
+  | screws           | 12               | 13 (S1-left now planned) |
+  | legacy fallbacks | 1                | 0                        |
+  | grades           | A 10 / B 2       | A 13                     |
+  | medial breach    | L5-right 1.41 mm | 0 everywhere             |
+  | head burial      | 5-21 mm          | 0-0.2 mm                 |
+
+  Lengths (left / right) became L1 35/35, L2 50/45, L3 35/40, L4 40/35,
+  L5 45/35, T12 35/25 mm, where most sides had been 25 mm before (L1, L2
+  and L4 on the left among them).
+- While Screw MPR was active, the 3D view kept drawing the standard
+  axial/sagittal/coronal planes and left the volume uncut.
+
 ## [0.2.0] - 2026-09-11
 
 The first release after the public baseline. It adds automatic trajectory
@@ -199,5 +274,6 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0
