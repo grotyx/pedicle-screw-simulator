@@ -82,6 +82,23 @@ NARROW_ENTRY_GRID_MM: Tuple[float, ...] = (-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0)
 #: Head-misalignment (mm) at which the rod objective costs a full unit of score.
 ROD_TOLERANCE_MM = 3.0
 
+#: Same-side convergence disagreement (deg RMS) at which the construct's
+#: convergence objective costs a full unit of score, mirroring
+#: :data:`ROD_TOLERANCE_MM` for the rod line.
+CONVERGENCE_TOLERANCE_DEG = 5.0
+
+#: Width of the convergence bins the candidate pool is required to cover, so
+#: the construct descent always has a trajectory at a *different* angle to move
+#: to and is not trapped in the 10 near-identical bests of one bin.
+CONVERGENCE_BIN_DEG = 2.5
+
+#: Labels whose screws are left out of the convergence agreement: a sacral
+#: screw's angle is anatomically different from the lumbar levels above it, so
+#: including it would drag every other level's angle toward it.  Values are the
+#: TotalSegmentator labels in
+#: :data:`src.core.pedicle_analyzer.VERTEBRA_LABELS` (25 sacrum, 26 S1).
+_SACRAL_LABELS = frozenset({25, 26})
+
 #: Fraction of a screw's own best score the construct re-ranking may trade away.
 CONSTRUCT_SCORE_TOLERANCE = 0.10
 
@@ -811,6 +828,104 @@ def rod_misalignment_mm(head_points: np.ndarray) -> float:
     direction = np.linalg.svd(centred, full_matrices=False)[2][0]
     residuals = centred - np.outer(centred @ direction, direction)
     return float(np.sqrt(np.mean(np.sum(residuals**2, axis=1))))
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """Lower weighted median, averaging the two middles on an exact tie.
+
+    With uniform weights this reproduces :func:`numpy.median` for both odd and
+    even counts, so the neighbour weighting degrades cleanly to a plain median
+    when no level ordering is known.
+    """
+    order = np.argsort(values, kind="stable")
+    ordered = values[order]
+    ordered_weights = weights[order]
+    total = float(ordered_weights.sum())
+    if total <= 0.0:
+        return float(np.median(values))
+    cumulative = np.cumsum(ordered_weights)
+    half = total / 2.0
+    index = min(int(np.searchsorted(cumulative, half - 1e-12, side="left")), ordered.size - 1)
+    if index + 1 < ordered.size and abs(float(cumulative[index]) - half) <= 1e-9:
+        return float((ordered[index] + ordered[index + 1]) / 2.0)
+    return float(ordered[index])
+
+
+def convergence_deviations_deg(
+    angles: Sequence[float],
+    levels: Optional[Sequence[Optional[int]]] = None,
+    exclude_s1: bool = True,
+) -> List[Optional[float]]:
+    """How far each screw's convergence sits from its neighbours' agreement.
+
+    ``levels`` are TotalSegmentator vertebra labels (see
+    :data:`src.core.pedicle_analyzer.VERTEBRA_LABELS`), one per angle, and may
+    be ``None`` where the level is unknown.  Adjacent-level agreement matters
+    more to a surgeon than global agreement -- a lumbar construct legitimately
+    converges more at L5 than at L1 -- so each screw is compared against a
+    median in which the entries one level away (and itself) count double.  With
+    no levels every weight is 1 and this is the plain median of the side.
+
+    Positions excluded from the term (sacral screws when ``exclude_s1``) come
+    back as ``None`` rather than 0.0, so a caller can tell "agrees perfectly"
+    from "was not asked to agree".
+    """
+    values = [float(a) for a in angles]
+    count = len(values)
+    resolved: List[Optional[int]] = (
+        list(levels) if levels is not None else [None] * count
+    )
+    if len(resolved) != count:
+        raise ValueError(
+            f"levels must have one entry per angle, got {len(resolved)} for {count}"
+        )
+    included = [
+        i
+        for i in range(count)
+        if not (exclude_s1 and resolved[i] is not None and resolved[i] in _SACRAL_LABELS)
+    ]
+    deviations: List[Optional[float]] = [None] * count
+    if len(included) < 2:
+        for i in included:
+            deviations[i] = 0.0
+        return deviations
+
+    included_values = np.array([values[i] for i in included], dtype=np.float64)
+    for i in included:
+        weights = np.array(
+            [
+                2.0
+                if (
+                    resolved[i] is not None
+                    and resolved[j] is not None
+                    and abs(int(resolved[i]) - int(resolved[j])) <= 1
+                )
+                else 1.0
+                for j in included
+            ],
+            dtype=np.float64,
+        )
+        deviations[i] = values[i] - _weighted_median(included_values, weights)
+    return deviations
+
+
+def convergence_spread_deg(
+    angles: Sequence[float],
+    levels: Optional[Sequence[Optional[int]]] = None,
+    exclude_s1: bool = True,
+) -> float:
+    """RMS convergence disagreement of one side, in degrees.
+
+    0.0 when fewer than two screws take part, which is the honest answer: one
+    screw always agrees with itself, and reporting anything else would let the
+    construct term push a single-level fusion around for nothing.
+    """
+    deviations = [
+        d for d in convergence_deviations_deg(angles, levels, exclude_s1) if d is not None
+    ]
+    if len(deviations) < 2:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(np.asarray(deviations, dtype=np.float64)))))
 
 
 def optimize_construct(

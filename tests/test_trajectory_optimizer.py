@@ -584,3 +584,62 @@ def test_flat_phantom_without_an_endplate_normal_is_unaffected():
     assert ranked
     assert all(c.components["endplate"] == pytest.approx(1.0) for c in ranked)
     assert not any(w.startswith(ENDPLATE_BAND_RELAXED_PREFIX) for w in ranked[0].warnings)
+
+# ------------------------------------------------------- convergence spread
+def test_convergence_spread_is_zero_below_two_screws():
+    from src.core.trajectory_optimizer import convergence_spread_deg
+
+    assert convergence_spread_deg([]) == pytest.approx(0.0)
+    assert convergence_spread_deg([12.0]) == pytest.approx(0.0)
+    assert convergence_spread_deg([12.0, 12.0, 12.0]) == pytest.approx(0.0)
+
+
+def test_convergence_spread_without_levels_is_rms_about_the_median():
+    from src.core.trajectory_optimizer import convergence_spread_deg
+
+    # median 10 -> deviations -5, 0, +5
+    assert convergence_spread_deg([5.0, 10.0, 15.0]) == pytest.approx(math.sqrt(50.0 / 3.0))
+
+
+def test_convergence_deviations_report_each_screws_offset():
+    from src.core.trajectory_optimizer import convergence_deviations_deg
+
+    assert convergence_deviations_deg([5.0, 10.0, 15.0]) == pytest.approx([-5.0, 0.0, 5.0])
+
+
+def test_s1_is_excluded_from_the_convergence_term():
+    from src.core.trajectory_optimizer import (
+        convergence_deviations_deg,
+        convergence_spread_deg,
+    )
+
+    angles = [10.0, 10.0, 40.0]
+    levels = [28, 27, 26]           # L4, L5, S1 (see pedicle_analyzer.VERTEBRA_LABELS)
+
+    assert convergence_spread_deg(angles, levels) == pytest.approx(0.0)
+    assert convergence_deviations_deg(angles, levels)[2] is None
+    # Including it would let one sacral screw dominate the whole side.
+    assert convergence_spread_deg(angles, levels, exclude_s1=False) == pytest.approx(
+        math.sqrt(300.0)
+    )
+
+
+def test_neighbouring_levels_count_double_in_the_median():
+    """A construct that steps from 20 deg to 5 deg at L3/L4 is judged locally."""
+    from src.core.trajectory_optimizer import (
+        convergence_deviations_deg,
+        convergence_spread_deg,
+    )
+
+    angles = [20.0, 20.0, 20.0, 5.0, 5.0]
+    levels = [31, 30, 29, 28, 27]           # L1, L2, L3, L4, L5
+
+    weighted = convergence_spread_deg(angles, levels)
+    unweighted = convergence_spread_deg(angles)     # plain median of the whole side
+
+    assert weighted == pytest.approx(math.sqrt(11.25))
+    assert unweighted == pytest.approx(math.sqrt(90.0))
+    assert weighted < unweighted
+    assert convergence_deviations_deg(angles, levels) == pytest.approx(
+        [0.0, 0.0, 0.0, -7.5, 0.0]
+    )
