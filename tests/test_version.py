@@ -29,7 +29,10 @@ def test_citation_and_notices_match_VERSION():
     citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
     assert re.search(rf'version:\s*"?{re.escape(version)}"?', citation)
     assert version in (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "0.1.0" not in (
+    # The workflow has to derive the version from the VERSION file, so the
+    # current literal must not appear in it -- checked against whatever the
+    # version is now rather than the one this test was written against.
+    assert version not in (
         PROJECT_ROOT / ".github" / "workflows" / "build-desktop.yml"
     ).read_text(encoding="utf-8")
 

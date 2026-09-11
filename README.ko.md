@@ -4,7 +4,7 @@
 
 DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
 
-**버전:** 0.1.0
+**버전:** 0.2.0
 
 **주요 검증 환경:** macOS, Python 3.12
 
@@ -19,17 +19,20 @@ DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR
 ## 주요 기능
 
 - 여러 시리즈를 포함한 DICOM CT 불러오기
-- Axial, Sagittal, Coronal MPR 동기화
-- VTK 기반 CPU 볼륨 렌더링 및 척추별 3D 메시 표시
-- GPU 우선 TotalSegmentator 연동 및 CPU 재시도
+- Axial, Sagittal, Coronal MPR 동기화. anterior가 위로 오며 A/P/L/R 방향 표시 제공
+- GPU를 활용하는 VTK 볼륨 렌더링(macOS는 CPU 레이캐스팅) 및 척추별 3D 메시 표시
+- GPU 우선 TotalSegmentator 연동 및 CPU 재시도, 업샘플링 계단 현상을 없애는 CT 기반 마스크 정제
 - 로컬에 설치한 척추경 세부영역(subregion) nnU-Net 모델을 이용한 선택적 isthmus 라벨 정밀화(소스 설치 전용)
 - 여러 척추 레벨 선택과 자동 스크류 제안
 - 다목적 궤적 최적화기(기본값)와 legacy 플래너 대체, 그리고 피질골 궤적(cortical bone trajectory, CBT) 계획 모드
-- 기본 MPR 및 스크류 방향에 정렬된 oblique MPR
+- 좁은 척추경 정책: 측면을 건너뛰는 대신 가장 작은 임플란트를 쓰고 medial 벽을 보호하며 해당 레벨을 표시
+- 상부 종판에 평행한 궤적, 그리고 construct 단위의 로드 직선·수렴각 조정
+- medial/lateral/두미 방향으로 나눈 Gertzbein-Robbins 등급, 골질 HU 지표, Heary 방향, facet 침범 등급
+- 기본 MPR 및 스크류 방향에 정렬된 oblique MPR. Screw MPR 평면은 회전·평행이동 가능
 - MPR과 3D에서 entry, tip, 전체 스크류 직접 수정
 - 수동 스크류 추가, 거리 측정, 각도 측정
 - JSON 계획 저장·불러오기 및 지원되는 CSV/STL 내보내기
-- 세 가지 UI 테마, MPR 이동·확대, 3D 탐색 기능
+- 편집 가능한 계획 파라미터, 나사별 검토 표와 검사창, 네 가지 UI 테마, MPR 이동·확대, 창 최대화, 3D 탐색 기능
 
 ## 빠른 시작
 
@@ -94,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.1.0 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
+`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.2.0 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
 
 ## 단독 실행 패키지
 
@@ -155,6 +158,7 @@ Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함
 
 - [English User Guide](docs/USER_GUIDE.md)
 - [한국어 사용설명서](docs/USER_GUIDE.ko.md)
+- [변경 이력](CHANGELOG.ko.md) · [Changelog](CHANGELOG.md)
 - [기여 안내](CONTRIBUTING.md)
 - [보안 및 의료데이터 보호](SECURITY.md)
 - [로컬 DICOM 데이터 정책](data/README.md)
@@ -195,7 +199,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 연구에 이 프로그램을 사용했다면 GitHub의 **Cite this repository** 기능이나 [`CITATION.cff`](CITATION.cff)를 사용하십시오.
 
-> Park S-M. Pedicle Screw Simulator (Version 0.1.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
 

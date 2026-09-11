@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 
 ## 1. Purpose and Safety
 
@@ -73,10 +73,27 @@ The Planning workspace contains:
 
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes
-- **Workflow panel:** study, segmentation, planning, selected screw, and validation controls
+- **Selected Screw inspector:** a pinned summary of the screw you are working on — size, angles, endplate angle, construct alignment, grade, HU statistics, facet and Heary classification, and the pedicle verdict
+- **Control tabs:** **Study** (series, display, segmentation), **Planning** (level selection, planning parameters, proposals, screw review), and **Tools** (manual placement and measurement)
 - **Tools palette:** Select, Add Screw, Distance, and Angle
 
+### Layouts
+
 Use **Planning** for a large 3D view and compact MPR panels. Use **MPR Focus** for a larger 2×2 review layout.
+
+### Orientation markers
+
+Each MPR pane labels its four edges with the anatomical direction you are looking toward: **A**nterior, **P**osterior, patient **L**eft, patient **R**ight, **S**uperior, **I**nferior. The axial view opens in radiological convention — anterior at the top, patient left on the right of the screen — so a left pedicle appears on the right of the image. A letter followed by an apostrophe means the axis is oblique to the screen and the label is the nearest direction rather than an exact one.
+
+Always confirm the markers against the patient's known laterality before planning. They are derived from the DICOM direction cosines, which a mislabelled or hand-edited series can misstate.
+
+### Maximise a single pane
+
+Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are working in to the full viewing area. The same gesture restores the previous layout. `Ctrl+M` follows the pane your pointer last worked in, whichever tool is active.
+
+### Themes
+
+**View → Theme** offers one dark and three light themes. The choice is remembered between sessions.
 
 ## 5. Standard Planning Workflow
 
@@ -95,6 +112,18 @@ Use **Planning** for a large 3D view and compact MPR panels. Use **MPR Focus** f
 4. Review segmentation boundaries before planning.
 
 In standalone builds TotalSegmentator is already included. If its first model download or inference fails, the application produces a threshold fallback and reports the reason. Never assume fallback output is clinically accurate. Source installations can add the AI runtime with `--with-totalseg`.
+
+#### Refine boundaries against CT
+
+TotalSegmentator infers at about 1.5 mm and its result is upsampled to the CT grid, which on a sub-millimetre study leaves visible stair-steps on every surface. Those steps are not anatomy, and they distort both the 3D rendering and the pedicle isthmus width measured from the mask.
+
+Leave **Refine boundaries against CT** enabled (the default) to re-decide the boundary band against the CT itself: each label is anti-aliased, voxels within 1.5 mm of a surface are re-assigned by bone density, interior holes are filled in 3D, and only the largest connected component of each vertebra is kept. It adds roughly one to two seconds on a 512 × 512 × 292 study and can be cancelled.
+
+The status line reports which mask is in use — `Refined mask` or `Raw mask` — and names any label the refinement declined to change. A refinement that would have altered a label's volume by more than 30 % is rejected and the raw label is kept, on the assumption that such a change is a failure rather than a correction.
+
+Turn the option off when you want the model output exactly as produced, for example when comparing against another tool's mask.
+
+**Re-running segmentation discards the pedicle analyses behind the current plan.** Screw grades are recomputed against the new mask immediately, but pedicle width, the narrow verdict, and the endplate angle become unavailable until you generate proposals again — those come from an analysis of the mask that was replaced, and reporting them beside a grade taken from a different mask would be misleading.
 
 ### 5.3 Select Vertebral Levels
 
@@ -179,6 +208,22 @@ CBT screws are graded through the exact same finalization path as traditional sc
 5. Select **Std MPR** to restore standard planes.
 
 Screw MPR shows the selected screw. Standard MPR shows screws intersecting the current slice.
+
+#### Moving the screw-aligned planes
+
+The oblique planes are not frozen. You can look around the screw without leaving screw-aligned review:
+
+| Control | Action |
+|---|---|
+| Mouse wheel | Slide the plane along the screw axis (the same travel as **Position**) |
+| `Shift` + wheel | Rotate the plane around the screw axis |
+| Middle-drag | Offset the plane sideways, keeping the screw direction |
+| `Ctrl/Cmd` + wheel | Zoom |
+| Right-drag | Adjust window/level |
+
+Each pane's readout shows the current rotation and offset, so a view you have moved is never mistaken for the canonical one. Rotation is useful for checking the medial wall along the whole corridor rather than only in the plane the screw happens to define; a sideways offset lets you compare the trajectory against the pedicle wall a few millimetres to one side of it.
+
+Selecting a different screw, or returning to **Std MPR** and back, resets rotation and offset to zero.
 
 ### 5.9 Screw Metrics and Grading
 
@@ -290,6 +335,9 @@ Measurements belong to the cut where they were created. They hide on another cut
 | `Pan` then left-drag | Move image and overlays |
 | `− / + / Fit` | Zoom out, zoom in, or fit |
 | Right-drag | Adjust window/level |
+| Double-click header, or `Ctrl+M` | Maximise this pane; repeat to restore |
+
+In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; see 5.8.
 
 ### 3D
 
@@ -302,6 +350,9 @@ Measurements belong to the cut where they were created. They hide on another cut
 | `Reset View` | Restore sagittal startup orientation |
 | `Vertebra Transparency` | Reveal or obscure internal screws |
 | `Planes On / Off` | Show or hide MPR planes |
+| Double-click header, or `Ctrl+M` | Maximise the 3D pane; repeat to restore |
+
+Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
 
 ## 9. Save and Export
 
@@ -325,6 +376,10 @@ Use `+`, enable `Pan` and drag, or select `Fit`. Use **Fit MPR** to reset all MP
 - Close memory-intensive applications.
 - Allow the first run to finish downloading model weights; subsequent runs reuse them.
 - Remember that lower-resolution segmentation may reduce boundary accuracy.
+
+### 3D View Is Slow or Stutters
+
+Volume rendering falls back to CPU ray casting when no usable GPU context is available — over Remote Desktop, inside a virtual machine, or with software OpenGL. The application detects this and re-downsamples the volume automatically, so the view stays responsive at lower detail; the log records `render mode=cpu-raycast` when it happens. For full-detail rendering, run on the machine directly with a working GPU driver. Lowering `Vertebra Transparency` or turning `Planes Off` also reduces the load.
 
 ### A Planned Screw Is Missing
 
@@ -363,6 +418,7 @@ Open **Help → About Pedicle Screw Simulator** to view the installed version, c
 - Academic affiliation: Seoul National University College of Medicine
 - Website: [https://sangmin.me](https://sangmin.me)
 - Citation: see [`CITATION.cff`](../CITATION.cff)
+- Release history: see [`CHANGELOG.md`](../CHANGELOG.md)
 
 ## 12. Validating Plans
 
