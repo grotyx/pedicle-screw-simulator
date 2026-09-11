@@ -125,12 +125,17 @@ The collapsible **Planning parameters** group below **Planning** exposes the set
 | Field | Default | Meaning |
 |---|---:|---|
 | Pedicle fill | 0.80 | Screw diameter as a fraction of the narrowest measured pedicle (isthmus) width |
-| Wall clearance | 1.0 mm | Minimum distance kept between the screw and the cortical wall |
+| Wall clearance | 0.0 mm | Minimum distance kept between the screw and the cortical wall |
 | Anterior margin | 4.0 mm | Safety margin kept behind the anterior vertebral body cortex |
 | Max convergence | 35° | Largest medial convergence angle the planner may use |
 | HU threshold | 123 HU | Trajectory HU below which the loosening-risk warning is flagged |
+| Narrow pedicle (mm) | 5.0 mm | Pedicle width below which the smallest catalogue screw is planned and the level is marked narrow |
+| Lateral breach cap (mm) | 2.0 mm | Lateral (in-out-in) breach a narrow pedicle may accept; the medial wall is never breached |
+| Parallel to upper endplate | On | Aims the trajectory along the upper endplate instead of horizontally |
+| Endplate band | 10° | How far from the endplate direction the optimizer may angle the screw while the option above is on |
+| Construct alignment | 0.30 | Weight given to lining screw heads up for the rod and agreeing on convergence across levels (see 5.6) |
 
-Select **Reset Defaults** to restore these five built-in values, along with the planner mode, trajectory family, and objective weights described below, and save them all immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
+Select **Reset Defaults** to restore these ten built-in values, along with the planner mode, trajectory family, and the Safety and Density objective weights described below, and save them all immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
 
 ### 5.6 Trajectory Optimizer
 

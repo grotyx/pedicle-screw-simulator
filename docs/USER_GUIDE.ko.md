@@ -125,12 +125,17 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 | 항목 | 기본값 | 의미 |
 |---|---:|---|
 | Pedicle fill | 0.80 | 측정된 척추경 협부(isthmus) 폭 대비 스크류 직경의 비율 |
-| Wall clearance | 1.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
+| Wall clearance | 0.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
 | Anterior margin | 4.0 mm | anterior cortex 뒤쪽에 유지하는 안전 여유 |
 | Max convergence | 35° | 플래너가 사용할 수 있는 최대 medial 수렴각 |
 | HU threshold | 123 HU | 이완(loosening) 위험 경고가 표시되는 궤적 HU 기준값 |
+| Narrow pedicle (mm) | 5.0 mm | 이보다 좁으면 카탈로그의 가장 작은 스크류를 계획하고 해당 레벨을 narrow로 표시하는 척추경 폭 기준값 |
+| Lateral breach cap (mm) | 2.0 mm | narrow 척추경에서 허용하는 lateral(in-out-in) 천공 한도이며, medial 벽은 절대 뚫지 않음 |
+| Parallel to upper endplate | 켜짐 | 궤적을 수평 대신 상위 종판(upper endplate)을 따라 정렬함 |
+| Endplate band | 10° | 위 옵션이 켜져 있을 때 최적화기가 종판 방향에서 얼마나 벗어난 각도까지 허용하는지 |
+| Construct alignment | 0.30 | 스크류 헤드를 로드에 맞춰 정렬하고 레벨 간 수렴각을 맞추는 데 주어지는 가중치(5.6절 참고) |
 
-**Reset Defaults**를 선택하면 이 다섯 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
+**Reset Defaults**를 선택하면 이 열 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, Safety·Density 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
 
 ### 5.6 궤적 최적화기(Trajectory Optimizer)
 
