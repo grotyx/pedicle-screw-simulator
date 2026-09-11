@@ -451,6 +451,66 @@ def test_maximize_menu_action_uses_ctrl_m_and_leaves_f11_alone(ui_main_window):
     assert window._maximized_view is None
 
 
+def _press(window, pane):
+    """Send a real left press to *pane* so the app-level focus filter sees it."""
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(4.0, 4.0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.instance().notify(pane, event)
+
+
+def test_ctrl_m_follows_the_pane_the_pointer_is_working_in(ui_main_window):
+    """Panning or dragging in a pane has to count as being in it.
+
+    ``crosshair_moved`` fires only from ``MPRViewer._on_left_click``, past the
+    pan, measure and screw-pick branches, so every other way of working in a
+    pane left the focus behind.  Maximising also used to pin the focus to the
+    maximised pane, so 3D stayed the Ctrl+M target after a restore no matter
+    what the user did next.
+    """
+    window = ui_main_window
+
+    window.toggle_maximized_view("3d")
+    assert window._maximized_view == "3d"
+    window.toggle_maximized_view("3d")
+    assert window._maximized_view is None
+
+    _press(window, window.sagittal_viewer)
+    window._maximize_view_action.trigger()
+
+    assert window._maximized_view == "sagittal"
+
+
+def test_a_press_inside_a_pane_child_still_names_the_pane(ui_main_window):
+    """The press lands on a VTK render window, not on the pane itself."""
+    from PyQt6.QtWidgets import QWidget
+
+    window = ui_main_window
+    child = QWidget(window.coronal_viewer)
+
+    _press(window, child)
+    window._maximize_view_action.trigger()
+
+    assert window._maximized_view == "coronal"
+
+
+def test_a_press_outside_every_pane_leaves_the_focus_alone(ui_main_window):
+    window = ui_main_window
+    _press(window, window.coronal_viewer)
+
+    _press(window, window.screw_list_widget)
+    window._maximize_view_action.trigger()
+
+    assert window._maximized_view == "coronal"
+
+
 def test_set_view_layout_rejects_an_unknown_maximize_target(ui_main_window):
     with pytest.raises(ValueError, match="Unknown view layout"):
         ui_main_window.set_view_layout("maximize:nope")

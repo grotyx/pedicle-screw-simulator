@@ -4,7 +4,7 @@ import logging
 import sys
 from typing import List, Optional
 
-from PyQt6.QtCore import QSettings, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -361,7 +361,6 @@ class MainWindow(QMainWindow):
             self._view_layout.setRowStretch(0, 1)
             self._view_layout.setColumnStretch(0, 1)
             self._maximized_view = maximized
-            self._focused_view_name = maximized
         else:
             for pane in panes.values():
                 pane.setVisible(True)
@@ -442,9 +441,66 @@ class MainWindow(QMainWindow):
             self.toggle_maximized_view(self._focused_view_name)
 
     def _remember_focused_view(self, plane: str) -> None:
-        """Track the last MPR pane the user interacted with."""
+        """Track the last pane the user interacted with."""
         if plane in self.MAXIMIZABLE_VIEWS:
             self._focused_view_name = str(plane)
+
+    def _install_focus_tracking(self) -> None:
+        """Follow the pointer into any pane, whatever the active tool.
+
+        ``crosshair_moved`` is emitted only from ``MPRViewer._on_left_click``,
+        past the pan, measure and screw-pick branches, and the 3D pane emits
+        nothing comparable at all.  So panning the sagittal view, dragging a
+        screw or orbiting in 3D left ``_focused_view_name`` wherever it last
+        happened to be -- and since maximising used to pin it to the maximised
+        pane, Ctrl+M after a maximise/restore re-maximised that same pane
+        instead of the one being worked in.
+
+        The filter goes on the application rather than on each pane: the panes
+        own VTK widgets that are created and replaced outside this class, and a
+        filter installed per child would miss every one of them made later.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    #: Events that count as "the user is working in this pane".
+    _FOCUS_EVENT_TYPES = frozenset(
+        {QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
+    )
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """Record which pane a press or wheel landed in; never consume it."""
+        if event.type() in self._FOCUS_EVENT_TYPES:
+            name = self._pane_name_for(obj)
+            if name is not None:
+                self._focused_view_name = name
+        return super().eventFilter(obj, event)
+
+    def _pane_name_for(self, obj: QObject) -> Optional[str]:
+        """Which maximisable pane contains *obj*, if any.
+
+        Walks up from the widget the event reached, so a press on a VTK render
+        window deep inside a pane still names the pane.  Guarded with
+        ``getattr``: the filter is live from construction, and an event can
+        arrive before every viewer attribute exists.
+        """
+        panes = [
+            (name, getattr(self, attribute, None))
+            for name, attribute in (
+                ("axial", "axial_viewer"),
+                ("sagittal", "sagittal_viewer"),
+                ("coronal", "coronal_viewer"),
+                ("3d", "viewer_3d"),
+            )
+        ]
+        node = obj
+        while node is not None:
+            for name, pane in panes:
+                if pane is not None and node is pane:
+                    return name
+            node = node.parent()
+        return None
 
     def _create_planning_cockpit(self) -> QWidget:
         """Build the pinned screw inspector shown above the control tabs."""
@@ -1508,6 +1564,7 @@ class MainWindow(QMainWindow):
             viewer.crosshair_moved.connect(
                 lambda plane, *_unused: self._remember_focused_view(plane)
             )
+        self._install_focus_tracking()
         self.screw_list_widget.currentRowChanged.connect(
             lambda *_unused: self.refresh_mode_indicators()
         )
@@ -2719,6 +2776,13 @@ class MainWindow(QMainWindow):
                        self.coronal_viewer, self.viewer_3d]:
             if viewer:
                 viewer.cleanup()
+
+        # The pane-focus filter is installed on the application, which outlives
+        # this window; taking it off here keeps a closing window from being
+        # asked about events on the way out.
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
 
         self._seg_ctrl.reset_state()
 
