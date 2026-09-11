@@ -381,6 +381,13 @@ class ScrewGrader:
         if side is None:
             return breach, breach, breach, min_wall
         direction = np.asarray(unit_trajectory(entry, target), dtype=np.float64)
+        if not direction.any():
+            # Same guard, same reason, as ``cylinder_points``: a zero-length
+            # trajectory has no perpendicular plane, so ``_radial_offsets``
+            # would normalise by a zero norm and hand back ``NaN`` offsets
+            # whose membership test reads as "nothing is medial" -- a 0 mm
+            # medial wall for a screw that never left the cortex.
+            return breach, breach, breach, min_wall
         if self._radial > 0:
             offsets = np.asarray(
                 self._radial_offsets(direction, float(diameter_mm) / 2.0),

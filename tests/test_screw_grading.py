@@ -477,6 +477,52 @@ class TestDirectionalBreach:
             assert np.array_equal(getattr(chunked, name), getattr(whole, name)), name
 
 
+class TestDegenerateDirection:
+    """A zero-length trajectory has no frame, and must not be measured as one.
+
+    ``cylinder_points`` already returns early for it; ``_directional_grade``
+    did not, so the perpendicular it built was normalised by a zero norm --
+    a numpy ``RuntimeWarning`` on stderr and ``NaN`` offsets whose membership
+    test then read as "no sample is medial", quietly reporting a wall of 0 mm
+    for a screw that is 2 mm clear of the cortex.
+    """
+
+    def test_a_zero_length_trajectory_falls_back_to_the_undirected_numbers(self):
+        import warnings
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        points = grader.cylinder_points((30.0, 35.0, 30.0), (30.0, 25.0, 30.0), 6.0)
+        d_out, d_in = grader.distances_at_points(points, 28)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            values = grader._directional_grade(
+                (30.0, 30.0, 30.0), (30.0, 30.0, 30.0),
+                6.0, d_out, d_in, 0.0, 2.0, "left",
+            )
+
+        assert values == (0.0, 0.0, 0.0, 2.0)
+
+    def test_grading_a_collapsed_screw_raises_no_numpy_warning(self):
+        """The public entry point rejects it outright, and quietly."""
+        import warnings
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = grader.grade(
+                entry=(30.0, 30.0, 30.0),
+                target=(30.0, 30.0, 30.0),
+                diameter_mm=6.0,
+                side="left",
+            )
+
+        assert result is None
+
+
 class TestDistancesAtPoints:
     def test_distances_match_the_label_geometry(self):
         grader = ScrewGrader(_cube_mask())  # label occupies index 20..39 on every axis
