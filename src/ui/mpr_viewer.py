@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core.mpr_geometry import (
+    orientation_letters,
     project_screw_to_slice,
     slice_to_world,
     world_to_slice,
@@ -40,9 +41,17 @@ from ..utils.constants import (
     DEFAULT_WINDOW_WIDTH,
 )
 from .click_detector import DoubleClickDetector
+from .styles import DEFAULT_THEME, get_theme, theme_rgb_float
+from .tool_icons import create_tool_icon
+from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
+
+# Orientation markers: 14 px letters kept 6 px inside the viewport edges.
+ORIENTATION_MARKER_FONT_SIZE = 14
+ORIENTATION_MARKER_MARGIN_PX = 6
+ORIENTATION_MARKER_SIDES = ("top", "bottom", "left", "right")
 
 
 class MPRViewer(QWidget):
@@ -59,6 +68,7 @@ class MPRViewer(QWidget):
     # Signals for cross-viewer synchronization
     slice_changed = pyqtSignal(str, float)  # (plane, position)
     crosshair_moved = pyqtSignal(str, float, float, float)  # (plane, x, y, z)
+    header_double_clicked = pyqtSignal(str)  # (plane) — maximise request
 
     ENTRY_HIT_RADIUS_PX = 16.0
     TIP_HIT_RADIUS_PX = 20.0
@@ -141,6 +151,14 @@ class MPRViewer(QWidget):
         self._mpr_pan_mode_active = False
         self._mpr_pan_drag_active = False
         self._mpr_pan_last_display: Optional[Tuple[int, int]] = None
+        self._middle_pan_active = False
+        self._middle_pan_last_display: Optional[Tuple[int, int]] = None
+        self._custom_scroll_handler: Optional[Callable] = None
+        self._custom_readout: Optional[str] = None
+        self._custom_rotate_handler: Optional[Callable] = None
+        self._rotate_drag_active = False
+        self._rotate_drag_last_display: Optional[Tuple[int, int]] = None
+        self._orientation_actors: Dict[str, vtk.vtkTextActor] = {}
 
         self._setup_ui()
         self._setup_vtk_pipeline()
@@ -165,8 +183,8 @@ class MPRViewer(QWidget):
             "coronal": COLOR_CORONAL,
         }
         color = colors.get(self.plane, (255, 255, 255))
-        self.label = QLabel(self.plane.capitalize())
-        self.label.setObjectName("viewerHeader")
+        self.label = ViewerHeaderLabel(self.plane.capitalize(), self.plane, self)
+        self.label.doubleClicked.connect(self.header_double_clicked)
         self.label.setStyleSheet(
             f"color: rgb({color[0]}, {color[1]}, {color[2]}); "
             f"font-weight: bold; padding: 2px;"
@@ -188,10 +206,12 @@ class MPRViewer(QWidget):
         self.pan_button = QToolButton(self.mpr_zoom_controls)
         self.pan_button.setText("Pan")
         self.pan_button.setToolTip(
-            "Move this MPR image: enable Pan, then left-drag"
+            "Move this MPR image: enable Pan and left-drag, "
+            "or middle-drag at any time"
         )
         self.pan_button.setCheckable(True)
         self.pan_button.setChecked(False)
+        self.set_pan_icon_color(self._theme_token("viewer_foreground"))
         self.zoom_out_button = QToolButton(self.mpr_zoom_controls)
         self.zoom_out_button.setText("−")
         self.zoom_out_button.setToolTip("Zoom out this MPR")
@@ -242,6 +262,11 @@ class MPRViewer(QWidget):
         layout.addWidget(self.viewport_container, stretch=1)
         layout.addWidget(self.info_label)
 
+    def resizeEvent(self, event):
+        """Keep the orientation letters pinned to the viewport edges."""
+        super().resizeEvent(event)
+        self.refresh_orientation_markers()
+
     def _setup_vtk_pipeline(self):
         """Setup the VTK rendering pipeline."""
         # Create renderer
@@ -261,6 +286,7 @@ class MPRViewer(QWidget):
 
         # Create crosshair actors
         self._create_crosshairs()
+        self._create_orientation_markers()
 
     def _setup_interactor(self):
         """Setup interactor for mouse events."""
@@ -280,6 +306,10 @@ class MPRViewer(QWidget):
         style.AddObserver("MouseMoveEvent", self._on_mouse_move)
         style.AddObserver("RightButtonPressEvent", self._on_right_click)
         style.AddObserver("RightButtonReleaseEvent", self._on_right_release)
+
+        # Middle-drag pans the camera in every mode, next to the Pan toggle.
+        style.AddObserver("MiddleButtonPressEvent", self._on_middle_click)
+        style.AddObserver("MiddleButtonReleaseEvent", self._on_middle_release)
 
         self._right_button_down = False
         self._last_mouse_y = 0
@@ -355,6 +385,129 @@ class MPRViewer(QWidget):
                 "orientation": orientation,
             })
 
+    def _create_orientation_markers(self) -> None:
+        """Create the four corner letters that name the patient axes."""
+        for side in ORIENTATION_MARKER_SIDES:
+            actor = vtk.vtkTextActor()
+            actor.SetObjectName(f"orientation-{side}")
+            actor.SetInput("")
+            actor.SetVisibility(False)
+            text_property = actor.GetTextProperty()
+            text_property.SetFontFamilyToArial()
+            text_property.SetFontSize(ORIENTATION_MARKER_FONT_SIZE)
+            text_property.SetBold(True)
+            if side == "top":
+                text_property.SetJustificationToCentered()
+                text_property.SetVerticalJustificationToTop()
+            elif side == "bottom":
+                text_property.SetJustificationToCentered()
+                text_property.SetVerticalJustificationToBottom()
+            elif side == "left":
+                text_property.SetJustificationToLeft()
+                text_property.SetVerticalJustificationToCentered()
+            else:
+                text_property.SetJustificationToRight()
+                text_property.SetVerticalJustificationToCentered()
+            text_property.SetColor(*self._orientation_marker_color())
+            self._orientation_actors[side] = actor
+            if self._renderer is not None:
+                self._renderer.AddViewProp(actor)
+
+    def _active_theme_name(self) -> str:
+        """Name of the palette the running application is using."""
+        app = QApplication.instance()
+        theme_name = None if app is None else app.property("themeName")
+        return str(theme_name or DEFAULT_THEME)
+
+    def _theme_token(self, key: str) -> str:
+        """Hex colour for one palette token under the active theme."""
+        return get_theme(self._active_theme_name())[key]
+
+    def _orientation_marker_color(self) -> Tuple[float, float, float]:
+        """Marker colour taken from the running application's theme."""
+        return theme_rgb_float(self._active_theme_name(), "viewer_foreground")
+
+    def set_pan_icon_color(self, color: str) -> None:
+        """Repaint the Pan glyph so it follows the active palette.
+
+        ``MainWindow.apply_theme`` calls this for every MPR pane; the colour
+        used to be a hard-coded hex that stayed dark-theme grey on the light
+        palettes.
+        """
+        button = self.__dict__.get("pan_button")
+        if button is not None:
+            button.setIcon(create_tool_icon("pan", str(color), 14))
+
+    def _display_size(self) -> Tuple[int, int]:
+        """Viewport size in VTK device pixels.
+
+        ``vtkTextActor.SetDisplayPosition`` and ``GetEventPosition`` both
+        speak device pixels, while ``QWidget.width()``/``height()`` are Qt
+        logical pixels. The two differ by ``devicePixelRatio`` on a scaled
+        Windows desktop (125-150 %), which used to bunch the orientation
+        letters -- and the Ctrl-drag rotation pivot -- towards the centre-left
+        of the view. The render window knows the real pixel size; the scaled
+        widget size is only a fallback for before it has been sized.
+        """
+        widget = self.__dict__.get("vtk_widget")
+        if widget is None:
+            return (1, 1)
+        get_render_window = getattr(widget, "GetRenderWindow", None)
+        render_window = get_render_window() if callable(get_render_window) else None
+        get_size = getattr(render_window, "GetSize", None)
+        if callable(get_size):
+            size = get_size()
+            if size and int(size[0]) > 0 and int(size[1]) > 0:
+                return (int(size[0]), int(size[1]))
+        ratio_getter = getattr(widget, "devicePixelRatioF", None)
+        ratio = float(ratio_getter()) if callable(ratio_getter) else 1.0
+        if ratio <= 0.0:
+            ratio = 1.0
+        return (
+            max(int(round(widget.width() * ratio)), 1),
+            max(int(round(widget.height() * ratio)), 1),
+        )
+
+    def _orientation_marker_positions(
+        self,
+        width: int,
+        height: int,
+    ) -> Dict[str, Tuple[int, int]]:
+        """Display positions (VTK pixels, y increasing upwards) per side."""
+        margin = ORIENTATION_MARKER_MARGIN_PX
+        return {
+            "top": (width // 2, max(height - margin, 0)),
+            "bottom": (width // 2, margin),
+            "left": (margin, height // 2),
+            "right": (max(width - margin, 0), height // 2),
+        }
+
+    def refresh_orientation_markers(self, render: bool = False) -> None:
+        """Re-derive, re-colour and re-place the four orientation letters.
+
+        Markers are hidden whenever there is no slice to label -- before a
+        volume is loaded ``_active_reslice_axes`` returns ``None``.
+        """
+        # Use the instance dict directly: a bare, not-yet-``__init__``-ed
+        # QWidget raises RuntimeError (not AttributeError) on ordinary
+        # attribute access, which ``getattr(..., default)`` cannot catch.
+        actors = self.__dict__.get("_orientation_actors")
+        if not actors:
+            return
+        axes = self._active_reslice_axes()
+        letters = {} if axes is None else orientation_letters(axes)
+        color = self._orientation_marker_color()
+        width, height = self._display_size()
+        positions = self._orientation_marker_positions(width, height)
+        for side, actor in actors.items():
+            text = letters.get(side, "")
+            actor.SetInput(text)
+            actor.SetVisibility(bool(text))
+            actor.GetTextProperty().SetColor(*color)
+            actor.SetDisplayPosition(*positions[side])
+        if render:
+            self._request_render()
+
     def update_volume(self):
         """Update the viewer when volume data changes."""
         vtk_image = self.volume_manager.get_vtk_image()
@@ -392,6 +545,7 @@ class MPRViewer(QWidget):
             self._crosshairs_added = True
 
         self.fit_to_view(render=False)
+        self.refresh_orientation_markers()
 
         # Update display
         self._update_slice_info()
@@ -507,6 +661,7 @@ class MPRViewer(QWidget):
         self.label.setText(title)
         self._update_reslice_position()
         self._update_slice_info()
+        self.refresh_orientation_markers()
         if not was_custom:
             self.fit_to_view(render=False)
         self._request_render()
@@ -514,12 +669,41 @@ class MPRViewer(QWidget):
     def clear_custom_reslice_axes(self) -> None:
         """Restore the viewer's standard axial, sagittal, or coronal plane."""
         self._custom_reslice_axes = None
+        self._custom_readout = None
+        self._rotate_drag_active = False
+        self._rotate_drag_last_display = None
         self._set_review_active(False)
         self.label.setText(self.plane.capitalize())
         self._update_reslice_position()
         self._update_slice_info()
+        self.refresh_orientation_markers()
         self.fit_to_view(render=False)
         self._request_render()
+
+    def set_custom_scroll_handler(self, handler: Optional[Callable]) -> None:
+        """Route wheel notches to ``handler`` while custom axes are active.
+
+        ``handler(plane, steps, modifiers)`` gets this viewer's plane name,
+        ``+1``/``-1`` per notch, and a frozenset of lowercase modifier names
+        (``"shift"``, ``"ctrl"``, ``"alt"``). Ctrl/Cmd+wheel still zooms and
+        never reaches the handler.
+        """
+        self._custom_scroll_handler = handler
+
+    def set_custom_rotate_handler(self, handler: Optional[Callable]) -> None:
+        """Enable Ctrl+left-drag rotation on this viewer.
+
+        ``handler(plane, delta_deg)`` receives the frame rotation in degrees:
+        positive follows the right-hand rule about the plane normal, and the
+        sign is already chosen so the anatomy follows the pointer. Only
+        viewers with a handler start a rotate drag.
+        """
+        self._custom_rotate_handler = handler
+
+    def set_custom_readout(self, text: Optional[str]) -> None:
+        """Replace the ``Screw-aligned`` readout prefix with ``text``."""
+        self._custom_readout = None if text is None else str(text)
+        self._update_slice_info()
 
     def set_review_screw(self, screw_id: Optional[int]) -> None:
         """Show only one selected screw during Screw MPR."""
@@ -646,7 +830,8 @@ class MPRViewer(QWidget):
         else:
             hu_text = f"HU: {self._last_hu_value:.0f}"
         if self._custom_reslice_axes is not None:
-            self.info_label.setText(f"Screw-aligned | {hu_text}")
+            prefix = self.__dict__.get("_custom_readout") or "Screw-aligned"
+            self.info_label.setText(f"{prefix} | {hu_text}")
         else:
             position = self.volume_manager.get_slice_position(self.plane)
             self.info_label.setText(f"Slice: {position:.1f} mm | {hu_text}")
@@ -1669,6 +1854,19 @@ class MPRViewer(QWidget):
         click_pos = interactor.GetEventPosition()
         self._update_hover_hu(click_pos[0], click_pos[1])
 
+        if (
+            self.__dict__.get("_custom_rotate_handler") is not None
+            and self._custom_reslice_axes is not None
+            and "ctrl" in self._modifier_names(self._current_modifiers())
+        ):
+            self._rotate_drag_active = True
+            self._rotate_drag_last_display = (
+                int(click_pos[0]),
+                int(click_pos[1]),
+            )
+            self.vtk_widget.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
         if self.__dict__.get("_mpr_pan_mode_active", False):
             self._mpr_pan_drag_active = True
             self._mpr_pan_last_display = (int(click_pos[0]), int(click_pos[1]))
@@ -1777,6 +1975,25 @@ class MPRViewer(QWidget):
         x, y = interactor.GetEventPosition()
         self._update_hover_hu(x, y)
 
+        if self.__dict__.get("_middle_pan_active", False):
+            previous = self._middle_pan_last_display
+            if previous is not None:
+                self._pan_camera_by_pixels(x - previous[0], y - previous[1])
+            self._middle_pan_last_display = (int(x), int(y))
+            return
+
+        if self.__dict__.get("_rotate_drag_active", False):
+            previous = self._rotate_drag_last_display
+            handler = self.__dict__.get("_custom_rotate_handler")
+            if previous is not None and handler is not None:
+                delta = self._drag_rotation_delta_deg(
+                    self._viewport_center_display(), previous, (x, y)
+                )
+                if delta != 0.0:
+                    handler(self.plane, delta)
+            self._rotate_drag_last_display = (int(x), int(y))
+            return
+
         if self.__dict__.get("_mpr_pan_drag_active", False):
             previous = self._mpr_pan_last_display
             if previous is not None:
@@ -1814,6 +2031,14 @@ class MPRViewer(QWidget):
 
     def _on_left_release(self, obj, event):
         """Release does not end double-click-locked screw movement."""
+        if self.__dict__.get("_rotate_drag_active", False):
+            self._rotate_drag_active = False
+            self._rotate_drag_last_display = None
+            self.vtk_widget.setCursor(
+                Qt.CursorShape.OpenHandCursor
+                if self.__dict__.get("_mpr_pan_mode_active", False)
+                else Qt.CursorShape.ArrowCursor
+            )
         if self.__dict__.get("_mpr_pan_drag_active", False):
             self._mpr_pan_drag_active = False
             self._mpr_pan_last_display = None
@@ -1845,31 +2070,59 @@ class MPRViewer(QWidget):
             return spacing[0]
         return spacing[1]
 
-    def _on_scroll_forward(self, obj, event):
-        """Scroll forward: Ctrl/Cmd+Scroll = zoom in, plain = next slice."""
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-            self._zoom(1.15)
-        elif self._custom_reslice_axes is not None:
+    def _current_modifiers(self):
+        """Keyboard modifiers driving wheel and drag decisions.
+
+        Read through a method (not inline) so tests can substitute one
+        without touching Qt's global application state.
+        """
+        return QApplication.keyboardModifiers()
+
+    @staticmethod
+    def _modifier_names(modifiers) -> frozenset:
+        """Translate Qt keyboard modifiers into lowercase names."""
+        names = []
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            names.append("shift")
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            names.append("ctrl")
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            names.append("alt")
+        return frozenset(names)
+
+    def _handle_scroll(self, steps: int, zoom_factor: float) -> None:
+        """Zoom, hand the notch to the custom handler, or step one slice."""
+        modifiers = self._current_modifiers()
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.MetaModifier
+        ):
+            self._zoom(zoom_factor)
             return
-        else:
-            step = self._get_scroll_step()
-            current = self.volume_manager.get_slice_position(self.plane)
-            self.set_slice_position(current + step)
-            self.slice_changed.emit(self.plane, current + step)
+        if self._custom_reslice_axes is not None:
+            handler = self.__dict__.get("_custom_scroll_handler")
+            if handler is not None:
+                handler(
+                    self.plane,
+                    int(steps),
+                    self._modifier_names(modifiers),
+                )
+            return
+        position = self.volume_manager.get_slice_position(self.plane)
+        position += self._get_scroll_step() * int(steps)
+        self.set_slice_position(position)
+        self.slice_changed.emit(self.plane, position)
+
+    def _on_scroll_forward(self, obj, event):
+        """Scroll forward: Ctrl/Cmd = zoom in, otherwise next slice or hook."""
+        self._handle_scroll(1, 1.15)
 
     def _on_scroll_backward(self, obj, event):
-        """Scroll backward: Ctrl/Cmd+Scroll = zoom out, plain = prev slice."""
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-            self._zoom(0.85)
-        elif self._custom_reslice_axes is not None:
-            return
-        else:
-            step = self._get_scroll_step()
-            current = self.volume_manager.get_slice_position(self.plane)
-            self.set_slice_position(current - step)
-            self.slice_changed.emit(self.plane, current - step)
+        """Scroll backward: Ctrl/Cmd = zoom out, otherwise prev slice or hook."""
+        self._handle_scroll(-1, 0.85)
 
     def _zoom(self, factor: float) -> None:
         """Zoom in/out by adjusting camera zoom factor."""
@@ -1898,6 +2151,42 @@ class MPRViewer(QWidget):
             else Qt.CursorShape.ArrowCursor
         )
 
+    def _viewport_center_display(self) -> Tuple[float, float]:
+        """Pixel centre of this viewport, the Ctrl-drag rotation pivot.
+
+        ``GetEventPosition()`` reports device pixels, so the pivot must be
+        the render window's centre rather than half the logical widget size.
+        """
+        width, height = self._display_size()
+        return (float(width) / 2.0, float(height) / 2.0)
+
+    @staticmethod
+    def _drag_rotation_delta_deg(center, previous, current) -> float:
+        """Frame rotation in degrees so the image follows a Ctrl-drag.
+
+        VTK display coordinates are bottom-up, so a counter-clockwise drag
+        increases the screen angle. The view frame must turn the other way
+        for the anatomy to follow the pointer, hence the negation. Points
+        within 4 px of the pivot are ignored to avoid wild jumps.
+        """
+        previous_dx = float(previous[0]) - float(center[0])
+        previous_dy = float(previous[1]) - float(center[1])
+        current_dx = float(current[0]) - float(center[0])
+        current_dy = float(current[1]) - float(center[1])
+        if math.hypot(previous_dx, previous_dy) < 4.0:
+            return 0.0
+        if math.hypot(current_dx, current_dy) < 4.0:
+            return 0.0
+        delta = math.degrees(
+            math.atan2(current_dy, current_dx)
+            - math.atan2(previous_dy, previous_dx)
+        )
+        while delta > 180.0:
+            delta -= 360.0
+        while delta <= -180.0:
+            delta += 360.0
+        return -delta
+
     def _pan_camera_by_pixels(
         self,
         delta_x: float,
@@ -1907,12 +2196,11 @@ class MPRViewer(QWidget):
         """Translate the parallel camera so the image follows pointer drag."""
         if self._renderer is None:
             return
-        height = max(
-            int(viewport_height)
-            if viewport_height is not None
-            else int(self.vtk_widget.height()),
-            1,
-        )
+        if viewport_height is not None:
+            height = max(int(viewport_height), 1)
+        else:
+            _, display_height = self._display_size()
+            height = max(display_height, 1)
         camera = self._renderer.GetActiveCamera()
         world_per_pixel = 2.0 * float(camera.GetParallelScale()) / height
         offset_x = -float(delta_x) * world_per_pixel
@@ -1930,6 +2218,27 @@ class MPRViewer(QWidget):
             position[2],
         )
         self._request_render()
+
+    def _on_middle_click(self, obj, event):
+        """Start a middle-button camera pan (works in every MPR mode)."""
+        interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
+        position = interactor.GetEventPosition()
+        self._middle_pan_active = True
+        self._middle_pan_last_display = (
+            int(position[0]),
+            int(position[1]),
+        )
+        self.vtk_widget.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _on_middle_release(self, obj, event):
+        """Finish a middle-button pan and restore the pointer shape."""
+        self._middle_pan_active = False
+        self._middle_pan_last_display = None
+        self.vtk_widget.setCursor(
+            Qt.CursorShape.OpenHandCursor
+            if self.__dict__.get("_mpr_pan_mode_active", False)
+            else Qt.CursorShape.ArrowCursor
+        )
 
     def _on_right_click(self, obj, event):
         """Handle right click start for window/level."""

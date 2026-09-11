@@ -39,27 +39,39 @@ GRADE_D_DESCRIPTION = "Breach 4-6mm (unsafe)"
 GRADE_E_DESCRIPTION = "Breach >6mm (dangerous)"
 
 # MPR Plane Direction Cosines
-# Axial: Standard XY plane (looking down from head)
+# Each flat list is loaded ROW-MAJOR into the reslice axes matrix by
+# create_reslice_axes() in vtk_helpers.py: axes[i][j] = list[i*3 + j].
+# vtkImageReslice then reads the matrix's COLUMNS as screen-right /
+# screen-up / normal, i.e. entries drawn from the list as:
+#   column 0 (screen-right) = (list[0], list[3], list[6])
+#   column 1 (screen-up)    = (list[1], list[4], list[7])
+#   column 2 (normal)       = (list[2], list[5], list[8])
+# Do NOT read a row of the list below as an axis — a row is only one
+# matrix row, not a screen-right/up/normal column.
+
+# Axial: radiological convention (looking from the patient's feet).
+# screen-right=+X (patient left on the viewer's right), screen-up=-Y
+# (anterior at the top), normal=+Z (scroll unchanged).
 AXIAL_DIRECTION_COSINES = [
-    1, 0, 0,   # X axis (left-right)
-    0, 1, 0,   # Y axis (anterior-posterior)
-    0, 0, 1    # Z axis (head-feet, slice direction)
+    1,  0, 0,
+    0, -1, 0,
+    0,  0, 1
 ]
 
-# Coronal: XZ plane (looking from front)
-# Columns: horizontal=X(L-R), vertical=Z(superior-up), normal=-Y(A-P)
+# Coronal: XZ plane (looking from front).
+# screen-right=X(L-R), screen-up=Z(superior-up), normal=-Y(A-P).
 CORONAL_DIRECTION_COSINES = [
-    1, 0,  0,   # Row 0
-    0, 0, -1,   # Row 1
-    0, 1,  0    # Row 2
+    1, 0,  0,
+    0, 0, -1,
+    0, 1,  0
 ]
 
-# Sagittal: YZ plane (looking from side)
-# Columns: horizontal=Y(A-P), vertical=Z(superior-up), normal=X(L-R)
+# Sagittal: YZ plane (looking from side).
+# screen-right=Y(A-P), screen-up=Z(superior-up), normal=X(L-R).
 SAGITTAL_DIRECTION_COSINES = [
-    0, 0, 1,   # Row 0
-    1, 0, 0,   # Row 1
-    0, 1, 0    # Row 2
+    0, 0, 1,
+    1, 0, 0,
+    0, 1, 0
 ]
 
 # UI Colors (RGB, 0-255)
@@ -213,10 +225,10 @@ TRANSFER_FUNCTION_PRESETS = {
 # Implant catalogue used by the automatic planner (mm)
 IMPLANT_LENGTHS_MM = (25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0)
 IMPLANT_DIAMETERS_MM = (4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5)
-# Sizing rules (Götschi 2026, Wang 2024): diameter <= 80 % of isthmus width and
-# >= 1 mm cortical clearance each side; tip >= 4 mm behind the anterior cortex.
+# Sizing rules (Götschi 2026, Wang 2024): diameter <= 80 % of isthmus width,
+# minus twice the configured cortical clearance (PlannerConfig.wall_clearance_mm,
+# 0 mm by default); tip >= 4 mm behind the anterior cortex.
 PEDICLE_FILL_RATIO = 0.80
-CORTICAL_WALL_CLEARANCE_MM = 1.0
 ANTERIOR_SAFETY_MARGIN_MM = 4.0
 
 # Trajectory HU below which screw loosening risk rises (Yamamoto 2025, Dhar 2026)

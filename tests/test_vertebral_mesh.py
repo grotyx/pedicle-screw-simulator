@@ -66,6 +66,43 @@ def _create_labeled_mask(
     return image
 
 
+def _create_sphere_mask(
+    dims=(32, 32, 32),
+    spacing=(1.0, 1.0, 1.0),
+    radius=11.0,
+    label=27,
+):
+    """Create a vtkImageData holding one labelled sphere.
+
+    Args:
+        dims: Volume dimensions (x, y, z).
+        spacing: Voxel spacing (x, y, z) in mm.
+        radius: Sphere radius in mm.
+        label: Label value written inside the sphere.
+
+    Returns:
+        (vtkImageData, sphere centre as an (x, y, z) numpy array in mm).
+    """
+    import numpy as np
+    from vtk.util.numpy_support import numpy_to_vtk
+
+    sp = np.asarray(spacing, dtype=float)
+    z_index, y_index, x_index = np.indices((dims[2], dims[1], dims[0]))
+    world = np.stack(
+        (x_index * sp[0], y_index * sp[1], z_index * sp[2]), axis=-1
+    )
+    center = (np.asarray(dims) - 1) * sp / 2.0
+    values = np.where(
+        np.linalg.norm(world - center, axis=-1) <= radius, label, 0
+    ).astype(np.uint16)
+
+    image = vtk.vtkImageData()
+    image.SetDimensions(*dims)
+    image.SetSpacing(*spacing)
+    image.GetPointData().SetScalars(numpy_to_vtk(values.ravel(), deep=True))
+    return image, center
+
+
 # ---------------------------------------------------------------------------
 # Tests: Color generation
 # ---------------------------------------------------------------------------
@@ -415,6 +452,120 @@ class TestMeshExtraction:
         fine_center = (np.array(mask.GetDimensions()) - 1) * 0.5 / 2.0
         radial_distance = np.linalg.norm(points - fine_center, axis=1)
         assert radial_distance.std() < 0.18
+
+
+class TestDerivedSmoothingDefault:
+    """The Gaussian sigma follows the mask's own grid, not a fixed constant."""
+
+    def test_native_ct_grid_keeps_the_09mm_floor(self):
+        from src.core.vertebral_mesh import default_smoothing_mm
+
+        assert default_smoothing_mm((0.39, 0.39, 1.0)) == pytest.approx(0.9)
+
+    def test_raw_15mm_inference_grid_also_lands_on_the_floor(self):
+        from src.core.vertebral_mesh import default_smoothing_mm
+
+        assert default_smoothing_mm((1.5, 1.5, 1.5)) == pytest.approx(0.9)
+
+    def test_coarse_slices_scale_to_half_the_coarsest_spacing(self):
+        from src.core.vertebral_mesh import default_smoothing_mm
+
+        assert default_smoothing_mm((0.5, 0.5, 3.0)) == pytest.approx(1.5)
+
+    def test_derived_sigma_is_clamped_at_2mm(self):
+        from src.core.vertebral_mesh import default_smoothing_mm
+
+        assert default_smoothing_mm((0.5, 0.5, 6.0)) == pytest.approx(2.0)
+
+    def test_signature_defaults_use_the_shared_constants(self):
+        import inspect
+
+        from src.core.vertebral_mesh import (
+            MESH_SMOOTHING_ITERATIONS,
+            MESH_SMOOTHING_PASSBAND,
+            extract_vertebral_mesh,
+        )
+
+        assert MESH_SMOOTHING_ITERATIONS == 30
+        assert MESH_SMOOTHING_PASSBAND == pytest.approx(0.06)
+        params = inspect.signature(extract_vertebral_mesh).parameters
+        assert params["smoothing_iterations"].default == MESH_SMOOTHING_ITERATIONS
+        assert params["smoothing_passband"].default == MESH_SMOOTHING_PASSBAND
+        assert params["smoothing_mm"].default is None
+
+    def test_none_sigma_is_derived_from_the_mask_spacing(self):
+        from src.core.vertebral_mesh import default_smoothing_mm, extract_vertebral_mesh
+
+        mask, _ = _create_sphere_mask(
+            dims=(24, 24, 24), spacing=(0.5, 0.5, 4.0), radius=5.0
+        )
+        derived = default_smoothing_mm(mask.GetSpacing())
+        assert derived == pytest.approx(2.0)
+
+        implicit = extract_vertebral_mesh(mask, labels=[27])
+        explicit = extract_vertebral_mesh(mask, labels=[27], smoothing_mm=derived)
+        assert implicit is not None and explicit is not None
+        assert implicit.GetNumberOfCells() == explicit.GetNumberOfCells()
+        assert implicit.GetNumberOfPoints() == explicit.GetNumberOfPoints()
+
+
+class TestFairingChangeIsSafe:
+    """30 iterations / 0.06 pass-band must fair harder without eroding the mesh."""
+
+    def test_cell_count_stays_within_20_percent_of_the_old_settings(self):
+        import numpy as np
+
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask, _ = _create_sphere_mask()
+        today = extract_vertebral_mesh(
+            mask,
+            labels=[27],
+            smoothing_iterations=20,
+            smoothing_passband=0.08,
+            smoothing_mm=0.9,
+        )
+        updated = extract_vertebral_mesh(mask, labels=[27])
+        assert today is not None and updated is not None
+        assert updated.GetNumberOfCells() == pytest.approx(
+            today.GetNumberOfCells(), rel=0.20
+        )
+        assert np.isfinite(updated.GetNumberOfCells())
+        assert updated.GetNumberOfCells() > 0
+
+    def test_new_fairing_is_at_least_as_smooth_as_the_old(self):
+        import numpy as np
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask, center = _create_sphere_mask()
+        today = extract_vertebral_mesh(
+            mask,
+            labels=[27],
+            smoothing_iterations=20,
+            smoothing_passband=0.08,
+            smoothing_mm=0.9,
+        )
+        updated = extract_vertebral_mesh(mask, labels=[27])
+
+        def radial_std(mesh):
+            points = vtk_to_numpy(mesh.GetPoints().GetData())
+            return float(np.linalg.norm(points - center, axis=1).std())
+
+        assert radial_std(updated) <= radial_std(today) + 1e-9
+
+    def test_new_fairing_does_not_shrink_the_sphere(self):
+        import numpy as np
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask, center = _create_sphere_mask()
+        updated = extract_vertebral_mesh(mask, labels=[27])
+        points = vtk_to_numpy(updated.GetPoints().GetData())
+        mean_radius = float(np.linalg.norm(points - center, axis=1).mean())
+        assert mean_radius == pytest.approx(11.0, abs=0.35)
 
 
 # ---------------------------------------------------------------------------

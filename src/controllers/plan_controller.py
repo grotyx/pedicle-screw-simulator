@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from src.controllers.tool_controller import screw_display_color
 from src.utils.planning_io import (
     deserialize_plan,
     export_screws_csv,
@@ -53,6 +54,11 @@ class PlanController:
                 screws=screws,
                 measurements=measurements,
                 measurement_planes=planes,
+                metadata={
+                    "mask_refinement": (
+                        self._window._seg_ctrl.mask_refinement_metadata()
+                    )
+                },
             )
             save_plan_json(path, payload)
             self._window.statusbar.showMessage(
@@ -192,6 +198,7 @@ class PlanController:
                 screw.entry_point,
                 screw.target_point,
                 radius=screw.diameter / 2.0,
+                color=screw_display_color(screw),
                 screw_id=screw_index,
             )
             tool_ctrl._screw_actors.append(actor)

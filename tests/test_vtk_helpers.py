@@ -263,5 +263,68 @@ class TestDownsampleVtkImage:
         assert "vtkImageShrink3D" in source
 
 
+class TestShrinkFactors:
+    """Volume-tier -> shrink-factor lookup, split by volume mapper kind."""
+
+    def test_cpu_mapper_keeps_todays_tiers(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU, shrink_factors
+
+        assert shrink_factors("small", MAPPER_KIND_CPU) == (2, 2, 1)
+        assert shrink_factors("medium", MAPPER_KIND_CPU) == (2, 2, 2)
+        assert shrink_factors("large", MAPPER_KIND_CPU) == (3, 3, 2)
+        assert shrink_factors("xl", MAPPER_KIND_CPU) == (3, 3, 3)
+
+    def test_smart_mapper_renders_small_volumes_at_full_resolution(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART, shrink_factors
+
+        assert shrink_factors("small", MAPPER_KIND_SMART) == (1, 1, 1)
+        assert shrink_factors("medium", MAPPER_KIND_SMART) == (2, 2, 1)
+        assert shrink_factors("large", MAPPER_KIND_SMART) == (2, 2, 2)
+        assert shrink_factors("xl", MAPPER_KIND_SMART) == (3, 3, 2)
+
+    def test_smart_mapper_never_shrinks_harder_than_the_cpu_mapper(self):
+        from src.utils.vtk_helpers import (
+            MAPPER_KIND_CPU,
+            MAPPER_KIND_SMART,
+            VOLUME_TIERS,
+            shrink_factors,
+        )
+
+        for tier in VOLUME_TIERS:
+            smart = shrink_factors(tier, MAPPER_KIND_SMART)
+            cpu = shrink_factors(tier, MAPPER_KIND_CPU)
+            assert all(s <= c for s, c in zip(smart, cpu, strict=True)), tier
+
+    def test_every_tier_assess_volume_scale_can_emit_is_covered(self):
+        from src.core.volume_scale import assess_volume_scale
+        from src.utils.vtk_helpers import (
+            MAPPER_KIND_CPU,
+            MAPPER_KIND_SMART,
+            VOLUME_TIERS,
+            shrink_factors,
+        )
+
+        sizes = [(256, 256, 100), (512, 512, 320), (512, 512, 700), (768, 768, 512)]
+        tiers = {assess_volume_scale(size).tier for size in sizes}
+        assert tiers == set(VOLUME_TIERS)
+        for tier in tiers:
+            for kind in (MAPPER_KIND_CPU, MAPPER_KIND_SMART):
+                factors = shrink_factors(tier, kind)
+                assert len(factors) == 3
+                assert all(isinstance(f, int) and f >= 1 for f in factors)
+
+    def test_unknown_tier_raises_value_error(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU, shrink_factors
+
+        with pytest.raises(ValueError, match="volume tier"):
+            shrink_factors("gigantic", MAPPER_KIND_CPU)
+
+    def test_unknown_mapper_kind_raises_value_error(self):
+        from src.utils.vtk_helpers import shrink_factors
+
+        with pytest.raises(ValueError, match="mapper kind"):
+            shrink_factors("small", "quantum")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

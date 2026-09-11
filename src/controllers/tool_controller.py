@@ -8,17 +8,34 @@ clicks to the active tool, and maintains screw/measurement UI lists.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from src.models.measurement import Measurement
 from src.tools.measurement_tool import MeasurementTool
 from src.tools.screw_tool import ScrewTool
-from src.utils.constants import COLOR_SCREW
+from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
+from src.utils.screw_metrics import is_narrow_pedicle, screw_metrics
 
 if TYPE_CHECKING:
     from src.ui.mpr_viewer import MPRViewer
 
 logger = logging.getLogger(__name__)
+
+
+def screw_display_color(screw) -> Tuple[float, float, float]:
+    """Normalised RGB for one screw in the 3D view and on the MPR planes.
+
+    A narrow pedicle is red everywhere it is drawn: it is a property of the
+    level, visible before the surgeon has clicked anything.  A breach is *not*
+    coloured here -- the grade chip and the warning block already carry it, and
+    repainting a graded screw would make "red" mean two different things.
+    """
+    rgb = (
+        COLOR_SCREW_BREACH
+        if is_narrow_pedicle(screw_metrics(screw))
+        else COLOR_SCREW
+    )
+    return tuple(value / 255.0 for value in rgb)
 
 
 class ToolController:
@@ -109,6 +126,10 @@ class ToolController:
         else:
             self._window.statusbar.showMessage("Select — navigate and inspect")
 
+        refresh = getattr(self._window, "refresh_mode_indicators", None)
+        if callable(refresh):
+            refresh()
+
     def on_viewer_click(self, plane: str, x: float, y: float, z: float):
         """Handle click events from MPR viewers for active tools."""
         if self._vm.get_vtk_image() is None:
@@ -143,6 +164,7 @@ class ToolController:
                     screw.entry_point,
                     screw.target_point,
                     radius=screw.diameter / 2.0,
+                    color=screw_display_color(screw),
                     screw_id=screw_id,
                 )
                 self._screw_actors.append(actor)
@@ -566,11 +588,9 @@ class ToolController:
         return viewer_map.get(plane)
 
     def _add_screw_to_list(self, screw):
-        """Append one screw entry to list widget."""
+        """Append one screw row to the screw plan table."""
         index = self._window.screw_list_widget.count()
-        self._window.screw_list_widget.addItem(
-            self._format_screw_list_text(index, screw)
-        )
+        self._window.screw_list_widget.addScrewRow(screw, index)
 
     def add_existing_screw(self, screw, select: bool = False) -> int:
         """Register an existing screw in the model and every linked view."""
@@ -580,6 +600,7 @@ class ToolController:
             screw.entry_point,
             screw.target_point,
             radius=screw.diameter / 2.0,
+            color=screw_display_color(screw),
             screw_id=screw_id,
         )
         self._screw_actors.append(actor)
@@ -589,17 +610,6 @@ class ToolController:
             self._window.screw_list_widget.setCurrentRow(screw_id)
         return screw_id
 
-    @staticmethod
-    def _format_screw_list_text(index: int, screw) -> str:
-        """Return the canonical list label for one screw."""
-        level = screw.vertebra_level or "Manual"
-        side = screw.side.capitalize() if screw.side else "--"
-        return (
-            f"#{index + 1}  {level} · {side}\n"
-            f"Ø {screw.diameter:.1f} mm  ·  Len {screw.length:.1f} mm  ·  "
-            f"Grade {screw.grade}"
-        )
-
     def _add_screw_to_mpr(self, screw_id: int, screw) -> None:
         """Add screw projection overlay to all MPR viewers."""
         for viewer in self._window._get_mpr_viewers():
@@ -607,7 +617,7 @@ class ToolController:
                 screw_id,
                 screw.entry_point,
                 screw.target_point,
-                color=tuple(value / 255.0 for value in COLOR_SCREW),
+                color=screw_display_color(screw),
                 diameter=screw.diameter,
             )
 
@@ -623,6 +633,7 @@ class ToolController:
             screw.entry_point,
             screw.target_point,
             radius=screw.diameter / 2.0,
+            color=screw_display_color(screw),
             screw_id=index,
         )
         if index < len(self._screw_actors):
@@ -631,9 +642,7 @@ class ToolController:
             self._screw_actors.append(new_actor)
 
         self._add_screw_to_mpr(index, screw)
-        item = self._window.screw_list_widget.item(index)
-        if item is not None:
-            item.setText(self._format_screw_list_text(index, screw))
+        self._window.screw_list_widget.updateScrewRow(index, screw)
         self._window._screw_mpr_ctrl.on_screw_updated(index)
 
     def regrade_all(self) -> None:
@@ -677,6 +686,7 @@ class ToolController:
                 screw.entry_point,
                 screw.target_point,
                 radius=screw.diameter / 2.0,
+                color=screw_display_color(screw),
                 screw_id=index,
             )
             self._screw_actors.append(actor)

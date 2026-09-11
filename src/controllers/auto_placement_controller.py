@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
-from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.auto_screw_planner import (
+    AutoScrewPlanner,
+    PlannedScrew,
+    construct_summary,
+)
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
@@ -26,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 #: How many dropped sides the status note names before it starts counting.
 _MAX_NAMED_DROPPED_SIDES = 4
+
+#: What the status line says instead of a construct summary when the run had no
+#: candidates to harmonise.  Legacy planning places each screw on its own, so
+#: there is nothing to report and no number that would be honest.
+CONSTRUCT_LEGACY_NOTE = "Construct alignment needs Optimizer mode"
 
 
 class _PlanningThread(QThread):
@@ -48,6 +57,10 @@ class _PlanningThread(QThread):
         self._ct = ct_image
         self._labels = labels
         self._config = config
+        #: Planner back-end this run used, so the finished handler can explain
+        #: a missing construct summary even if the user has since switched the
+        #: combo box.
+        self.planner_mode = (config or PlannerConfig()).mode
         # Optional (z, y, x) boolean pedicle mask from the subregion model.
         self._pedicle_mask = pedicle_mask
         self._cancel = threading.Event()
@@ -55,6 +68,9 @@ class _PlanningThread(QThread):
         self.skipped_sides: List[Tuple[str, str, str]] = []
         #: Whether the planner stopped early on :meth:`request_cancel`.
         self.cancelled = False
+        #: The pedicle analyses this run planned from, for the screw tool to
+        #: re-measure analysis-derived metrics after the user edits a screw.
+        self.analyses: List = []
 
     def request_cancel(self) -> None:
         """Ask the planner to stop at the next (level, side) (GUI thread safe)."""
@@ -67,6 +83,7 @@ class _PlanningThread(QThread):
                 self._mask, self._ct, pedicle_mask=self._pedicle_mask
             )
             analyses = analyzer.analyze_all(labels=self._labels)
+            self.analyses = list(analyses)
 
             successful = [a for a in analyses if a.success]
             self.progress.emit(
@@ -270,12 +287,41 @@ class AutoPlacementController:
         self._close_progress_dialog()
         self._cancel_requested = False
         self._last_planned = []
+        # A new study's vertebrae are not the old study's: keeping the old
+        # per-level analyses around would let a regrade measure a screw
+        # against an endplate that belonged to a different patient.
+        self._set_analysis_registry(None)
         if hasattr(self._window, 'auto_screw_status'):
             self._window.auto_screw_status.setText("No auto plan")
 
     # ------------------------------------------------------------------
     # Private: planning callbacks
     # ------------------------------------------------------------------
+
+    def _set_analysis_registry(self, analyses) -> None:
+        """Hand the screw tool this run's analyses and the config behind them.
+
+        The tool re-measures an edited screw, and two of the things it
+        re-measures are thresholds rather than geometry: the cortical clearance
+        that decides whether a thin wall is worth a note, and the width below
+        which a pedicle counts as narrow.  Both live in the active
+        :class:`PlannerConfig`, so they travel with the analyses -- otherwise a
+        drag would be judged by the tool's defaults and the edit itself would
+        look like it had changed the screw.
+
+        Guarded the way the neighbouring ``auto_screw_status`` accesses are:
+        the real :class:`MainWindow` always has a tool controller, but a
+        lightweight stand-in need not, and a missing one must not cost a status
+        update.
+        """
+        if not hasattr(self._window, "_tool_ctrl"):
+            return
+        screw_tool = self._window._tool_ctrl.screw_tool
+        screw_tool.set_analysis_by_level(analyses)
+        config_of = getattr(self._window, "planner_config", None)
+        config = config_of() if callable(config_of) else PlannerConfig()
+        screw_tool.set_wall_clearance_mm(config.wall_clearance_mm)
+        screw_tool.set_narrow_pedicle_mm(config.narrow_pedicle_mm)
 
     def _close_progress_dialog(self):
         """Close the planning dialog without re-entering the cancel path.
@@ -350,6 +396,14 @@ class AutoPlacementController:
             logger.info("Planner dropped %d side(s): %s", len(skipped), skipped)
 
         self._last_planned = list(planned)
+        # Before the empty-plan early return: a run that placed nothing still
+        # measured the endplates the user's own screws are graded against.
+        self._set_analysis_registry(
+            {
+                int(analysis.vertebra.label): analysis
+                for analysis in (getattr(thread, "analyses", None) or ())
+            }
+        )
 
         if not planned:
             if cancelled:
@@ -387,16 +441,14 @@ class AutoPlacementController:
                 f"Added {len(planned)} editable screws. "
                 f"Grades: {grade_summary}. Select a screw and drag it directly."
             )
-            rod = _rod_misalignment_by_side(planned)
-            # Only the sides that actually have screws: "R 0.0 mm" for a side
-            # with none reads as a perfectly aligned rod that does not exist.
-            measured = [
-                f"{initial} {rod[side]:.1f} mm"
-                for side, initial in (("left", "L"), ("right", "R"))
-                if side in rod
-            ]
-            if measured:
-                status += " Rod misalignment " + " / ".join(measured)
+            # Only the sides that actually have screws: a side with none must
+            # never be reported as a perfectly fitted rod that does not exist.
+            if getattr(thread, "planner_mode", "optimizer") == "legacy":
+                status += " " + CONSTRUCT_LEGACY_NOTE
+            else:
+                summary = construct_summary(planned)
+                if summary:
+                    status += " " + summary
         status += note
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)
@@ -449,6 +501,11 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     infeasible cortical-bone corridor.  A shorter construct than the one that
     was requested must never reach the surgeon unannounced.
 
+    The reason itself stays in the log: every remaining reason is a search
+    failure the surgeon can see for themselves once they open the level, and a
+    width is no longer a reason at all -- a narrow pedicle is planned and
+    marked, never dropped.
+
     A whole-spine run can drop a dozen sides, which would push the rest of the
     status line off the label, so only the first
     :data:`_MAX_NAMED_DROPPED_SIDES` are named and the remainder are counted.
@@ -462,24 +519,6 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     if remaining:
         sides += f" and {remaining} more"
     return f" No screw planned: {sides}"
-
-
-def _rod_misalignment_by_side(planned: List[PlannedScrew]) -> Dict[str, float]:
-    """Per-side rod misalignment recorded by the optimiser, if it ran.
-
-    Legacy planning leaves the metric out, in which case the caller omits the
-    readout entirely rather than reporting a misleading 0.0 mm.
-    """
-    rod: Dict[str, float] = {}
-    for ps in planned:
-        value = ps.metrics.get("rod_misalignment_mm")
-        if value is None:
-            continue
-        try:
-            rod[ps.side] = float(value)
-        except (TypeError, ValueError):
-            logger.warning("Ignoring unreadable rod misalignment %r", value)
-    return rod
 
 
 def planned_screw_to_screw(ps: PlannedScrew) -> Screw:

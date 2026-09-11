@@ -261,26 +261,36 @@ class CoordinateSystem:
 
         These define how the 2D slice maps to 3D space.
 
+        Read out of the same ``*_DIRECTION_COSINES`` the viewers hand to
+        ``vtkImageReslice`` rather than written out again beside them.  The
+        axial row had to be corrected once already when the Y row was flipped
+        to put anterior at the top; a second copy of the convention is a
+        second thing to forget, and this helper has no caller in ``src/`` to
+        make the mistake visible.  ``create_reslice_axes`` lays the flat list
+        out row-major and reslice reads the *columns*, so screen-right is
+        ``(m[0], m[3], m[6])`` and screen-up is ``(m[1], m[4], m[7])``.
+
         Args:
             plane: 'axial', 'sagittal', or 'coronal'
 
         Returns:
             (row_direction, column_direction) each as (x, y, z)
         """
-        if plane == "axial":
-            # Looking down from head
-            # Row: left-right (L), Column: anterior-posterior (P)
-            return ((1, 0, 0), (0, 1, 0))
+        from ..utils.constants import (
+            AXIAL_DIRECTION_COSINES,
+            CORONAL_DIRECTION_COSINES,
+            SAGITTAL_DIRECTION_COSINES,
+        )
 
-        elif plane == "sagittal":
-            # Looking from patient's left side
-            # Row: anterior-posterior (P), Column: superior-inferior (S)
-            return ((0, 1, 0), (0, 0, 1))
-
-        elif plane == "coronal":
-            # Looking from front
-            # Row: left-right (L), Column: superior-inferior (S)
-            return ((1, 0, 0), (0, 0, 1))
-
-        else:
+        matrices = {
+            "axial": AXIAL_DIRECTION_COSINES,
+            "sagittal": SAGITTAL_DIRECTION_COSINES,
+            "coronal": CORONAL_DIRECTION_COSINES,
+        }
+        matrix = matrices.get(plane)
+        if matrix is None:
             raise ValueError(f"Unknown plane: {plane}")
+        return (
+            (matrix[0], matrix[3], matrix[6]),    # screen-right
+            (matrix[1], matrix[4], matrix[7]),    # screen-up
+        )

@@ -4,7 +4,7 @@ import logging
 import sys
 from typing import List, Optional
 
-from PyQt6.QtCore import QSettings, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -27,19 +27,25 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from src.controllers.auto_placement_controller import AutoPlacementController
 from src.controllers.dicom_controller import DicomController
 from src.controllers.plan_controller import PlanController
 from src.controllers.screw_edit_controller import ScrewEditController
-from src.controllers.screw_mpr_controller import ScrewMPRController
+from src.controllers.screw_mpr_controller import (
+    SCREW_MPR_CONTROLS_HELP,
+    ScrewMPRController,
+)
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
 from src.controllers.view_controller import ViewController
+from src.utils.screw_metrics import is_narrow_pedicle, pedicle_row_text
 
 from .. import (
     __academic_affiliation__,
@@ -64,6 +70,7 @@ from ..utils.constants import (
 )
 from .collapsible_group import CollapsibleGroupBox
 from .mpr_viewer import MPRViewer
+from .screw_plan_table import ScrewPlanTable
 from .spin_boxes import DiameterSpinBox
 from .styles import (
     DEFAULT_THEME,
@@ -84,6 +91,32 @@ _APP_SETTINGS_SCOPE = ("SNUBH", "PedicleScrewSimulator")
 
 #: Keys copied out of the legacy scope on first use of the unified scope.
 _MIGRATED_SETTINGS_KEYS = ("appearance/theme", "geometry", "windowState")
+
+#: Shown once when a planner mode persisted as Legacy before construct
+#: harmonisation existed is migrated to Optimizer.
+PLANNER_MODE_MIGRATION_MESSAGE = (
+    "Planner mode set to Optimizer (construct alignment needs it); "
+    "change it in Planning parameters."
+)
+
+#: Settings flag recording that the one-time Legacy -> Optimizer migration ran.
+_PLANNER_MODE_MIGRATION_KEY = "mode_migrated_v2"
+
+#: The wall clearance older builds shipped as the planner default.  W7 moved
+#: it to 0 mm because the optimiser could not satisfy ``min_wall >= 1.0`` on
+#: most sides of a real study and fell back to the legacy planner; a store
+#: written by one of those builds still carries it, so it has to be retired
+#: rather than simply out-defaulted.
+_LEGACY_WALL_CLEARANCE_MM = 1.0
+
+#: Shown once when that persisted 1.0 mm clearance is reset to the new default.
+PLANNER_CLEARANCE_MIGRATION_MESSAGE = (
+    "Wall clearance reset to 0.0 mm (the new default); raise it in "
+    "Planning parameters if you want a buffer."
+)
+
+#: Settings flag recording that the one-time clearance reset ran.
+_PLANNER_CLEARANCE_MIGRATION_KEY = "clearance_migrated_v2"
 
 #: Set once the legacy-scope migration check has run for this process, so
 #: app_settings() only ever opens the legacy scope once, not on every call.
@@ -176,13 +209,12 @@ class MainWindow(QMainWindow):
             else stored_theme if stored_theme in THEMES else DEFAULT_THEME
         )
         self._active_selection_kind: Optional[str] = None
-        self.control_section_order = [
-            "Study",
-            "Screw Review",
-            "Segmentation",
-            "Planning",
-            "Validation",
-        ]
+        #: (QAction | QAbstractButton, icon kind) pairs repainted by apply_theme.
+        self._themed_icon_targets: list[tuple[object, str]] = []
+        #: Which collapsible sections live in which control-panel tab, in order.
+        #: Filled in by _create_control_panel from control_tab_sections.
+        self.control_section_order: dict[str, list[str]] = {}
+        self.control_tab_sections: dict[str, tuple] = {}
 
         # Core components
         self.volume_manager = VolumeManager()
@@ -203,6 +235,11 @@ class MainWindow(QMainWindow):
         self._auto_placement_ctrl = AutoPlacementController(self.volume_manager, self)
         self._screw_mpr_ctrl = ScrewMPRController(self.volume_manager, self)
         self._screw_edit_ctrl = ScrewEditController(self.volume_manager, self)
+
+        # load_planner_settings() runs before the status bar exists, so a
+        # migration message waits here until _setup_statusbar can show it.
+        self._planner_mode_migration_message: Optional[str] = None
+        self._planner_clearance_migration_message: Optional[str] = None
 
         # Build UI (widgets only, no signal connections to controllers)
         self._setup_ui()
@@ -256,6 +293,9 @@ class MainWindow(QMainWindow):
         self._view_layout.setSpacing(6)
         self._view_layout.setContentsMargins(6, 6, 6, 6)
         self._view_layout_mode = "planning"
+        self._maximized_view: Optional[str] = None
+        self._restore_layout_mode = "planning"
+        self._focused_view_name = "axial"
 
         # Create viewers
         self.axial_viewer = MPRViewer("axial", self.volume_manager)
@@ -283,8 +323,18 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter)
 
     def set_view_layout(self, mode: str) -> None:
-        """Switch between VWORKS planning and equal-size MPR layouts."""
-        if mode not in {"planning", "mpr_focus"}:
+        """Switch layouts, or maximise one pane with ``maximize:<name>``.
+
+        A maximise leaves ``_view_layout_mode`` on the base layout, so
+        restoring returns to exactly the layout the user was in.
+        """
+        mode = str(mode)
+        maximized: Optional[str] = None
+        if mode.startswith("maximize:"):
+            maximized = mode.split(":", 1)[1]
+            if maximized not in self.MAXIMIZABLE_VIEWS:
+                raise ValueError(f"Unknown view layout: {mode}")
+        elif mode not in {"planning", "mpr_focus"}:
             raise ValueError(f"Unknown view layout: {mode}")
 
         while self._view_layout.count():
@@ -295,52 +345,302 @@ class MainWindow(QMainWindow):
         for column in range(2):
             self._view_layout.setColumnStretch(column, 0)
 
-        if mode == "planning":
-            self._view_layout.addWidget(self.axial_viewer, 0, 0)
-            self._view_layout.addWidget(self.sagittal_viewer, 1, 0)
-            self._view_layout.addWidget(self.coronal_viewer, 2, 0)
-            self._view_layout.addWidget(self.viewer_3d, 0, 1, 3, 1)
-            for row in range(3):
-                self._view_layout.setRowStretch(row, 1)
-            self._view_layout.setColumnStretch(0, 3)
-            self._view_layout.setColumnStretch(1, 5)
-        else:
-            self._view_layout.addWidget(self.axial_viewer, 0, 0)
-            self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
-            self._view_layout.addWidget(self.coronal_viewer, 1, 0)
-            self._view_layout.addWidget(self.viewer_3d, 1, 1)
-            self._view_layout.setRowStretch(0, 1)
-            self._view_layout.setRowStretch(1, 1)
-            self._view_layout.setColumnStretch(0, 1)
-            self._view_layout.setColumnStretch(1, 1)
+        panes = {
+            "axial": self.axial_viewer,
+            "sagittal": self.sagittal_viewer,
+            "coronal": self.coronal_viewer,
+            "3d": self.viewer_3d,
+        }
 
-        self._view_layout_mode = mode
+        if maximized is not None:
+            if self._maximized_view is None:
+                self._restore_layout_mode = self._view_layout_mode
+            for name, pane in panes.items():
+                pane.setVisible(name == maximized)
+            self._view_layout.addWidget(panes[maximized], 0, 0)
+            self._view_layout.setRowStretch(0, 1)
+            self._view_layout.setColumnStretch(0, 1)
+            self._maximized_view = maximized
+        else:
+            for pane in panes.values():
+                pane.setVisible(True)
+            self._maximized_view = None
+            if mode == "planning":
+                self._view_layout.addWidget(self.axial_viewer, 0, 0)
+                self._view_layout.addWidget(self.sagittal_viewer, 1, 0)
+                self._view_layout.addWidget(self.coronal_viewer, 2, 0)
+                self._view_layout.addWidget(self.viewer_3d, 0, 1, 3, 1)
+                for row in range(3):
+                    self._view_layout.setRowStretch(row, 1)
+                self._view_layout.setColumnStretch(0, 3)
+                self._view_layout.setColumnStretch(1, 5)
+            else:
+                self._view_layout.addWidget(self.axial_viewer, 0, 0)
+                self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
+                self._view_layout.addWidget(self.coronal_viewer, 1, 0)
+                self._view_layout.addWidget(self.viewer_3d, 1, 1)
+                self._view_layout.setRowStretch(0, 1)
+                self._view_layout.setRowStretch(1, 1)
+                self._view_layout.setColumnStretch(0, 1)
+                self._view_layout.setColumnStretch(1, 1)
+            self._view_layout_mode = mode
+            self._restore_layout_mode = mode
+
+        self._render_shown_panes(panes, maximized)
+
         if hasattr(self, "layout_combo"):
-            combo_index = self.layout_combo.findData(mode)
+            combo_index = self.layout_combo.findData(self._view_layout_mode)
             if combo_index >= 0 and combo_index != self.layout_combo.currentIndex():
                 previous = self.layout_combo.blockSignals(True)
                 self.layout_combo.setCurrentIndex(combo_index)
                 self.layout_combo.blockSignals(previous)
         if hasattr(self, "_planning_layout_action"):
-            self._planning_layout_action.setChecked(mode == "planning")
-            self._mpr_focus_layout_action.setChecked(mode == "mpr_focus")
+            self._planning_layout_action.setChecked(
+                self._view_layout_mode == "planning"
+            )
+            self._mpr_focus_layout_action.setChecked(
+                self._view_layout_mode == "mpr_focus"
+            )
+        if hasattr(self, "_maximize_view_action"):
+            previous = self._maximize_view_action.blockSignals(True)
+            self._maximize_view_action.setChecked(self._maximized_view is not None)
+            self._maximize_view_action.blockSignals(previous)
         QTimer.singleShot(0, self.fit_mpr_views)
 
+    def _render_shown_panes(self, panes: dict, maximized: Optional[str]) -> None:
+        """Repaint every pane the new layout leaves on screen.
+
+        Re-showing a hidden VTK pane does not repaint its surface: the widget
+        only renders when its dirty flag is set, and a plain ``setVisible``
+        does not set it. Restoring from a maximised view therefore left the
+        other panes -- most visibly the 3D view -- showing a stale, wrongly
+        scaled copy of the maximised pane until the next interaction.
+        """
+        for name, pane in panes.items():
+            if maximized is not None and name != maximized:
+                continue
+            for hook_name in ("_request_render", "safe_render"):
+                hook = getattr(pane, hook_name, None)
+                if callable(hook):
+                    hook()
+                    break
+
+    def toggle_maximized_view(self, view_name: str) -> None:
+        """Maximise one pane, or restore the previous layout if it already is."""
+        name = str(view_name)
+        if self._maximized_view == name:
+            self.set_view_layout(self._restore_layout_mode)
+        else:
+            self.set_view_layout(f"maximize:{name}")
+
+    def _toggle_maximize_current_view(self) -> None:
+        """View-menu / Ctrl+M entry point for single-view maximise."""
+        if self._maximized_view is not None:
+            self.set_view_layout(self._restore_layout_mode)
+        else:
+            self.toggle_maximized_view(self._focused_view_name)
+
+    def _remember_focused_view(self, plane: str) -> None:
+        """Track the last pane the user interacted with."""
+        if plane in self.MAXIMIZABLE_VIEWS:
+            self._focused_view_name = str(plane)
+
+    def _install_focus_tracking(self) -> None:
+        """Follow the pointer into any pane, whatever the active tool.
+
+        ``crosshair_moved`` is emitted only from ``MPRViewer._on_left_click``,
+        past the pan, measure and screw-pick branches, and the 3D pane emits
+        nothing comparable at all.  So panning the sagittal view, dragging a
+        screw or orbiting in 3D left ``_focused_view_name`` wherever it last
+        happened to be -- and since maximising used to pin it to the maximised
+        pane, Ctrl+M after a maximise/restore re-maximised that same pane
+        instead of the one being worked in.
+
+        The filter goes on the application rather than on each pane: the panes
+        own VTK widgets that are created and replaced outside this class, and a
+        filter installed per child would miss every one of them made later.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    #: Events that count as "the user is working in this pane".
+    _FOCUS_EVENT_TYPES = frozenset(
+        {QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
+    )
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """Record which pane a press or wheel landed in; never consume it."""
+        if event.type() in self._FOCUS_EVENT_TYPES:
+            name = self._pane_name_for(obj)
+            if name is not None:
+                self._focused_view_name = name
+        return super().eventFilter(obj, event)
+
+    def _pane_name_for(self, obj: QObject) -> Optional[str]:
+        """Which maximisable pane contains *obj*, if any.
+
+        Walks up from the widget the event reached, so a press on a VTK render
+        window deep inside a pane still names the pane.  Guarded with
+        ``getattr``: the filter is live from construction, and an event can
+        arrive before every viewer attribute exists.
+        """
+        panes = [
+            (name, getattr(self, attribute, None))
+            for name, attribute in (
+                ("axial", "axial_viewer"),
+                ("sagittal", "sagittal_viewer"),
+                ("coronal", "coronal_viewer"),
+                ("3d", "viewer_3d"),
+            )
+        ]
+        node = obj
+        while node is not None:
+            for name, pane in panes:
+                if pane is not None and node is pane:
+                    return name
+            node = node.parent()
+        return None
+
+    def _create_planning_cockpit(self) -> QWidget:
+        """Build the pinned screw inspector shown above the control tabs."""
+        cockpit = QWidget()
+        cockpit.setObjectName("planningCockpit")
+        cockpit_layout = QVBoxLayout(cockpit)
+        cockpit_layout.setContentsMargins(8, 6, 8, 6)
+        cockpit_layout.setSpacing(6)
+
+        screw_review_nav = QHBoxLayout()
+        screw_review_nav.setSpacing(5)
+        self.screw_previous_btn = QPushButton("‹ Previous")
+        self.screw_previous_btn.setObjectName("screwReviewNav")
+        self.selected_screw_counter = QLabel("No screws")
+        self.selected_screw_counter.setObjectName("screwReviewCounter")
+        self.selected_screw_counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.screw_next_btn = QPushButton("Next ›")
+        self.screw_next_btn.setObjectName("screwReviewNav")
+        self.screw_previous_btn.setEnabled(False)
+        self.screw_next_btn.setEnabled(False)
+        screw_review_nav.addWidget(self.screw_previous_btn)
+        screw_review_nav.addWidget(self.selected_screw_counter, 1)
+        screw_review_nav.addWidget(self.screw_next_btn)
+        cockpit_layout.addLayout(screw_review_nav)
+
+        self.selected_screw_title = QLabel("No screw selected")
+        self.selected_screw_title.setObjectName("selectedScrewTitle")
+        cockpit_layout.addWidget(self.selected_screw_title)
+
+        self.selected_screw_metrics = QWidget()
+        self.selected_screw_metrics.setObjectName("screwMetrics")
+        selected_screw_details = QGridLayout()
+        selected_screw_details.setContentsMargins(8, 6, 8, 6)
+        selected_screw_details.setHorizontalSpacing(8)
+        selected_screw_details.setVerticalSpacing(5)
+        selected_screw_details.addWidget(QLabel("Diameter"), 0, 0)
+        self.selected_screw_diameter = DiameterSpinBox()
+        self.selected_screw_diameter.setRange(
+            MIN_SCREW_DIAMETER,
+            MAX_SCREW_DIAMETER,
+        )
+        self.selected_screw_diameter.setDecimals(1)
+        self.selected_screw_diameter.setSingleStep(0.5)
+        self.selected_screw_diameter.setSuffix(" mm")
+        self.selected_screw_diameter.setValue(DEFAULT_SCREW_DIAMETER)
+        self.selected_screw_diameter.setEnabled(False)
+        self.selected_screw_diameter.setToolTip(
+            "Adjust the selected screw diameter (4.0–7.5 mm)"
+        )
+        selected_screw_details.addWidget(self.selected_screw_diameter, 0, 1)
+        selected_screw_details.addWidget(QLabel("Length"), 0, 2)
+        self.selected_screw_length = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_length, 0, 3)
+        selected_screw_details.addWidget(QLabel("Convergence"), 1, 0)
+        self.selected_screw_convergence = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_convergence, 1, 1)
+        selected_screw_details.addWidget(QLabel("Craniocaudal"), 1, 2)
+        self.selected_screw_craniocaudal = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_craniocaudal, 1, 3)
+        selected_screw_details.addWidget(QLabel("Endplate"), 2, 0)
+        self.selected_screw_endplate = QLabel("--")
+        self.selected_screw_endplate.setToolTip(
+            "Screw angle relative to the upper endplate; + is tip-cranial, 0 is parallel"
+        )
+        selected_screw_details.addWidget(self.selected_screw_endplate, 2, 1)
+        selected_screw_details.addWidget(QLabel("Alignment"), 3, 0)
+        self.selected_screw_alignment = QLabel("--")
+        self.selected_screw_alignment.setToolTip(
+            "How this screw sits in the construct: rod-line offset and how far "
+            "its convergence differs from its neighbours"
+        )
+        selected_screw_details.addWidget(self.selected_screw_alignment, 3, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Safety"), 4, 0)
+        self.selected_screw_grade = QLabel("Grade --")
+        selected_screw_details.addWidget(self.selected_screw_grade, 4, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory HU"), 5, 0)
+        self.selected_screw_hu = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_hu, 5, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Source"), 6, 0)
+        self.selected_screw_source = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_source, 6, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Body HU"), 7, 0)
+        self.selected_screw_body_hu = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_body_hu, 7, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Wall margin"), 8, 0)
+        self.selected_screw_wall = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_wall, 8, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Facet"), 9, 0)
+        self.selected_screw_facet = QLabel("--")
+        self.selected_screw_facet.setWordWrap(True)
+        selected_screw_details.addWidget(self.selected_screw_facet, 9, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Heary"), 10, 0)
+        self.selected_screw_heary = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_heary, 10, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Trajectory"), 11, 0)
+        self.selected_screw_trajectory = QLabel("—")
+        selected_screw_details.addWidget(self.selected_screw_trajectory, 11, 1, 1, 3)
+        selected_screw_details.addWidget(QLabel("Pedicle"), 12, 0)
+        self.selected_screw_pedicle = QLabel("--")
+        selected_screw_details.addWidget(self.selected_screw_pedicle, 12, 1, 1, 3)
+        self.selected_screw_metrics.setLayout(selected_screw_details)
+        cockpit_layout.addWidget(self.selected_screw_metrics)
+
+        self.selected_screw_warning = QLabel(
+            "Select a screw to inspect its trajectory."
+        )
+        self.selected_screw_warning.setWordWrap(True)
+        self.selected_screw_warning.setMinimumHeight(42)
+        self.selected_screw_warning.setObjectName("selectedScrewWarning")
+        cockpit_layout.addWidget(self.selected_screw_warning)
+
+        self.screw_narrow_legend = QLabel(
+            "Red screw = narrow pedicle: smallest implant, medial wall protected."
+        )
+        self.screw_narrow_legend.setWordWrap(True)
+        self.screw_narrow_legend.setObjectName("screwNarrowLegend")
+        cockpit_layout.addWidget(self.screw_narrow_legend)
+
+        self.screw_drag_hint = QLabel(
+            "Double-click head, tip, or shaft; move the pointer; double-click again to finish."
+        )
+        self.screw_drag_hint.setWordWrap(True)
+        self.screw_drag_hint.setObjectName("screwDragHint")
+        cockpit_layout.addWidget(self.screw_drag_hint)
+
+        return cockpit
+
     def _create_control_panel(self) -> QWidget:
-        """Create the right-side control panel inside a scroll area.
+        """Create the right-side control panel.
+
+        The panel is a pinned Planning Cockpit above a three-tab widget;
+        each tab holds its sections in its own scroll area, so the cockpit
+        stays visible while any tab is scrolled.
 
         Creates all widgets and stores references. Signal connections
         are handled in _connect_signals().
         """
-        # Scroll area wrapper so the panel is usable at any window height
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        scroll.setMinimumWidth(390)
-        self.control_scroll = scroll
-
+        # Sections are built into one throwaway column layout first and then
+        # distributed into the tabs at the end of this method, so the group
+        # construction below stays exactly as it was.
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -355,6 +655,15 @@ class MainWindow(QMainWindow):
 
         self.seg_run_btn = QPushButton("Run Auto Segmentation")
         seg_layout.addWidget(self.seg_run_btn)
+
+        self.seg_refine_check = QCheckBox("Refine boundaries against CT")
+        self.seg_refine_check.setChecked(True)
+        self.seg_refine_check.setToolTip(
+            "Smooth the segmentation to the CT grid and snap its boundaries to "
+            "the bone cortex. Turn off to keep TotalSegmentator's raw 1.5 mm "
+            "label map."
+        )
+        seg_layout.addWidget(self.seg_refine_check)
 
         self.vertebra_isolate_btn = QPushButton("Isolate Vertebrae")
         self.vertebra_isolate_btn.setEnabled(False)
@@ -505,6 +814,24 @@ class MainWindow(QMainWindow):
         auto_layout.setContentsMargins(6, 2, 6, 4)
         auto_layout.setSpacing(3)
 
+        workspace_mode_row = QHBoxLayout()
+        workspace_mode_row.addWidget(QLabel("Mode:"))
+        self.workspace_mode_combo = QComboBox()
+        self.workspace_mode_combo.setObjectName("workspaceMode")
+        self.workspace_mode_combo.addItem("Planning", "planning")
+        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
+        guided_index = self.workspace_mode_combo.findData("guided")
+        guided_item = self.workspace_mode_combo.model().item(guided_index)
+        if guided_item is not None:
+            guided_item.setEnabled(False)
+        self.workspace_mode_combo.setToolTip(
+            "Guided Workflow is reserved for a later release"
+        )
+        self.workspace_mode_combo.setMaximumWidth(100)
+        self.workspace_mode_combo.setMaximumHeight(26)
+        workspace_mode_row.addWidget(self.workspace_mode_combo, 1)
+        auto_layout.addLayout(workspace_mode_row)
+
         self.auto_screw_review_notice = QLabel(
             "Generated screws are added immediately. Select and adjust them below."
         )
@@ -618,15 +945,45 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(QLabel("HU threshold"), 6, 0)
         params_layout.addWidget(self.plan_hu_threshold_spin, 6, 1, 1, 2)
 
+        self.plan_narrow_pedicle_spin = QDoubleSpinBox()
+        self.plan_narrow_pedicle_spin.setRange(3.0, 8.0)
+        self.plan_narrow_pedicle_spin.setSingleStep(0.5)
+        self.plan_narrow_pedicle_spin.setDecimals(1)
+        self.plan_narrow_pedicle_spin.setSuffix(" mm")
+        self.plan_narrow_pedicle_spin.setValue(planner_defaults.narrow_pedicle_mm)
+        self.plan_narrow_pedicle_spin.setToolTip(
+            "Pedicle width below which the smallest screw is planned and the "
+            "level is marked narrow"
+        )
+        params_layout.addWidget(QLabel("Narrow pedicle"), 7, 0)
+        params_layout.addWidget(self.plan_narrow_pedicle_spin, 7, 1, 1, 2)
+
+        self.plan_narrow_lateral_spin = QDoubleSpinBox()
+        self.plan_narrow_lateral_spin.setRange(0.0, 6.0)
+        self.plan_narrow_lateral_spin.setSingleStep(0.5)
+        self.plan_narrow_lateral_spin.setDecimals(1)
+        self.plan_narrow_lateral_spin.setSuffix(" mm")
+        self.plan_narrow_lateral_spin.setValue(
+            planner_defaults.narrow_lateral_breach_mm
+        )
+        self.plan_narrow_lateral_spin.setToolTip(
+            "Lateral (in-out-in) breach a narrow pedicle may accept; the medial "
+            "wall is never breached"
+        )
+        params_layout.addWidget(QLabel("Lateral breach cap"), 8, 0)
+        params_layout.addWidget(self.plan_narrow_lateral_spin, 8, 1, 1, 2)
+
         weight_rows = (
             ("Safety weight", "safety", "Importance of cortical wall clearance"),
             ("Density weight", "density",
              "Importance of dense bone along the trajectory"),
-            ("Rod weight", "rod",
-             "Importance of lining up the screw heads for the rod"),
+            ("Construct alignment", "rod",
+             "Importance of lining the screw heads up for the rod and of "
+             "agreeing on convergence across levels"),
         )
         self._planner_weight_value_labels = {}
-        for row, (caption, name, tip) in enumerate(weight_rows, start=7):
+        self._planner_weight_captions = {}
+        for row, (caption, name, tip) in enumerate(weight_rows, start=9):
             attribute = f"plan_weight_{name}"
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 300)
@@ -642,13 +999,37 @@ class MainWindow(QMainWindow):
             value_label.setMinimumWidth(34)
             value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._planner_weight_value_labels[attribute] = value_label
-            params_layout.addWidget(QLabel(caption), row, 0)
+            caption_label = QLabel(caption)
+            self._planner_weight_captions[attribute] = caption_label
+            params_layout.addWidget(caption_label, row, 0)
             params_layout.addWidget(slider, row, 1)
             params_layout.addWidget(value_label, row, 2)
         self._refresh_planner_weight_labels()
 
+        # Rows are taken from the grid rather than hard-coded, so this block
+        # keeps working whatever rows the parameter list above grows.
+        endplate_row = params_layout.rowCount()
+        self.plan_endplate_parallel_check = QCheckBox("Parallel to upper endplate")
+        self.plan_endplate_parallel_check.setChecked(planner_defaults.endplate_parallel)
+        self.plan_endplate_parallel_check.setToolTip(
+            "Aim the trajectory along the upper endplate instead of horizontally"
+        )
+        params_layout.addWidget(self.plan_endplate_parallel_check, endplate_row, 0, 1, 3)
+
+        self.plan_endplate_tolerance_spin = QDoubleSpinBox()
+        self.plan_endplate_tolerance_spin.setRange(0.0, 30.0)
+        self.plan_endplate_tolerance_spin.setSingleStep(1.0)
+        self.plan_endplate_tolerance_spin.setDecimals(1)
+        self.plan_endplate_tolerance_spin.setSuffix(" °")
+        self.plan_endplate_tolerance_spin.setValue(planner_defaults.endplate_tolerance_deg)
+        self.plan_endplate_tolerance_spin.setToolTip(
+            "How far from the endplate direction the optimizer may angle the screw"
+        )
+        params_layout.addWidget(QLabel("Endplate band"), endplate_row + 1, 0)
+        params_layout.addWidget(self.plan_endplate_tolerance_spin, endplate_row + 1, 1, 1, 2)
+
         self.plan_reset_defaults_btn = QPushButton("Reset Defaults")
-        params_layout.addWidget(self.plan_reset_defaults_btn, 10, 0, 1, 3)
+        params_layout.addWidget(self.plan_reset_defaults_btn, params_layout.rowCount(), 0, 1, 3)
 
         plan_params_group.set_content_layout(params_layout)
         layout.addWidget(plan_params_group)
@@ -759,110 +1140,8 @@ class MainWindow(QMainWindow):
         screw_list_layout.setContentsMargins(8, 4, 8, 8)
         screw_list_layout.setSpacing(6)
 
-        screw_review_nav = QHBoxLayout()
-        screw_review_nav.setSpacing(5)
-        self.screw_previous_btn = QPushButton("‹ Previous")
-        self.screw_previous_btn.setObjectName("screwReviewNav")
-        self.selected_screw_counter = QLabel("No screws")
-        self.selected_screw_counter.setObjectName("screwReviewCounter")
-        self.selected_screw_counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.screw_next_btn = QPushButton("Next ›")
-        self.screw_next_btn.setObjectName("screwReviewNav")
-        self.screw_previous_btn.setEnabled(False)
-        self.screw_next_btn.setEnabled(False)
-        screw_review_nav.addWidget(self.screw_previous_btn)
-        screw_review_nav.addWidget(self.selected_screw_counter, 1)
-        screw_review_nav.addWidget(self.screw_next_btn)
-        screw_list_layout.addLayout(screw_review_nav)
-
-        self.selected_screw_title = QLabel("No screw selected")
-        self.selected_screw_title.setObjectName("selectedScrewTitle")
-        screw_list_layout.addWidget(self.selected_screw_title)
-
-        self.selected_screw_metrics = QWidget()
-        self.selected_screw_metrics.setObjectName("screwMetrics")
-        selected_screw_details = QGridLayout()
-        selected_screw_details.setContentsMargins(8, 6, 8, 6)
-        selected_screw_details.setHorizontalSpacing(8)
-        selected_screw_details.setVerticalSpacing(5)
-        selected_screw_details.addWidget(QLabel("Diameter"), 0, 0)
-        self.selected_screw_diameter = DiameterSpinBox()
-        self.selected_screw_diameter.setRange(
-            MIN_SCREW_DIAMETER,
-            MAX_SCREW_DIAMETER,
-        )
-        self.selected_screw_diameter.setDecimals(1)
-        self.selected_screw_diameter.setSingleStep(0.5)
-        self.selected_screw_diameter.setSuffix(" mm")
-        self.selected_screw_diameter.setValue(DEFAULT_SCREW_DIAMETER)
-        self.selected_screw_diameter.setEnabled(False)
-        self.selected_screw_diameter.setToolTip(
-            "Adjust the selected screw diameter (4.0–7.5 mm)"
-        )
-        selected_screw_details.addWidget(self.selected_screw_diameter, 0, 1)
-        selected_screw_details.addWidget(QLabel("Length"), 0, 2)
-        self.selected_screw_length = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_length, 0, 3)
-        selected_screw_details.addWidget(QLabel("Convergence"), 1, 0)
-        self.selected_screw_convergence = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_convergence, 1, 1)
-        selected_screw_details.addWidget(QLabel("Craniocaudal"), 1, 2)
-        self.selected_screw_craniocaudal = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_craniocaudal, 1, 3)
-        selected_screw_details.addWidget(QLabel("Safety"), 2, 0)
-        self.selected_screw_grade = QLabel("Grade --")
-        selected_screw_details.addWidget(self.selected_screw_grade, 2, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory HU"), 3, 0)
-        self.selected_screw_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_hu, 3, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Source"), 4, 0)
-        self.selected_screw_source = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_source, 4, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Body HU"), 5, 0)
-        self.selected_screw_body_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_body_hu, 5, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Wall margin"), 6, 0)
-        self.selected_screw_wall = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_wall, 6, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Facet"), 7, 0)
-        self.selected_screw_facet = QLabel("--")
-        self.selected_screw_facet.setWordWrap(True)
-        selected_screw_details.addWidget(self.selected_screw_facet, 7, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Heary"), 8, 0)
-        self.selected_screw_heary = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_heary, 8, 1, 1, 3)
-        selected_screw_details.addWidget(QLabel("Trajectory"), 9, 0)
-        self.selected_screw_trajectory = QLabel("—")
-        selected_screw_details.addWidget(self.selected_screw_trajectory, 9, 1, 1, 3)
-        self.selected_screw_metrics.setLayout(selected_screw_details)
-        screw_list_layout.addWidget(self.selected_screw_metrics)
-
-        self.selected_screw_warning = QLabel(
-            "Select a screw to inspect its trajectory."
-        )
-        self.selected_screw_warning.setWordWrap(True)
-        self.selected_screw_warning.setMinimumHeight(42)
-        self.selected_screw_warning.setObjectName("selectedScrewWarning")
-        screw_list_layout.addWidget(self.selected_screw_warning)
-
-        self.screw_drag_hint = QLabel(
-            "Double-click head, tip, or shaft; move the pointer; double-click again to finish."
-        )
-        self.screw_drag_hint.setWordWrap(True)
-        self.screw_drag_hint.setObjectName("screwDragHint")
-        screw_list_layout.addWidget(self.screw_drag_hint)
-
-        self.screw_list_widget = QListWidget()
-        self.screw_list_widget.setObjectName("screwPlanList")
-        self.screw_list_widget.setMinimumHeight(160)
-        self.screw_list_widget.setMaximumHeight(220)
-        self.screw_list_widget.setSpacing(2)
-        self.screw_list_widget.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
-        )
-        self.screw_list_widget.setVerticalScrollMode(
-            QAbstractItemView.ScrollMode.ScrollPerPixel
-        )
+        self.screw_list_widget = ScrewPlanTable()
+        self.screw_list_widget.apply_theme(self._theme_name)
         screw_list_layout.addWidget(self.screw_list_widget)
 
         screw_edit_buttons = QHBoxLayout()
@@ -909,6 +1188,27 @@ class MainWindow(QMainWindow):
         )
         screw_position_layout.addWidget(self.screw_axis_position_slider, 1)
         screw_list_layout.addLayout(screw_position_layout)
+
+        screw_rotation_layout = QHBoxLayout()
+        screw_rotation_layout.addWidget(QLabel("Rotation:"))
+        self.screw_axis_rotation_spin = QSpinBox()
+        self.screw_axis_rotation_spin.setRange(-180, 180)
+        self.screw_axis_rotation_spin.setSingleStep(5)
+        self.screw_axis_rotation_spin.setValue(0)
+        self.screw_axis_rotation_spin.setSuffix(" °")
+        self.screw_axis_rotation_spin.setEnabled(False)
+        self.screw_axis_rotation_spin.setToolTip(
+            "Spin both long-axis cuts about the screw. Positive follows the "
+            "right-hand rule about the entry-to-target axis."
+        )
+        screw_rotation_layout.addWidget(self.screw_axis_rotation_spin, 1)
+        self.screw_mpr_reset_btn = QPushButton("Reset view")
+        self.screw_mpr_reset_btn.setEnabled(False)
+        self.screw_mpr_reset_btn.setToolTip(
+            "Reset Screw MPR position, rotation, and plane offsets"
+        )
+        screw_rotation_layout.addWidget(self.screw_mpr_reset_btn)
+        screw_list_layout.addLayout(screw_rotation_layout)
 
         self.remove_screw_btn = QPushButton("Delete Screw")
         screw_list_layout.addWidget(self.remove_screw_btn)
@@ -960,8 +1260,11 @@ class MainWindow(QMainWindow):
             self.screw_axis_mpr_btn,
         ):
             button.setProperty("role", "primary")
+        self._register_themed_icon(self.seg_run_btn, "run")
+        self._register_themed_icon(self.auto_screw_plan_btn, "run")
         for button in (
             self.standard_mpr_btn,
+            self.screw_mpr_reset_btn,
         ):
             button.setProperty("role", "secondary")
         for button in (
@@ -971,31 +1274,66 @@ class MainWindow(QMainWindow):
         ):
             button.setProperty("role", "danger")
 
-        for group in (
-            info_group,
-            seg_group,
-            auto_screw_group,
-            plan_params_group,
-            screw_list_group,
-            view_group,
-        ):
-            layout.removeWidget(group)
-        for index, group in enumerate(
-            (
-                info_group,
-                screw_list_group,
-                seg_group,
+        # ── Assemble: pinned cockpit + three tabs of collapsible sections ──
+        self.planning_cockpit = self._create_planning_cockpit()
+
+        self.control_tab_sections = {
+            "Study": (info_group, seg_group, wl_group),
+            "Planning": (
                 auto_screw_group,
                 plan_params_group,
-                view_group,
+                screw_group,
+                screw_list_group,
+            ),
+            "Tools": (measure_group, measure_list_group, view_group),
+        }
+        self.control_section_order = {
+            tab: [group.title for group in groups]
+            for tab, groups in self.control_tab_sections.items()
+        }
+
+        # Detach every section from the temporary column layout.
+        for groups in self.control_tab_sections.values():
+            for group in groups:
+                layout.removeWidget(group)
+                group.setParent(None)
+        layout.removeWidget(self._btn_clear_screws)
+        self._btn_clear_screws.setParent(None)
+
+        self.control_tabs = QTabWidget()
+        self.control_tabs.setObjectName("controlTabs")
+        self.control_tab_scrolls: dict[str, QScrollArea] = {}
+        for tab, groups in self.control_tab_sections.items():
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(6, 6, 6, 6)
+            page_layout.setSpacing(2)
+            for group in groups:
+                page_layout.addWidget(group)
+            if tab == "Planning":
+                page_layout.addWidget(self._btn_clear_screws)
+            page_layout.addStretch()
+
+            page_scroll = QScrollArea()
+            page_scroll.setWidgetResizable(True)
+            page_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
             )
-        ):
-            layout.insertWidget(index, group)
+            page_scroll.setWidget(page)
+            self.control_tab_scrolls[tab] = page_scroll
+            self.control_tabs.addTab(page_scroll, tab)
 
-        # Spacer at bottom
-        layout.addStretch()
+        self.control_tabs.setCurrentIndex(1)
+        #: Kept for callers that used to reach for the one panel scroll area.
+        self.control_scroll = self.control_tab_scrolls["Planning"]
 
-        scroll.setWidget(panel)
+        container = QWidget()
+        container.setMinimumWidth(390)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(6, 6, 6, 6)
+        container_layout.setSpacing(6)
+        container_layout.addWidget(self.planning_cockpit)
+        container_layout.addWidget(self.control_tabs, 1)
 
         # Keep the main planning stages visible and secondary tools collapsed.
         info_group.collapse()
@@ -1006,7 +1344,8 @@ class MainWindow(QMainWindow):
         measure_list_group.collapse()
         view_group.collapse()
 
-        return scroll
+        panel.deleteLater()
+        return container
 
     def _connect_signals(self):
         """Connect all widget signals to controller methods.
@@ -1072,6 +1411,12 @@ class MainWindow(QMainWindow):
         self.screw_axis_position_slider.valueChanged.connect(
             self._screw_mpr_ctrl.set_position
         )
+        self.screw_axis_rotation_spin.valueChanged.connect(
+            self._screw_mpr_ctrl.set_rotation
+        )
+        self.screw_mpr_reset_btn.clicked.connect(
+            self._screw_mpr_ctrl.reset_view
+        )
         self.selected_screw_diameter.valueChanged.connect(
             self._tool_ctrl.set_selected_screw_diameter
         )
@@ -1099,6 +1444,9 @@ class MainWindow(QMainWindow):
             self._seg_ctrl.on_label_combo_changed
         )
         self.seg_run_btn.clicked.connect(self._seg_ctrl.run)
+        self.seg_refine_check.stateChanged.connect(
+            self._on_segmentation_setting_changed
+        )
         self.seg_show_2d_check.stateChanged.connect(
             self._seg_ctrl.update_visibility
         )
@@ -1144,6 +1492,8 @@ class MainWindow(QMainWindow):
             spin_box.valueChanged.connect(self._on_planner_parameter_changed)
         for combo in self._planner_choice_combos().values():
             combo.currentIndexChanged.connect(self._on_planner_parameter_changed)
+        for check_box in self._planner_check_boxes().values():
+            check_box.toggled.connect(self._on_planner_parameter_changed)
         for slider in self._planner_weight_sliders().values():
             slider.valueChanged.connect(self._on_planner_weight_changed)
         self.plan_reset_defaults_btn.clicked.connect(
@@ -1176,6 +1526,12 @@ class MainWindow(QMainWindow):
                 on_select=self._tool_ctrl.select_measurement_from_view,
                 on_drag=self._tool_ctrl.update_measurement_point,
             )
+            viewer.set_custom_scroll_handler(self._screw_mpr_ctrl.handle_scroll)
+
+        # Only the cross-section view rotates under Ctrl+left-drag.
+        self.coronal_viewer.set_custom_rotate_handler(
+            self._screw_mpr_ctrl.handle_rotate_drag
+        )
         self.measurement_list_widget.currentRowChanged.connect(
             self._tool_ctrl.on_measurement_selection_changed
         )
@@ -1191,6 +1547,27 @@ class MainWindow(QMainWindow):
         self._screw_mpr_ctrl.refresh_controls()
         self._screw_mpr_ctrl.refresh_selected_screw()
         self._screw_edit_ctrl.refresh_controls()
+
+        # Single-view maximise: header double-click on every pane, and a
+        # record of the last MPR pane the user touched for Ctrl+M.
+        for name, pane in (
+            ("axial", self.axial_viewer),
+            ("sagittal", self.sagittal_viewer),
+            ("coronal", self.coronal_viewer),
+            ("3d", self.viewer_3d),
+        ):
+            signal = getattr(pane, "header_double_clicked", None)
+            if signal is not None:
+                signal.connect(self.toggle_maximized_view)
+            del name
+        for viewer in self._get_mpr_viewers():
+            viewer.crosshair_moved.connect(
+                lambda plane, *_unused: self._remember_focused_view(plane)
+            )
+        self._install_focus_tracking()
+        self.screw_list_widget.currentRowChanged.connect(
+            lambda *_unused: self.refresh_mode_indicators()
+        )
 
     def _select_screw_from_view(self, screw_id: int) -> None:
         """Synchronize a screw picked in MPR/3D with the selection list."""
@@ -1245,11 +1622,13 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
 
         open_action = QAction("Open DICOM Folder...", self)
+        self._register_themed_icon(open_action, "open")
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._dicom_ctrl.open_folder)
         file_menu.addAction(open_action)
 
         save_plan_action = QAction("Save Plan...", self)
+        self._register_themed_icon(save_plan_action, "save")
         save_plan_action.setShortcut("Ctrl+S")
         save_plan_action.triggered.connect(self._plan_ctrl.save_dialog)
         file_menu.addAction(save_plan_action)
@@ -1277,27 +1656,29 @@ class MainWindow(QMainWindow):
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
 
-        select_action = QAction(create_tool_icon("select"), "Select", self)
+        select_action = QAction("Select", self)
+        self._register_themed_icon(select_action, "select")
         select_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("navigate")
         )
         tools_menu.addAction(select_action)
 
-        screw_action = QAction(create_tool_icon("screw"), "Add Screw", self)
+        screw_action = QAction("Add Screw", self)
+        self._register_themed_icon(screw_action, "screw")
         screw_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("screw")
         )
         tools_menu.addAction(screw_action)
 
-        distance_action = QAction(
-            create_tool_icon("distance"), "Measure Distance", self
-        )
+        distance_action = QAction("Measure Distance", self)
+        self._register_themed_icon(distance_action, "distance")
         distance_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("distance")
         )
         tools_menu.addAction(distance_action)
 
-        angle_action = QAction(create_tool_icon("angle"), "Measure Angle", self)
+        angle_action = QAction("Measure Angle", self)
+        self._register_themed_icon(angle_action, "angle")
         angle_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("angle")
         )
@@ -1331,10 +1712,76 @@ class MainWindow(QMainWindow):
         self._layout_action_group.addAction(self._mpr_focus_layout_action)
         view_menu.addAction(self._mpr_focus_layout_action)
 
+        self._maximize_view_action = QAction("Maximize Current View", self)
+        self._maximize_view_action.setShortcut("Ctrl+M")
+        self._maximize_view_action.setCheckable(True)
+        self._maximize_view_action.setToolTip(
+            "Maximize the last-used view, or restore the previous layout"
+        )
+        self._maximize_view_action.triggered.connect(
+            self._toggle_maximize_current_view
+        )
+        self._register_themed_icon(self._maximize_view_action, "layout")
+        view_menu.addAction(self._maximize_view_action)
+
+        view_menu.addSeparator()
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.setObjectName("themeSelector")
+        for theme_name, label in THEME_LABELS.items():
+            self.theme_combo.addItem(label, theme_name)
+        theme_index = self.theme_combo.findData(self._theme_name)
+        self.theme_combo.setCurrentIndex(max(theme_index, 0))
+        self.theme_combo.setMaximumWidth(110)
+        self.theme_combo.setMaximumHeight(26)
+        self.theme_combo.currentIndexChanged.connect(
+            lambda: self.apply_theme(self.theme_combo.currentData())
+        )
+        view_menu.addAction(
+            self._menu_combo_action("Theme:", self.theme_combo)
+        )
+
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItem("Planning (3D Large)", "planning")
+        self.layout_combo.addItem("MPR Focus (2 x 2)", "mpr_focus")
+        self.layout_combo.setCurrentIndex(
+            self.layout_combo.findData(self._view_layout_mode)
+        )
+        self.layout_combo.currentIndexChanged.connect(
+            lambda: self.set_view_layout(self.layout_combo.currentData())
+        )
+        view_menu.addAction(
+            self._menu_combo_action("Layout:", self.layout_combo)
+        )
+
         help_menu = menubar.addMenu("Help")
+        self._screw_mpr_help_action = QAction("Screw MPR controls", self)
+        self._screw_mpr_help_action.triggered.connect(
+            self.show_screw_mpr_help
+        )
+        help_menu.addAction(self._screw_mpr_help_action)
+        help_menu.addSeparator()
         self._about_action = QAction(f"About {__title__}", self)
         self._about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self._about_action)
+
+    def _menu_combo_action(self, caption: str, combo: QComboBox) -> QWidgetAction:
+        """Wrap a labelled combo box so it can live inside a QMenu."""
+        row = QWidget(self)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 3, 10, 3)
+        row_layout.setSpacing(6)
+        row_layout.addWidget(QLabel(caption))
+        row_layout.addWidget(combo, 1)
+        action = QWidgetAction(self)
+        action.setDefaultWidget(row)
+        return action
+
+    def show_screw_mpr_help(self) -> None:
+        """Show the Screw MPR mouse and keyboard gesture map."""
+        QMessageBox.information(
+            self, "Screw MPR controls", SCREW_MPR_CONTROLS_HELP
+        )
 
     def show_about_dialog(self) -> None:
         """Display version, creator credit, contact, license, and safety scope."""
@@ -1351,38 +1798,37 @@ class MainWindow(QMainWindow):
     def _setup_toolbar(self):
         """Setup the application toolbar and unified icon tool palette."""
         toolbar = QToolBar("Main Toolbar")
+        toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
+        self.main_toolbar = toolbar
 
-        # Open button
         open_action = QAction("Open DICOM", self)
+        open_action.setToolTip("Open a DICOM series folder")
         open_action.triggered.connect(self._dicom_ctrl.open_folder)
+        self._register_themed_icon(open_action, "open")
         toolbar.addAction(open_action)
+        self._open_toolbar_action = open_action
 
         toolbar.addSeparator()
-
-        toolbar.addWidget(QLabel("Tools:"))
 
         # Unified tool palette (mutually exclusive)
         self._tool_group = QActionGroup(self)
         self._tool_group.setExclusive(True)
 
-        self._select_tool_action = QAction(
-            create_tool_icon("select"), "Select", self
-        )
+        self._select_tool_action = QAction("Select", self)
         self._select_tool_action.setToolTip("Select, navigate, and inspect")
         self._select_tool_action.setCheckable(True)
         self._select_tool_action.setChecked(True)
         self._select_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("navigate")
         )
+        self._register_themed_icon(self._select_tool_action, "select")
         self._tool_group.addAction(self._select_tool_action)
         toolbar.addAction(self._select_tool_action)
 
-        self._add_screw_tool_action = QAction(
-            create_tool_icon("screw"), "Add Screw", self
-        )
+        self._add_screw_tool_action = QAction("Add Screw", self)
         self._add_screw_tool_action.setToolTip(
             "Add a screw: click entry, then tip, in an MPR view"
         )
@@ -1390,12 +1836,11 @@ class MainWindow(QMainWindow):
         self._add_screw_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("screw")
         )
+        self._register_themed_icon(self._add_screw_tool_action, "screw")
         self._tool_group.addAction(self._add_screw_tool_action)
         toolbar.addAction(self._add_screw_tool_action)
 
-        self._distance_tool_action = QAction(
-            create_tool_icon("distance"), "Distance", self
-        )
+        self._distance_tool_action = QAction("Distance", self)
         self._distance_tool_action.setToolTip(
             "Measure distance: click two points in one MPR view"
         )
@@ -1403,12 +1848,11 @@ class MainWindow(QMainWindow):
         self._distance_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("distance")
         )
+        self._register_themed_icon(self._distance_tool_action, "distance")
         self._tool_group.addAction(self._distance_tool_action)
         toolbar.addAction(self._distance_tool_action)
 
-        self._angle_tool_action = QAction(
-            create_tool_icon("angle"), "Angle", self
-        )
+        self._angle_tool_action = QAction("Angle", self)
         self._angle_tool_action.setToolTip(
             "Measure angle: click three points in one MPR view"
         )
@@ -1416,6 +1860,7 @@ class MainWindow(QMainWindow):
         self._angle_tool_action.triggered.connect(
             lambda: self._tool_ctrl.set_tool("angle")
         )
+        self._register_themed_icon(self._angle_tool_action, "angle")
         self._tool_group.addAction(self._angle_tool_action)
         toolbar.addAction(self._angle_tool_action)
 
@@ -1424,86 +1869,91 @@ class MainWindow(QMainWindow):
         self._measure_action = self._distance_tool_action
 
         toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Mode:"))
-        self.workspace_mode_combo = QComboBox()
-        self.workspace_mode_combo.setObjectName("workspaceMode")
-        self.workspace_mode_combo.addItem("Planning", "planning")
-        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
-        guided_index = self.workspace_mode_combo.findData("guided")
-        guided_item = self.workspace_mode_combo.model().item(guided_index)
-        if guided_item is not None:
-            guided_item.setEnabled(False)
-        self.workspace_mode_combo.setToolTip(
-            "Guided Workflow is reserved for a later release"
-        )
-        self.workspace_mode_combo.setMaximumWidth(100)
-        self.workspace_mode_combo.setMaximumHeight(26)
-        toolbar.addWidget(self.workspace_mode_combo)
 
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Theme:"))
-        self.theme_combo = QComboBox()
-        self.theme_combo.setObjectName("themeSelector")
-        for theme_name, label in THEME_LABELS.items():
-            self.theme_combo.addItem(label, theme_name)
-        theme_index = self.theme_combo.findData(self._theme_name)
-        self.theme_combo.setCurrentIndex(max(theme_index, 0))
-        self.theme_combo.setMaximumWidth(110)
-        self.theme_combo.setMaximumHeight(26)
-        self.theme_combo.currentIndexChanged.connect(
-            lambda: self.apply_theme(self.theme_combo.currentData())
-        )
-        toolbar.addWidget(self.theme_combo)
-
-        toolbar.addSeparator()
-        toolbar.addWidget(QLabel("Layout:"))
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItem("Planning (3D Large)", "planning")
-        self.layout_combo.addItem("MPR Focus (2 x 2)", "mpr_focus")
-        self.layout_combo.setCurrentIndex(
-            self.layout_combo.findData(self._view_layout_mode)
-        )
-        self.layout_combo.currentIndexChanged.connect(
-            lambda: self.set_view_layout(self.layout_combo.currentData())
-        )
-        toolbar.addWidget(self.layout_combo)
-
-        toolbar.addSeparator()
         self._fit_mpr_action = QAction("Fit MPR", self)
         self._fit_mpr_action.setToolTip("Fit CT images tightly in all MPR views")
         self._fit_mpr_action.triggered.connect(self.fit_mpr_views)
+        self._register_themed_icon(self._fit_mpr_action, "fit")
         toolbar.addAction(self._fit_mpr_action)
-
-        self._zoom_in_3d_action = QAction("3D +", self)
-        self._zoom_in_3d_action.setToolTip("Zoom in the 3D view")
-        self._zoom_in_3d_action.triggered.connect(
-            lambda: self.viewer_3d.zoom_camera(1.2)
-        )
-        toolbar.addAction(self._zoom_in_3d_action)
 
         self._zoom_out_3d_action = QAction("3D -", self)
         self._zoom_out_3d_action.setToolTip("Zoom out the 3D view")
         self._zoom_out_3d_action.triggered.connect(
             lambda: self.viewer_3d.zoom_camera(1.0 / 1.2)
         )
+        self._register_themed_icon(self._zoom_out_3d_action, "zoom_out")
         toolbar.addAction(self._zoom_out_3d_action)
+
+        self._zoom_in_3d_action = QAction("3D +", self)
+        self._zoom_in_3d_action.setToolTip("Zoom in the 3D view")
+        self._zoom_in_3d_action.triggered.connect(
+            lambda: self.viewer_3d.zoom_camera(1.2)
+        )
+        self._register_themed_icon(self._zoom_in_3d_action, "zoom_in")
+        toolbar.addAction(self._zoom_in_3d_action)
 
         self._fit_3d_action = QAction("Fit 3D", self)
         self._fit_3d_action.setToolTip("Fit all visible objects in the 3D view")
         self._fit_3d_action.triggered.connect(self.viewer_3d.fit_to_view)
+        self._register_themed_icon(self._fit_3d_action, "reset")
         toolbar.addAction(self._fit_3d_action)
 
+        toolbar.addSeparator()
+
+        self._screw_mpr_action = QAction("Screw MPR", self)
+        self._screw_mpr_action.setToolTip(
+            "Toggle screw-aligned MPR for the selected screw"
+        )
+        self._screw_mpr_action.setCheckable(True)
+        self._screw_mpr_action.setEnabled(False)
+        self._screw_mpr_action.triggered.connect(self._toggle_screw_mpr)
+        self._register_themed_icon(self._screw_mpr_action, "screw_mpr")
+        toolbar.addAction(self._screw_mpr_action)
+
+        self._refresh_themed_icons()
+        self.refresh_mode_indicators()
+
+    def _toggle_screw_mpr(self, checked: bool) -> None:
+        """Enter or leave Screw MPR from the toolbar toggle.
+
+        Both controller entry points end in ``refresh_controls()``, which
+        calls back into ``refresh_mode_indicators``; refreshing again here
+        would rewrite the status-bar mode text twice per toggle.
+        """
+        if checked:
+            self._screw_mpr_ctrl.enter()
+        else:
+            self._screw_mpr_ctrl.exit()
+
     def _setup_statusbar(self):
-        """Setup the status bar with coordinate and HU display."""
+        """Setup the status bar with mode, coordinate, and HU display."""
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
 
+        self._mode_label = QLabel("Select")
+        self._mode_label.setObjectName("statusModeLabel")
         self._coord_label = QLabel("X: --  Y: --  Z: --")
         self._hu_label = QLabel("HU: --")
+        self.statusbar.addPermanentWidget(self._mode_label)
         self.statusbar.addPermanentWidget(self._coord_label)
         self.statusbar.addPermanentWidget(self._hu_label)
 
         self.statusbar.showMessage("Ready")
+        self.refresh_mode_indicators()
+
+        # Both one-time migrations can fire on the same first launch, and the
+        # user has to learn about both -- the second must not silently replace
+        # the first.
+        migrations = [
+            message
+            for message in (
+                self._planner_mode_migration_message,
+                self._planner_clearance_migration_message,
+            )
+            if message
+        ]
+        if migrations:
+            self.statusbar.showMessage(" · ".join(migrations))
 
     def _get_mpr_viewers(self) -> List[MPRViewer]:
         """Return list of active MPR viewers."""
@@ -1527,6 +1977,19 @@ class MainWindow(QMainWindow):
             app.setProperty("themeName", theme_name)
             app.setStyleSheet(load_stylesheet(theme_name))
         self._theme_name = theme_name
+        self._refresh_themed_icons()
+        if hasattr(self, "screw_list_widget"):
+            self.screw_list_widget.apply_theme(theme_name)
+        # An inline colour the application stylesheet cannot reach, so the
+        # previous palette's red would otherwise stay on the narrow-pedicle row
+        # until the next selection.
+        self._repaint_pedicle_row()
+        pan_icon_color = THEMES[theme_name]["viewer_foreground"]
+        for viewer in self._get_mpr_viewers():
+            viewer.refresh_orientation_markers(render=True)
+            set_pan_icon_color = getattr(viewer, "set_pan_icon_color", None)
+            if callable(set_pan_icon_color):
+                set_pan_icon_color(pan_icon_color)
 
         if hasattr(self, "theme_combo"):
             index = self.theme_combo.findData(theme_name)
@@ -1543,6 +2006,48 @@ class MainWindow(QMainWindow):
                 f"Theme changed to {THEME_LABELS[theme_name]}"
             )
 
+    def _register_themed_icon(self, target, kind: str) -> None:
+        """Track a widget/action whose icon must follow the active palette."""
+        self._themed_icon_targets.append((target, kind))
+        target.setIcon(create_tool_icon(kind, THEMES[self._theme_name]["accent"]))
+
+    def _refresh_themed_icons(self) -> None:
+        """Repaint every registered icon with the active theme's accent."""
+        accent = THEMES[self._theme_name]["accent"]
+        for target, kind in self._themed_icon_targets:
+            target.setIcon(create_tool_icon(kind, accent))
+
+    def refresh_mode_indicators(self) -> None:
+        """Sync the Screw MPR toggle and the status-bar mode label."""
+        action = getattr(self, "_screw_mpr_action", None)
+        if action is not None:
+            active = bool(self._screw_mpr_ctrl.is_active)
+            if action.isChecked() != active:
+                previous = action.blockSignals(True)
+                action.setChecked(active)
+                action.blockSignals(previous)
+            action.setEnabled(active or self.screw_axis_mpr_btn.isEnabled())
+        label = getattr(self, "_mode_label", None)
+        if label is not None:
+            label.setText(self.current_mode_text())
+
+    def current_mode_text(self) -> str:
+        """Return the status-bar wording for the active tool or review mode."""
+        if self._screw_mpr_ctrl.is_active:
+            row = self.screw_list_widget.currentRow()
+            screws = self._tool_ctrl.screw_tool.get_screws()
+            if 0 <= row < len(screws):
+                screw = screws[row]
+                level = str(getattr(screw, "vertebra_level", "") or "").strip()
+                side = str(getattr(screw, "side", "") or "").strip()
+                identity = " ".join(
+                    part for part in (f"#{row + 1}", level, side) if part
+                )
+                return f"Screw MPR · {identity}"
+            return "Screw MPR"
+        tool = self._tool_ctrl.active_tool
+        return self.TOOL_MODE_LABELS.get(tool, str(tool).capitalize())
+
     # ------------------------------------------------------------------
     # Planning parameters
     # ------------------------------------------------------------------
@@ -1557,7 +2062,28 @@ class MainWindow(QMainWindow):
         "anterior_margin_mm",
         "max_convergence_deg",
         "trajectory_hu_threshold",
+        "narrow_pedicle_mm",
+        "narrow_lateral_breach_mm",
+        "endplate_tolerance_deg",
     )
+
+    #: Planner settings whose widget is a check box.  Kept apart from
+    #: PLANNER_SETTINGS_KEYS because that tuple's loader coerces with float(),
+    #: and because QSettings gives a bool back as the string "true"/"false" --
+    #: PlannerConfig.from_mapping does that coercion.
+    PLANNER_BOOL_SETTINGS_KEYS = ("endplate_parallel",)
+
+    #: Views that "maximize:<name>" accepts.
+    MAXIMIZABLE_VIEWS = ("axial", "sagittal", "coronal", "3d")
+
+    #: Status-bar wording for each active tool id.
+    TOOL_MODE_LABELS = {
+        "navigate": "Select",
+        "screw": "Add Screw",
+        "distance": "Distance",
+        "angle": "Angle",
+        "path": "Path",
+    }
 
     @staticmethod
     def _segmentation_settings() -> QSettings:
@@ -1575,22 +2101,31 @@ class MainWindow(QMainWindow):
         settings.setValue(
             "subregion_model_dir", self.seg_subregion_dir_edit.text().strip()
         )
+        settings.setValue("refine_mask", self.seg_refine_check.isChecked())
         settings.endGroup()
         settings.sync()
 
     def load_segmentation_settings(self) -> None:
-        """Restore the persisted subregion-model choices."""
+        """Restore the persisted segmentation choices."""
         settings = self._segmentation_settings()
         raw_enabled = settings.value("use_subregion_model", False)
         model_dir = settings.value("subregion_model_dir", "")
+        raw_refine = settings.value("refine_mask", True)
         settings.endGroup()
 
         enabled = str(raw_enabled).strip().lower() in ("true", "1", "yes")
-        for widget in (self.seg_use_subregion_check, self.seg_subregion_dir_edit):
+        refine = str(raw_refine).strip().lower() in ("true", "1", "yes")
+        for widget in (
+            self.seg_use_subregion_check,
+            self.seg_subregion_dir_edit,
+            self.seg_refine_check,
+        ):
             previous = widget.blockSignals(True)
             try:
                 if widget is self.seg_use_subregion_check:
                     widget.setChecked(enabled)
+                elif widget is self.seg_refine_check:
+                    widget.setChecked(refine)
                 else:
                     widget.setText(str(model_dir or ""))
             finally:
@@ -1625,6 +2160,9 @@ class MainWindow(QMainWindow):
             "anterior_margin_mm": self.plan_anterior_margin_spin,
             "max_convergence_deg": self.plan_max_convergence_spin,
             "trajectory_hu_threshold": self.plan_hu_threshold_spin,
+            "narrow_pedicle_mm": self.plan_narrow_pedicle_spin,
+            "narrow_lateral_breach_mm": self.plan_narrow_lateral_spin,
+            "endplate_tolerance_deg": self.plan_endplate_tolerance_spin,
         }
 
     def _planner_choice_combos(self) -> dict:
@@ -1633,6 +2171,10 @@ class MainWindow(QMainWindow):
             "mode": self.plan_mode_combo,
             "trajectory": self.plan_trajectory_combo,
         }
+
+    def _planner_check_boxes(self) -> dict:
+        """Map PlannerConfig boolean field names to their check boxes."""
+        return {"endplate_parallel": self.plan_endplate_parallel_check}
 
     def _planner_weight_sliders(self) -> dict:
         """Map OptimizerWeights field names to their percent sliders."""
@@ -1656,6 +2198,8 @@ class MainWindow(QMainWindow):
         }
         for key, combo in self._planner_choice_combos().items():
             data[key] = combo.currentData()
+        for key, check_box in self._planner_check_boxes().items():
+            data[key] = check_box.isChecked()
         # Sliders hold percents; the optimiser wants plain multipliers.
         data["weights"] = {
             name: slider.value() / 100.0
@@ -1677,6 +2221,8 @@ class MainWindow(QMainWindow):
         for key in self.PLANNER_SETTINGS_KEYS:
             settings.setValue(key, values[key])
         for key in self._planner_choice_combos():
+            settings.setValue(key, values[key])
+        for key in self.PLANNER_BOOL_SETTINGS_KEYS:
             settings.setValue(key, values[key])
         for name in self._planner_weight_sliders():
             settings.setValue(f"weights/{name}", values["weights"][name])
@@ -1700,6 +2246,10 @@ class MainWindow(QMainWindow):
                 break
         for key in self._planner_choice_combos():
             stored[key] = str(settings.value(key, defaults[key]) or defaults[key])
+        for key in self.PLANNER_BOOL_SETTINGS_KEYS:
+            # Handed to PlannerConfig.from_mapping as-is: QSettings returns
+            # "false" as a string, and bool("false") is True.
+            stored[key] = settings.value(key, defaults[key])
         weights = {}
         for name in self._planner_weight_sliders():
             default_weight = defaults["weights"][name]
@@ -1712,7 +2262,18 @@ class MainWindow(QMainWindow):
                 )
                 weights[name] = float(default_weight)
         stored["weights"] = weights
+        raw_migrated = settings.value(_PLANNER_MODE_MIGRATION_KEY, False)
+        if str(raw_migrated).strip().lower() not in ("true", "1", "yes"):
+            # Runs once per settings store, whatever the stored mode is, so a
+            # user who picks Legacy *after* this keeps it.
+            settings.setValue(_PLANNER_MODE_MIGRATION_KEY, True)
+            if stored.get("mode") == "legacy":
+                stored["mode"] = "optimizer"
+                settings.setValue("mode", "optimizer")
+                self._planner_mode_migration_message = PLANNER_MODE_MIGRATION_MESSAGE
+        self._migrate_wall_clearance(settings, stored)
         settings.endGroup()
+        settings.sync()
 
         try:
             config = PlannerConfig.from_mapping(stored)
@@ -1722,6 +2283,46 @@ class MainWindow(QMainWindow):
             )
             config = PlannerConfig()
         self._apply_planner_config(config)
+
+    def _migrate_wall_clearance(self, settings: QSettings, stored: dict) -> None:
+        """Retire the 1.0 mm wall clearance older builds persisted as the default.
+
+        W7 moved the planner default to 0 mm: at 1 mm the optimiser could not
+        satisfy ``min_wall >= 1.0`` on most sides of a real study (8 of 12
+        measured) and silently fell back to the legacy planner, so a user
+        upgrading from an older build would keep getting legacy trajectories
+        from a number they never chose.  Out-defaulting it is not enough -- the
+        old value is *persisted*, so it wins over the new default forever.
+
+        Mirrors the Legacy -> Optimizer migration next to it: it runs once per
+        settings store, whatever is stored, so a clearance the user picks
+        *afterwards* (1.0 mm included) is respected.  A persisted value that is
+        not the old default -- 0.5 or 1.5 mm -- was a deliberate choice and is
+        left alone; only the flag is written.
+
+        The one case that does *not* count as a run is an unreadable store.
+        ``load_planner_settings`` empties ``stored`` on the first numeric key it
+        cannot parse, so a single malformed value hides the persisted clearance
+        from this check entirely.  Marking the migration done there retired it
+        permanently while the old 1.0 mm survived -- exactly the state it
+        exists to end -- so the flag is written only once the value has
+        actually been read.
+        """
+        raw_migrated = settings.value(_PLANNER_CLEARANCE_MIGRATION_KEY, False)
+        if str(raw_migrated).strip().lower() in ("true", "1", "yes"):
+            return
+        clearance = stored.get("wall_clearance_mm")
+        persisted = settings.contains("wall_clearance_mm")
+        if persisted and not isinstance(clearance, float):
+            return                       # unreadable; retry on a later launch
+        settings.setValue(_PLANNER_CLEARANCE_MIGRATION_KEY, True)
+        if not persisted or not isinstance(clearance, float):
+            return                       # nothing persisted; the new default applies
+        if abs(clearance - _LEGACY_WALL_CLEARANCE_MM) > 1e-6:
+            return
+        stored["wall_clearance_mm"] = 0.0
+        settings.setValue("wall_clearance_mm", 0.0)
+        self._planner_clearance_migration_message = PLANNER_CLEARANCE_MIGRATION_MESSAGE
 
     def reset_planner_settings(self) -> None:
         """Restore the built-in planner defaults and persist them."""
@@ -1746,15 +2347,42 @@ class MainWindow(QMainWindow):
             previous = combo.blockSignals(True)
             combo.setCurrentIndex(index)
             combo.blockSignals(previous)
+        for key, check_box in self._planner_check_boxes().items():
+            previous = check_box.blockSignals(True)
+            check_box.setChecked(bool(values[key]))
+            check_box.blockSignals(previous)
         for name, slider in self._planner_weight_sliders().items():
             previous = slider.blockSignals(True)
             slider.setValue(int(round(float(values["weights"][name]) * 100.0)))
             slider.blockSignals(previous)
         self._refresh_planner_weight_labels()
+        self._push_screw_tool_thresholds()
+
+    def _push_screw_tool_thresholds(self) -> None:
+        """Judge an edited screw by the parameters the panel currently shows.
+
+        The screw tool re-grades on every drag and every diameter change, and
+        two of its verdicts are thresholds rather than geometry: the cortical
+        clearance worth a note, and the width below which a pedicle is narrow.
+        Left on its own defaults the tool would disagree with the planner that
+        produced the screw, and the *edit* would appear to have changed it.
+
+        Called from both directions a parameter can move -- a config written
+        into the panel, and a user turning a spin box -- so the tool is never
+        a step behind.  Guarded because ``load_planner_settings`` runs during
+        construction, when the tool controller may not exist yet.
+        """
+        tool_ctrl = getattr(self, "_tool_ctrl", None)
+        screw_tool = getattr(tool_ctrl, "screw_tool", None)
+        if screw_tool is None:
+            return
+        screw_tool.set_wall_clearance_mm(self.plan_wall_clearance_spin.value())
+        screw_tool.set_narrow_pedicle_mm(self.plan_narrow_pedicle_spin.value())
 
     def _on_planner_parameter_changed(self, _value=None) -> None:
         """Persist planner parameters whenever the user edits one."""
         self.save_planner_settings()
+        self._push_screw_tool_thresholds()
 
     def _on_planner_weight_changed(self, _value=None) -> None:
         """Refresh the weight readouts and persist the new objective weights."""
@@ -1768,13 +2396,34 @@ class MainWindow(QMainWindow):
     def _clear_screw_metric_rows(self) -> None:
         """Reset the clinical metric rows of the screw inspector."""
         for label in (
+            self.selected_screw_endplate,
             self.selected_screw_body_hu,
             self.selected_screw_wall,
             self.selected_screw_facet,
             self.selected_screw_heary,
+            self.selected_screw_pedicle,
+            self.selected_screw_alignment,
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
+        self._pedicle_row_narrow = False
+        self._repaint_pedicle_row()
+
+    #: Whether the cockpit's Pedicle row is currently showing a narrow pedicle.
+    #: Its colour is an inline style, so the application stylesheet cannot
+    #: repaint it on a theme change; remembering the verdict is what lets
+    #: :meth:`apply_theme` redraw it without a fresh selection.
+    _pedicle_row_narrow = False
+
+    def _repaint_pedicle_row(self) -> None:
+        """Paint the cockpit's Pedicle row in the active palette's danger colour."""
+        if not hasattr(self, "selected_screw_pedicle"):
+            return
+        self.selected_screw_pedicle.setStyleSheet(
+            f"color: {THEMES[self._theme_name]['danger']};"
+            if self._pedicle_row_narrow
+            else ""
+        )
 
     def _update_screw_metric_rows(self, metrics: dict) -> None:
         """Fill the clinical metric rows from a screw's metric bundle."""
@@ -1798,6 +2447,10 @@ class MainWindow(QMainWindow):
         if min_wall is not None:
             self.selected_screw_wall.setText(f"{float(min_wall):.1f} mm")
 
+        endplate_angle = metrics.get("endplate_angle_deg")
+        if isinstance(endplate_angle, (int, float)) and not isinstance(endplate_angle, bool):
+            self.selected_screw_endplate.setText(f"{float(endplate_angle):+.1f}°")
+
         facet_grade = metrics.get("facet_grade")
         facet_text = str(metrics.get("facet_text") or "").strip()
         if facet_grade is not None:
@@ -1811,6 +2464,25 @@ class MainWindow(QMainWindow):
         heary = str(metrics.get("heary_direction") or "").strip()
         if heary:
             self.selected_screw_heary.setText(heary)
+
+        self.selected_screw_pedicle.setText(pedicle_row_text(metrics))
+        self._pedicle_row_narrow = is_narrow_pedicle(metrics)
+        self._repaint_pedicle_row()
+
+        # Type-guarded like the endplate angle above: these arrive from a plan
+        # file, which the app does not own -- a hand-edited or third-party JSON
+        # with a string here used to raise straight out of screw selection.
+        rod = metrics.get("rod_misalignment_mm")
+        deviation = metrics.get("convergence_deviation_deg")
+        alignment: List[str] = []
+        if isinstance(rod, (int, float)) and not isinstance(rod, bool):
+            alignment.append(f"rod {float(rod):.1f} mm")
+        if isinstance(deviation, (int, float)) and not isinstance(deviation, bool):
+            # Signed: which way this level differs from its neighbours is the
+            # part a surgeon acts on.
+            alignment.append(f"conv {float(deviation):+.1f}°")
+        if alignment:
+            self.selected_screw_alignment.setText(" · ".join(alignment))
 
     def update_selected_screw_inspector(
         self,
@@ -1849,12 +2521,7 @@ class MainWindow(QMainWindow):
         self.selected_screw_counter.setText(
             f"Screw {index + 1} of {screw_count}"
         )
-        selected_item = self.screw_list_widget.item(index)
-        if selected_item is not None:
-            self.screw_list_widget.scrollToItem(
-                selected_item,
-                QAbstractItemView.ScrollHint.PositionAtCenter,
-            )
+        self.screw_list_widget.scrollToRow(index)
 
         level = str(getattr(screw, "vertebra_level", "") or "").strip()
         side = str(getattr(screw, "side", "") or "").strip().capitalize()
@@ -1862,6 +2529,7 @@ class MainWindow(QMainWindow):
         if not identity:
             identity = f"Screw #{index + 1}"
 
+        from src.core.auto_screw_planner import NARROW_PEDICLE_WARNING_PREFIX
         from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
         convergence = convergence_angle_deg(screw.entry_point, screw.target_point, screw.side or None)
         craniocaudal = craniocaudal_angle_deg(screw.entry_point, screw.target_point)
@@ -1906,6 +2574,9 @@ class MainWindow(QMainWindow):
             lines.insert(
                 0, "No estimated breach — CT review is still required."
             )
+        # The narrow note explains why the screw is the size it is, so it reads
+        # before the breach line rather than after it.
+        lines.sort(key=lambda line: not line.startswith(NARROW_PEDICLE_WARNING_PREFIX))
         self.selected_screw_warning.setText("\n".join(lines))
 
     def update_vertebra_level_checks(self, detected_labels: list) -> None:
@@ -2105,6 +2776,13 @@ class MainWindow(QMainWindow):
                        self.coronal_viewer, self.viewer_3d]:
             if viewer:
                 viewer.cleanup()
+
+        # The pane-focus filter is installed on the application, which outlives
+        # this window; taking it off here keeps a closing window from being
+        # asked about events on the way out.
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
 
         self._seg_ctrl.reset_state()
 

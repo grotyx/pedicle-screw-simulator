@@ -18,12 +18,13 @@ import logging
 import math
 import weakref
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
 
 from .planner_config import PlannerConfig
+from .screw_geometry import endplate_slope_deg
 from .screw_grading import BatchResult, ScrewGrader
 from .vertebra import PedicleAnalysisResult
 
@@ -39,21 +40,100 @@ DENSITY_HIGH_HU = 600.0
 #: Deviation from the endplate plane that drives the endplate objective to 0.
 ENDPLATE_TOLERANCE_DEG = 15.0
 
+#: How far the craniocaudal sweep may be shifted off the pedicle axis to follow
+#: the endplate (degrees).  A thoracolumbar endplate is within about 20 degrees
+#: of the pedicle axis; a larger offset means the plane fit is wrong, and
+#: chasing it would sweep the whole grid out of the vertebra.
+MAX_ENDPLATE_RECENTRE_DEG = 20.0
+
+#: How far the convergence sweep may be shifted off the pedicle axis so that
+#: its rotation *offsets* land on the configured *absolute* window (degrees).
+#: :func:`generate_candidates` sweeps ``conv`` as a rotation of the pedicle
+#: axis, while :func:`score_candidates` filters the *measured* convergence
+#: against ``[min_convergence_deg, max_convergence_deg]``; on an axis that
+#: converges strongly on its own the two disagree by exactly that angle and the
+#: entire grid can land outside the window.  A pedicle axis more than 60
+#: degrees off the sagittal plane is a mis-fit rather than an anatomy, and
+#: recentring further would aim the grid across the vertebral body instead of
+#: down the corridor, so the shift is clamped here the way
+#: :data:`MAX_ENDPLATE_RECENTRE_DEG` clamps the endplate one.
+MAX_CONVERGENCE_RECENTRE_DEG = 60.0
+
+#: Prefix of the note left on every candidate when the endplate band had to be
+#: dropped.  Callers match on the prefix; the text carries the tolerance.
+ENDPLATE_BAND_RELAXED_PREFIX = "Endplate band relaxed"
+
+
+def endplate_band_relaxed_warning(tolerance_deg: float) -> str:
+    """The single wording for a dropped endplate band."""
+    return (
+        f"{ENDPLATE_BAND_RELAXED_PREFIX}: no trajectory within "
+        f"±{tolerance_deg:g}° of the upper endplate"
+    )
+
+
 #: Length of the distal segment the anterior-margin check is measured over (mm).
 TIP_SEGMENT_MM = 4.0
+
+#: Relief subtracted from ``anterior_margin_mm`` before the distal
+#: :data:`TIP_SEGMENT_MM` is tested (mm).  The tip test was calibrated while the
+#: wall clearance defaulted to 1.0 mm and the margin was written as
+#: ``anterior_margin_mm - wall_clearance_mm``, i.e. an effective 3.0 mm.  W7
+#: dropped the clearance default to 0.0, which silently tightened the tip test
+#: to the full 4.0 mm for every side, narrow or not, and pushed sides into the
+#: legacy fallback.  Naming the relief restores the calibrated 3.0 mm and keeps
+#: a future clearance change from moving the anterior margin with it.
+TIP_MARGIN_RELIEF_MM = 1.0
 
 #: How far the seated entry may sit anterior of the posterior cortex before the
 #: trajectory counts as unreachable.  A pedicle is continuous with the lamina, so
 #: a few millimetres of countersinking is normal; more than this means a drill
 #: would have to cross air (or another structure) to reach the corridor.
-MAX_ENTRY_SHORTFALL_MM = 3.0
+#:
+#: The shortfall measures *burial*, not exposure: the entry sits inside bone,
+#: anterior of the cortex the posterior ray-cast reached, so a larger value can
+#: never admit a screw hanging in air.  Containment is a separate, unrelaxed
+#: test -- the grader still requires ``breach_mm <= 0`` and the configured wall
+#: clearance over the whole shaft -- so the only thing this bound buys is a
+#: shallower countersink.  Part of what it measures is an artefact besides:
+#: ``surface_reach`` is cast along the *pedicle axis* while ``travel`` runs
+#: along each candidate's own direction, so an obliquely angled candidate on a
+#: tilted axis reports a shortfall from the geometry of the two rays alone.  At
+#: 3 mm that made this the sole binder on tilted levels whose trajectories were
+#: otherwise contained; 6 mm still rejects an entry buried in the lamina with
+#: no drillable bone behind it (the arch phantom reports 12 mm and up).
+MAX_ENTRY_SHORTFALL_MM = 6.0
 
 #: How many catalogue steps below the recommended diameter the search may go
 #: before giving up.  Bounds the worst-case runtime of :func:`optimize_screw`.
 MAX_DIAMETER_STEPS = 2
 
+#: Tangential entry offsets (mm) the candidate sweep spreads over the entry
+#: surface.  A narrow side needs a wider one: the whole point of the policy is
+#: that the corridor can be slid laterally until the medial wall survives, and
+#: +/- 2 mm is not always far enough to get there.
+DEFAULT_ENTRY_GRID_MM: Tuple[float, ...] = (-2.0, -1.0, 0.0, 1.0, 2.0)
+NARROW_ENTRY_GRID_MM: Tuple[float, ...] = (-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0)
+
 #: Head-misalignment (mm) at which the rod objective costs a full unit of score.
 ROD_TOLERANCE_MM = 3.0
+
+#: Same-side convergence disagreement (deg RMS) at which the construct's
+#: convergence objective costs a full unit of score, mirroring
+#: :data:`ROD_TOLERANCE_MM` for the rod line.
+CONVERGENCE_TOLERANCE_DEG = 5.0
+
+#: Width of the convergence bins the candidate pool is required to cover, so
+#: the construct descent always has a trajectory at a *different* angle to move
+#: to and is not trapped in the 10 near-identical bests of one bin.
+CONVERGENCE_BIN_DEG = 2.5
+
+#: Labels whose screws are left out of the convergence agreement: a sacral
+#: screw's angle is anatomically different from the lumbar levels above it, so
+#: including it would drag every other level's angle toward it.  Values are the
+#: TotalSegmentator labels in
+#: :data:`src.core.pedicle_analyzer.VERTEBRA_LABELS` (25 sacrum, 26 S1).
+_SACRAL_LABELS = frozenset({25, 26})
 
 #: Fraction of a screw's own best score the construct re-ranking may trade away.
 CONSTRUCT_SCORE_TOLERANCE = 0.10
@@ -138,6 +218,13 @@ class Candidate:
     surface_shortfall_mm: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    #: Directional split of ``breach_mm`` from the grader, and the wall left on
+    #: the medial side.  All four equal the undirected numbers for a candidate
+    #: graded without a side.
+    medial_breach_mm: float = 0.0
+    lateral_breach_mm: float = 0.0
+    craniocaudal_breach_mm: float = 0.0
+    medial_wall_mm: float = 0.0
 
 
 # --------------------------------------------------------------------- helpers
@@ -295,7 +382,7 @@ def generate_candidates(
     analysis: PedicleAnalysisResult,
     side: str,
     config: PlannerConfig,
-    entry_grid_mm: Sequence[float] = (-2.0, -1.0, 0.0, 1.0, 2.0),
+    entry_grid_mm: Sequence[float] = DEFAULT_ENTRY_GRID_MM,
     convergence_step_deg: float = 2.5,
     craniocaudal_range_deg: Tuple[float, float] = (-10.0, 10.0),
     craniocaudal_step_deg: float = 5.0,
@@ -320,6 +407,18 @@ def generate_candidates(
     aligned with the return value; it currently carries
     ``"surface_shortfall_mm"``, how far anterior of the posterior cortex each
     entry had to be seated.
+
+    When ``config.endplate_parallel`` is on and the analysis carries an
+    upper-endplate normal, the craniocaudal window is centred on the
+    endplate-parallel direction rather than on the pedicle axis, so
+    ``craniocaudal_range_deg`` reads as "how far either side of the endplate".
+
+    The convergence window is recentred the same way, but unconditionally: the
+    swept ``conv`` is a rotation *offset* from the axis while
+    ``score_candidates`` tests the *measured* angle, so the sweep is shifted by
+    the axis's own convergence (clamped to
+    :data:`MAX_CONVERGENCE_RECENTRE_DEG`) to make the two agree.  On an axis
+    that is already anteroposterior the shift is zero and the grid is unchanged.
     """
     empty = (np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
     center, axis, width = _side_data(analysis, side)
@@ -341,16 +440,59 @@ def generate_candidates(
     # Rotating about ``+lateral_axis`` tips the trajectory caudally, so the
     # craniocaudal sweep uses its negation to keep "positive = cranial".
     craniocaudal_axis = -lateral_axis
+    # The (-10, 10) window is a window around the *endplate* direction, not
+    # around the pedicle axis: an endplate-parallel trajectory that the hard
+    # band in ``score_candidates`` demands has to be in the grid to be found.
+    # ``cc`` rotates about ``craniocaudal_axis``, which is perpendicular to the
+    # base direction's horizontal projection, so ``cc`` is an elevation offset
+    # from the base direction (exactly at zero convergence, compressed by
+    # cos(convergence) elsewhere -- close enough to populate the band, and the
+    # band itself is applied to the measured angle, not to this offset).
+    craniocaudal_center = 0.0
+    slope_deg = (
+        endplate_slope_deg(analysis.upper_endplate_normal)
+        if config.endplate_parallel
+        else None
+    )
+    if slope_deg is not None:
+        base_elevation = math.degrees(
+            math.atan2(float(base[2]), float(math.hypot(base[0], base[1])))
+        )
+        craniocaudal_center = float(
+            np.clip(
+                slope_deg - base_elevation,
+                -MAX_ENDPLATE_RECENTRE_DEG,
+                MAX_ENDPLATE_RECENTRE_DEG,
+            )
+        )
+    # ``conv`` below *rotates* ``base``, so it is an offset from the pedicle
+    # axis's own convergence, while ``score_candidates`` filters the *measured*
+    # absolute angle against the same window.  Shift the offsets back by the
+    # axis's own convergence -- the recentring ``craniocaudal_center`` already
+    # does for the endplate -- so the swept angles are the configured window as
+    # measured, instead of that window plus whatever the axis brings with it.
+    base_convergence = float(_trajectory_angles(base[None, :], side)[0][0])
+    convergence_center = float(
+        np.clip(
+            -base_convergence,
+            -MAX_CONVERGENCE_RECENTRE_DEG,
+            MAX_CONVERGENCE_RECENTRE_DEG,
+        )
+    )
     medial_sign = -1.0 if side == "left" else 1.0
 
     directions = np.array(
         [
             _unit(_rotate(_rotate(base, z_axis, medial_sign * conv), craniocaudal_axis, cc))
             for conv in np.arange(
-                config.min_convergence_deg, config.max_convergence_deg + 1e-9, convergence_step_deg
+                convergence_center + config.min_convergence_deg,
+                convergence_center + config.max_convergence_deg + 1e-9,
+                convergence_step_deg,
             )
             for cc in np.arange(
-                craniocaudal_range_deg[0], craniocaudal_range_deg[1] + 1e-9, craniocaudal_step_deg
+                craniocaudal_center + craniocaudal_range_deg[0],
+                craniocaudal_center + craniocaudal_range_deg[1] + 1e-9,
+                craniocaudal_step_deg,
             )
         ]
     )
@@ -433,6 +575,7 @@ def score_candidates(
     tip_batch: Optional[BatchResult] = None,
     surface_shortfall_mm: Optional[np.ndarray] = None,
     grader: Optional[ScrewGrader] = None,
+    narrow: bool = False,
 ) -> List[Candidate]:
     """Filter graded candidates to the feasible ones and rank them.
 
@@ -448,6 +591,24 @@ def score_candidates(
     an otherwise-sampled batch still mean the candidate could not be measured
     and stay infeasible.  ``grader``, when given, deduplicates that missing-CT
     warning to one per study instead of one per scoring pass.
+
+    ``narrow`` swaps the feasibility rule and the objective for a pedicle the
+    planner flagged: containment is required medially and craniocaudally only,
+    a lateral breach up to ``config.narrow_lateral_breach_mm`` is accepted, the
+    safety term measures the *medial* wall rather than the thinnest one, and a
+    new ``lateral`` term (sharing the safety weight) pays for keeping that
+    breach small.  Centering is dropped -- on a narrow side it would pull the
+    corridor back toward the canal, which is the one direction it must not go.
+    Narrow and normal scores are never compared with each other (every
+    comparison is within one screw's own candidate list), so the two objectives
+    do not have to be on the same scale.
+
+    With ``config.endplate_parallel`` on and a fitted endplate plane, a
+    candidate is feasible only while its endplate angle stays inside
+    ``config.endplate_tolerance_deg``.  If that empties the set the band is
+    dropped for this call and every returned candidate carries
+    :func:`endplate_band_relaxed_warning`.  With the option off the soft
+    ``endplate`` objective is pinned to 1.0, which is rank-neutral.
     """
     entries = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
     targets = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
@@ -478,26 +639,57 @@ def score_candidates(
     if without_ct:
         _warn_missing_ct(grader)
 
-    feasible = (
-        (batch.breach_mm <= 0.0)
-        & (batch.min_wall_mm >= config.wall_clearance_mm)
-        & (sampled_hu | without_ct)
-        & movable
-        & (convergence >= config.min_convergence_deg - 1e-6)
-        & (convergence <= config.max_convergence_deg + 1e-6)
-    )
+    if narrow:
+        feasible = (
+            (batch.medial_breach_mm <= 0.0)
+            & (batch.craniocaudal_breach_mm <= 0.0)
+            & (batch.lateral_breach_mm <= config.narrow_lateral_breach_mm + 1e-9)
+            & (sampled_hu | without_ct)
+            & movable
+            & (convergence >= config.min_convergence_deg - 1e-6)
+            & (convergence <= config.max_convergence_deg + 1e-6)
+        )
+    else:
+        feasible = (
+            (batch.breach_mm <= 0.0)
+            & (batch.min_wall_mm >= config.wall_clearance_mm)
+            & (sampled_hu | without_ct)
+            & movable
+            & (convergence >= config.min_convergence_deg - 1e-6)
+            & (convergence <= config.max_convergence_deg + 1e-6)
+        )
     if tip_batch is not None:
-        tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
+        tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
     if surface_shortfall_mm is not None:
         shortfall = np.asarray(surface_shortfall_mm, dtype=np.float64).reshape(-1)
         feasible &= shortfall <= MAX_ENTRY_SHORTFALL_MM + 1e-9
     else:
         shortfall = np.zeros(count)
+
+    # Hard endplate band.  A band that admits nothing is dropped for this side
+    # with a note rather than costing it a screw: an off-parallel screw the
+    # surgeon can see is better than a missing one they have to explain.
+    band_relaxed = False
+    endplate_slope = (
+        endplate_slope_deg(analysis.upper_endplate_normal)
+        if config.endplate_parallel
+        else None
+    )
+    if endplate_slope is not None:
+        within_band = feasible & (
+            np.abs(craniocaudal - endplate_slope)
+            <= config.endplate_tolerance_deg + 1e-9
+        )
+        if within_band.any():
+            feasible = within_band
+        else:
+            band_relaxed = True
     if not feasible.any():
         return []
 
-    safety = np.clip(np.minimum(batch.min_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
+    safety_wall = batch.medial_wall_mm if narrow else batch.min_wall_mm
+    safety = np.clip(np.minimum(safety_wall, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
     density = np.clip(
         (np.where(sampled_hu, batch.mean_hu, DENSITY_LOW_HU) - DENSITY_LOW_HU)
         / (DENSITY_HIGH_HU - DENSITY_LOW_HU),
@@ -505,26 +697,50 @@ def score_candidates(
         1.0,
     )
     length_score = np.clip(lengths / max_length, 0.0, 1.0)
-    if normal is None:
+    if normal is None or not config.endplate_parallel:
+        # Neutral, not absent: a constant 1.0 adds ``weights.endplate`` to every
+        # score, which leaves the ranking exactly as if the weight were zero,
+        # while keeping the component present in every candidate's breakdown.
         endplate = np.ones(count)
     else:
         tilt = np.degrees(np.arcsin(np.clip(directions @ normal, -1.0, 1.0)))
         endplate = np.clip(1.0 - np.abs(tilt) / ENDPLATE_TOLERANCE_DEG, 0.0, 1.0)
-    if center is None:
-        centering = np.ones(count)
+
+    # Insertion order is the order the weighted sum is accumulated in, and it
+    # matches the pre-split expression term for term, so a normal pedicle keeps
+    # its exact score.
+    component_arrays: Dict[str, np.ndarray] = {
+        "safety": safety,
+        "density": density,
+        "length": length_score,
+        "endplate": endplate,
+    }
+    if narrow:
+        cap = max(float(config.narrow_lateral_breach_mm), 1e-9)
+        component_arrays["lateral"] = np.clip(
+            1.0 - batch.lateral_breach_mm / cap, 0.0, 1.0
+        )
+    elif center is None:
+        component_arrays["centering"] = np.ones(count)
     else:
         offset = np.asarray(center, dtype=np.float64)[None, :] - entries
         perpendicular = offset - directions * np.sum(offset * directions, axis=1)[:, None]
-        centering = np.clip(
+        component_arrays["centering"] = np.clip(
             1.0 - np.linalg.norm(perpendicular, axis=1) / half_width, 0.0, 1.0
         )
 
-    total = (
-        weights.safety * safety
-        + weights.density * density
-        + weights.length * length_score
-        + weights.endplate * endplate
-        + weights.centering * centering
+    # The lateral cap and the medial wall are two halves of one trade-off, so
+    # they share the safety weight: raising "safety" tightens both.
+    component_weights = {
+        "safety": weights.safety,
+        "density": weights.density,
+        "length": weights.length,
+        "endplate": weights.endplate,
+        "lateral": weights.safety,
+        "centering": weights.centering,
+    }
+    total = sum(
+        component_weights[name] * values for name, values in component_arrays.items()
     )
 
     candidates = [
@@ -540,21 +756,57 @@ def score_candidates(
             craniocaudal_deg=float(craniocaudal[i]),
             score=float(total[i]),
             surface_shortfall_mm=float(shortfall[i]),
+            medial_breach_mm=float(batch.medial_breach_mm[i]),
+            lateral_breach_mm=float(batch.lateral_breach_mm[i]),
+            craniocaudal_breach_mm=float(batch.craniocaudal_breach_mm[i]),
+            medial_wall_mm=float(batch.medial_wall_mm[i]),
             components={
-                "safety": float(safety[i]),
-                "density": float(density[i]),
-                "length": float(length_score[i]),
-                "endplate": float(endplate[i]),
-                "centering": float(centering[i]),
+                name: float(values[i]) for name, values in component_arrays.items()
             },
         )
         for i in np.flatnonzero(feasible)
     ]
+    if band_relaxed:
+        warning = endplate_band_relaxed_warning(config.endplate_tolerance_deg)
+        for candidate in candidates:
+            candidate.warnings.append(warning)
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates
 
 
 # ---------------------------------------------------------------------- driver
+def _cover_convergence_bins(ranked: List[Candidate], top_k: int) -> List[Candidate]:
+    """The best ``top_k`` candidates, but never all from one convergence bin.
+
+    ``ranked`` is score-descending, so the first candidate seen in a bin is that
+    bin's best.  Taking those representatives first guarantees the construct
+    stage is handed a trajectory at a genuinely different angle for every angle
+    that is feasible at all -- otherwise a pedicle whose 40 best candidates sit
+    within half a degree of each other can never join a harmonised construct,
+    however cheap the alternative would be.  The remaining slots go to the next
+    best overall, and the result is re-sorted by score so callers keep reading
+    ``[0]`` as "this screw's own best".
+    """
+    if top_k <= 0 or len(ranked) <= top_k:
+        return list(ranked)
+    representatives: Dict[int, Candidate] = {}
+    for candidate in ranked:
+        representatives.setdefault(
+            int(math.floor(candidate.convergence_deg / CONVERGENCE_BIN_DEG)), candidate
+        )
+    # dict preserves insertion order, which here is score order.
+    selection = list(representatives.values())[:top_k]
+    picked = {id(c) for c in selection}
+    for candidate in ranked:
+        if len(selection) >= top_k:
+            break
+        if id(candidate) not in picked:
+            selection.append(candidate)
+            picked.add(id(candidate))
+    selection.sort(key=lambda c: c.score, reverse=True)
+    return selection
+
+
 def optimize_screw(
     grader: ScrewGrader,
     analysis: PedicleAnalysisResult,
@@ -563,6 +815,7 @@ def optimize_screw(
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
     top_k: int = 10,
     planner=None,
+    narrow: bool = False,
 ) -> List[Candidate]:
     """Best ``top_k`` trajectories for one pedicle, highest score first.
 
@@ -578,6 +831,18 @@ def optimize_screw(
     entry-point search and diameter rules are used, so a substitute is
     equivalent exactly when it holds this ``grader``'s mask and this ``config``;
     :func:`make_planner` builds that planner when none is given.
+
+    ``narrow`` plans the pedicle under the narrow policy: only
+    ``planner.MIN_SCREW_DIAMETER``, the wider :data:`NARROW_ENTRY_GRID_MM` so a
+    lateral shift is reachable, and the relaxed, medial-first feasibility of
+    :func:`score_candidates`.  The diameter is the minimum rather than the
+    level's recommendation because a side is also flagged narrow when its width
+    could not be trusted at all -- including an implausibly *wide* measurement,
+    whose recommendation would otherwise put a full-size screw through the
+    relaxed feasibility rule.  This matches :meth:`AutoScrewPlanner._plan_screw`,
+    which hard-codes the same minimum for a narrow side, so the two back-ends
+    agree.  A narrow candidate therefore carries no "diameter reduced ... for
+    cortical containment" warning: the minimum is the policy, not a step-down.
     """
     center, _axis, width = _side_data(analysis, side)
     if center is None or not analysis.success:
@@ -585,13 +850,17 @@ def optimize_screw(
 
     planner = planner if planner is not None else make_planner(grader, config)
     recommended = planner._compute_diameter(width, analysis.vertebra.name)
-    if recommended is None:
-        return []
     label = int(analysis.vertebra.label)
 
-    catalogue = sorted(
-        (d for d in config.implant_diameters_mm if d <= recommended + 1e-9), reverse=True
-    )[: MAX_DIAMETER_STEPS + 1]
+    if narrow:
+        catalogue = [float(planner.MIN_SCREW_DIAMETER)]
+        entry_grid = NARROW_ENTRY_GRID_MM
+    else:
+        catalogue = sorted(
+            (d for d in config.implant_diameters_mm if d <= recommended + 1e-9),
+            reverse=True,
+        )[: MAX_DIAMETER_STEPS + 1]
+        entry_grid = DEFAULT_ENTRY_GRID_MM
     for diameter in catalogue:
         diagnostics: Dict[str, np.ndarray] = {}
         entries, targets, lengths = generate_candidates(
@@ -599,13 +868,14 @@ def optimize_screw(
             analysis,
             side,
             config,
+            entry_grid_mm=entry_grid,
             corridor_radius_mm=diameter / 2.0,
             planner=planner,
             diagnostics=diagnostics,
         )
         if entries.shape[0] == 0:
             continue
-        batch = grader.evaluate_batch(entries, targets, diameter, label)
+        batch = grader.evaluate_batch(entries, targets, diameter, label, side=side)
         directions = targets - entries
         norms = np.linalg.norm(directions, axis=1)
         norms[norms <= 1e-12] = 1.0
@@ -618,16 +888,17 @@ def optimize_screw(
             tip_batch=tip_batch,
             surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
             grader=grader,
+            narrow=narrow,
         )
         if ranked:
-            if diameter < recommended:
+            if not narrow and diameter < recommended:
                 warning = (
                     f"Diameter reduced from {recommended:.1f} to {diameter:.1f} mm "
                     "for cortical containment"
                 )
                 for candidate in ranked:
                     candidate.warnings.append(warning)
-            return ranked[:top_k]
+            return _cover_convergence_bins(ranked, top_k)
     return []
 
 
@@ -650,24 +921,132 @@ def rod_misalignment_mm(head_points: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.sum(residuals**2, axis=1))))
 
 
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """Lower weighted median, averaging the two middles on an exact tie.
+
+    With uniform weights this reproduces :func:`numpy.median` for both odd and
+    even counts, so the neighbour weighting degrades cleanly to a plain median
+    when no level ordering is known.
+    """
+    order = np.argsort(values, kind="stable")
+    ordered = values[order]
+    ordered_weights = weights[order]
+    total = float(ordered_weights.sum())
+    if total <= 0.0:
+        return float(np.median(values))
+    cumulative = np.cumsum(ordered_weights)
+    half = total / 2.0
+    index = min(int(np.searchsorted(cumulative, half - 1e-12, side="left")), ordered.size - 1)
+    if index + 1 < ordered.size and abs(float(cumulative[index]) - half) <= 1e-9:
+        return float((ordered[index] + ordered[index + 1]) / 2.0)
+    return float(ordered[index])
+
+
+def convergence_deviations_deg(
+    angles: Sequence[float],
+    levels: Optional[Sequence[Optional[int]]] = None,
+    exclude_s1: bool = True,
+) -> List[Optional[float]]:
+    """How far each screw's convergence sits from its neighbours' agreement.
+
+    ``levels`` are TotalSegmentator vertebra labels (see
+    :data:`src.core.pedicle_analyzer.VERTEBRA_LABELS`), one per angle, and may
+    be ``None`` where the level is unknown.  Adjacent-level agreement matters
+    more to a surgeon than global agreement -- a lumbar construct legitimately
+    converges more at L5 than at L1 -- so each screw is compared against a
+    median in which the entries one level away (and itself) count double.  With
+    no levels every weight is 1 and this is the plain median of the side.
+
+    Positions excluded from the term (sacral screws when ``exclude_s1``) come
+    back as ``None`` rather than 0.0, so a caller can tell "agrees perfectly"
+    from "was not asked to agree".
+    """
+    values = [float(a) for a in angles]
+    count = len(values)
+    resolved: List[Optional[int]] = (
+        list(levels) if levels is not None else [None] * count
+    )
+    if len(resolved) != count:
+        raise ValueError(
+            f"levels must have one entry per angle, got {len(resolved)} for {count}"
+        )
+    included = [
+        i
+        for i in range(count)
+        if not (exclude_s1 and resolved[i] is not None and resolved[i] in _SACRAL_LABELS)
+    ]
+    deviations: List[Optional[float]] = [None] * count
+    if len(included) < 2:
+        for i in included:
+            deviations[i] = 0.0
+        return deviations
+
+    included_values = np.array([values[i] for i in included], dtype=np.float64)
+    for i in included:
+        weights = np.array(
+            [
+                2.0
+                if (
+                    resolved[i] is not None
+                    and resolved[j] is not None
+                    and abs(int(resolved[i]) - int(resolved[j])) <= 1
+                )
+                else 1.0
+                for j in included
+            ],
+            dtype=np.float64,
+        )
+        deviations[i] = values[i] - _weighted_median(included_values, weights)
+    return deviations
+
+
+def convergence_spread_deg(
+    angles: Sequence[float],
+    levels: Optional[Sequence[Optional[int]]] = None,
+    exclude_s1: bool = True,
+) -> float:
+    """RMS convergence disagreement of one side, in degrees.
+
+    0.0 when fewer than two screws take part, which is the honest answer: one
+    screw always agrees with itself, and reporting anything else would let the
+    construct term push a single-level fusion around for nothing.
+    """
+    deviations = [
+        d for d in convergence_deviations_deg(angles, levels, exclude_s1) if d is not None
+    ]
+    if len(deviations) < 2:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(np.asarray(deviations, dtype=np.float64)))))
+
+
 def optimize_construct(
     per_screw_candidates: Dict[Tuple[str, str], List[Candidate]],
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
+    levels: Optional[Mapping[Tuple[str, str], int]] = None,
 ) -> Dict[Tuple[str, str], Candidate]:
-    """Re-rank per-screw candidates so the heads of each side line up.
+    """Re-rank per-screw candidates so each side agrees with itself.
 
-    Keys are ``(level_name, side)``.  Starting from every screw's own best
-    trajectory, greedy coordinate descent sweeps the screws (at most
-    :data:`_CONSTRUCT_MAX_PASSES` times, stopping early once a pass changes
-    nothing) and swaps in the candidate minimising
+    Keys are ``(level_name, side)``; ``levels`` maps those keys to
+    TotalSegmentator vertebra labels so the convergence term knows which levels
+    are neighbours and which screw is sacral.  Without it every screw is an
+    unknown level: the convergence median is then the plain side median and no
+    screw is excluded.
 
-    ``-score + weights.rod * rod_misalignment_mm(side heads) / ROD_TOLERANCE_MM``
+    Starting from every screw's own best trajectory, greedy coordinate descent
+    sweeps the screws (at most :data:`_CONSTRUCT_MAX_PASSES` times, stopping
+    early once a pass changes nothing) and swaps in the candidate minimising
 
-    Only candidates whose own score stays within
-    :data:`CONSTRUCT_SCORE_TOLERANCE` of that screw's best are eligible, so rod
-    alignment can never buy a materially worse screw.  Levels are only ever
-    compared against the same side's heads; the other side's term is constant
-    for that screw and cannot change the choice.
+    ``-score
+      + weights.rod * rod_misalignment_mm(side heads) / ROD_TOLERANCE_MM
+      + weights.rod * convergence_spread_deg(side angles) / CONVERGENCE_TOLERANCE_DEG``
+
+    One weight governs both terms because they are one surgical property: a
+    construct whose heads line up but whose angles fight each other is not
+    harmonised.  Only candidates whose own score stays within
+    :data:`CONSTRUCT_SCORE_TOLERANCE` of that screw's best are eligible, so
+    neither alignment term can ever buy a materially worse screw.  Levels are
+    only ever compared against the same side's screws; the other side's terms
+    are constant for that screw and cannot change the choice.
     """
     chosen: Dict[Tuple[str, str], Candidate] = {}
     eligible: Dict[Tuple[str, str], List[Candidate]] = {}
@@ -679,26 +1058,31 @@ def optimize_construct(
         chosen[key] = best
         eligible[key] = [c for c in candidates if c.score >= floor - 1e-12]
 
-    def side_misalignment(side: str, key: Tuple[str, str], candidate: Candidate) -> float:
-        heads = [
-            (candidate if k == key else c).entry
-            for k, c in chosen.items()
-            if k[1] == side
-        ]
-        return rod_misalignment_mm(np.asarray(heads, dtype=np.float64)) if heads else 0.0
+    def alignment_cost(side: str, key: Tuple[str, str], candidate: Candidate) -> float:
+        heads: List[np.ndarray] = []
+        angles: List[float] = []
+        side_levels: List[Optional[int]] = []
+        for other, current in chosen.items():
+            if other[1] != side:
+                continue
+            pick = candidate if other == key else current
+            heads.append(pick.entry)
+            angles.append(pick.convergence_deg)
+            side_levels.append(None if levels is None else levels.get(other))
+        rod = rod_misalignment_mm(np.asarray(heads, dtype=np.float64)) if heads else 0.0
+        spread = convergence_spread_deg(angles, side_levels)
+        return weights.rod * (
+            rod / ROD_TOLERANCE_MM + spread / CONVERGENCE_TOLERANCE_DEG
+        )
 
     for _ in range(_CONSTRUCT_MAX_PASSES):
         changed = False
         for key in list(chosen):
             side = key[1]
             best_candidate = chosen[key]
-            best_cost = -best_candidate.score + weights.rod * side_misalignment(
-                side, key, best_candidate
-            ) / ROD_TOLERANCE_MM
+            best_cost = -best_candidate.score + alignment_cost(side, key, best_candidate)
             for candidate in eligible[key]:
-                cost = -candidate.score + weights.rod * side_misalignment(
-                    side, key, candidate
-                ) / ROD_TOLERANCE_MM
+                cost = -candidate.score + alignment_cost(side, key, candidate)
                 if cost < best_cost - 1e-12:
                     best_cost, best_candidate = cost, candidate
             if best_candidate is not chosen[key]:

@@ -20,7 +20,10 @@ def test_roundtrip_mapping_ignores_unknown_keys():
 
 @pytest.mark.parametrize("field,value", [("pedicle_fill_ratio", 1.2), ("pedicle_fill_ratio", 0.2),
                                          ("wall_clearance_mm", -1.0), ("anterior_margin_mm", 30.0),
-                                         ("max_convergence_deg", 91.0)])
+                                         ("max_convergence_deg", 91.0),
+                                         ("narrow_pedicle_mm", 2.5), ("narrow_pedicle_mm", 8.5),
+                                         ("narrow_lateral_breach_mm", -0.1),
+                                         ("narrow_lateral_breach_mm", 6.5)])
 def test_validate_rejects_out_of_range(field, value):
     with pytest.raises(ValueError):
         PlannerConfig(**{field: value}).validate()
@@ -46,3 +49,31 @@ def test_optimizer_defaults_and_weight_roundtrip():
 def test_validate_rejects_unknown_enum(field, value):
     with pytest.raises(ValueError):
         PlannerConfig(**{field: value}).validate()
+
+
+class TestEndplateOption:
+    def test_defaults_are_on_at_ten_degrees(self):
+        config = PlannerConfig()
+        assert config.endplate_parallel is True
+        assert config.endplate_tolerance_deg == pytest.approx(10.0)
+
+    def test_tolerance_is_validated(self):
+        PlannerConfig(endplate_tolerance_deg=0.0).validate()
+        PlannerConfig(endplate_tolerance_deg=30.0).validate()
+        with pytest.raises(ValueError, match="endplate_tolerance_deg"):
+            PlannerConfig(endplate_tolerance_deg=30.5).validate()
+        with pytest.raises(ValueError, match="endplate_tolerance_deg"):
+            PlannerConfig(endplate_tolerance_deg=-1.0).validate()
+
+    def test_from_mapping_reads_qsettings_style_booleans(self):
+        """QSettings hands back "false" as a string; bool("false") is True."""
+        assert PlannerConfig.from_mapping({"endplate_parallel": "false"}).endplate_parallel is False
+        assert PlannerConfig.from_mapping({"endplate_parallel": "true"}).endplate_parallel is True
+        assert PlannerConfig.from_mapping({"endplate_parallel": "0"}).endplate_parallel is False
+        assert PlannerConfig.from_mapping({"endplate_parallel": False}).endplate_parallel is False
+
+    def test_round_trips_through_to_mapping(self):
+        config = PlannerConfig(endplate_parallel=False, endplate_tolerance_deg=7.5)
+        restored = PlannerConfig.from_mapping(config.to_mapping())
+        assert restored.endplate_parallel is False
+        assert restored.endplate_tolerance_deg == pytest.approx(7.5)

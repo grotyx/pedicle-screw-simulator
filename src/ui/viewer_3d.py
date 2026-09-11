@@ -1,8 +1,8 @@
 """
-3D Viewer - CPU Volume Rendering
+3D Viewer - Volume Rendering
 
 Provides:
-- CPU volume rendering (vtkFixedPointVolumeRayCastMapper)
+- Volume rendering (vtkSmartVolumeMapper, or a CPU fallback on macOS)
 - Transfer function presets (Bone, Soft Tissue, CT Angiography, MIP)
 - MPR plane indicators
 - Screw visualization
@@ -10,23 +10,26 @@ Provides:
 - Segmentation overlay
 - Interactive rotation/zoom
 
-Why CPU, not GPU?
-  macOS OpenGL is emulated on Metal. GPU volume mappers trigger glFinish()
-  during 3D texture upload, blocking the main thread for 60-312s. No parameter
-  tuning or downsampling avoids this — the bottleneck is the OpenGL→Metal
-  translation layer itself (AppleMetalOpenGLRenderer).
-  The fixed-point CPU mapper does all ray casting on CPU and only blits
-  a 2D result image to screen (~1 MB), completely bypassing the GPU hang.
+Why the mapper depends on the platform:
+  macOS OpenGL is emulated on Metal. The hardware volume mappers trigger
+  glFinish() during 3D texture upload, blocking the main thread for 60-312s.
+  No parameter tuning or downsampling avoids this - the bottleneck is the
+  OpenGL->Metal translation layer itself (AppleMetalOpenGLRenderer). On macOS
+  the fixed-point CPU mapper therefore does all ray casting on CPU and only
+  blits a 2D result image to screen (~1 MB), completely bypassing the hang.
+  Everywhere else vtkSmartVolumeMapper picks hardware ray casting when a
+  usable context exists and falls back to its own CPU caster otherwise.
 """
 
 import logging
 import math
+import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import vtk
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -38,14 +41,21 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core.vertebral_mesh import MESH_SMOOTHING_ITERATIONS, MESH_SMOOTHING_PASSBAND
 from ..core.volume_manager import VolumeManager
 from ..core.volume_scale import assess_volume_scale
 from ..utils.constants import (
     COLOR_SCREW,
     TRANSFER_FUNCTION_PRESETS,
 )
-from ..utils.vtk_helpers import downsample_vtk_image
+from ..utils.vtk_helpers import (
+    MAPPER_KIND_CPU,
+    MAPPER_KIND_SMART,
+    downsample_vtk_image,
+    shrink_factors,
+)
 from .click_detector import DoubleClickDetector
+from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
 logger = logging.getLogger(__name__)
@@ -58,6 +68,110 @@ PLANE_INDICATOR_COLORS = {
 }
 PLANE_INDICATOR_OPACITY = 0.14
 PLANE_OUTLINE_OPACITY = 0.48
+
+# vtkSmartVolumeMapper render-mode enum -> log-friendly name.
+RENDER_MODE_NAMES = {
+    0: "default",
+    1: "cpu-raycast",
+    2: "gpu",
+    3: "ospray",
+    4: "anari",
+    5: "undefined",
+    6: "invalid",
+}
+
+
+def select_volume_mapper_kind(platform: str) -> str:
+    """Pick the volume mapper kind for a ``sys.platform`` string.
+
+    macOS keeps the fixed-point CPU ray caster (see the module docstring for
+    the Metal glFinish() hang); every other platform gets the smart mapper.
+    """
+    return MAPPER_KIND_CPU if str(platform) == "darwin" else MAPPER_KIND_SMART
+
+
+def create_volume_mapper(kind: str) -> vtk.vtkVolumeMapper:
+    """Build and configure the volume mapper for ``kind``.
+
+    Raises:
+        ValueError: if ``kind`` is not a known mapper kind.
+    """
+    if kind == MAPPER_KIND_CPU:
+        mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+        mapper.SetBlendModeToComposite()
+        mapper.SetAutoAdjustSampleDistances(False)
+        mapper.LockSampleDistanceToInputSpacingOff()
+        mapper.SetInteractiveSampleDistance(3.0)
+        return mapper
+    if kind == MAPPER_KIND_SMART:
+        # VTK 9.7's vtkSmartVolumeMapper exposes neither
+        # SetInteractiveSampleDistance nor LockSampleDistanceToInputSpacing;
+        # the two-phase LOD in _on_interaction_start / _execute_phase2 drives
+        # SetSampleDistance directly instead, which both mappers support.
+        mapper = vtk.vtkSmartVolumeMapper()
+        mapper.SetRequestedRenderModeToDefault()
+        mapper.SetBlendModeToComposite()
+        mapper.SetAutoAdjustSampleDistances(False)
+        mapper.SetInteractiveUpdateRate(1.0 / 15.0)
+        return mapper
+    raise ValueError(f"unknown mapper kind: {kind!r}")
+
+
+def describe_render_mode(mapper) -> str:
+    """Name the render mode a mapper used on its last render.
+
+    vtkFixedPointVolumeRayCastMapper has no GetLastUsedRenderMode(); it is
+    always a CPU fixed-point cast, so say so instead of failing.
+    """
+    getter = getattr(mapper, "GetLastUsedRenderMode", None)
+    if getter is None:
+        return "cpu-fixed-point"
+    return RENDER_MODE_NAMES.get(int(getter()), "unknown")
+
+
+#: Render-mode names that mean "the mapper has not rendered yet", so the log
+#: should wait for a real frame rather than report them.
+PENDING_RENDER_MODES = frozenset({"undefined", "unknown"})
+
+#: The mode a ``vtkSmartVolumeMapper`` reports when it found no usable GPU
+#: context and fell back to its own CPU ray caster.
+CPU_RAYCAST_MODE = "cpu-raycast"
+
+
+# Per-tier target sample distance: (spacing multiplier, absolute floor in mm).
+# These reproduce the pre-GPU formulas exactly and do not depend on the mapper.
+_SAMPLE_DISTANCE_RULES = {
+    "xl": (4.0, 2.0),
+    "large": (3.0, 1.5),
+    "medium": (2.5, 1.2),
+    "small": (2.0, 1.0),
+}
+
+
+def volume_render_settings(
+    tier: str,
+    spacing: Sequence[float],
+    mapper_kind: str,
+) -> Tuple[float, Tuple[int, int, int]]:
+    """Return the fine sample distance (mm) and shrink factors for a volume.
+
+    Args:
+        tier: Tier string from ``assess_volume_scale``.
+        spacing: Volume spacing (x, y, z) in millimetres.
+        mapper_kind: ``MAPPER_KIND_CPU`` or ``MAPPER_KIND_SMART``.
+
+    Returns:
+        ``(sample_distance_mm, (sx, sy, sz))``.
+
+    Raises:
+        ValueError: if the tier or the mapper kind is unknown.
+    """
+    rule = _SAMPLE_DISTANCE_RULES.get(tier)
+    if rule is None:
+        raise ValueError(f"unknown volume tier: {tier!r}")
+    multiplier, floor_mm = rule
+    min_spacing = min(float(value) for value in spacing)
+    return max(min_spacing * multiplier, floor_mm), shrink_factors(tier, mapper_kind)
 
 
 @dataclass
@@ -247,15 +361,16 @@ def _flush_logs():
 
 class Viewer3D(QWidget):
     """
-    3D viewer widget with CPU volume rendering.
+    3D viewer widget for volume rendering.
 
-    Uses vtkFixedPointVolumeRayCastMapper for CPU-based ray casting.
-    No mesh generation, no background threads — volume is rendered
-    directly from vtkImageData with transfer functions.
-
-    CPU rendering avoids the macOS OpenGL→Metal glFinish() hang entirely.
-    Combined with downsampled volume, first render completes in 2-5 seconds.
+    The volume mapper is chosen per platform (see ``select_volume_mapper_kind``):
+    vtkFixedPointVolumeRayCastMapper (CPU) on macOS, to avoid the OpenGL→Metal
+    glFinish() hang, and vtkSmartVolumeMapper (GPU-capable) everywhere else.
+    No mesh generation, no background threads — volume is rendered directly
+    from vtkImageData with transfer functions.
     """
+
+    header_double_clicked = pyqtSignal(str)  # ("3d") — maximise request
 
     # Render state: GUARD blocks renders during pipeline setup, NORMAL allows them.
     _RS_GUARD = 0
@@ -289,7 +404,12 @@ class Viewer3D(QWidget):
 
         # Volume rendering pipeline
         self._volume: Optional[vtk.vtkVolume] = None
-        self._volume_mapper: Optional[vtk.vtkFixedPointVolumeRayCastMapper] = None
+        self._volume_mapper: Optional[vtk.vtkVolumeMapper] = None
+        self._mapper_kind: str = select_volume_mapper_kind(sys.platform)
+        # Which shrink table the volume is downsampled by.  Normally the
+        # mapper's own, but a smart mapper that turns out to be ray casting on
+        # the CPU is demoted to the CPU table (see _apply_cpu_raycast_fallback).
+        self._shrink_kind: str = self._mapper_kind
         self._volume_property: Optional[vtk.vtkVolumeProperty] = None
         self._color_tf: Optional[vtk.vtkColorTransferFunction] = None
         self._opacity_tf: Optional[vtk.vtkPiecewiseFunction] = None
@@ -352,10 +472,12 @@ class Viewer3D(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.label = QLabel("3D View")
-        self.label.setStyleSheet(
-            "color: white; font-weight: bold; padding: 2px;"
-        )
+        self.label = ViewerHeaderLabel("3D View", "3d", self)
+        # No colour here on purpose: the app stylesheet's QLabel#viewerHeader
+        # rule supplies the theme's viewer_foreground, and a hard-coded white
+        # in this inline sheet used to override it on the light palettes.
+        self.label.setStyleSheet("font-weight: bold; padding: 2px;")
+        self.label.doubleClicked.connect(self.header_double_clicked)
 
         self.viewport_container = QWidget(self)
         viewport_layout = QGridLayout(self.viewport_container)
@@ -488,9 +610,22 @@ class Viewer3D(QWidget):
         layout.addWidget(self.label)
         layout.addWidget(self.viewport_container, stretch=1)
 
+    def _build_volume_mapper(self) -> vtk.vtkVolumeMapper:
+        """Select and configure the volume mapper for the current platform."""
+        self._mapper_kind = select_volume_mapper_kind(sys.platform)
+        self._shrink_kind = self._mapper_kind
+        mapper = create_volume_mapper(self._mapper_kind)
+        logger.info(
+            "_setup_vtk_pipeline: volume mapper=%s (kind=%s, platform=%s)",
+            type(mapper).__name__,
+            self._mapper_kind,
+            sys.platform,
+        )
+        return mapper
+
     def _setup_vtk_pipeline(self):
-        """Setup the VTK CPU volume rendering pipeline."""
-        logger.info("_setup_vtk_pipeline: initializing CPU volume renderer")
+        """Setup the VTK volume rendering pipeline (mapper chosen per platform)."""
+        logger.info("_setup_vtk_pipeline: initializing volume renderer")
         # Flat neutral background keeps anatomy and implant colors dominant.
         self._renderer = vtk.vtkRenderer()
         self._renderer.SetBackground(*VIEWPORT_BACKGROUND)
@@ -517,12 +652,7 @@ class Viewer3D(QWidget):
         interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
         interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
 
-        # CPU volume mapper — bypasses macOS OpenGL→Metal glFinish() hang.
-        self._volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
-        self._volume_mapper.SetBlendModeToComposite()
-        self._volume_mapper.SetAutoAdjustSampleDistances(False)
-        self._volume_mapper.LockSampleDistanceToInputSpacingOff()
-        self._volume_mapper.SetInteractiveSampleDistance(3.0)
+        self._volume_mapper = self._build_volume_mapper()
 
         self._color_tf = vtk.vtkColorTransferFunction()
         self._opacity_tf = vtk.vtkPiecewiseFunction()
@@ -684,29 +814,19 @@ class Viewer3D(QWidget):
         # Quality control per volume tier
         dims = self.volume_manager.dimensions
         spacing = self.volume_manager.spacing
-        min_spacing = min(spacing)
         assessment = assess_volume_scale(dims)
-        logger.info(
-            "  dims=%s spacing=%s tier=%s",
-            dims, spacing, assessment.tier,
+        sample_dist, shrink = volume_render_settings(
+            assessment.tier, spacing, self._shrink_kind
         )
-
-        if assessment.tier == "xl":
-            sample_dist = max(min_spacing * 4.0, 2.0)
-            shrink = (3, 3, 3)
-        elif assessment.tier == "large":
-            sample_dist = max(min_spacing * 3.0, 1.5)
-            shrink = (3, 3, 2)
-        elif assessment.tier == "medium":
-            sample_dist = max(min_spacing * 2.5, 1.2)
-            shrink = (2, 2, 2)
-        else:
-            sample_dist = max(min_spacing * 2.0, 1.0)
-            shrink = (2, 2, 1)
+        logger.info(
+            "  dims=%s spacing=%s tier=%s mapper=%s shrink=%s(%s) sample_dist=%.2f",
+            dims, spacing, assessment.tier, self._mapper_kind, shrink,
+            self._shrink_kind, sample_dist,
+        )
 
         self._target_sample_dist = sample_dist
 
-        # Downsampled volume for faster CPU ray casting
+        # Downsampled volume per the mapper's tier table
         t0 = time.perf_counter()
         self._downsampled_image = downsample_vtk_image(vtk_image, shrink)
         ds_dims = self._downsampled_image.GetDimensions()
@@ -788,12 +908,93 @@ class Viewer3D(QWidget):
         else:
             self.vtk_widget.GetRenderWindow().Render()
         render_sec = time.perf_counter() - t0
-        logger.info("  Phase 1 done: %.3fs", render_sec)
+        logger.info(
+            "  Phase 1 done: %.3fs (mapper=%s)", render_sec, self._mapper_kind
+        )
+
+        # safe_render() only marks the widget dirty; the VTK render itself
+        # happens in the next paintEvent, so the mapper's last-used mode is
+        # still undefined right here. Read it on the next event-loop turn.
+        self._render_mode_logged = False
+        QTimer.singleShot(0, lambda: self._log_render_mode("Phase 1"))
 
         # Schedule Phase 2 via QTimer (works now — no Cocoa event loop starvation)
         gen = self._render_generation
         QTimer.singleShot(500, lambda: self._execute_phase2(gen))
         logger.info("  Phase 2 timer started (gen=%d, 0.5s)", gen)
+
+    def _log_render_mode(self, phase: str = "Phase 1", final: bool = False):
+        """Log the render mode the mapper actually used, once it is known.
+
+        Called on the event-loop turn after each phase's paint request. While
+        the mode is still undefined the log is held back, so a mapper that
+        only settles later is reported honestly; Phase 2 makes the final
+        attempt and logs whatever it sees.
+        """
+        # Read through __dict__: a Viewer3D built with __new__ (as the tests
+        # do) raises RuntimeError, not AttributeError, on attribute access.
+        state = self.__dict__
+        if state.get("_render_mode_logged", False):
+            return
+        mapper = state.get("_volume_mapper")
+        if mapper is None:
+            return
+        mode = describe_render_mode(mapper)
+        if mode in PENDING_RENDER_MODES and not final:
+            return
+        state["_render_mode_logged"] = True
+        logger.info(
+            "  %s render mode=%s (mapper=%s)",
+            phase,
+            mode,
+            state.get("_mapper_kind", "?"),
+        )
+        _flush_logs()
+        if mode == CPU_RAYCAST_MODE and state.get("_shrink_kind") == MAPPER_KIND_SMART:
+            self._apply_cpu_raycast_fallback()
+
+    def _apply_cpu_raycast_fallback(self) -> None:
+        """Re-downsample after the smart mapper falls back to its CPU ray caster.
+
+        ``vtkSmartVolumeMapper`` picks GPU ray casting only when it finds a
+        usable context; over RDP, in a VM and on software GL it silently uses
+        its own CPU caster instead.  The smart shrink table assumes the GPU is
+        not the bottleneck and hands the "small" tier the volume at full
+        resolution, so that fallback meant full-resolution CPU ray casting with
+        ``AutoAdjustSampleDistances`` off -- several times the load the old
+        fixed-point path ever carried, and a frozen GUI on every camera move.
+
+        Detecting the mode and only logging it, which is what this used to do,
+        told the log what the user was already suffering.  The volume is
+        re-downsampled by the CPU table instead and the mapper is allowed to
+        drop sample distances during interaction, which is exactly the deal the
+        macOS fixed-point path takes.  Runs once: ``_shrink_kind`` is the flag.
+        """
+        self._shrink_kind = MAPPER_KIND_CPU
+        mapper = self.__dict__.get("_volume_mapper")
+        if mapper is None:
+            return
+        # The GPU path pins the sample distance for a stable frame time; a CPU
+        # cast cannot afford that while the camera is moving.
+        mapper.SetAutoAdjustSampleDistances(True)
+        vtk_image = self.volume_manager.get_vtk_image()
+        if vtk_image is None or not self.__dict__.get("_volume_added", False):
+            return                       # nothing loaded yet; update_volume will use the new table
+        tier = assess_volume_scale(self.volume_manager.dimensions).tier
+        sample_dist, shrink = volume_render_settings(
+            tier, self.volume_manager.spacing, MAPPER_KIND_CPU
+        )
+        logger.warning(
+            "  smart mapper is ray casting on the CPU; re-downsampling "
+            "tier=%s with shrink=%s sample_dist=%.2f",
+            tier, shrink, sample_dist,
+        )
+        self._downsampled_image = downsample_vtk_image(vtk_image, shrink)
+        mapper.SetInputData(self._downsampled_image)
+        self._target_sample_dist = sample_dist
+        mapper.SetSampleDistance(sample_dist)
+        self._request_render()
+        _flush_logs()
 
     def _execute_phase2(self, generation: int):
         """Phase 2: Fine quality render after delay.
@@ -811,6 +1012,9 @@ class Viewer3D(QWidget):
                         self._target_sample_dist)
         self._request_render()
         logger.info("  Phase 2 done")
+        QTimer.singleShot(
+            0, lambda: self._log_render_mode("Phase 2", final=True)
+        )
 
     def _request_render(self):
         """Request a VTK render."""
@@ -1534,26 +1738,31 @@ class Viewer3D(QWidget):
             gaussian.SetDimensionality(3)
             surface_input = gaussian.GetOutputPort()
 
-        marching_cubes = vtk.vtkMarchingCubes()
-        marching_cubes.SetInputConnection(surface_input)
-        marching_cubes.SetValue(0, 0.5)
-        marching_cubes.ComputeNormalsOff()
-        marching_cubes.Update()
+        # vtkFlyingEdges3D is the same sub-voxel extractor used by
+        # extract_vertebral_mesh (src/core/vertebral_mesh.py); it produces the
+        # same isosurface as vtkMarchingCubes with far less staircase noise
+        # on anisotropic grids.
+        surface_extractor = vtk.vtkFlyingEdges3D()
+        surface_extractor.SetInputConnection(surface_input)
+        surface_extractor.SetValue(0, 0.5)
+        surface_extractor.ComputeNormalsOff()
+        surface_extractor.ComputeGradientsOff()
+        surface_extractor.Update()
 
-        n_points = marching_cubes.GetOutput().GetNumberOfPoints()
-        logger.info("3D seg: marching cubes produced %d points", n_points)
+        n_points = surface_extractor.GetOutput().GetNumberOfPoints()
+        logger.info("3D seg: flying edges produced %d points", n_points)
         if n_points == 0:
             return
 
         decimator = vtk.vtkDecimatePro()
-        decimator.SetInputConnection(marching_cubes.GetOutputPort())
+        decimator.SetInputConnection(surface_extractor.GetOutputPort())
         decimator.SetTargetReduction(0.45)
         decimator.PreserveTopologyOn()
 
         smoother = vtk.vtkWindowedSincPolyDataFilter()
         smoother.SetInputConnection(decimator.GetOutputPort())
-        smoother.SetNumberOfIterations(25)
-        smoother.SetPassBand(0.08)
+        smoother.SetNumberOfIterations(MESH_SMOOTHING_ITERATIONS)
+        smoother.SetPassBand(MESH_SMOOTHING_PASSBAND)
         smoother.BoundarySmoothingOff()
         smoother.FeatureEdgeSmoothingOff()
         smoother.NonManifoldSmoothingOn()

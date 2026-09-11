@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Dict, Mapping, Tuple
 
 from ..utils.constants import (
     ANTERIOR_SAFETY_MARGIN_MM,
-    CORTICAL_WALL_CLEARANCE_MM,
     IMPLANT_DIAMETERS_MM,
     IMPLANT_LENGTHS_MM,
     PEDICLE_FILL_RATIO,
@@ -36,10 +35,22 @@ def _default_weights() -> "OptimizerWeights":
 @dataclass(frozen=True)
 class PlannerConfig:
     pedicle_fill_ratio: float = PEDICLE_FILL_RATIO
-    wall_clearance_mm: float = CORTICAL_WALL_CLEARANCE_MM
+    #: Cortical clearance the planner keeps on each side of the screw.  The
+    #: default is 0 mm: a clearance that drops a whole pedicle side is a policy,
+    #: not a measurement, and the surgeon-facing rule is now "place the smallest
+    #: screw and mark the level".  The spin box still lets it be raised.
+    wall_clearance_mm: float = 0.0
     anterior_margin_mm: float = ANTERIOR_SAFETY_MARGIN_MM
     max_convergence_deg: float = 35.0
     min_convergence_deg: float = -5.0
+    #: Measured pedicle width below which a side is planned under the
+    #: narrow-pedicle policy: smallest implant, medial wall protected, level
+    #: marked red.
+    narrow_pedicle_mm: float = 5.0
+    #: Lateral (in-out-in) breach a narrow side may accept.  2 mm keeps the
+    #: default inside a Gertzbein grade B; the literature accepts up to about
+    #: 6 mm in T4-T9 with the in-out-in technique, which the range allows.
+    narrow_lateral_breach_mm: float = 2.0
     implant_lengths_mm: Tuple[float, ...] = IMPLANT_LENGTHS_MM
     implant_diameters_mm: Tuple[float, ...] = IMPLANT_DIAMETERS_MM
     trajectory_hu_threshold: float = TRAJECTORY_HU_LOOSENING_THRESHOLD
@@ -47,6 +58,14 @@ class PlannerConfig:
     mode: str = "optimizer"
     #: Trajectory family, one of :data:`TRAJECTORY_KINDS`.
     trajectory: str = "traditional"
+    #: Aim the trajectory along the upper endplate.  When off, the legacy
+    #: planner keeps the target at the entry height and the optimiser drops both
+    #: its endplate band and its endplate objective, leaving the sagittal angle
+    #: to the other objectives.
+    endplate_parallel: bool = True
+    #: Half-width of the hard band the optimiser holds the endplate angle inside
+    #: while :attr:`endplate_parallel` is on (degrees).
+    endplate_tolerance_deg: float = 10.0
     #: Objective weights consumed by the optimiser (ignored in legacy mode).
     weights: "OptimizerWeights" = field(default_factory=_default_weights)
 
@@ -57,8 +76,14 @@ class PlannerConfig:
             raise ValueError("wall_clearance_mm must be within [0, 3]")
         if not 0.0 <= self.anterior_margin_mm <= 15.0:
             raise ValueError("anterior_margin_mm must be within [0, 15]")
+        if not 0.0 <= self.endplate_tolerance_deg <= 30.0:
+            raise ValueError("endplate_tolerance_deg must be within [0, 30]")
         if not -30.0 <= self.min_convergence_deg < self.max_convergence_deg <= 90.0:
             raise ValueError("convergence limits must satisfy -30 <= min < max <= 90")
+        if not 3.0 <= self.narrow_pedicle_mm <= 8.0:
+            raise ValueError("narrow_pedicle_mm must be within [3, 8]")
+        if not 0.0 <= self.narrow_lateral_breach_mm <= 6.0:
+            raise ValueError("narrow_lateral_breach_mm must be within [0, 6]")
         if not self.implant_lengths_mm or not self.implant_diameters_mm:
             raise ValueError("implant catalogues must not be empty")
         if self.mode not in PLANNER_MODES:
@@ -78,6 +103,16 @@ class PlannerConfig:
         for key in ("mode", "trajectory"):
             if key in kwargs:
                 kwargs[key] = str(kwargs[key])
+        if "endplate_parallel" in kwargs:
+            raw = kwargs["endplate_parallel"]
+            # QSettings returns "true"/"false" strings, and bool("false") is True.
+            kwargs["endplate_parallel"] = (
+                raw.strip().lower() in ("true", "1", "yes")
+                if isinstance(raw, str)
+                else bool(raw)
+            )
+        if "endplate_tolerance_deg" in kwargs:
+            kwargs["endplate_tolerance_deg"] = float(kwargs["endplate_tolerance_deg"])
         if isinstance(kwargs.get("weights"), Mapping):
             from .trajectory_optimizer import OptimizerWeights
 

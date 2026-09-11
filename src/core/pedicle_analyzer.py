@@ -45,6 +45,33 @@ VERTEBRA_LABELS: Dict[int, str] = {
     43: "T1",
 }
 
+#: Endplate plane-fit RMS residual above which the fit is called rough (mm).
+#: One millimetre is a single lumbar CT voxel; 1.5 mm is the point at which the
+#: fitted plane can no longer be told apart from the stair steps of the mask it
+#: was fitted to, and the endplate-parallel trajectory built on it deserves a
+#: second look in the sagittal view.
+ENDPLATE_FIT_RMSE_WARNING_MM: float = 1.5
+
+
+def endplate_fit_warning(rmse_mm: float) -> str:
+    """The single wording for a rough upper-endplate fit.
+
+    Both the analyser and :mod:`src.core.auto_screw_planner` emit this text --
+    the analyser onto the analysis, the planner onto the screw that used it --
+    so it lives in one place and cannot drift between them.
+    """
+    return (
+        f"Upper endplate fit is rough (RMSE {rmse_mm:.1f} mm) — "
+        "check the sagittal view"
+    )
+
+
+#: Lateral offset from the vertebral body below which the axial re-check stops
+#: using the sign of the offset to tell left from right.  At a smaller offset
+#: the recorded centre sits on the body's own column and the sign is noise.
+_AXIAL_RECHECK_SIDE_MARGIN_MM: float = 2.0
+
+
 # Labels for which pedicle analysis is not meaningful.
 _SKIP_PEDICLE_LABELS: frozenset = frozenset({25})  # sacrum
 
@@ -72,8 +99,21 @@ class PedicleAnalyzer:
     # Half-width of the midline band that separates body/lamina slices
     # from pedicle-zone slices.
     MIDLINE_BAND_MM: float = 3.0
-    # Smallest coronal cross-section accepted as a pedicle.
-    MIN_PEDICLE_AREA_MM2: float = 10.0
+    # Smallest coronal cross-section accepted as a pedicle.  Raised from the
+    # original 10 mm2 because a nearest-neighbour-upsampled mask routinely
+    # leaves a 12-15 mm2 fragment beside the real pedicle (spec W3: a 12.5 mm2
+    # sliver at 8.8 mm lateral displacing a 99 mm2 pedicle at L2 right).
+    MIN_PEDICLE_AREA_MM2: float = 20.0
+    # Narrowest cross-section accepted as a pedicle candidate.  A pedicle is
+    # never 1-2 voxels across; a stair step is.
+    MIN_SLICE_WIDTH_MM: float = 2.0
+    # Furthest a corridor's cross-section centroid may move between
+    # neighbouring coronal slices and still be the same pedicle.  The pedicle
+    # funnels gently; a jump this size is a different structure.
+    MAX_TRACK_JUMP_MM: float = 4.0
+    # Slices the corridor may go untracked before the walk ends.  A stair-step
+    # notch can erase one or two cross-sections without ending the pedicle.
+    MAX_TRACK_GAP_SLICES: int = 3
     # Accepted lateral offset of a pedicle centroid from the midline.
     MIN_LATERAL_MM: float = 3.0
     MAX_LATERAL_MM: float = 40.0
@@ -89,9 +129,39 @@ class PedicleAnalyzer:
     PEDICLE_WINDOW_AREA_RATIO: float = 1.25
     # Fewest window records needed to fit an axis through their centroids.
     MIN_AXIS_WINDOW_RECORDS: int = 3
+    # Shortest AP travel the centroid track may be fitted over.  On a
+    # CT-guided refined mask (0.39 mm coronal voxels) the area-ratio window is
+    # 3-4 records = 1.2-1.6 mm, over which a single 1.0 mm slice of stair-step
+    # drift swings the SVD by more than 40 degrees.  Five millimetres is short
+    # enough to stay inside a real pedicle's isthmus and long enough that one
+    # voxel of drift is a small angle.
+    MIN_AXIS_WINDOW_MM: float = 5.0
+    # Largest cranio-caudal rise the fitted axis may have per unit of AP
+    # travel.  Thoracolumbar pedicles run within about 25 degrees of the axial
+    # plane; 0.7 (35 degrees) keeps the margin a lordotic level needs when the
+    # slices are not square to the endplate, and still refuses the fits that
+    # break the planner -- the sample CT's L2-left came back at 42 degrees
+    # caudal, which no L2 pedicle does.  Such a fit is discarded in favour of
+    # body centre -> isthmus.
+    MAX_AXIS_TILT_RATIO: float = 0.7
     # Fewest labelled voxels on one side before that side is measured.  Below
     # this the label is a speck of leakage rather than a pedicle.
     MIN_LABEL_SIDE_VOXELS: int = 20
+    # Plausible minimum transverse pedicle width per level class (mm).  A
+    # measurement outside its band is a segmentation or measurement artefact,
+    # not a narrow pedicle: the bands are wide enough to contain every real
+    # thoracolumbar pedicle and every dysplastic one worth planning around.
+    LUMBAR_WIDTH_RANGE_MM: Tuple[float, float] = (5.0, 22.0)
+    THORACIC_WIDTH_RANGE_MM: Tuple[float, float] = (3.5, 18.0)
+    # How far an axial re-check component's centroid may sit from the recorded
+    # isthmus centre before it is refused (mm).  At the isthmus the pedicle is
+    # usually continuous with the body, so the *nearest* non-body component is
+    # often a transverse-process or spinous fragment several centimetres away;
+    # a 30x15-voxel TP fragment at 0.39 mm measures about 5.9 mm, which lands
+    # inside the lumbar band and silently replaced the real width.  Ten
+    # millimetres is wider than any isthmus centroid offset and far short of
+    # the transverse process.
+    MAX_AXIAL_RECHECK_OFFSET_MM: float = 10.0
 
     def __init__(
         self,
@@ -294,10 +364,20 @@ class PedicleAnalyzer:
         result.vertebral_body_center = body_center
         body_center_ijk: Optional[Tuple[float, float, float]] = None
         if body_center is not None:
-            result.upper_endplate_normal = self._estimate_upper_endplate_normal(
+            (
+                result.upper_endplate_normal,
+                result.endplate_fit_rmse_mm,
+            ) = self._estimate_upper_endplate_normal(
                 indices_zyx,
                 body_center,
             )
+            if (
+                result.endplate_fit_rmse_mm is not None
+                and result.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
+            ):
+                result.warnings.append(
+                    endplate_fit_warning(result.endplate_fit_rmse_mm)
+                )
             body_center_ijk = self._mask_image.TransformPhysicalPointToContinuousIndex(
                 tuple(float(v) for v in body_center)
             )
@@ -366,6 +446,7 @@ class PedicleAnalyzer:
             self._report_held_warnings(result, held_warnings)
             result.method = "+".join(methods)
             result.success = True
+            self._apply_plausibility_gate(result, binary)
             return result
 
         # --- Fallback: axial connected-component search ---------------------
@@ -469,19 +550,33 @@ class PedicleAnalyzer:
                 pca_voxels = all_voxels
 
             axis = self._compute_pedicle_axis(pca_voxels)
+            if (
+                abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT
+                or self._is_overtilted(axis)
+            ):
+                # The axial pass gathers its cloud slice by slice, so a
+                # stair-stepped or obliquely drawn corridor tips its principal
+                # axis out of the AP direction as readily as the coronal fit --
+                # and this path never had a guard at all.  Same answer as the
+                # other two: body centre -> isthmus, oriented posteriorly.
+                axis = self._body_centre_axis(isthmus_center, body_center)
 
             # --- Minimum transverse width ---
             width = self._measure_pedicle_width(isthmus_voxels, voxel_area_mm2)
 
-            # Store results.
+            # Store results.  This path has only the one width estimate, so it
+            # is its own lower bound -- leaving the bound at its 0.0 default
+            # would read as a 0 mm pedicle rather than as "not cross-checked".
             if side == "left":
                 result.left_pedicle_center = isthmus_center
                 result.left_pedicle_axis = axis
                 result.left_pedicle_width = width
+                result.left_width_lower_bound_mm = width
             else:
                 result.right_pedicle_center = isthmus_center
                 result.right_pedicle_axis = axis
                 result.right_pedicle_width = width
+                result.right_width_lower_bound_mm = width
 
         if axial_found:
             methods.append("axial_components")
@@ -493,6 +588,9 @@ class PedicleAnalyzer:
             result.method = "+".join(methods)
             result.success = True
 
+        # The gate runs last on both exits: it may append to `method`, so it
+        # has to see the method the detection paths settled on.
+        self._apply_plausibility_gate(result, binary)
         return result
 
     def _report_held_warnings(
@@ -547,12 +645,14 @@ class PedicleAnalyzer:
             result.left_pedicle_center = found["center_lps"]
             result.left_pedicle_axis = found["axis_lps"]
             result.left_pedicle_width = found["width_mm"]
+            result.left_width_lower_bound_mm = found["width_lower_bound_mm"]
             result.left_pedicle_height = found["height_mm"]
             result.left_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
         else:
             result.right_pedicle_center = found["center_lps"]
             result.right_pedicle_axis = found["axis_lps"]
             result.right_pedicle_width = found["width_mm"]
+            result.right_width_lower_bound_mm = found["width_lower_bound_mm"]
             result.right_pedicle_height = found["height_mm"]
             result.right_pedicle_inferior_medial_lps = found["inferior_medial_lps"]
 
@@ -644,18 +744,60 @@ class PedicleAnalyzer:
 
         js, counts = np.unique(side_voxels[:, 1], return_counts=True)
         areas = counts.astype(np.float64) * sx * sz
+        widths = np.array(
+            [
+                float(
+                    side_voxels[side_voxels[:, 1] == j][:, 2].max()
+                    - side_voxels[side_voxels[:, 1] == j][:, 2].min()
+                    + 1
+                )
+                * sx
+                for j in js
+            ],
+            dtype=np.float64,
+        )
         # Ignore the end slices that taper into body / lamina.
         interior = slice(1, -1) if js.size > 2 else slice(None)
         interior_js = js[interior]
         interior_areas = areas[interior]
-        min_area = float(interior_areas.min())
-        tied = np.flatnonzero(interior_areas == min_area)
+        interior_widths = widths[interior]
+        # A stair-stepped label leaves cross-sections narrower than any real
+        # pedicle inside the corridor; they are not isthmus candidates.  When
+        # the floors would reject every slice the corridor is uniformly thin
+        # and the narrowest slice is still the best answer available.
+        solid = (interior_areas >= self.MIN_PEDICLE_AREA_MM2) & (
+            interior_widths >= self.MIN_SLICE_WIDTH_MM
+        )
+        candidate_areas = (
+            np.where(solid, interior_areas, np.inf) if solid.any() else interior_areas
+        )
+        min_area = float(candidate_areas.min())
+        tied = np.flatnonzero(candidate_areas == min_area)
         isthmus_j = int(interior_js[tied[tied.size // 2]])
 
         coords = side_voxels[side_voxels[:, 1] == isthmus_j]
-        # Outer voxel-boundary extents, as in _find_pedicle_coronal.
-        width_mm = float(coords[:, 2].max() - coords[:, 2].min() + 1) * sx
-        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        # Outer voxel-boundary extents, as in _find_pedicle_coronal, taken as
+        # the median over the isthmus slice and its neighbours in the labelled
+        # corridor and cross-checked against the inscribed diameter.
+        isthmus_pos = int(np.flatnonzero(js == isthmus_j)[0])
+        neighbour_js = js[max(0, isthmus_pos - 1):isthmus_pos + 2]
+        neighbour_slices = [side_voxels[side_voxels[:, 1] == j] for j in neighbour_js]
+        # `widths` already holds each slice's x-extent in mm, so the width
+        # median is a slice of it rather than three more scans of side_voxels.
+        width_extent_mm = float(
+            np.median(widths[max(0, isthmus_pos - 1):isthmus_pos + 2])
+        )
+        height_mm = float(
+            np.median(
+                [
+                    float(sl[:, 0].max() - sl[:, 0].min() + 1) * sz
+                    for sl in neighbour_slices
+                ]
+            )
+        )
+        width_edt_mm = self._inscribed_width_mm(coords[:, [0, 2]], (sz, sx))
+        width_mm = max(width_extent_mm, width_edt_mm)
+        width_lower_bound_mm = min(width_extent_mm, width_edt_mm)
         center = self._continuous_ijk_to_lps(
             float(coords[:, 2].mean()),
             float(isthmus_j),
@@ -663,14 +805,12 @@ class PedicleAnalyzer:
         )
 
         axis = self._compute_pedicle_axis(side_voxels)
-        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
-            # A cloud whose principal axis is not AP enough to trust — fall
+        if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT or self._is_overtilted(axis):
+            # A cloud whose principal axis is not AP enough to trust, or one
+            # that climbs out of the axial plane faster than it advances — fall
             # back on body centre -> isthmus, as the coronal search does.
-            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
-            fallback = center - body_center_lps
-            norm = float(np.linalg.norm(fallback))
-            axis = (
-                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            axis = self._body_centre_axis(
+                center, self._continuous_ijk_to_lps(*body_center_ijk)
             )
         if axis[1] < 0:
             axis = -axis
@@ -679,6 +819,7 @@ class PedicleAnalyzer:
             "center_lps": center,
             "axis_lps": axis,
             "width_mm": width_mm,
+            "width_lower_bound_mm": width_lower_bound_mm,
             "height_mm": height_mm,
             "isthmus_j": isthmus_j,
             "inferior_medial_lps": self._inferior_medial_corner_lps(
@@ -688,6 +829,243 @@ class PedicleAnalyzer:
             # window it covers is that corridor's full coronal span.
             "isthmus_window_j": (int(js[0]), int(js[-1])),
         }
+
+    @classmethod
+    def _width_range_for(cls, name: str) -> Optional[Tuple[float, float]]:
+        """The plausible width band for a level, or ``None`` when it is not gated.
+
+        Only the named lumbar and thoracic levels have a band.  The sacrum is
+        skipped before analysis starts, and S1's "pedicle" is the sacral ala,
+        whose width has nothing to do with a thoracolumbar pedicle -- gating it
+        against a lumbar band would flag every normal S1.
+        """
+        level = str(name).strip().upper()
+        if len(level) < 2 or not level[1:].isdigit():
+            return None
+        number = int(level[1:])
+        if level[0] == "L" and 1 <= number <= 5:
+            return cls.LUMBAR_WIDTH_RANGE_MM
+        if level[0] == "T" and 1 <= number <= 12:
+            return cls.THORACIC_WIDTH_RANGE_MM
+        return None
+
+    def _axial_recheck_width(
+        self,
+        binary: np.ndarray,
+        result: PedicleAnalysisResult,
+        side: str,
+    ) -> Optional[float]:
+        """Re-measure one pedicle's width on the axial slice through its isthmus.
+
+        The axial route cuts the corridor in a direction the coronal walk never
+        does, so a corridor the coronal search reduced to a stair-step sliver
+        gets a genuinely independent second opinion rather than the same number
+        computed twice.  The vertebral body is the largest component of the
+        slice and is dropped, exactly as the axial fallback in
+        :meth:`analyze_pedicle` does; the pedicle is whichever remaining
+        component is nearest the recorded isthmus centre.
+
+        Candidates are refused unless they sit within
+        :attr:`MAX_AXIAL_RECHECK_OFFSET_MM` of the recorded centre *and* on the
+        same side of the body as it: without both, the nearest non-body
+        component is routinely a posterior-element fragment whose width happens
+        to fall inside the plausible band, and believing it replaced a real
+        measurement with a fragment's.
+
+        Returns ``None`` when the slice holds nothing but the body, or nothing
+        near enough to be this pedicle -- a pedicle fused to the body in the
+        axial plane has no second opinion to give, and an answer measured off
+        the body (or off a transverse process) would be worse than none.
+        """
+        center = self._recorded_center(result, side)
+        if center is None:
+            return None
+        index = self._mask_image.TransformPhysicalPointToContinuousIndex(
+            tuple(float(v) for v in center)
+        )
+        z = int(round(index[2]))
+        if not 0 <= z < binary.shape[0]:
+            return None
+        axial_slice = binary[z]
+        labeled, n_components = ndi.label(axial_slice)
+        if n_components < 2:
+            return None
+        sizes = ndi.sum(axial_slice, labeled, index=range(1, n_components + 1))
+        body_id = int(np.argmax(sizes)) + 1
+        sx, sy, _ = self._spacing
+        target_yx = np.array([float(index[1]), float(index[0])])
+        # Millimetres, not voxels: the in-plane spacings need not be equal, and
+        # the cap below is an anatomical distance.
+        scale_yx = np.array([float(sy), float(sx)])
+        body_x = float(ndi.center_of_mass(axial_slice, labeled, body_id)[1])
+        target_offset_mm = (target_yx[1] - body_x) * float(sx)
+        best: Optional[Tuple[float, np.ndarray]] = None
+        for comp_id in range(1, n_components + 1):
+            if comp_id == body_id:
+                continue
+            coords = np.argwhere(labeled == comp_id)  # (n, 2) -> y, x
+            centroid = coords.mean(axis=0)
+            distance = float(np.linalg.norm((centroid - target_yx) * scale_yx))
+            if distance > self.MAX_AXIAL_RECHECK_OFFSET_MM:
+                continue                 # too far away to be this pedicle
+            # Same side of the body as the recorded centre.  Skipped when the
+            # centre sits essentially on the body's own column, where the sign
+            # carries no information and the distance cap is the whole check.
+            if abs(target_offset_mm) >= _AXIAL_RECHECK_SIDE_MARGIN_MM:
+                comp_offset_mm = (float(centroid[1]) - body_x) * float(sx)
+                if comp_offset_mm * target_offset_mm <= 0.0:
+                    continue
+            if best is None or distance < best[0]:
+                best = (distance, coords)
+        if best is None:
+            return None
+        voxels_zyx = np.column_stack([np.full(best[1].shape[0], z), best[1]])
+        return float(self._measure_pedicle_width(voxels_zyx, sx * sy))
+
+    def _apply_plausibility_gate(
+        self,
+        result: PedicleAnalysisResult,
+        binary: np.ndarray,
+    ) -> None:
+        """Check each measured width against its level's plausible band.
+
+        A width outside the band is a measurement failure rather than a narrow
+        pedicle, so it is re-measured axially before it is believed.  A
+        plausible second opinion replaces it and is recorded in
+        :attr:`~src.core.vertebra.PedicleAnalysisResult.method`; when there is
+        none, the original value is kept -- it is still the best number
+        available -- and the side is flagged so the planner plans it under the
+        narrow-pedicle policy and marks the level as uncertain.
+
+        A replaced width takes its lower bound with it.  The bound belongs to
+        the estimate that produced it, and the axial route has only the one
+        estimate, so it becomes its own bound exactly as the axial fallback in
+        :meth:`analyze_pedicle` does -- leaving the coronal bound in place
+        would show a reviewer a floor higher than the width it sits under.
+        """
+        band = self._width_range_for(result.vertebra.name)
+        if band is None:
+            return
+        lo, hi = band
+        rechecked = False
+        for side in ("left", "right"):
+            if self._recorded_center(result, side) is None:
+                continue
+            width = (
+                result.left_pedicle_width
+                if side == "left"
+                else result.right_pedicle_width
+            )
+            if lo <= width <= hi:
+                continue
+            second = self._axial_recheck_width(binary, result, side)
+            if second is not None and lo <= second <= hi:
+                logger.info(
+                    "%s: %s pedicle width %.1f mm re-measured axially as %.1f mm",
+                    result.vertebra.name,
+                    side,
+                    width,
+                    second,
+                )
+                if side == "left":
+                    result.left_pedicle_width = second
+                    result.left_width_lower_bound_mm = second
+                else:
+                    result.right_pedicle_width = second
+                    result.right_width_lower_bound_mm = second
+                result.warnings.append(
+                    f"{side} pedicle width re-measured axially "
+                    f"({width:.1f} → {second:.1f} mm) — verify on CT"
+                )
+                rechecked = True
+                continue
+            if side not in result.width_flags:
+                result.warnings.append(
+                    f"{side} pedicle width {width:.1f} mm outside the expected "
+                    f"{lo}–{hi} mm — verify manually"
+                )
+            result.width_flags[side] = "implausible"
+        if rechecked and "axial_recheck" not in result.method:
+            result.method = (
+                f"{result.method}+axial_recheck" if result.method else "axial_recheck"
+            )
+
+    @staticmethod
+    def _inscribed_width_mm(
+        coords_zx: np.ndarray,
+        sampling: Tuple[float, float],
+    ) -> float:
+        """The largest inscribed diameter of one cross-section, in mm.
+
+        This is a conservative *floor* under the reported width, never a
+        rescue.  After the one-voxel correction below, twice the largest
+        inscribed radius less one in-plane voxel can never exceed the isthmus
+        slice's own x-extent, so ``max(extent, this)`` is the extent on every
+        cross-section wider than it is tall; the inscribed diameter only speaks
+        up on a section whose bounding box is narrower than the corridor
+        genuinely inside it.  The max is moreover taken against the *median*
+        extent over the isthmus slice and its two neighbours, not against the
+        isthmus slice's own extent, so the EDT term can win only where the
+        isthmus slice is the widest of the three.  What stops a 7 mm pedicle
+        being reported as 1.6 mm is that neighbourhood median, together with
+        the per-slice area and width floors and the continuity tracking that
+        keeps the walk on the real corridor.
+
+        ``coords_zx`` are the component's ``(z, x)`` voxel indices and
+        ``sampling`` their ``(sz, sx)`` spacing.  The component is rasterised
+        into its own bounding box padded by one background voxel on every
+        side, so the transform measures the distance to the real boundary
+        rather than to the edge of the array.
+        """
+        # The transform measures to the *centre* of the nearest background
+        # voxel rather than to the boundary it shares with the foreground, so
+        # twice the largest radius over-reads by one voxel.  Subtracting one
+        # in-plane voxel makes an odd-voxel width exact and leaves an
+        # even-voxel width one voxel short -- the safe direction to err in for
+        # a planner, and harmless here because the reported width is
+        # max(extent, this) and the extent still wins on regular sections.
+        lo = coords_zx.min(axis=0)
+        local = coords_zx - lo
+        section = np.zeros(
+            tuple(int(n) + 2 for n in local.max(axis=0) + 1), dtype=bool
+        )
+        section[local[:, 0] + 1, local[:, 1] + 1] = True
+        distances = ndi.distance_transform_edt(section, sampling=sampling)
+        return max(0.0, 2.0 * float(distances.max()) - sampling[1])
+
+    @staticmethod
+    def _track_candidate(
+        candidates: List[Tuple[float, np.ndarray, float, float]],
+        previous_zx_mm: Optional[Tuple[float, float]],
+        max_jump_mm: float,
+    ) -> Optional[np.ndarray]:
+        """Pick this coronal slice's pedicle cross-section.
+
+        The first slice of a corridor has nothing to follow, so it still takes
+        the candidate nearest the midline -- the pedicle is medial to the
+        transverse process and the facet.  Every slice after that follows the
+        corridor by continuity instead: the candidate whose ``(z, x)`` centroid
+        is closest to the previous record's, and only while that step stays
+        under ``max_jump_mm``.  A medial fragment beside the real pedicle is
+        then ignored rather than preferred, which is the failure the
+        nearest-midline rule produces on a stair-stepped mask.
+
+        ``candidates`` entries are ``(lateral_mm, coords_zx, centroid_z_mm,
+        centroid_x_mm)``.  Returns the chosen ``coords_zx``, or ``None`` when
+        this slice has no candidate within reach.
+        """
+        if not candidates:
+            return None
+        if previous_zx_mm is None:
+            return min(candidates, key=lambda item: item[0])[1]
+        best: Optional[Tuple[float, np.ndarray]] = None
+        for _lateral_mm, coords, z_mm, x_mm in candidates:
+            jump = float(np.hypot(z_mm - previous_zx_mm[0], x_mm - previous_zx_mm[1]))
+            if jump > max_jump_mm:
+                continue
+            if best is None or jump < best[0]:
+                best = (jump, coords)
+        return None if best is None else best[1]
 
     def _find_pedicle_coronal(
         self,
@@ -711,10 +1089,12 @@ class PedicleAnalyzer:
 
         * the **isthmus** is the single narrowest recorded slice, and
           supplies the centre, width and height;
-        * the **axis** is fitted only over the contiguous run of records
+        * the **axis** is fitted over the contiguous run of records
           around the isthmus whose area stays within
           ``PEDICLE_WINDOW_AREA_RATIO`` of the minimum, which drops the
-          laminar slices as soon as the cross-section starts to flare.
+          laminar slices as soon as the cross-section starts to flare —
+          widened, when that run is shorter than
+          ``MIN_AXIS_WINDOW_MM`` of AP travel, until it is not.
 
         Parameters
         ----------
@@ -745,6 +1125,8 @@ class PedicleAnalyzer:
         band = max(1, int(round(self.MIDLINE_BAND_MM / sx)))
         records: List[Tuple[int, float, np.ndarray]] = []
         body_ended = False
+        previous_zx_mm: Optional[Tuple[float, float]] = None
+        gap = 0
 
         for j in range(j_start, binary.shape[1]):
             coronal = binary[:, j, :]  # (z, x)
@@ -765,11 +1147,16 @@ class PedicleAnalyzer:
             elif midline_ids:
                 break                 # lamina / spinous process reached
 
-            best: Optional[Tuple[float, np.ndarray]] = None
+            candidates: List[Tuple[float, np.ndarray, float, float]] = []
             for comp_id in range(1, n_components + 1):
                 coords = np.argwhere(labeled == comp_id)  # (n, 2) -> z, x
                 if coords.shape[0] * sx * sz < self.MIN_PEDICLE_AREA_MM2:
                     continue
+                width_mm = float(
+                    coords[:, 1].max() - coords[:, 1].min() + 1
+                ) * sx
+                if width_mm < self.MIN_SLICE_WIDTH_MM:
+                    continue          # a stair-step sliver, not a pedicle
                 lateral_mm = (float(coords[:, 1].mean()) - cx) * sx * lateral_sign
                 if not self.MIN_LATERAL_MM <= lateral_mm <= self.MAX_LATERAL_MM:
                     continue
@@ -777,12 +1164,32 @@ class PedicleAnalyzer:
                 margin = self.Z_RANGE_MARGIN_MM / sz
                 if not z_range[0] - margin <= z_mean <= z_range[1] + margin:
                     continue
-                # The pedicle is the candidate nearest the midline; anything
-                # further lateral is transverse process or facet.
-                if best is None or lateral_mm < best[0]:
-                    best = (lateral_mm, coords)
-            if best is not None:
-                records.append((j, best[1].shape[0] * sx * sz, best[1]))
+                candidates.append(
+                    (
+                        lateral_mm,
+                        coords,
+                        z_mean * sz,
+                        float(coords[:, 1].mean()) * sx,
+                    )
+                )
+
+            chosen = self._track_candidate(
+                candidates, previous_zx_mm, self.MAX_TRACK_JUMP_MM
+            )
+            if chosen is None:
+                # A corridor that loses its cross-section for a slice or two is
+                # still a corridor; one that loses it for longer has ended.
+                if records:
+                    gap += 1
+                    if gap > self.MAX_TRACK_GAP_SLICES:
+                        break
+                continue
+            gap = 0
+            previous_zx_mm = (
+                float(chosen[:, 0].mean()) * sz,
+                float(chosen[:, 1].mean()) * sx,
+            )
+            records.append((j, chosen.shape[0] * sx * sz, chosen))
 
         if len(records) < 2:
             return None
@@ -796,9 +1203,30 @@ class PedicleAnalyzer:
         isthmus_j, _, coords = records[isthmus_index]
 
         # Extents are outer voxel-boundary extents (max - min + 1 voxels), so
-        # they over-read the underlying continuous extent by one voxel.
-        width_mm = float(coords[:, 1].max() - coords[:, 1].min() + 1) * sx
-        height_mm = float(coords[:, 0].max() - coords[:, 0].min() + 1) * sz
+        # they over-read the underlying continuous extent by one voxel.  A
+        # single slice of a stair-stepped mask is not trustworthy on its own,
+        # so the extents are the median over the isthmus and its neighbours in
+        # the recorded corridor (fewer at a corridor end).
+        neighbourhood = records[max(0, isthmus_index - 1):isthmus_index + 2]
+        width_extent_mm = float(
+            np.median(
+                [
+                    float(rec[2][:, 1].max() - rec[2][:, 1].min() + 1) * sx
+                    for rec in neighbourhood
+                ]
+            )
+        )
+        height_mm = float(
+            np.median(
+                [
+                    float(rec[2][:, 0].max() - rec[2][:, 0].min() + 1) * sz
+                    for rec in neighbourhood
+                ]
+            )
+        )
+        width_edt_mm = self._inscribed_width_mm(coords, (sz, sx))
+        width_mm = max(width_extent_mm, width_edt_mm)
+        width_lower_bound_mm = min(width_extent_mm, width_edt_mm)
         center = self._continuous_ijk_to_lps(
             float(coords[:, 1].mean()),
             float(isthmus_j),
@@ -814,17 +1242,17 @@ class PedicleAnalyzer:
         hi_index = isthmus_index
         while hi_index + 1 < len(records) and records[hi_index + 1][1] <= area_limit:
             hi_index += 1
-        window = records[lo_index:hi_index + 1]
+        # A direction fitted over a millimetre of AP travel is noise: widen the
+        # window until it spans a real length, whatever the areas say.
+        lo_index, hi_index = self._extend_axis_window(records, lo_index, hi_index)
 
-        axis = self._fit_axis_through_centroids(window)
+        axis = self._fit_axis_through_centroids(records[lo_index:hi_index + 1])
         if axis is None:
-            # Too few slices, or a corridor whose centroids do not track the
-            # AP direction — fall back on body centre -> isthmus.
-            body_center_lps = self._continuous_ijk_to_lps(*body_center_ijk)
-            fallback = center - body_center_lps
-            norm = float(np.linalg.norm(fallback))
-            axis = (
-                fallback / norm if norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            # Too few slices, a corridor whose centroids do not track the AP
+            # direction, or one that climbs out of the axial plane faster than
+            # it advances — fall back on body centre -> isthmus.
+            axis = self._body_centre_axis(
+                center, self._continuous_ijk_to_lps(*body_center_ijk)
             )
         if axis[1] < 0:
             axis = -axis
@@ -833,6 +1261,7 @@ class PedicleAnalyzer:
             "center_lps": center,
             "axis_lps": axis,
             "width_mm": width_mm,
+            "width_lower_bound_mm": width_lower_bound_mm,
             "height_mm": height_mm,
             "isthmus_j": int(isthmus_j),
             "inferior_medial_lps": self._inferior_medial_corner_lps(
@@ -840,6 +1269,45 @@ class PedicleAnalyzer:
             ),
             "isthmus_window_j": (int(records[lo_index][0]), int(records[hi_index][0])),
         }
+
+    def _extend_axis_window(
+        self,
+        records: List[Tuple[int, float, np.ndarray]],
+        lo_index: int,
+        hi_index: int,
+    ) -> Tuple[int, int]:
+        """Widen ``records[lo_index:hi_index + 1]`` to :attr:`MIN_AXIS_WINDOW_MM`.
+
+        The area-ratio window says which slices are *pedicle*; it says nothing
+        about whether they are enough slices to fit a direction to.  On a fine
+        coronal grid they routinely are not — three 0.39 mm slices span 1.2 mm,
+        and one voxel of stair-step drift across that baseline tilts the fit by
+        tens of degrees.
+
+        Slices are added alternately in front of and behind the window, over
+        the recorded corridor and ignoring the area ratio (they only steady the
+        direction; the isthmus, width and height are already measured), until
+        the window spans ``MIN_AXIS_WINDOW_MM`` of AP travel or the corridor
+        runs out.  A corridor shorter than that is used whole.
+        """
+        _, sy, _ = self._spacing
+        last = len(records) - 1
+        extend_lo = True
+        while (records[hi_index][0] - records[lo_index][0] + 1) * sy < (
+            self.MIN_AXIS_WINDOW_MM
+        ):
+            if lo_index == 0 and hi_index == last:
+                break                  # the whole corridor is shorter than that
+            if extend_lo and lo_index > 0:
+                lo_index -= 1
+            elif hi_index < last:
+                hi_index += 1
+            elif lo_index > 0:
+                # The posterior end is exhausted; keep widening towards the
+                # body.  The break above means this arm always has room.
+                lo_index -= 1
+            extend_lo = not extend_lo
+        return lo_index, hi_index
 
     def _fit_axis_through_centroids(
         self,
@@ -877,7 +1345,45 @@ class PedicleAnalyzer:
         axis = axis / norm
         if abs(float(axis[1])) < self.MIN_AXIS_AP_COMPONENT:
             return None
+        if self._is_overtilted(axis):
+            return None
         return axis
+
+    @classmethod
+    def _is_overtilted(cls, axis: np.ndarray) -> bool:
+        """True when *axis* rises out of the axial plane by more than
+        atan(MAX_AXIS_TILT_RATIO) -- about 35 deg for the current 0.7 ratio.
+
+        A pedicle runs very nearly axially.  A fit that climbs faster than it
+        advances is an artefact of a short or drifting centroid track, and
+        following it lands the entry point a centimetre off the isthmus.
+        """
+        return abs(float(axis[2])) > cls.MAX_AXIS_TILT_RATIO * abs(float(axis[1]))
+
+    @staticmethod
+    def _body_centre_axis(
+        isthmus_center_lps: np.ndarray,
+        body_center_lps: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """Body centre -> isthmus, as a posterior-oriented unit vector.
+
+        The direction every path falls back on when its own fit is too short,
+        too lateral or too steep to trust: it cannot be more than a rough
+        estimate of the corridor, but it always points into the pedicle from
+        in front of it.  Degenerates to ``+Y`` when there is no body centre or
+        the isthmus sits on top of it.
+        """
+        if body_center_lps is None:
+            return np.array([0.0, 1.0, 0.0])
+        direction = (
+            np.asarray(isthmus_center_lps, dtype=np.float64)
+            - np.asarray(body_center_lps, dtype=np.float64)
+        )
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-9:
+            return np.array([0.0, 1.0, 0.0])
+        direction = direction / norm
+        return -direction if direction[1] < 0 else direction
 
     def analyze_all(
         self, labels: Optional[List[int]] = None
@@ -1016,15 +1522,22 @@ class PedicleAnalyzer:
         self,
         indices_zyx: np.ndarray,
         body_center: np.ndarray,
-    ) -> Optional[np.ndarray]:
-        """Fit the superior anterior-body envelope as an LPS plane."""
+    ) -> Tuple[Optional[np.ndarray], Optional[float]]:
+        """Fit the superior anterior-body envelope as an LPS plane.
+
+        Returns ``(normal, rmse_mm)``.  ``rmse_mm`` is the RMS residual of the
+        final fit over the samples it retained, so it describes the plane that
+        was actually returned rather than the first, outlier-polluted pass.
+        Both are ``None`` when no plane could be fitted at all -- a missing fit
+        is not a perfect one.
+        """
         if indices_zyx.shape[0] < 12:
-            return None
+            return None, None
 
         points = self._indices_to_lps(indices_zyx)
         extents = np.ptp(points, axis=0)
         if extents[0] < 4.0 or extents[1] < 4.0 or extents[2] < 2.0:
-            return None
+            return None, None
 
         body_mask = (
             (points[:, 1] <= body_center[1] + 0.15 * extents[1])
@@ -1032,7 +1545,7 @@ class PedicleAnalyzer:
         )
         body_points = points[body_mask]
         if body_points.shape[0] < 12:
-            return None
+            return None, None
 
         grid_size = max(2.0, 2.0 * min(self._spacing[0], self._spacing[1]))
         grid_cells = np.floor(body_points[:, :2] / grid_size).astype(np.int64)
@@ -1043,14 +1556,14 @@ class PedicleAnalyzer:
             envelope.append(cell_points[int(np.argmax(cell_points[:, 2]))])
         samples = np.asarray(envelope, dtype=np.float64)
         if samples.shape[0] < 6:
-            return None
+            return None, None
 
         retained = np.ones(samples.shape[0], dtype=bool)
         coefficients = None
         for _ in range(3):
             fit_points = samples[retained]
             if fit_points.shape[0] < 6:
-                return None
+                return None, None
             design = np.column_stack(
                 [fit_points[:, 0], fit_points[:, 1], np.ones(fit_points.shape[0])]
             )
@@ -1074,15 +1587,22 @@ class PedicleAnalyzer:
             retained = updated
 
         if coefficients is None:
-            return None
+            return None, None
+        predicted = (
+            samples[:, 0] * coefficients[0]
+            + samples[:, 1] * coefficients[1]
+            + coefficients[2]
+        )
+        residuals = samples[:, 2] - predicted
+        rmse = float(np.sqrt(np.mean(residuals[retained] ** 2)))
         normal = np.array(
             [-coefficients[0], -coefficients[1], 1.0],
             dtype=np.float64,
         )
         norm = float(np.linalg.norm(normal))
         if norm <= 1e-9:
-            return None
+            return None, None
         normal /= norm
         if normal[2] < 0.0:
             normal = -normal
-        return normal
+        return normal, rmse

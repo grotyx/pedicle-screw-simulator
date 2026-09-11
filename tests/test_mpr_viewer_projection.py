@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 import vtk
+from PyQt6.QtCore import Qt
 
 from src.core.mpr_geometry import build_screw_mpr_axes
 from src.ui.click_detector import DoubleClickDetector
@@ -52,7 +53,7 @@ def test_display_pick_is_converted_back_to_dicom_world():
 
     world = viewer._slice_display_to_world((10.0, -20.0, 0.0))
 
-    assert world == pytest.approx((3.0, 203.0, 503.0))
+    assert world == pytest.approx((3.0, 243.0, 503.0))
 
 
 def test_world_screw_is_drawn_inside_slice_local_coordinates():
@@ -71,7 +72,7 @@ def test_world_screw_is_drawn_inside_slice_local_coordinates():
     guide = _actor_by_name(props, "screw-guide")
     line_bounds = guide.GetBounds()
     assert line_bounds[0:2] == pytest.approx((-13.0, 27.0))
-    assert line_bounds[2:4] == pytest.approx((-23.0, 17.0))
+    assert line_bounds[2:4] == pytest.approx((-17.0, 23.0))
     assert 0.0 < line_bounds[4] < 1.0
     assert 0.0 < line_bounds[5] < 1.0
     assert guide.GetProperty().GetOpacity() == pytest.approx(0.16)
@@ -245,6 +246,18 @@ def test_standard_sagittal_axes_keep_original_patient_orientation():
     assert normal == pytest.approx((1.0, 0.0, 0.0))
 
 
+def test_standard_axial_axes_show_anterior_up_left_on_right():
+    axes = create_reslice_axes("axial", (10.0, 20.0, 30.0))
+
+    x_axis = tuple(axes.GetElement(row, 0) for row in range(3))
+    y_axis = tuple(axes.GetElement(row, 1) for row in range(3))
+    normal = tuple(axes.GetElement(row, 2) for row in range(3))
+
+    assert x_axis == pytest.approx((1.0, 0.0, 0.0))
+    assert y_axis == pytest.approx((0.0, -1.0, 0.0))
+    assert normal == pytest.approx((0.0, 0.0, 1.0))
+
+
 def test_mpr_drag_callbacks_receive_selected_part_and_world_updates():
     viewer = _make_viewer(center=(0.0, 0.0, 0.0), position=0.0)
     events = []
@@ -394,8 +407,8 @@ def test_visible_screw_section_moves_when_slice_position_changes():
         (next_bounds[2] + next_bounds[3]) / 2.0,
     )
 
-    assert first_center == pytest.approx((-13.0, -23.0), abs=0.1)
-    assert next_center == pytest.approx((3.47, -6.53), abs=0.1)
+    assert first_center == pytest.approx((-13.0, 23.0), abs=0.1)
+    assert next_center == pytest.approx((3.47, 6.53), abs=0.1)
     assert next_center != pytest.approx(first_center)
 
 
@@ -456,6 +469,36 @@ def test_mpr_pan_moves_camera_without_changing_zoom():
     assert render_calls == [True]
 
 
+def test_mpr_pan_scales_by_device_pixels_not_logical_widget_height():
+    """GetEventPosition() deltas are device pixels; on a 125-150% scaled
+    desktop the render window is taller than the logical widget, so panning
+    must divide by the render window's real pixel height or drags overshoot.
+    """
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer._renderer = vtk.vtkRenderer()
+    camera = viewer._renderer.GetActiveCamera()
+    camera.ParallelProjectionOn()
+    camera.SetParallelScale(90.0)
+    camera.SetFocalPoint(0.0, 0.0, 0.0)
+    camera.SetPosition(0.0, 0.0, 100.0)
+    render_calls = []
+    viewer._request_render = lambda: render_calls.append(True)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 300,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 2.0,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (600, 600)),
+    )
+
+    viewer._pan_camera_by_pixels(30, 0)
+
+    world_per_pixel = 2.0 * 90.0 / 600.0
+    expected_offset = -30.0 * world_per_pixel
+    assert camera.GetFocalPoint() == pytest.approx((expected_offset, 0.0, 0.0))
+    assert camera.GetFocalPoint()[0] != pytest.approx(-30.0 * (2.0 * 90.0 / 300.0))
+    assert render_calls == [True]
+
+
 def test_measurement_is_visible_only_on_its_original_mpr_cut():
     viewer = _make_viewer(center=(0.0, 0.0, 10.0), position=10.0)
     viewer._measurement_props = {}
@@ -513,3 +556,297 @@ def test_selected_measurement_shows_pacs_style_point_handles():
     viewer.set_selected_measurement(4)
 
     assert all(handle.GetVisibility() for handle in handles)
+
+
+class _FakeVTKWidget:
+    """Stands in for QVTKRenderWindowInteractor, its window, and interactor."""
+
+    def __init__(self, width=400, height=200):
+        self._width = width
+        self._height = height
+        self.cursors = []
+        self.event_position = (0, 0)
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
+    def setCursor(self, cursor):
+        self.cursors.append(cursor)
+
+    def GetRenderWindow(self):
+        return self
+
+    def GetInteractor(self):
+        return self
+
+    def GetEventPosition(self):
+        return self.event_position
+
+
+def _make_camera_viewer(width=400, height=200):
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.plane = "axial"
+    viewer._renderer = vtk.vtkRenderer()
+    camera = viewer._renderer.GetActiveCamera()
+    camera.ParallelProjectionOn()
+    camera.SetParallelScale(100.0)
+    camera.SetFocalPoint(0.0, 0.0, 0.0)
+    camera.SetPosition(0.0, 0.0, 100.0)
+    viewer.vtk_widget = _FakeVTKWidget(width, height)
+    viewer._request_render = lambda: None
+    viewer._update_hover_hu = lambda x, y: None
+    viewer._custom_reslice_axes = None
+    viewer._custom_scroll_handler = None
+    viewer._custom_readout = None
+    return viewer
+
+
+def test_interactor_binds_middle_button_pan_events(monkeypatch):
+    recorded = []
+
+    class _Style:
+        def AddObserver(self, event, _callback):
+            recorded.append(event)
+
+    class _Interactor:
+        def SetInteractorStyle(self, _style):
+            return None
+
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        GetRenderWindow=lambda: SimpleNamespace(
+            GetInteractor=lambda: _Interactor()
+        )
+    )
+    monkeypatch.setattr(vtk, "vtkInteractorStyleImage", _Style)
+
+    viewer._setup_interactor()
+
+    assert "MiddleButtonPressEvent" in recorded
+    assert "MiddleButtonReleaseEvent" in recorded
+
+
+def test_middle_button_drag_pans_without_changing_zoom():
+    viewer = _make_camera_viewer()
+    viewer.vtk_widget.event_position = (100, 100)
+
+    viewer._on_middle_click(None, "MiddleButtonPressEvent")
+    assert viewer._middle_pan_active is True
+
+    viewer.vtk_widget.event_position = (110, 80)
+    viewer._on_mouse_move(None, "MouseMoveEvent")
+
+    camera = viewer._renderer.GetActiveCamera()
+    assert camera.GetFocalPoint() == pytest.approx((-10.0, 20.0, 0.0))
+    assert camera.GetPosition() == pytest.approx((-10.0, 20.0, 100.0))
+    assert camera.GetParallelScale() == pytest.approx(100.0)
+
+    viewer._on_middle_release(None, "MiddleButtonReleaseEvent")
+    assert viewer._middle_pan_active is False
+    assert viewer._middle_pan_last_display is None
+
+
+def test_custom_axes_wheel_is_routed_to_the_scroll_handler():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    events = []
+    viewer.set_custom_scroll_handler(
+        lambda plane, steps, modifiers: events.append(
+            (plane, steps, modifiers)
+        )
+    )
+
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ShiftModifier
+    viewer._on_scroll_backward(None, "MouseWheelBackwardEvent")
+
+    assert events == [
+        ("axial", 1, frozenset()),
+        ("axial", -1, frozenset({"shift"})),
+    ]
+
+
+def test_ctrl_wheel_still_zooms_while_custom_axes_are_active():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    events = []
+    viewer.set_custom_scroll_handler(lambda *args: events.append(args))
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ControlModifier
+
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+
+    assert events == []
+    assert viewer._renderer.GetActiveCamera().GetParallelScale() == (
+        pytest.approx(100.0 / 1.15)
+    )
+
+
+def test_standard_mode_wheel_still_steps_one_slice():
+    viewer = _make_camera_viewer()
+    viewer.volume_manager = _VolumeManager(10.0)
+    moved = []
+    emitted = []
+    viewer.set_slice_position = lambda position: moved.append(position)
+    viewer.slice_changed = SimpleNamespace(
+        emit=lambda plane, position: emitted.append((plane, position))
+    )
+    viewer.set_custom_scroll_handler(lambda *args: pytest.fail("not custom"))
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+
+    viewer._on_scroll_forward(None, "MouseWheelForwardEvent")
+    viewer._on_scroll_backward(None, "MouseWheelBackwardEvent")
+
+    assert moved == [pytest.approx(11.0), pytest.approx(9.0)]
+    assert emitted == [
+        ("axial", pytest.approx(11.0)),
+        ("axial", pytest.approx(9.0)),
+    ]
+
+
+def test_custom_readout_replaces_the_screw_aligned_prefix():
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.plane = "axial"
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._custom_readout = None
+    viewer._last_hu_value = 412.0
+    viewer.info_label = SimpleNamespace(
+        text="", setText=lambda value: setattr(viewer.info_label, "text", value)
+    )
+
+    viewer._update_slice_info()
+    assert viewer.info_label.text == "Screw-aligned | HU: 412"
+
+    viewer.set_custom_readout("Screw-aligned · rot 15° · +2.0 mm")
+    assert viewer.info_label.text == (
+        "Screw-aligned · rot 15° · +2.0 mm | HU: 412"
+    )
+
+    viewer.set_custom_readout(None)
+    assert viewer.info_label.text == "Screw-aligned | HU: 412"
+
+
+def test_modifier_names_translate_qt_modifiers():
+    assert MPRViewer._modifier_names(Qt.KeyboardModifier.NoModifier) == (
+        frozenset()
+    )
+    assert MPRViewer._modifier_names(Qt.KeyboardModifier.ShiftModifier) == (
+        frozenset({"shift"})
+    )
+    assert MPRViewer._modifier_names(
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    ) == frozenset({"ctrl", "alt"})
+
+
+def test_drag_rotation_delta_negates_the_on_screen_pointer_angle():
+    # Pivot (200, 100); pointer moves from +x to +y, i.e. +90 deg on screen.
+    delta = MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (300.0, 100.0), (200.0, 200.0)
+    )
+
+    assert delta == pytest.approx(-90.0)
+
+
+def test_drag_rotation_wraps_across_the_negative_x_axis():
+    # Crossing the atan2 branch cut must stay a small step, not ~360 deg.
+    delta = MPRViewer._drag_rotation_delta_deg(
+        (0.0, 0.0), (-100.0, -1.0), (-100.0, 1.0)
+    )
+
+    assert delta == pytest.approx(1.1458773953669, abs=1e-9)
+
+
+def test_rotation_pivot_is_the_render_window_centre_not_the_logical_one():
+    # GetEventPosition() reports device pixels; on a 150 % desktop half the
+    # logical widget size would put the pivot up and to the left of centre.
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 1.5,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (600, 450)),
+    )
+
+    assert viewer._viewport_center_display() == pytest.approx((300.0, 225.0))
+
+
+def test_rotation_pivot_scales_the_widget_size_before_the_window_is_sized():
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.vtk_widget = SimpleNamespace(
+        width=lambda: 400,
+        height=lambda: 300,
+        devicePixelRatioF=lambda: 1.5,
+        GetRenderWindow=lambda: SimpleNamespace(GetSize=lambda: (0, 0)),
+    )
+
+    assert viewer._viewport_center_display() == pytest.approx((300.0, 225.0))
+
+
+def test_drag_rotation_ignores_points_near_the_pivot():
+    assert MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (201.0, 100.0), (200.0, 200.0)
+    ) == 0.0
+    assert MPRViewer._drag_rotation_delta_deg(
+        (200.0, 100.0), (300.0, 100.0), (200.0, 102.0)
+    ) == 0.0
+
+
+def test_ctrl_left_drag_on_a_custom_plane_reports_frame_rotation():
+    viewer = _make_camera_viewer()
+    axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._custom_reslice_axes = axes
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.ControlModifier
+    rotations = []
+    viewer.set_custom_rotate_handler(
+        lambda plane, delta: rotations.append((plane, delta))
+    )
+
+    viewer.vtk_widget.event_position = (300, 100)
+    viewer._on_left_click(None, "LeftButtonPressEvent")
+    assert viewer._rotate_drag_active is True
+
+    viewer.vtk_widget.event_position = (200, 200)
+    viewer._on_mouse_move(None, "MouseMoveEvent")
+    viewer._on_left_release(None, "LeftButtonReleaseEvent")
+
+    assert rotations == [("axial", pytest.approx(-90.0))]
+    assert viewer._rotate_drag_active is False
+    assert viewer._rotate_drag_last_display is None
+
+
+def test_plain_left_click_on_a_custom_plane_does_not_rotate():
+    viewer = _make_camera_viewer()
+    axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._custom_reslice_axes = axes
+    viewer._current_modifiers = lambda: Qt.KeyboardModifier.NoModifier
+    viewer._mpr_pan_mode_active = True
+    viewer.set_custom_rotate_handler(lambda *args: pytest.fail("rotated"))
+
+    viewer.vtk_widget.event_position = (300, 100)
+    viewer._on_left_click(None, "LeftButtonPressEvent")
+
+    assert viewer.__dict__.get("_rotate_drag_active", False) is False
+    assert viewer._mpr_pan_drag_active is True
+
+
+def test_leaving_custom_axes_cancels_an_in_flight_rotate_drag():
+    viewer = _make_camera_viewer()
+    viewer._custom_reslice_axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+    viewer._rotate_drag_active = True
+    viewer._rotate_drag_last_display = (10, 10)
+    viewer._set_review_active = lambda _active: None
+    viewer.label = SimpleNamespace(setText=lambda _text: None)
+    viewer._update_reslice_position = lambda: None
+    viewer._update_slice_info = lambda: None
+    viewer.fit_to_view = lambda render=True: None
+
+    viewer.clear_custom_reslice_axes()
+
+    assert viewer._rotate_drag_active is False
+    assert viewer._rotate_drag_last_display is None
+    assert viewer._custom_readout is None

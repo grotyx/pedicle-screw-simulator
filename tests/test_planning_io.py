@@ -104,6 +104,43 @@ class TestPlanningIO:
             return
         raise AssertionError("Expected ValueError for invalid plane")
 
+    def test_metadata_round_trips_through_the_plan_file(self, tmp_path):
+        payload = serialize_plan(
+            series_id="SERIES-META",
+            screws=[],
+            measurements=[],
+            metadata={"mask_refinement": {"enabled": True, "ct_guided": True}},
+        )
+        path = tmp_path / "plan.json"
+        save_plan_json(str(path), payload)
+
+        parsed = deserialize_plan(load_plan_json(str(path)))
+
+        assert parsed["metadata"] == {
+            "mask_refinement": {"enabled": True, "ct_guided": True}
+        }
+
+    def test_metadata_defaults_to_an_empty_object(self):
+        payload = serialize_plan(series_id="S", screws=[], measurements=[])
+
+        assert payload["metadata"] == {}
+        assert deserialize_plan(payload)["metadata"] == {}
+
+    def test_a_v3_plan_without_metadata_still_loads(self):
+        """Every plan saved before this change has no metadata key at all."""
+        parsed = deserialize_plan(
+            {"version": 3, "series_id": "S", "screws": [], "measurements": []}
+        )
+
+        assert parsed["metadata"] == {}
+
+    def test_non_object_metadata_is_rejected(self):
+        with pytest.raises(ValueError, match="metadata"):
+            deserialize_plan(
+                {"version": 3, "series_id": "S", "screws": [], "measurements": [],
+                 "metadata": ["not", "an", "object"]}
+            )
+
 
 def test_v2_roundtrip_preserves_metadata(tmp_path):
     from src.models.screw import Screw
@@ -390,3 +427,104 @@ def test_csv_has_trajectory_type_column(tmp_path):
     assert dict(zip(header, rows[1], strict=True))["trajectory_type"] == "cbt"
     # Absent on a manual screw: an empty cell, not a shifted row.
     assert dict(zip(header, rows[2], strict=True))["trajectory_type"] == ""
+
+
+def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
+    import csv as _csv
+
+    from src.utils.planning_io import export_screws_csv
+
+    narrow = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={
+            "pedicle_width_mm": 4.5,
+            "narrow_pedicle": True,
+            "medial_breach_mm": 0.0,
+            "lateral_breach_mm": 1.5,
+        },
+    )
+    manual = Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))
+    path = tmp_path / "screws.csv"
+
+    export_screws_csv(str(path), [narrow, manual])
+
+    rows = list(_csv.reader(path.open(encoding="utf-8")))
+    header = rows[0]
+    # Each wave appends its own columns and never reorders an earlier one, so
+    # these four (W7) sit before the endplate angle (W8) and the uncertainty
+    # flag, not at the end of the row.
+    assert header[-6:-2] == [
+        "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
+    ]
+    assert header[-2:] == ["endplate_angle_deg", "width_uncertain"]
+    row = dict(zip(header, rows[1], strict=True))
+    assert row["pedicle_width_mm"] == "4.500"
+    assert row["narrow_pedicle"] == "true"
+    assert row["medial_breach_mm"] == "0.000"
+    assert row["lateral_breach_mm"] == "1.500"
+    assert row["width_uncertain"] == ""
+
+    blank = dict(zip(header, rows[2], strict=True))
+    assert blank["pedicle_width_mm"] == ""
+    assert blank["narrow_pedicle"] == ""
+
+
+def test_csv_distinguishes_an_untrusted_width_from_a_narrow_one(tmp_path):
+    """``narrow_pedicle`` alone cannot explain a 24 mm "narrow" pedicle."""
+    import csv as _csv
+
+    from src.utils.planning_io import export_screws_csv
+
+    flagged = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={
+            "pedicle_width_mm": 24.0,
+            "narrow_pedicle": True,
+            "width_uncertain": True,
+        },
+    )
+    path = tmp_path / "flagged.csv"
+
+    export_screws_csv(str(path), [flagged])
+
+    rows = list(_csv.reader(path.open(encoding="utf-8")))
+    row = dict(zip(rows[0], rows[1], strict=True))
+    assert row["narrow_pedicle"] == "true"
+    assert row["width_uncertain"] == "true"
+
+
+def test_plan_json_round_trips_the_narrow_metrics(tmp_path):
+    from src.utils.planning_io import deserialize_plan, serialize_plan
+
+    screw = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5,
+                 "medial_breach_mm": 0.0, "lateral_breach_mm": 1.5},
+    )
+
+    parsed = deserialize_plan(serialize_plan("s", [screw], []))
+
+    assert parsed["version"] == 3
+    metrics = parsed["screws"][0].metrics
+    assert metrics["narrow_pedicle"] is True
+    assert metrics["pedicle_width_mm"] == 4.5
+    assert metrics["lateral_breach_mm"] == 1.5
+
+
+def test_csv_has_an_endplate_angle_column(tmp_path):
+    screws = [
+        Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 5.0),
+              diameter=6.0, vertebra_level="L3", side="left",
+              metrics={"endplate_angle_deg": 2.4}),
+        Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0),
+              diameter=6.0, vertebra_level="L4", side="left"),
+    ]
+    path = tmp_path / "plan.csv"
+
+    export_screws_csv(str(path), screws)
+
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    header = rows[0]
+    assert "endplate_angle_deg" in header
+    assert dict(zip(header, rows[1], strict=True))["endplate_angle_deg"] == "2.400"
+    assert dict(zip(header, rows[2], strict=True))["endplate_angle_deg"] == ""

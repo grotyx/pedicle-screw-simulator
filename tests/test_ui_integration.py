@@ -37,6 +37,7 @@ class DummyMPRViewer(QWidget):
 
     slice_changed = pyqtSignal(str, float)
     crosshair_moved = pyqtSignal(str, float, float, float)
+    header_double_clicked = pyqtSignal(str)
 
     def __init__(self, plane, volume_manager, parent=None):
         super().__init__(parent)
@@ -48,6 +49,9 @@ class DummyMPRViewer(QWidget):
         self.measurements = {}
         self.custom_axes = None
         self.custom_title = None
+        self.custom_readout = None
+        self.custom_scroll_handler = None
+        self.custom_rotate_handler = None
         self.review_screw_id = None
         self.screw_overlays = {}
         self.fit_count = 0
@@ -56,6 +60,7 @@ class DummyMPRViewer(QWidget):
         self.selected_measurement_id = None
         self.screw_interaction_cancelled = 0
         self.last_slice_position = None
+        self.orientation_refresh_count = 0
 
     def set_window_level(self, _window, _level):
         return
@@ -115,9 +120,19 @@ class DummyMPRViewer(QWidget):
         self.custom_axes = axes
         self.custom_title = title
 
+    def set_custom_readout(self, text):
+        self.custom_readout = text
+
+    def set_custom_scroll_handler(self, handler):
+        self.custom_scroll_handler = handler
+
+    def set_custom_rotate_handler(self, handler):
+        self.custom_rotate_handler = handler
+
     def clear_custom_reslice_axes(self):
         self.custom_axes = None
         self.custom_title = None
+        self.custom_readout = None
 
     def set_review_screw(self, screw_id):
         self.review_screw_id = screw_id
@@ -137,6 +152,9 @@ class DummyMPRViewer(QWidget):
     def fit_to_view(self):
         self.fit_count += 1
 
+    def refresh_orientation_markers(self, render=False):
+        self.orientation_refresh_count += 1
+
     # Stubs for _coordinated_initial_render
     _render_guard_active = False
     _settled = False
@@ -148,6 +166,8 @@ class DummyMPRViewer(QWidget):
 
 class DummyViewer3D(QWidget):
     """Lightweight 3D viewer test double for UI workflow tests."""
+
+    header_double_clicked = pyqtSignal(str)
 
     def __init__(self, volume_manager, parent=None):
         super().__init__(parent)
@@ -782,13 +802,7 @@ def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
     guided_index = window.workspace_mode_combo.findData("guided")
     assert guided_index >= 0
     assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
-    assert window.control_section_order == [
-        "Study",
-        "Screw Review",
-        "Segmentation",
-        "Planning",
-        "Validation",
-    ]
+    assert list(window.control_section_order) == ["Study", "Planning", "Tools"]
 
 
 def test_selected_screw_inspector_updates_from_list_selection(ui_main_window):
@@ -841,7 +855,7 @@ def test_selected_screw_diameter_control_updates_model_and_linked_views(
     assert window.viewer_3d.screws[0].radius == pytest.approx(3.75)
     for viewer in window._get_mpr_viewers():
         assert viewer.screw_overlays[0]["diameter"] == pytest.approx(7.5)
-    assert "Ø 7.5 mm" in window.screw_list_widget.item(0).text()
+    assert "7.5" in window.screw_list_widget.rowText(0)
 
 
 def test_manual_screw_diameter_defaults_to_common_size_and_caps_at_7_5(
@@ -1045,7 +1059,7 @@ def test_refresh_screw_replaces_same_overlay_id_and_list_row(ui_main_window):
     for viewer in window._get_mpr_viewers():
         assert viewer.screw_overlays[0]["entry"] == (4.0, 5.0, 6.0)
         assert viewer.screw_overlays[0]["target"] == (7.0, 8.0, 12.0)
-    assert "Len 7.3 mm" in window.screw_list_widget.item(0).text()
+    assert "7.3" in window.screw_list_widget.rowText(0)
     assert window.viewer_3d.screws[0].entry_point == (4.0, 5.0, 6.0)
 
 
@@ -1062,7 +1076,7 @@ def test_screw_list_row_shows_level_side_and_geometry(ui_main_window):
 
     window._tool_ctrl.add_existing_screw(screw, select=True)
 
-    text = window.screw_list_widget.item(0).text()
+    text = window.screw_list_widget.rowText(0)
     assert "L4" in text
     assert "Left" in text
     assert "6.5" in text
@@ -1793,6 +1807,65 @@ def test_planner_spin_boxes_use_specified_ranges(ui_main_window):
             window.plan_hu_threshold_spin.maximum()) == (50.0, 300.0)
 
 
+def test_narrow_pedicle_spin_boxes_reach_the_planner_config(ui_main_window):
+    window = ui_main_window
+
+    assert (window.plan_narrow_pedicle_spin.minimum(),
+            window.plan_narrow_pedicle_spin.maximum()) == (3.0, 8.0)
+    assert window.plan_narrow_pedicle_spin.singleStep() == pytest.approx(0.5)
+    assert (window.plan_narrow_lateral_spin.minimum(),
+            window.plan_narrow_lateral_spin.maximum()) == (0.0, 6.0)
+    assert window.plan_narrow_lateral_spin.singleStep() == pytest.approx(0.5)
+
+    window.plan_narrow_pedicle_spin.setValue(6.0)
+    window.plan_narrow_lateral_spin.setValue(4.0)
+    cfg = window.planner_config()
+
+    assert cfg.narrow_pedicle_mm == pytest.approx(6.0)
+    assert cfg.narrow_lateral_breach_mm == pytest.approx(4.0)
+
+
+def test_narrow_settings_persist_into_a_new_window(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    window.plan_narrow_pedicle_spin.setValue(6.5)
+    window.plan_narrow_lateral_spin.setValue(3.0)
+
+    settings = _planner_settings(isolated_qsettings)
+    assert float(settings.value("narrow_pedicle_mm")) == pytest.approx(6.5)
+    assert float(settings.value("narrow_lateral_breach_mm")) == pytest.approx(3.0)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_narrow_pedicle_spin.value() == pytest.approx(6.5)
+        assert reopened.plan_narrow_lateral_spin.value() == pytest.approx(3.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_the_wall_clearance_default_is_zero_but_a_stored_value_is_kept(
+    ui_main_window, isolated_qsettings
+):
+    """No migration: a surgeon who raised the clearance keeps it."""
+    from src.core.planner_config import PlannerConfig
+
+    window = ui_main_window
+    window.plan_wall_clearance_spin.setValue(1.5)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_wall_clearance_spin.value() == pytest.approx(1.5)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+    window.plan_reset_defaults_btn.click()
+    assert window.plan_wall_clearance_spin.value() == pytest.approx(
+        PlannerConfig().wall_clearance_mm
+    )
+    assert PlannerConfig().wall_clearance_mm == 0.0
+
+
 def test_planner_settings_persist_into_a_new_window(ui_main_window):
     window = ui_main_window
     window.plan_fill_ratio_spin.setValue(0.65)
@@ -1886,6 +1959,16 @@ def test_optimizer_controls_feed_planner_config(ui_main_window):
     assert cfg.weights.rod == pytest.approx(0.0)
 
 
+def test_rod_weight_slider_is_labelled_construct_alignment(ui_main_window):
+    """The slider governs the rod line *and* convergence agreement now."""
+    window = ui_main_window
+
+    caption = window._planner_weight_captions["plan_weight_rod"]
+
+    assert caption.text() == "Construct alignment"
+    assert "convergence" in window.plan_weight_rod.toolTip().lower()
+
+
 def test_optimizer_controls_persist_into_a_new_window(ui_main_window, isolated_qsettings):
     window = ui_main_window
     window.plan_mode_combo.setCurrentIndex(window.plan_mode_combo.findData("legacy"))
@@ -1955,6 +2038,7 @@ def test_inspector_metric_rows_default_to_dashes(ui_main_window):
     assert window.selected_screw_wall.text() == "--"
     assert window.selected_screw_facet.text() == "--"
     assert window.selected_screw_heary.text() == "--"
+    assert window.selected_screw_pedicle.text() == "--"
 
     window.update_selected_screw_inspector(-1, None, False)
 
@@ -1962,6 +2046,7 @@ def test_inspector_metric_rows_default_to_dashes(ui_main_window):
     assert window.selected_screw_wall.text() == "--"
     assert window.selected_screw_facet.text() == "--"
     assert window.selected_screw_heary.text() == "--"
+    assert window.selected_screw_pedicle.text() == "--"
 
 
 # ---------------------------------------------------------------------------
@@ -2082,4 +2167,62 @@ def test_empty_pedicle_mask_is_reported_as_no_voxels(
     assert not ctrl._last_pedicle_mask.any()
     assert "pedicle model ran but found no pedicle voxels" in (
         window.seg_status_label.text()
+    )
+
+
+def test_dragging_a_narrow_screw_into_a_wide_level_repaints_it(ui_main_window):
+    """The one visual cue for a narrow pedicle has to follow the drag.
+
+    End to end through the path an edit really takes: the tool re-grades, reads
+    the width of the level the screw is now in, and the tool controller redraws
+    the 3D actor from the refreshed bundle.
+    """
+    import numpy as np
+
+    from src.core.screw_grading import ScrewGrader
+    from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
+
+    class _Analysis:
+        """Duck-typed pedicle analysis: only the widths are read here."""
+
+        def __init__(self, width):
+            self.left_pedicle_width = width
+            self.right_pedicle_width = width
+            self.width_flags = {}
+            self.upper_endplate_normal = None
+
+    window = ui_main_window
+    # (z, y, x) at 1 mm with a zero origin: label 28 below z = 30 mm, 29 above.
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[20:30, 20:40, 20:40] = 28
+    arr[30:40, 20:40, 20:40] = 29
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+
+    tool = window._tool_ctrl.screw_tool
+    tool.set_grader(ScrewGrader(mask, ct))
+    tool.set_analysis_by_level({28: _Analysis(4.5), 29: _Analysis(9.2)})
+
+    narrow = Screw(
+        entry_point=(30.0, 38.0, 25.0),
+        target_point=(30.0, 22.0, 25.0),
+        diameter=5.0,
+        side="left",
+        vertebra_level="L2",
+        metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5},
+    )
+    index = window._tool_ctrl.add_existing_screw(narrow, select=True)
+    assert window.viewer_3d.screws[0].color == pytest.approx(
+        tuple(value / 255.0 for value in COLOR_SCREW_BREACH)
+    )
+
+    moved = tool.replace_screw(
+        index, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+    window._tool_ctrl.refresh_screw(index, moved)
+
+    assert moved.metrics["pedicle_width_mm"] == pytest.approx(9.2)
+    assert window.viewer_3d.screws[0].color == pytest.approx(
+        tuple(value / 255.0 for value in COLOR_SCREW)
     )

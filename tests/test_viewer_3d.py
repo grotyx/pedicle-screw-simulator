@@ -540,14 +540,16 @@ class TestSegmentationSurfaceSmoothing:
 class TestVolumeMapperPerformanceConfig:
     """Verify vtkFixedPointVolumeRayCastMapper (CPU) config to avoid macOS glFinish hang."""
 
-    def test_source_uses_cpu_mapper(self):
-        """Must use vtkFixedPointVolumeRayCastMapper (CPU) — NOT vtkGPUVolumeRayCastMapper."""
+    def test_source_keeps_the_cpu_mapper_and_never_hard_codes_the_gpu_mapper(self):
+        """macOS keeps vtkFixedPointVolumeRayCastMapper; nobody instantiates
+        vtkGPUVolumeRayCastMapper directly — vtkSmartVolumeMapper owns that
+        choice and falls back to CPU when no context is available."""
         import inspect
 
         from src.ui import viewer_3d
         source = inspect.getsource(viewer_3d)
         assert "vtkFixedPointVolumeRayCastMapper" in source
-        # GPU mapper must NOT be present — it causes macOS glFinish hang
+        assert "vtkSmartVolumeMapper" in source
         assert "vtkGPUVolumeRayCastMapper" not in source
 
     def test_source_has_auto_adjust_sample_distances(self):
@@ -558,13 +560,14 @@ class TestVolumeMapperPerformanceConfig:
         source = inspect.getsource(viewer_3d)
         assert "SetAutoAdjustSampleDistances" in source
 
-    def test_source_has_interactive_sample_distance(self):
-        """CPU mapper must set InteractiveSampleDistance for responsive interaction."""
+    def test_source_has_interactive_sample_distance_for_the_cpu_mapper(self):
+        """The fixed-point CPU mapper must keep its InteractiveSampleDistance."""
         import inspect
 
         from src.ui import viewer_3d
-        source = inspect.getsource(viewer_3d)
-        assert "SetInteractiveSampleDistance" in source
+        source = inspect.getsource(viewer_3d.create_volume_mapper)
+        assert "SetInteractiveSampleDistance(3.0)" in source
+        assert "SetInteractiveUpdateRate(1.0 / 15.0)" in source
 
     def test_source_has_sample_distance(self):
         """update_volume must set SampleDistance per volume tier."""
@@ -737,6 +740,146 @@ class TestVolumeMapperPerformanceConfig:
         assert "setUpdatesEnabled(True)" in phase1_src
 
 
+class TestVolumeMapperSelection:
+    """Platform decides the mapper; macOS keeps the fixed-point CPU caster."""
+
+    def test_macos_keeps_the_fixed_point_cpu_mapper(self):
+        from src.ui.viewer_3d import select_volume_mapper_kind
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        assert select_volume_mapper_kind("darwin") == MAPPER_KIND_CPU
+
+    def test_windows_and_linux_use_the_smart_mapper(self):
+        from src.ui.viewer_3d import select_volume_mapper_kind
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        assert select_volume_mapper_kind("win32") == MAPPER_KIND_SMART
+        assert select_volume_mapper_kind("linux") == MAPPER_KIND_SMART
+
+    def test_cpu_mapper_configuration_is_byte_for_byte_todays(self):
+        import vtk
+
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        mapper = create_volume_mapper(MAPPER_KIND_CPU)
+        assert isinstance(mapper, vtk.vtkFixedPointVolumeRayCastMapper)
+        assert mapper.GetBlendMode() == vtk.vtkVolumeMapper.COMPOSITE_BLEND
+        assert mapper.GetAutoAdjustSampleDistances() == 0
+        assert mapper.GetLockSampleDistanceToInputSpacing() == 0
+        assert mapper.GetInteractiveSampleDistance() == pytest.approx(3.0)
+
+    def test_smart_mapper_requests_the_default_render_mode(self):
+        import vtk
+
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert isinstance(mapper, vtk.vtkSmartVolumeMapper)
+        assert (
+            mapper.GetRequestedRenderMode()
+            == vtk.vtkSmartVolumeMapper.DefaultRenderMode
+        )
+        assert mapper.GetBlendMode() == vtk.vtkVolumeMapper.COMPOSITE_BLEND
+        assert mapper.GetAutoAdjustSampleDistances() == 0
+        assert mapper.GetInteractiveUpdateRate() == pytest.approx(1.0 / 15.0)
+
+    def test_smart_mapper_has_no_interactive_sample_distance_knob(self):
+        """VTK 9.7 documents why the LOD drives SetSampleDistance directly."""
+        from src.ui.viewer_3d import create_volume_mapper
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert not hasattr(mapper, "SetInteractiveSampleDistance")
+        assert not hasattr(mapper, "LockSampleDistanceToInputSpacingOff")
+        assert hasattr(mapper, "SetSampleDistance")
+
+    def test_unknown_mapper_kind_raises_value_error(self):
+        from src.ui.viewer_3d import create_volume_mapper
+
+        with pytest.raises(ValueError, match="mapper kind"):
+            create_volume_mapper("quantum")
+
+    def test_pipeline_builds_the_cpu_mapper_on_macos(self, monkeypatch):
+        import vtk
+
+        from src.ui import viewer_3d
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        monkeypatch.setattr(viewer_3d.sys, "platform", "darwin")
+        viewer = viewer_3d.Viewer3D.__new__(viewer_3d.Viewer3D)
+        mapper = viewer._build_volume_mapper()
+
+        assert isinstance(mapper, vtk.vtkFixedPointVolumeRayCastMapper)
+        assert viewer._mapper_kind == MAPPER_KIND_CPU
+
+    def test_pipeline_builds_the_smart_mapper_on_windows(self, monkeypatch):
+        import vtk
+
+        from src.ui import viewer_3d
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        monkeypatch.setattr(viewer_3d.sys, "platform", "win32")
+        viewer = viewer_3d.Viewer3D.__new__(viewer_3d.Viewer3D)
+        mapper = viewer._build_volume_mapper()
+
+        assert isinstance(mapper, vtk.vtkSmartVolumeMapper)
+        assert viewer._mapper_kind == MAPPER_KIND_SMART
+
+    def test_setup_pipeline_delegates_to_build_volume_mapper(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._setup_vtk_pipeline)
+        assert "self._build_volume_mapper()" in source
+        assert "vtkFixedPointVolumeRayCastMapper()" not in source
+
+
+class TestRenderModeNaming:
+    """The log must name the mode the mapper actually used."""
+
+    def test_gpu_mode_is_named(self):
+        import vtk
+
+        from src.ui.viewer_3d import describe_render_mode
+
+        fake = SimpleNamespace(
+            GetLastUsedRenderMode=lambda: vtk.vtkSmartVolumeMapper.GPURenderMode
+        )
+        assert describe_render_mode(fake) == "gpu"
+
+    def test_cpu_raycast_mode_is_named(self):
+        import vtk
+
+        from src.ui.viewer_3d import describe_render_mode
+
+        fake = SimpleNamespace(
+            GetLastUsedRenderMode=lambda: vtk.vtkSmartVolumeMapper.RayCastRenderMode
+        )
+        assert describe_render_mode(fake) == "cpu-raycast"
+
+    def test_smart_mapper_before_first_render_is_undefined(self):
+        from src.ui.viewer_3d import create_volume_mapper, describe_render_mode
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        mapper = create_volume_mapper(MAPPER_KIND_SMART)
+        assert describe_render_mode(mapper) == "undefined"
+
+    def test_fixed_point_mapper_has_no_last_used_mode(self):
+        from src.ui.viewer_3d import create_volume_mapper, describe_render_mode
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        mapper = create_volume_mapper(MAPPER_KIND_CPU)
+        assert describe_render_mode(mapper) == "cpu-fixed-point"
+
+    def test_unrecognised_mode_value_is_reported_not_raised(self):
+        from src.ui.viewer_3d import describe_render_mode
+
+        assert describe_render_mode(SimpleNamespace(GetLastUsedRenderMode=lambda: 99)) == "unknown"
+
+
 class TestTransferFunctionPresets:
     """Verify transfer function presets are usable from constants."""
 
@@ -796,5 +939,428 @@ class TestTransferFunctionPresets:
         assert viewer._opacity_tf.GetValue(hu) == pytest.approx(base * 0.3, abs=1e-6)
 
 
+class TestVolumeRenderSettings:
+    """Sample distance is unchanged; only the shrink factors gain a mapper axis."""
+
+    def test_small_volume_is_full_resolution_on_the_smart_mapper(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        sample_dist, shrink = volume_render_settings(
+            "small", (0.39, 0.39, 1.0), MAPPER_KIND_SMART
+        )
+        assert shrink == (1, 1, 1)
+        assert sample_dist == pytest.approx(1.0)
+
+    def test_small_volume_keeps_todays_shrink_on_the_cpu_mapper(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        sample_dist, shrink = volume_render_settings(
+            "small", (0.39, 0.39, 1.0), MAPPER_KIND_CPU
+        )
+        assert shrink == (2, 2, 1)
+        assert sample_dist == pytest.approx(1.0)
+
+    def test_sample_distance_is_identical_for_both_mappers(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import (
+            MAPPER_KIND_CPU,
+            MAPPER_KIND_SMART,
+            VOLUME_TIERS,
+        )
+
+        for tier in VOLUME_TIERS:
+            for spacing in ((0.39, 0.39, 1.0), (0.4, 0.4, 0.4), (1.0, 1.0, 1.0)):
+                cpu_dist, _ = volume_render_settings(tier, spacing, MAPPER_KIND_CPU)
+                smart_dist, _ = volume_render_settings(tier, spacing, MAPPER_KIND_SMART)
+                assert cpu_dist == pytest.approx(smart_dist)
+
+    def test_tier_sample_distances_match_the_pre_change_formulas(self):
+        from src.ui.viewer_3d import volume_render_settings
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        assert volume_render_settings("xl", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(4.0)
+        assert volume_render_settings("xl", (0.3, 0.3, 0.3), MAPPER_KIND_CPU)[0] == pytest.approx(2.0)
+        assert volume_render_settings("large", (0.5, 0.5, 0.5), MAPPER_KIND_CPU)[0] == pytest.approx(1.5)
+        assert volume_render_settings("medium", (0.4, 0.4, 0.4), MAPPER_KIND_CPU)[0] == pytest.approx(1.2)
+        assert volume_render_settings("medium", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(2.5)
+        assert volume_render_settings("small", (1.0, 1.0, 1.0), MAPPER_KIND_CPU)[0] == pytest.approx(2.0)
+
+    def test_update_volume_uses_the_shared_settings_helper(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D, volume_render_settings
+
+        assert "shrink_factors(" in inspect.getsource(volume_render_settings)
+        source = inspect.getsource(Viewer3D.update_volume)
+        assert "volume_render_settings(" in source
+        assert "self._mapper_kind" in source
+        assert "shrink = (3, 3, 3)" not in source
+
+
+class TestTwoPhaseLodSurvivesTheSmartMapper:
+    """SetSampleDistance is the only LOD knob both mappers share."""
+
+    def _viewer_with(self, kind):
+        from src.ui.viewer_3d import Viewer3D, create_volume_mapper
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume_mapper = create_volume_mapper(kind)
+        viewer._target_sample_dist = 1.0
+        viewer._render_generation = 7
+        viewer._request_render = lambda: None
+        return viewer
+
+    def test_smart_mapper_coarsens_during_interaction_and_restores_after(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._on_interaction_start(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(3.0)
+        viewer._on_interaction_end(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_cpu_mapper_coarsens_during_interaction_and_restores_after(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer = self._viewer_with(MAPPER_KIND_CPU)
+        viewer._on_interaction_start(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(3.0)
+        viewer._on_interaction_end(None, None)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_phase2_restores_fine_sampling_for_the_current_generation(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._volume_mapper.SetSampleDistance(2.0)
+        viewer._execute_phase2(7)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(1.0)
+
+    def test_phase2_ignores_a_stale_generation(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer = self._viewer_with(MAPPER_KIND_SMART)
+        viewer._volume_mapper.SetSampleDistance(2.0)
+        viewer._execute_phase2(6)
+        assert viewer._volume_mapper.GetSampleDistance() == pytest.approx(2.0)
+
+    def test_phase1_logs_the_mapper_and_the_render_mode(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._deferred_render_phase1)
+        assert "self._mapper_kind" in source
+        # The mode itself is read one event-loop turn later, after the paint.
+        assert "self._log_render_mode" in source
+        mode_src = inspect.getsource(Viewer3D._log_render_mode)
+        assert "describe_render_mode(mapper)" in mode_src
+
+
+class _LateModeMapper:
+    """A mapper whose render mode is only defined once Render() has run."""
+
+    UNDEFINED = 5
+    GPU = 2
+
+    def __init__(self, defines_on_render=True):
+        self._defines_on_render = bool(defines_on_render)
+        self._mode = self.UNDEFINED
+        self.sample_distances = []
+
+    def SetSampleDistance(self, distance):
+        self.sample_distances.append(float(distance))
+
+    def GetSampleDistance(self):
+        return self.sample_distances[-1] if self.sample_distances else 0.0
+
+    def Render(self):
+        if self._defines_on_render:
+            self._mode = self.GPU
+
+    def GetLastUsedRenderMode(self):
+        return self._mode
+
+
+class _PaintingWidget:
+    """A vtk_widget stub whose safe_render() paints straight away."""
+
+    def __init__(self, mapper):
+        self._mapper = mapper
+        self.render_count = 0
+
+    def setUpdatesEnabled(self, _enabled):
+        return None
+
+    def safe_render(self):
+        self.render_count += 1
+        self._mapper.Render()
+
+
+class TestRenderModeIsLoggedAfterTheFirstRealRender:
+    """The dirty-flag paint gate means the mode is unknown at request time."""
+
+    @staticmethod
+    def _viewer(mapper):
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume_mapper = mapper
+        viewer._volume_added = True
+        viewer._target_sample_dist = 1.0
+        viewer._render_generation = 3
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._mapper_kind = "smart"
+        viewer.vtk_widget = _PaintingWidget(mapper)
+        viewer._request_render = viewer.vtk_widget.safe_render
+        return viewer
+
+    def test_phase1_log_names_the_mode_the_paint_settled_on(self, qtbot, caplog):
+        import logging
+
+        mapper = _LateModeMapper()
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            assert "render mode" not in caplog.text
+            qtbot.wait(20)
+
+        assert "Phase 1 render mode=gpu (mapper=smart)" in caplog.text
+        assert "undefined" not in caplog.text
+
+    def test_an_undefined_mode_waits_and_phase2_reports_it_anyway(
+        self, qtbot, caplog
+    ):
+        import logging
+
+        mapper = _LateModeMapper(defines_on_render=False)
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            qtbot.wait(20)
+            assert "render mode" not in caplog.text
+
+            mapper._defines_on_render = True
+            viewer._execute_phase2(3)
+            qtbot.wait(20)
+
+        assert "Phase 2 render mode=gpu (mapper=smart)" in caplog.text
+
+    def test_the_mode_is_logged_once_per_volume(self, qtbot, caplog):
+        import logging
+
+        mapper = _LateModeMapper()
+        viewer = self._viewer(mapper)
+
+        with caplog.at_level(logging.INFO, logger="src.ui.viewer_3d"):
+            viewer._deferred_render_phase1()
+            qtbot.wait(20)
+            viewer._execute_phase2(3)
+            qtbot.wait(20)
+
+        assert caplog.text.count("render mode=") == 1
+
+
+class TestSingleLabelSurfaceExtractor:
+    """The generic overlay path must match the vertebral mesh pipeline."""
+
+    @staticmethod
+    def _sphere_mask(dims=(24, 24, 24), radius=8.0, label=27):
+        import numpy as np
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk
+
+        z_index, y_index, x_index = np.indices((dims[2], dims[1], dims[0]))
+        center = (np.asarray(dims) - 1) / 2.0
+        values = np.where(
+            np.sqrt(
+                (x_index - center[0]) ** 2
+                + (y_index - center[1]) ** 2
+                + (z_index - center[2]) ** 2
+            )
+            <= radius,
+            label,
+            0,
+        ).astype(np.uint16)
+
+        image = vtk.vtkImageData()
+        image.SetDimensions(*dims)
+        image.SetSpacing(1.0, 1.0, 1.0)
+        image.GetPointData().SetScalars(numpy_to_vtk(values.ravel(), deep=True))
+        return image
+
+    def _render(self, label_value):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._segmentation_actor = None
+        viewer._segmentation_mask_image = self._sphere_mask()
+        viewer._segmentation_label_value = label_value
+        viewer._segmentation_color = (0.9, 0.8, 0.7)
+        viewer._request_render = lambda: None
+        viewer._render_segmentation_actor()
+        return viewer
+
+    def test_source_uses_flying_edges_not_marching_cubes(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        assert "vtkFlyingEdges3D()" in source
+        assert "vtkMarchingCubes()" not in source
+
+    def test_source_shares_the_vertebral_mesh_fairing_constants(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        assert "SetNumberOfIterations(MESH_SMOOTHING_ITERATIONS)" in source
+        assert "SetPassBand(MESH_SMOOTHING_PASSBAND)" in source
+
+    def test_flying_edges_path_produces_a_non_empty_actor(self):
+        viewer = self._render(27)
+
+        assert viewer._segmentation_actor is not None
+        mapper = viewer._segmentation_actor.GetMapper()
+        mapper.Update()
+        assert mapper.GetInput().GetNumberOfCells() > 0
+
+    def test_all_labels_mode_still_produces_a_surface(self):
+        viewer = self._render(0)
+
+        assert viewer._segmentation_actor is not None
+        mapper = viewer._segmentation_actor.GetMapper()
+        mapper.Update()
+        assert mapper.GetInput().GetNumberOfCells() > 0
+
+    def test_absent_label_produces_no_actor(self):
+        viewer = self._render(31)
+
+        assert viewer._segmentation_actor is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+class TestThe3DHeaderFollowsTheTheme:
+    """The 3D title used to be hard-coded white, unreadable on light themes."""
+
+    def test_the_inline_header_sheet_sets_no_colour_of_its_own(self):
+        import inspect
+
+        from src.ui.viewer_3d import Viewer3D
+
+        source = inspect.getsource(Viewer3D._setup_ui)
+        assert "font-weight: bold; padding: 2px;" in source
+        assert "color: white" not in source
+
+    def test_every_palette_colours_the_shared_viewer_header(self):
+        from src.ui.styles import THEMES, load_stylesheet
+
+        for name, palette in THEMES.items():
+            rule = load_stylesheet(name).split("QLabel#viewerHeader")[1]
+            assert palette["viewer_foreground"] in rule.split("}")[0]
+
+
+class TestCpuRaycastFallback:
+    """A smart mapper that ends up on the CPU must stop being fed full-res."""
+
+    @staticmethod
+    def _viewer(dims=(64, 64, 48), spacing=(0.39, 0.39, 1.0)):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        image = vtk.vtkImageData()
+        image.SetDimensions(*dims)
+        image.SetSpacing(*spacing)
+        image.AllocateScalars(vtk.VTK_SHORT, 1)
+
+        calls = {"input_dims": [], "sample_distance": [], "auto_adjust": [],
+                 "renders": 0}
+
+        class _Mapper:
+            def SetAutoAdjustSampleDistances(self, value):
+                calls["auto_adjust"].append(bool(value))
+
+            def SetInputData(self, data):
+                calls["input_dims"].append(data.GetDimensions())
+
+            def SetSampleDistance(self, value):
+                calls["sample_distance"].append(float(value))
+
+            def GetLastUsedRenderMode(self):
+                return vtk.vtkSmartVolumeMapper.RayCastRenderMode
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._mapper_kind = MAPPER_KIND_SMART
+        viewer._shrink_kind = MAPPER_KIND_SMART
+        viewer._volume_mapper = _Mapper()
+        viewer._volume_added = True
+        viewer._render_mode_logged = False
+        viewer.volume_manager = SimpleNamespace(
+            get_vtk_image=lambda: image,
+            dimensions=dims,
+            spacing=spacing,
+        )
+        viewer.vtk_widget = SimpleNamespace(
+            safe_render=lambda: calls.__setitem__("renders", calls["renders"] + 1)
+        )
+        return viewer, calls
+
+    def test_the_fallback_re_downsamples_by_the_cpu_table(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer, calls = self._viewer()
+
+        viewer._apply_cpu_raycast_fallback()
+
+        assert viewer._shrink_kind == MAPPER_KIND_CPU
+        # "small" on the smart table is (1, 1, 1) -- no downsampling at all --
+        # which is exactly what a CPU ray caster cannot afford.
+        assert calls["input_dims"] == [(32, 32, 48)]
+        assert calls["auto_adjust"] == [True]
+        assert calls["renders"] == 1
+
+    def test_reading_a_cpu_raycast_mode_triggers_the_fallback(self):
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        viewer, calls = self._viewer()
+
+        viewer._log_render_mode("Phase 1")
+
+        assert viewer._shrink_kind == MAPPER_KIND_CPU
+        assert calls["input_dims"] == [(32, 32, 48)]
+
+    def test_a_gpu_mode_leaves_the_smart_table_alone(self):
+        import vtk
+
+        from src.utils.vtk_helpers import MAPPER_KIND_SMART
+
+        viewer, calls = self._viewer()
+        viewer._volume_mapper.GetLastUsedRenderMode = (
+            lambda: vtk.vtkSmartVolumeMapper.GPURenderMode
+        )
+
+        viewer._log_render_mode("Phase 1")
+
+        assert viewer._shrink_kind == MAPPER_KIND_SMART
+        assert calls["input_dims"] == []
+
+    def test_the_fallback_runs_only_once(self):
+        viewer, calls = self._viewer()
+        viewer._apply_cpu_raycast_fallback()
+        viewer._render_mode_logged = False
+
+        viewer._log_render_mode("Phase 2")
+
+        assert len(calls["input_dims"]) == 1

@@ -104,6 +104,43 @@ class TestCoordinateSystem:
         normal = CoordinateSystem.get_plane_normal("coronal")
         assert normal == (0, 1, 0)
 
+    def test_get_plane_axes_axial_matches_reslice_columns(self):
+        """Axial row/column axes mirror AXIAL_DIRECTION_COSINES."""
+        row, column = CoordinateSystem.get_plane_axes("axial")
+        assert row == (1, 0, 0)
+        assert column == (0, -1, 0)
+
+    @pytest.mark.parametrize("plane", ["axial", "sagittal", "coronal"])
+    def test_get_plane_axes_are_read_out_of_the_reslice_matrix(self, plane):
+        """Never a second copy of the convention: reslice reads the columns.
+
+        ``create_reslice_axes`` lays the flat constant out row-major, so the
+        screen-right and screen-up axes are its first two *columns*.  The
+        axial Y row was flipped once already to put anterior at the top; a
+        hand-written duplicate here would have gone on disagreeing silently,
+        since nothing in ``src/`` calls this helper.
+        """
+        from src.utils.constants import (
+            AXIAL_DIRECTION_COSINES,
+            CORONAL_DIRECTION_COSINES,
+            SAGITTAL_DIRECTION_COSINES,
+        )
+
+        matrix = {
+            "axial": AXIAL_DIRECTION_COSINES,
+            "sagittal": SAGITTAL_DIRECTION_COSINES,
+            "coronal": CORONAL_DIRECTION_COSINES,
+        }[plane]
+
+        row, column = CoordinateSystem.get_plane_axes(plane)
+
+        assert row == (matrix[0], matrix[3], matrix[6])
+        assert column == (matrix[1], matrix[4], matrix[7])
+
+    def test_get_plane_axes_rejects_an_unknown_plane(self):
+        with pytest.raises(ValueError, match="Unknown plane"):
+            CoordinateSystem.get_plane_axes("oblique")
+
 
 class TestVTKHelpers:
     """Tests for VTK helper functions."""

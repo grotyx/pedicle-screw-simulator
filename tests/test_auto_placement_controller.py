@@ -159,9 +159,21 @@ class _DummyViewer3D:
 class _DummyScrewTool:
     def __init__(self):
         self._screws = []
+        self._analysis_by_level = {}
+        self._wall_clearance_mm = None
+        self._narrow_pedicle_mm = None
 
     def add_screw(self, screw):
         self._screws.append(screw)
+
+    def set_analysis_by_level(self, analyses):
+        self._analysis_by_level = dict(analyses or {})
+
+    def set_wall_clearance_mm(self, value):
+        self._wall_clearance_mm = float(value)
+
+    def set_narrow_pedicle_mm(self, value):
+        self._narrow_pedicle_mm = float(value)
 
     def get_screws(self):
         return list(self._screws)
@@ -741,31 +753,42 @@ def test_planning_thread_pedicle_mask_defaults_to_none():
     assert thread._pedicle_mask is None
 
 
-def test_on_finished_reports_rod_misalignment(controller_with_window):
+def test_on_finished_reports_the_construct_summary(controller_with_window):
     ctrl, window = controller_with_window
     ctrl._on_finished(_current_thread(ctrl), [
-        _planned("L4", "left", metrics={"rod_misalignment_mm": 1.24}),
-        _planned("L4", "right", metrics={"rod_misalignment_mm": 2.75}),
+        _planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        }),
+        _planned("L4", "right", metrics={
+            "rod_misalignment_mm": 0.92, "convergence_spread_deg": 3.44,
+        }),
     ])
-    assert "Rod misalignment L 1.2 mm / R 2.8 mm" in window.auto_screw_status._text
+    assert (
+        "Construct: rod fit 1.2 mm (L), 0.9 mm (R) "
+        "· convergence spread 2.8° (L), 3.4° (R)"
+    ) in window.auto_screw_status._text
 
 
-def test_on_finished_omits_rod_misalignment_when_absent(controller_with_window):
+def test_on_finished_omits_the_summary_without_construct_metrics(
+    controller_with_window,
+):
     ctrl, window = controller_with_window
     ctrl._on_finished(_current_thread(ctrl), [_planned("L4", "left")])
-    assert "Rod misalignment" not in window.auto_screw_status._text
+    assert "Construct:" not in window.auto_screw_status._text
 
 
-def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
+def test_on_finished_omits_a_side_with_no_construct_metrics(controller_with_window):
     """A side with no screws must not be reported as perfectly aligned."""
     ctrl, window = controller_with_window
     ctrl._on_finished(
         _current_thread(ctrl),
-        [_planned("L4", "left", metrics={"rod_misalignment_mm": 1.24})],
+        [_planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        })],
     )
     text = window.auto_screw_status._text
-    assert text.endswith("Rod misalignment L 1.2 mm")
-    assert "R 0.0 mm" not in text
+    assert text.endswith("Construct: rod fit 1.2 mm (L) · convergence spread 2.8° (L)")
+    assert "(R)" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -776,10 +799,13 @@ def test_on_finished_omits_a_side_with_no_rod_value(controller_with_window):
 class _FinishedThread:
     """Stand-in for a finished ``_PlanningThread``."""
 
-    def __init__(self, cancelled=False, skipped_sides=(), generation=0):
+    def __init__(
+        self, cancelled=False, skipped_sides=(), generation=0, planner_mode="optimizer"
+    ):
         self.cancelled = cancelled
         self.skipped_sides = list(skipped_sides)
         self.cancel_requested = False
+        self.planner_mode = planner_mode
         # A fresh controller sits at generation 0, so the default matches the
         # run a test that never called ``run_planning`` is standing in for.
         self.generation = generation
@@ -1375,3 +1401,164 @@ def test_dropped_sides_note_says_one_more_for_a_single_extra():
     import src.controllers.auto_placement_controller as module
 
     assert module._dropped_sides_note(_skipped(5)).endswith("and 1 more")
+
+
+def test_dropped_sides_note_names_only_the_level_and_side():
+    """No width reason reaches this note any more: a width is never a drop."""
+    import src.controllers.auto_placement_controller as module
+
+    note = module._dropped_sides_note(
+        [
+            ("L2", "right", "no feasible trajectory"),
+            ("L3", "left", "no left entry point on the posterior surface"),
+        ]
+    )
+
+    assert note == " No screw planned: L2 right, L3 left"
+
+
+def test_finished_run_hands_its_analyses_to_the_screw_tool(controller_with_window):
+    """A manual edit after planning can only re-measure what the tool was told."""
+    ctrl, window = controller_with_window
+
+    class _Vertebra:
+        label = 28
+
+    class _Analysis:
+        vertebra = _Vertebra()
+        upper_endplate_normal = (0.0, 0.0, 1.0)
+
+    analysis = _Analysis()
+    thread = _current_thread(ctrl)
+    thread.analyses = [analysis]
+
+    ctrl._on_finished(thread, [])
+
+    assert window._tool_ctrl.screw_tool._analysis_by_level[28] is analysis
+
+
+def test_a_run_with_no_analyses_clears_a_previous_runs_registry(
+    controller_with_window,
+):
+    """Stale analyses would re-measure a new study against old endplates."""
+    ctrl, window = controller_with_window
+    tool = window._tool_ctrl.screw_tool
+    tool.set_analysis_by_level({28: object()})
+
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
+
+    assert tool._analysis_by_level == {}
+
+
+def test_reset_state_clears_the_endplate_analysis_registry(controller_with_window):
+    """A new study's vertebrae must not be graded against the old study's
+    endplates: reset_state runs on every new DICOM load, well before the
+    next planning run would otherwise refresh the registry."""
+    ctrl, window = controller_with_window
+    tool = window._tool_ctrl.screw_tool
+    tool.set_analysis_by_level({28: object()})
+
+    ctrl.reset_state()
+
+    assert tool._analysis_by_level == {}
+
+
+def test_on_finished_explains_that_legacy_cannot_harmonise(controller_with_window):
+    import src.controllers.auto_placement_controller as module
+
+    ctrl, window = controller_with_window
+    ctrl._on_finished(
+        _current_thread(ctrl, planner_mode="legacy"),
+        [_planned("L4", "left")],
+    )
+
+    assert module.CONSTRUCT_LEGACY_NOTE in window.auto_screw_status._text
+    assert "Construct:" not in window.auto_screw_status._text
+
+
+def test_on_finished_does_not_nag_about_legacy_in_optimizer_mode(
+    controller_with_window,
+):
+    import src.controllers.auto_placement_controller as module
+
+    ctrl, window = controller_with_window
+    ctrl._on_finished(
+        _current_thread(ctrl, planner_mode="optimizer"),
+        [_planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        })],
+    )
+
+    assert module.CONSTRUCT_LEGACY_NOTE not in window.auto_screw_status._text
+
+
+def test_planning_thread_records_the_mode_it_ran_in():
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+    from src.core.planner_config import PlannerConfig
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+        config=PlannerConfig(mode="legacy"),
+    )
+
+    assert thread.planner_mode == "legacy"
+    assert _thread_for().planner_mode == "optimizer"
+
+
+def test_a_finished_run_hands_its_thresholds_to_the_screw_tool(
+    controller_with_window,
+):
+    """A manual edit must be judged by the config that planned the screw.
+
+    Without this the tool falls back to its own defaults, and the first drag of
+    an auto screw can add a cortical-clearance note the plan never carried.
+    """
+    from src.core.planner_config import PlannerConfig
+
+    ctrl, window = controller_with_window
+    window.planner_config_value = PlannerConfig(
+        wall_clearance_mm=1.0, narrow_pedicle_mm=6.5
+    )
+
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
+
+    tool = window._tool_ctrl.screw_tool
+    assert tool._wall_clearance_mm == pytest.approx(1.0)
+    assert tool._narrow_pedicle_mm == pytest.approx(6.5)
+
+
+def test_reset_state_restores_the_panel_thresholds(controller_with_window):
+    """A new study has no plan yet, but the panel's numbers still apply."""
+    from src.core.planner_config import PlannerConfig
+
+    ctrl, window = controller_with_window
+    window.planner_config_value = PlannerConfig(wall_clearance_mm=2.0)
+
+    ctrl.reset_state()
+
+    assert window._tool_ctrl.screw_tool._wall_clearance_mm == pytest.approx(2.0)
+
+
+def test_a_window_without_a_tool_controller_survives_a_run(controller_with_window):
+    """The screw tool is optional plumbing here; the status text is not."""
+    ctrl, window = controller_with_window
+    del window._tool_ctrl
+
+    ctrl.reset_state()
+
+    assert window.auto_screw_status._text == "No auto plan"
+
+
+def test_a_window_without_a_tool_controller_survives_an_empty_plan(
+    controller_with_window,
+):
+    ctrl, window = controller_with_window
+    del window._tool_ctrl
+
+    ctrl._on_finished(_current_thread(ctrl), [])
+
+    assert "no valid trajectories" in window.auto_screw_status._text

@@ -33,6 +33,13 @@ MAX_BATCH_SAMPLE_POINTS = 2_000_000
 #: unrankable instead (see :meth:`ScrewGrader.evaluate_batch`).
 MIN_BATCH_CANDIDATE_LENGTH_MM = 1.0
 
+#: Cosine of the half-angle of the cone that owns a radial sample.  A sample
+#: within 60 degrees of the medial direction is medial, one within 60 degrees of
+#: its negation is lateral, and the rest are craniocaudal -- so with the default
+#: eight radial samples the ring splits roughly 3 / 3 / 2 and no sample is
+#: counted twice.
+MEDIAL_CONE_COS = 0.5
+
 #: Grid-equality tolerances used by :meth:`ScrewGrader.grids_match`.
 #:
 #: An origin is compared against a *fraction of a voxel* rather than an absolute
@@ -72,12 +79,30 @@ class BatchResult:
     candidate that breaches, and the HU arrays are ``NaN`` for a candidate with
     no sample inside the CT (including every candidate when there is no CT) and
     for a candidate too short to rank.
+
+    The four directional arrays split that single ``breach_mm`` by where the
+    screw left the vertebra: toward the midline, away from it, or above/below.
+    They are only meaningful when the caller said which side of the spine the
+    pedicle is on, so a batch graded without a ``side`` leaves them unset and
+    they mirror ``breach_mm``/``min_wall_mm`` -- an undirected batch therefore
+    reads exactly as it did before the split existed.
     """
 
     breach_mm: np.ndarray
     min_wall_mm: np.ndarray
     mean_hu: np.ndarray
     min_hu: np.ndarray
+    medial_breach_mm: Optional[np.ndarray] = None
+    lateral_breach_mm: Optional[np.ndarray] = None
+    craniocaudal_breach_mm: Optional[np.ndarray] = None
+    medial_wall_mm: Optional[np.ndarray] = None
+
+    def __post_init__(self) -> None:
+        for name in ("medial_breach_mm", "lateral_breach_mm", "craniocaudal_breach_mm"):
+            if getattr(self, name) is None:
+                setattr(self, name, self.breach_mm)
+        if self.medial_wall_mm is None:
+            self.medial_wall_mm = self.min_wall_mm
 
 
 @dataclass
@@ -92,6 +117,19 @@ class GradeResult:
     #: belongs to (LPS mm). Both ``None`` when the screw is contained.
     breach_point_lps: Optional[Tuple[float, float, float]] = None
     breach_centre_lps: Optional[Tuple[float, float, float]] = None
+    #: Directional split of ``breach_mm``, and the wall left on the medial side.
+    #: Unset without a ``side``, in which case they mirror the undirected pair.
+    medial_breach_mm: Optional[float] = None
+    lateral_breach_mm: Optional[float] = None
+    craniocaudal_breach_mm: Optional[float] = None
+    medial_wall_mm: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        for name in ("medial_breach_mm", "lateral_breach_mm", "craniocaudal_breach_mm"):
+            if getattr(self, name) is None:
+                setattr(self, name, self.breach_mm)
+        if self.medial_wall_mm is None:
+            self.medial_wall_mm = self.min_wall_mm
 
 
 class _DistanceMaps:
@@ -260,7 +298,9 @@ class ScrewGrader:
         target: Point3,
         diameter_mm: float,
         label: Optional[int] = None,
+        side: Optional[str] = None,
     ) -> Optional[GradeResult]:
+        self._validate_side(side)
         if label is None:
             label = self.detect_label(entry, target)
         if label is None:
@@ -301,6 +341,9 @@ class ScrewGrader:
             min_wall = 0.0
         if math.isinf(min_wall):
             min_wall = 0.0
+        medial, lateral, craniocaudal, medial_wall = self._directional_grade(
+            entry, target, diameter_mm, d_out, d_in, breach, min_wall, side
+        )
         return GradeResult(
             grade=self.grade_from_breach(breach),
             breach_mm=float(breach),
@@ -310,6 +353,70 @@ class ScrewGrader:
             min_hu=float(np.min(hu_samples)) if hu_samples.size else None,
             breach_point_lps=breach_point,
             breach_centre_lps=breach_centre,
+            medial_breach_mm=medial,
+            lateral_breach_mm=lateral,
+            craniocaudal_breach_mm=craniocaudal,
+            medial_wall_mm=medial_wall,
+        )
+
+    def _directional_grade(
+        self,
+        entry: Point3,
+        target: Point3,
+        diameter_mm: float,
+        d_out: np.ndarray,
+        d_in: np.ndarray,
+        breach: float,
+        min_wall: float,
+        side: Optional[str],
+    ) -> Tuple[float, float, float, float]:
+        """The four directional figures for one screw, from its own sample distances.
+
+        ``cylinder_points`` emits a fixed block of ``1 + radial_samples`` points
+        per centreline step, in the order :meth:`_radial_offsets` produced them,
+        which is what makes reshaping the flat distance arrays back into that
+        ring valid.  A cylinder that did not come out that way (a zero radial
+        count, or a degenerate frame) falls back to the undirected numbers.
+        """
+        if side is None:
+            return breach, breach, breach, min_wall
+        direction = np.asarray(unit_trajectory(entry, target), dtype=np.float64)
+        if not direction.any():
+            # Same guard, same reason, as ``cylinder_points``: a zero-length
+            # trajectory has no perpendicular plane, so ``_radial_offsets``
+            # would normalise by a zero norm and hand back ``NaN`` offsets
+            # whose membership test reads as "nothing is medial" -- a 0 mm
+            # medial wall for a screw that never left the cortex.
+            return breach, breach, breach, min_wall
+        if self._radial > 0:
+            offsets = np.asarray(
+                self._radial_offsets(direction, float(diameter_mm) / 2.0),
+                dtype=np.float64,
+            ).reshape(1, -1, 3)
+        else:
+            offsets = np.zeros((1, 0, 3), dtype=np.float64)
+        per_step = 1 + offsets.shape[1]
+        if per_step <= 1 or d_out.size % per_step:
+            return breach, breach, breach, min_wall
+        membership, degenerate = self._sample_membership(
+            direction[None, :], offsets, side
+        )
+        out_ring = d_out.reshape(-1, per_step)
+        in_ring = d_in.reshape(-1, per_step)
+        values = self._directional_reductions(
+            out_ring.max(axis=0)[None, :],
+            np.where(out_ring == 0.0, in_ring, np.inf).min(axis=0)[None, :],
+            np.asarray([breach], dtype=np.float64),
+            np.asarray([min_wall], dtype=np.float64),
+            membership,
+            degenerate,
+        )
+        medial, lateral, craniocaudal, medial_wall = values
+        return (
+            float(medial[0]),
+            float(lateral[0]),
+            float(craniocaudal[0]),
+            float(medial_wall[0]),
         )
 
     def evaluate_batch(
@@ -318,6 +425,7 @@ class ScrewGrader:
         targets: np.ndarray,
         diameter_mm: float,
         label: int,
+        side: Optional[str] = None,
     ) -> BatchResult:
         """Grade many candidate trajectories at once.
 
@@ -334,7 +442,13 @@ class ScrewGrader:
         and is reported as the worst possible screw — ``crop_margin_mm`` of
         breach, no wall, ``NaN`` HU — rather than as the flawless one its
         collapsed cylinder would otherwise measure as.
+
+        ``side`` (``"left"``/``"right"``) additionally splits each candidate's
+        breach into medial, lateral and craniocaudal components and measures the
+        wall left on the medial side; without it those four fields mirror
+        ``breach_mm``/``min_wall_mm``.
         """
+        self._validate_side(side)
         starts = np.asarray(entries, dtype=np.float64).reshape(-1, 3)
         ends = np.asarray(targets, dtype=np.float64).reshape(-1, 3)
         if starts.shape != ends.shape:
@@ -343,7 +457,7 @@ class ScrewGrader:
             )
         count = starts.shape[0]
         if count == 0:
-            return BatchResult(*(np.empty(0, dtype=np.float64) for _ in range(4)))
+            return BatchResult(*(np.empty(0, dtype=np.float64) for _ in range(8)))
 
         deltas = ends - starts
         lengths = np.linalg.norm(deltas, axis=1)
@@ -357,11 +471,15 @@ class ScrewGrader:
         movable = lengths > 1e-12
         directions[movable] = deltas[movable] / lengths[movable, None]
         offsets = self._batch_radial_offsets(directions, float(diameter_mm) / 2.0)
+        membership, degenerate = self._sample_membership(directions, offsets, side)
 
         chunk = max(1, MAX_BATCH_SAMPLE_POINTS // (n_samples * per_step))
         parts: List[Tuple[np.ndarray, ...]] = [
             self._evaluate_slice(
-                starts[lo:lo + chunk], deltas[lo:lo + chunk], offsets[lo:lo + chunk], n_samples, label
+                starts[lo:lo + chunk], deltas[lo:lo + chunk], offsets[lo:lo + chunk],
+                n_samples, label,
+                None if membership is None else membership[lo:lo + chunk],
+                None if degenerate is None else degenerate[lo:lo + chunk],
             )
             for lo in range(0, count, chunk)
         ]
@@ -369,8 +487,13 @@ class ScrewGrader:
 
         unrankable = lengths < MIN_BATCH_CANDIDATE_LENGTH_MM
         if unrankable.any():
-            result.breach_mm[unrankable] = self._crop_margin
-            result.min_wall_mm[unrankable] = 0.0
+            for name in (
+                "breach_mm", "medial_breach_mm", "lateral_breach_mm",
+                "craniocaudal_breach_mm",
+            ):
+                getattr(result, name)[unrankable] = self._crop_margin
+            for name in ("min_wall_mm", "medial_wall_mm"):
+                getattr(result, name)[unrankable] = 0.0
             result.mean_hu[unrankable] = np.nan
             result.min_hu[unrankable] = np.nan
         return result
@@ -404,6 +527,106 @@ class ScrewGrader:
         out[nonzero] = vectors[nonzero] / norms[nonzero, None]
         return out
 
+    @staticmethod
+    def _validate_side(side: Optional[str]) -> None:
+        """Reject anything but ``None``, ``"left"`` or ``"right"``.
+
+        Called at the top of :meth:`grade` and :meth:`evaluate_batch` rather
+        than only where the ring is classified, because three paths never reach
+        that classification at all -- a grader built without radial samples, an
+        empty batch, and a zero-length screw -- and would otherwise accept a
+        misspelt side in silence.
+        """
+        if side is not None and side not in ("left", "right"):
+            raise ValueError(f"side must be 'left', 'right' or None, got {side!r}")
+
+    @staticmethod
+    def _medial_directions(directions: np.ndarray, side: str) -> np.ndarray:
+        """Unit vectors from each pedicle toward the midline, perpendicular to the screw.
+
+        The midline lies toward ``-X`` for a left pedicle and ``+X`` for a right
+        one in LPS.  Projecting that axis out of the trajectory leaves the
+        in-plane medial direction the radial ring is classified against.  A
+        trajectory that runs along ``X`` has no such direction at all, and its
+        row comes back zero for the caller to notice.
+        """
+        medial_sign = -1.0 if side == "left" else 1.0
+        raw = np.zeros_like(directions)
+        raw[:, 0] = medial_sign
+        projected = raw - directions * (medial_sign * directions[:, 0])[:, None]
+        return ScrewGrader._normalise_rows(projected)
+
+    def _sample_membership(
+        self, directions: np.ndarray, offsets: np.ndarray, side: Optional[str]
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Which class each cylinder sample joins, per candidate.
+
+        Returns ``(membership, degenerate)``: a ``(C, 1 + radial_samples, 3)``
+        boolean array whose columns are medial / lateral / craniocaudal, and a
+        ``(C,)`` mask of candidates with no medial direction perpendicular to
+        the trajectory.  Both are ``None`` when there is no split to make --
+        ``side=None``, or a grader built without radial samples, whose only
+        sample is the centreline; the centreline's wall distance describes the
+        nearest cortex in *any* direction, so classifying it as the medial wall
+        would report zero margin for a comfortably contained screw.  The caller
+        falls back to the undirected numbers instead, exactly as :meth:`grade`
+        already did.
+
+        The centreline sample (offset 0) joins *every* class: a centreline
+        outside the label has left the vertebra in every direction at once, so
+        counting it everywhere is the conservative reading, and it is excluded
+        again from the wall reduction.
+        """
+        self._validate_side(side)
+        count, radial = offsets.shape[0], offsets.shape[1]
+        if side is None or radial == 0:
+            return None, None
+        membership = np.zeros((count, 1 + radial, 3), dtype=bool)
+        membership[:, 0, :] = True
+        medial = self._medial_directions(directions, side)
+        degenerate = ~medial.any(axis=1)
+        units = self._normalise_rows(offsets.reshape(-1, 3)).reshape(count, radial, 3)
+        dots = np.einsum("crk,ck->cr", units, medial)
+        membership[:, 1:, 0] = dots > MEDIAL_CONE_COS
+        membership[:, 1:, 1] = dots < -MEDIAL_CONE_COS
+        membership[:, 1:, 2] = ~(membership[:, 1:, 0] | membership[:, 1:, 1])
+        membership[degenerate] = True
+        return membership, degenerate
+
+    @staticmethod
+    def _directional_reductions(
+        breach_per_offset: np.ndarray,
+        wall_per_offset: np.ndarray,
+        breach: np.ndarray,
+        min_wall: np.ndarray,
+        membership: Optional[np.ndarray],
+        degenerate: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """``(medial, lateral, craniocaudal, medial_wall)`` from per-offset extremes.
+
+        The centreline axis has already been collapsed, so each class is a max
+        (or a min) over the offsets it owns.  A candidate with no medial
+        direction falls back to the undirected numbers rather than silently
+        reporting a zero medial breach for a screw that plainly breached.
+        """
+        if membership is None:
+            return breach, breach, breach, min_wall
+        classes = [
+            np.where(membership[:, :, index], breach_per_offset, -np.inf).max(axis=1)
+            for index in range(3)
+        ]
+        wall_member = membership[:, :, 0].copy()
+        wall_member[:, 0] = False           # the centreline is nobody's wall sample
+        medial_wall = np.where(wall_member, wall_per_offset, np.inf).min(axis=1)
+        medial_wall = np.where(
+            np.isfinite(medial_wall) & (classes[0] <= 0.0), medial_wall, 0.0
+        )
+        if degenerate is not None and degenerate.any():
+            for values in classes:
+                values[degenerate] = breach[degenerate]
+            medial_wall[degenerate] = min_wall[degenerate]
+        return classes[0], classes[1], classes[2], medial_wall
+
     def _evaluate_slice(
         self,
         starts: np.ndarray,
@@ -411,7 +634,9 @@ class ScrewGrader:
         offsets: np.ndarray,
         n_samples: int,
         label: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        membership: Optional[np.ndarray] = None,
+        degenerate: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, ...]:
         """One chunk of :meth:`evaluate_batch`, reduced along its sample axes."""
         count = starts.shape[0]
         per_step = 1 + offsets.shape[1]
@@ -424,10 +649,16 @@ class ScrewGrader:
         flat = points.reshape(-1, 3)
 
         d_out, d_in = self.distances_at_points(flat, label)
-        d_out = d_out.reshape(count, -1)
-        d_in = d_in.reshape(count, -1)
-        breach = d_out.max(axis=1)
-        min_wall = np.where(d_out == 0.0, d_in, np.inf).min(axis=1)
+        d_out = d_out.reshape(count, n_samples, per_step)
+        d_in = d_in.reshape(count, n_samples, per_step)
+        # Collapse the centreline axis first.  Every figure below -- undirected
+        # or directional -- is a max (or a min) over some subset of the offsets,
+        # so reducing the steps once is both cheaper and exactly equivalent to
+        # reducing each subset over the full sample grid.
+        breach_per_offset = d_out.max(axis=1)                                  # (C, P)
+        wall_per_offset = np.where(d_out == 0.0, d_in, np.inf).min(axis=1)     # (C, P)
+        breach = breach_per_offset.max(axis=1)
+        min_wall = wall_per_offset.min(axis=1)
         min_wall = np.where(np.isfinite(min_wall) & (breach <= 0.0), min_wall, 0.0)
 
         hu = self.hu_at_points(flat).reshape(count, -1)
@@ -440,7 +671,10 @@ class ScrewGrader:
         min_hu = np.where(
             counts > 0, np.where(sampled, hu, np.inf).min(axis=1), np.nan
         )
-        return breach, min_wall, mean_hu, min_hu
+        directional = self._directional_reductions(
+            breach_per_offset, wall_per_offset, breach, min_wall, membership, degenerate
+        )
+        return (breach, min_wall, mean_hu, min_hu, *directional)
 
     @staticmethod
     def grade_from_breach(breach_mm: float) -> str:

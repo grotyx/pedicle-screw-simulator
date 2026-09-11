@@ -81,6 +81,20 @@ def _metric_number(metrics: Dict[str, Any], key: str, spec: str = ".3f") -> str:
     return f"{int(number):d}" if spec == "d" else format(number, spec)
 
 
+def _metric_flag(metrics: Dict[str, Any], key: str) -> str:
+    """Format one boolean metric for CSV; empty when it was never recorded.
+
+    A manually placed screw has no pedicle analysis behind it, so ``narrow`` is
+    unknown rather than false -- and a spreadsheet that reads an empty cell as
+    "not narrow" is at least reading it as a missing measurement, which an
+    explicit ``false`` would hide.
+    """
+    value = metrics.get(key)
+    if value is None:
+        return ""
+    return "true" if bool(value) else "false"
+
+
 def screw_to_dict(screw: Screw) -> Dict[str, Any]:
     """Serialize Screw dataclass to plain dict."""
     return {
@@ -180,8 +194,15 @@ def serialize_plan(
     screws: List[Screw],
     measurements: List[Measurement],
     measurement_planes: Optional[List[Optional[str]]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build plan payload dictionary for JSON persistence."""
+    """Build plan payload dictionary for JSON persistence.
+
+    ``metadata`` is an additive, free-form block describing how the plan was
+    produced (currently the mask-refinement settings). It never affects how
+    screws or measurements are read back, so a reader that does not know a key
+    simply ignores it and the plan version stays at 3.
+    """
     planes = measurement_planes
     if planes is None:
         planes = [None] * len(measurements)
@@ -201,6 +222,7 @@ def serialize_plan(
         "series_id": series_id,
         "screws": [screw_to_dict(screw) for screw in screws],
         "measurements": measurement_items,
+        "metadata": dict(metadata or {}),
     }
 
 
@@ -215,6 +237,10 @@ def deserialize_plan(
     measurement_items = payload.get("measurements", [])
     if not isinstance(screw_items, list) or not isinstance(measurement_items, list):
         raise ValueError("Invalid plan payload: screws/measurements must be lists")
+
+    raw_metadata = payload.get("metadata", {})
+    if raw_metadata is not None and not isinstance(raw_metadata, dict):
+        raise ValueError("Invalid plan payload: metadata must be an object")
 
     screws = [screw_from_dict(item) for item in screw_items]
     measurements: List[Measurement] = []
@@ -233,6 +259,7 @@ def deserialize_plan(
         "screws": screws,
         "measurements": measurements,
         "measurement_planes": planes,
+        "metadata": dict(raw_metadata or {}),
     }
 
 
@@ -265,6 +292,17 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
             "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
             "warnings",
+            # Appended, per the plan-file contract: readers key on the header.
+            "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
+            "lateral_breach_mm",
+            # Appended last, per the plan-file contract: existing readers index
+            # by header name, and new columns must never shift an old one.
+            "endplate_angle_deg",
+            # ``narrow_pedicle`` is true for an untrustworthy width as well as
+            # a small one, because both are planned under the same policy.
+            # This column is what tells a reader which of the two it is
+            # looking at, so a 24 mm "narrow" pedicle can be read correctly.
+            "width_uncertain",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -301,4 +339,10 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 # cell stays empty rather than guessing "traditional".
                 "" if metrics.get("trajectory_type") is None else str(metrics["trajectory_type"]),
                 "|".join(screw.warnings),
+                _metric_number(metrics, "pedicle_width_mm"),
+                _metric_flag(metrics, "narrow_pedicle"),
+                _metric_number(metrics, "medial_breach_mm"),
+                _metric_number(metrics, "lateral_breach_mm"),
+                _metric_number(metrics, "endplate_angle_deg"),
+                _metric_flag(metrics, "width_uncertain"),
             ])

@@ -1,6 +1,6 @@
 """Selectable flat-color QSS themes for the planning workstation."""
 
-DEFAULT_THEME = "soft_light"
+DEFAULT_THEME = "graphite_blue"
 
 THEME_LABELS = {
     "soft_light": "Soft Light",
@@ -36,6 +36,15 @@ THEMES = {
         "danger_text": "#B82F3A",
         "viewer_header": "#12161B",
         "viewer_readout": "#0B0E12",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#B8C1CB",
+        "grade_a": "#2E9E5B",
+        "grade_b": "#8FBF3F",
+        "grade_c": "#E0A326",
+        "grade_d": "#D64545",
+        "grade_na": "#8D99A5",
+        "grade_text": "#FFFFFF",
         "table_alternate": "#F1F3F5",
         "table_header": "#ECEFF2",
         "scrollbar_bg": "#E7EAEE",
@@ -69,6 +78,15 @@ THEMES = {
         "danger_text": "#FFBBC2",
         "viewer_header": "#15181C",
         "viewer_readout": "#101317",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#2B3138",
+        "grade_a": "#35B36B",
+        "grade_b": "#9BCB4C",
+        "grade_c": "#E8AE35",
+        "grade_d": "#E05561",
+        "grade_na": "#5E6873",
+        "grade_text": "#0B0E12",
         "table_alternate": "#181C21",
         "table_header": "#111419",
         "scrollbar_bg": "#15181C",
@@ -102,6 +120,15 @@ THEMES = {
         "danger_text": "#FFC0C4",
         "viewer_header": "#181A17",
         "viewer_readout": "#111310",
+        "viewer_bg": "#050A0F",
+        "viewer_foreground": "#E8EDF2",
+        "viewer_separator": "#30352F",
+        "grade_a": "#3FBE7B",
+        "grade_b": "#A3D255",
+        "grade_c": "#EDB645",
+        "grade_d": "#E76A72",
+        "grade_na": "#626A60",
+        "grade_text": "#07110E",
         "table_alternate": "#1B1E1A",
         "table_header": "#141613",
         "scrollbar_bg": "#181A17",
@@ -116,6 +143,26 @@ def get_theme(theme_name: str = DEFAULT_THEME) -> dict[str, str]:
     return THEMES.get(str(theme_name), THEMES[DEFAULT_THEME])
 
 
+def theme_rgb_float(theme_name: str, key: str) -> tuple[float, float, float]:
+    """Return one palette colour as VTK-style floats in 0.0-1.0.
+
+    Args:
+        theme_name: Palette name; unknown names fall back to DEFAULT_THEME.
+        key: Palette key, e.g. ``"viewer_foreground"``.
+
+    Returns:
+        (red, green, blue) each in 0.0-1.0; white if the key is missing.
+    """
+    value = get_theme(theme_name).get(key, "#FFFFFF").lstrip("#")
+    if len(value) != 6:
+        return (1.0, 1.0, 1.0)
+    return (
+        int(value[0:2], 16) / 255.0,
+        int(value[2:4], 16) / 255.0,
+        int(value[4:6], 16) / 255.0,
+    )
+
+
 def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
     """Return the application stylesheet for one named palette."""
     t = get_theme(theme_name)
@@ -124,7 +171,7 @@ def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
 QMainWindow, QWidget {{
     background-color: {t["bg_primary"]};
     color: {t["text_primary"]};
-    font-family: "Avenir Next", "Helvetica Neue", Arial;
+    font-family: "Segoe UI", "SF Pro Text", "Avenir Next", "Helvetica Neue", Arial;
     font-size: 13px;
 }}
 
@@ -433,20 +480,37 @@ QListWidget::item:selected {{
 QListWidget::item:hover {{
     background-color: {t["bg_secondary"]};
 }}
-QListWidget#screwPlanList {{
-    border-radius: 7px;
-    padding: 4px;
-}}
-QListWidget#screwPlanList::item {{
-    padding: 7px 8px;
-    margin: 1px;
+
+/* ===== Control Tabs ===== */
+QTabWidget#controlTabs::pane {{
+    background-color: {t["bg_primary"]};
     border: 1px solid {t["border"]};
-    border-radius: 5px;
+    border-radius: 8px;
+    top: -1px;
 }}
-QListWidget#screwPlanList::item:selected {{
-    background-color: {t["accent_dim"]};
+QTabWidget#controlTabs QTabBar::tab {{
+    background-color: {t["bg_primary"]};
+    color: {t["text_secondary"]};
+    border: 1px solid {t["border"]};
+    border-bottom: none;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    font-weight: 700;
+    margin-right: 2px;
+    padding: 7px 14px;
+}}
+QTabWidget#controlTabs QTabBar::tab:selected {{
+    background-color: {t["bg_secondary"]};
+    border-color: {t["accent"]};
     color: {t["text_primary"]};
+}}
+QTabWidget#controlTabs QTabBar::tab:hover:!selected {{
+    color: {t["text_primary"]};
+}}
+QWidget#planningCockpit {{
+    background-color: {t["bg_secondary"]};
     border: 2px solid {t["accent"]};
+    border-radius: 10px;
 }}
 
 /* ===== Planning Cockpit ===== */
@@ -491,9 +555,13 @@ QLabel#screwDragHint {{
     border-radius: 5px;
     padding: 6px 8px;
 }}
-MPRViewer {{
-    background-color: #050A0F;
-    border: 1px solid {t["border"]};
+QLabel#screwNarrowLegend {{
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
+MPRViewer, Viewer3D {{
+    background-color: {t["viewer_bg"]};
+    border: 1px solid {t["viewer_separator"]};
     border-radius: 7px;
 }}
 MPRViewer[reviewActive="true"] {{
@@ -501,7 +569,7 @@ MPRViewer[reviewActive="true"] {{
 }}
 QLabel#viewerHeader {{
     background-color: {t["viewer_header"]};
-    color: #E8EDF2;
+    color: {t["viewer_foreground"]};
     padding: 5px 8px;
     font-size: 12px;
 }}
@@ -531,6 +599,21 @@ QHeaderView::section {{
     padding: 6px 4px;
     font-weight: 700;
 }}
+QTableWidget#screwPlanTable {{
+    background-color: {t["bg_tertiary"]};
+    alternate-background-color: {t["table_alternate"]};
+    border: 1px solid {t["border"]};
+    border-radius: 7px;
+    selection-background-color: {t["accent_dim"]};
+    selection-color: {t["text_primary"]};
+}}
+QTableWidget#screwPlanTable::item {{
+    padding: 5px 6px;
+}}
+QTableWidget#screwPlanTable::item:selected {{
+    background-color: {t["accent_dim"]};
+    color: {t["text_primary"]};
+}}
 
 /* ===== Status Bar ===== */
 QStatusBar {{
@@ -538,6 +621,15 @@ QStatusBar {{
     color: {t["text_secondary"]};
     border-top: 1px solid {t["border"]};
     font-size: 12px;
+    padding: 2px 8px;
+}}
+QLabel#statusModeLabel {{
+    background-color: {t["accent_dim"]};
+    border: 1px solid {t["accent"]};
+    border-radius: 4px;
+    color: {t["secondary_action_text"]};
+    font-weight: 700;
+    margin-right: 6px;
     padding: 2px 8px;
 }}
 

@@ -125,12 +125,17 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 | 항목 | 기본값 | 의미 |
 |---|---:|---|
 | Pedicle fill | 0.80 | 측정된 척추경 협부(isthmus) 폭 대비 스크류 직경의 비율 |
-| Wall clearance | 1.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
+| Wall clearance | 0.0 mm | 스크류와 피질골 사이에 유지하는 최소 거리 |
 | Anterior margin | 4.0 mm | anterior cortex 뒤쪽에 유지하는 안전 여유 |
 | Max convergence | 35° | 플래너가 사용할 수 있는 최대 medial 수렴각 |
 | HU threshold | 123 HU | 이완(loosening) 위험 경고가 표시되는 궤적 HU 기준값 |
+| Narrow pedicle (mm) | 5.0 mm | 이보다 좁으면 카탈로그의 가장 작은 스크류를 계획하고 해당 레벨을 narrow로 표시하는 척추경 폭 기준값 |
+| Lateral breach cap (mm) | 2.0 mm | narrow 척추경에서 허용하는 lateral(in-out-in) 천공 한도이며, medial 벽은 절대 뚫지 않음 |
+| Parallel to upper endplate | 켜짐 | 궤적을 수평 대신 상위 종판(upper endplate)을 따라 정렬함 |
+| Endplate band | 10° | 위 옵션이 켜져 있을 때 최적화기가 종판 방향에서 얼마나 벗어난 각도까지 허용하는지 |
+| Construct alignment | 0.30 | 스크류 헤드를 로드에 맞춰 정렬하고 레벨 간 수렴각을 맞추는 데 주어지는 가중치(5.6절 참고) |
 
-**Reset Defaults**를 선택하면 이 다섯 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
+**Reset Defaults**를 선택하면 이 열 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, Safety·Density 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
 
 ### 5.6 궤적 최적화기(Trajectory Optimizer)
 
@@ -144,11 +149,11 @@ Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 
   - **Centering(중심성)** — 궤적이 척추경 협부(isthmus) 중심에 얼마나 가깝게 지나가는지를 협부 반폭 대비로 나타낸 값입니다.
 - **Legacy** — 최적화기가 추가되기 전부터 사용하던 원래의 탐욕적(greedy) entry/target 탐색 방식입니다.
 
-기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Rod**(기본값 30% / 0.3)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Rod 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
+기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Construct alignment**(기본값 30% / 0.3, 내부적으로는 `rod` 가중치)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추고 수렴하는 레벨들의 각도를 서로 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Construct alignment 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
 
-어떤 후보가 실현 가능하려면 피질골 천공이 전혀 없어야 하고, 설정된 최소 벽 여유거리를 유지해야 하며, 수렴각이 설정 범위 안에 있어야 하고, 원위(팁 쪽) 4 mm 구간에서 설정된 anterior margin을 확보해야 합니다. 스크류 단면이 들어가려면 posterior cortex 안쪽으로 3 mm 넘게 entry를 밀어 넣어야 하는 경우에도 실제 드릴이 그만큼의 뼈를 통과할 수 없으므로 도달 불가능한 것으로 보고 제외합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
+어떤 후보가 실현 가능하려면 설정된 최소 벽 여유거리를 유지해야 하고, 수렴각이 설정 범위 안에 있어야 하며, 원위(팁 쪽) 4 mm 구간에서 설정된 anterior margin을 확보해야 합니다. 척추경 폭이 정상 범위이면 여기에 더해 피질골 천공이 전혀 없어야 하지만, "Narrow pedicle (mm)" 임계값(기본 5.0 mm)보다 좁은 narrow 척추경에서는 대신 최적화기가 카탈로그에서 가장 작은 직경(4.0 mm, **Selected Screw** 패널에 빨간색으로 표시)의 스크류를 배치하며, medial(척추관 쪽) 벽은 그대로 유지하면서 "Lateral breach cap (mm)" 한도(기본 2.0 mm)까지 lateral(in-out-in) 천공을 허용합니다 — 두 스핀박스는 모두 Planning parameters의 Wall clearance 옆에 있습니다. 스크류 단면이 들어가려면 posterior cortex 안쪽으로 6 mm 넘게 entry를 밀어 넣어야 하는 경우에도 실제 드릴이 그만큼의 뼈를 통과할 수 없으므로 도달 불가능한 것으로 보고 제외합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. narrow 척추경의 경우 이 legacy 대체 경로도 해당 side를 포기하지 않습니다 — lateral shift 탐색이 찾아낸 것 중 medial 쪽으로 가장 덜 치우친 entry를 그대로 배치하며, 그 탐색 후에도 척추관 쪽 천공이 남아 있으면 조용히 받아들이거나 버리는 대신 스크류에 "Medial breach _x_.x mm — canal side" 경고를 표시합니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
 
-같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이도록 조정합니다 — 이는 로드를 얼마나 구부려야 하는지를 대신 나타내는 값입니다. 이때 Rod 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Rod misalignment L *x* mm / R *y* mm" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`이 함께 기록됩니다.
+같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이고 이웃 레벨의 수렴각이 서로 맞도록 조정합니다 — 이는 로드를 얼마나 구부리고 비틀어야 하는지를 대신 나타내는 값입니다. 이때 Construct alignment 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`, `convergence_deviation_deg`가 함께 기록됩니다. Legacy 방식은 스크류를 각각 따로 배치하므로 조화시킬 대상이 없습니다 — 이 경우 상태 줄에는 대신 "Construct alignment needs Optimizer mode"가 표시됩니다.
 
 실행 시간은 일반적인 CT 기준 척추경 한 개당 약 2–3초이며, 다중 레벨 증례는 척추경을 하나씩 순서대로 계획하기 때문에 그만큼 더 걸립니다. 현재 버전에는 계획 중 레벨별 진행 표시가 없으며, "Analyzing vertebral pedicles...", "Analyzed N vertebrae, M with pedicle data. Planning screws...", "Planned N screw trajectories." 세 개의 큰 단계 메시지만 표시됩니다.
 
@@ -181,9 +186,12 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 
 - **Convergence(수렴각):** 정중선 방향으로의 axial 각도이며 부호가 있습니다. 양수는 medial(팁이 정중선을 향함), 음수는 lateral을 의미합니다.
 - **Craniocaudal(두미측각):** axial 평면 위로의 궤적 상승각이며 부호가 있습니다. 양수는 cranial입니다. 스크류가 수렴하는 경우 이 값은 sagittal 투영각과 약간 다를 수 있습니다.
+- **Endplate(종판각):** 상위 종판(upper endplate) 대비 궤적의 부호 있는 각도이며, 양수는 팁이 cranial 쪽, 0은 평행을 뜻합니다. "Parallel to upper endplate" 계획 옵션을 켜면 설정된 endplate band 안에서 0°를 직접 목표로 삼습니다.
+- **Alignment(정렬):** 이 스크류가 다중 스크류 construct 안에서 어떻게 놓이는지 — 로드 선 대비 오프셋(`rod _x_ mm`)과 이웃 레벨과의 수렴각 차이(`conv ±_y_°`)를 나타냅니다. Optimizer가 construct를 조정한 경우에만 채워지며(5.6절 참고), Legacy 모드 스크류는 이 행이 비어 있습니다.
 - **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급입니다. 등급 계산에는 HU가 전혀 사용되지 않으며, 함께 표시되는 궤적의 평균·최소 HU는 참고용 정보일 뿐입니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
+- **Pedicle(척추경):** 측정된 척추경 협부(isthmus) 폭입니다. 해당 레벨이 "Narrow pedicle" 임계값보다 좁으면 빨간색으로 표시되며, 이는 플래너가 카탈로그에서 가장 작은 직경을 사용하고 medial 벽을 보호하기 위해 lateral(in-out-in) 천공 허용치를 제한했다는 뜻입니다. 폭 뒤에 `?`가 붙고 행에 "width not trusted"라고 표시되면서 같은 빨간색이 나타나는 경우는, 분석기가 그 측정값 자체를 신뢰할 수 없다고 판단한 것입니다(해당 레벨의 타당 범위를 위아래 어느 쪽으로든 벗어난 경우). 두 경우 모두 narrow 정책이 적용되지만, 신뢰할 수 있는 폭만 임상 수치로 인용됩니다.
 
-자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하이면서 각 방향으로 최소 1 mm의 피질골 여유를 확보하도록 설정하고, 팁을 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
+자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하로 유지하고, 팁을 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. Wall clearance의 기본값은 이제 0 mm이며, 위에서 설명한 무천공(zero-breach) 요건보다 더 넉넉한 여유를 두고 싶다면 Planning parameters에서 값을 올리면 됩니다. 예전 빌드가 저장한 1.0 mm는 사용자가 고른 값이 아니라 당시 기본값이므로 최초 1회에 한해 0 mm로 이관되며 상태 표시줄에 안내가 나옵니다. 그 밖의 저장값(0.5 mm, 1.5 mm 등)과 이관 이후 사용자가 직접 지정한 1.0 mm는 그대로 존중되어 해당 스핀박스에 계속 표시됩니다. "Parallel to upper endplate" 체크박스와 그 허용오차 스핀박스(endplate band, 기본 10°)는 스크류 크기와 별개로 궤적을 수평 대신 상위 종판(upper endplate)에 맞춰 정렬하며, 두 항목 모두 Planning parameters의 크기 관련 필드 옆에 있습니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
 
 불러온 volume은 표시 전에 LPS(identity 방향)로 재정렬됩니다. Oblique 방식으로 촬영된 volume은 identity 방향 격자로 resampling되며, 이 경우 정보 패널에 "(oblique volume resampled)"가 표시됩니다.
 

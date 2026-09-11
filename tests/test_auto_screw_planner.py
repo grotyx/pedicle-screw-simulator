@@ -17,6 +17,8 @@ import SimpleITK as sitk
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
+from src.core.pedicle_analyzer import endplate_fit_warning
+from src.core.planner_config import PlannerConfig
 from src.core.vertebra import PedicleAnalysisResult, Vertebra
 
 # ---------------------------------------------------------------------------
@@ -72,6 +74,68 @@ def _make_bone_cylinder(
     ct_img = _make_image(ct_arr, spacing)
     mask_img = _make_image(mask_arr, spacing)
     return ct_img, mask_img
+
+
+def _make_thin_medial_wall_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+    medial_edge: int = 39,
+    lateral_edge: int = 50,
+) -> tuple:
+    """A left corridor whose medial wall only survives a lateral entry.
+
+    The vertebral body is deliberately generous (x = 15..59, y = 5..31) so that
+    nothing but the pedicle corridor can ever breach.  The corridor itself runs
+    ``x = medial_edge..lateral_edge``, and the analysis hands the planner an
+    isthmus centre at x = 40 on a straight posteroanterior axis: a 4.0 mm screw
+    placed on that axis spans x = 38..42 and hangs into the canal, while the
+    same screw a couple of millimetres lateral is fully contained.
+
+    ``lateral_edge`` narrows the corridor for the case where no shift can save
+    the medial wall.
+    """
+    shape = (40, 60, 70)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:32, 15:60] = hu_value
+    mask_arr[10:30, 5:32, 15:60] = label
+
+    ct_arr[14:27, 30:46, medial_edge:lateral_edge] = hu_value
+    mask_arr[14:27, 30:46, medial_edge:lateral_edge] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
+def _make_sloped_lamina_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+) -> tuple:
+    """A left corridor whose posterior cortex recedes (slopes) with x.
+
+    Like :func:`_make_thin_medial_wall_phantom`, the vertebral body is
+    generous (x = 15..59, y = 5..31) so only the pedicle corridor can ever
+    breach.  The corridor's posterior surface is not flat here, though: at
+    the pedicle centre (x = 40) it sits at y = 44, and it steps 2 mm closer
+    to the body for every millimetre lateral out to x = 43 (y = 38), then
+    holds flat.  A lateral shift that merely translates an already-seated
+    entry keeps its old y and so lands in the air behind the receded
+    cortex at every one of the three shifts; only a shift that re-seats on
+    the cortex with ``_find_entry_point`` finds a valid entry at all.
+    """
+    shape = (40, 60, 70)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:32, 15:60] = hu_value
+    mask_arr[10:30, 5:32, 15:60] = label
+
+    for x in range(39, 60):
+        y_top = max(46 - 2 * (min(x, 43) - 39), 32)
+        ct_arr[14:27, 30:y_top, x] = hu_value
+        mask_arr[14:27, 30:y_top, x] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
 
 
 def _make_vertebra(
@@ -701,14 +765,17 @@ class TestPlanScrew:
 
         assert result is None
 
-    def test_plan_screw_narrow_pedicle_returns_none(self):
-        """Pedicle too narrow for any screw should return None."""
+    def test_plan_screw_narrow_pedicle_is_planned_at_the_minimum_diameter(self):
+        """A narrow pedicle gets the smallest screw, not a dropped side."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
         analysis = _make_analysis(left_width=3.0, right_width=3.0)
 
         result = planner.plan_screw(analysis, "left")
-        assert result is None
+
+        assert result is not None
+        assert result.diameter_mm == pytest.approx(AutoScrewPlanner.MIN_SCREW_DIAMETER)
+        assert result.metrics["narrow_pedicle"] is True
 
     def test_plan_screw_invalid_side_raises(self):
         """Invalid side string should raise ValueError."""
@@ -730,14 +797,14 @@ class TestPlanScrew:
         assert not np.allclose(result.entry_lps, result.target_lps)
 
     def test_screw_diameter_respects_pedicle_width(self):
-        """Diameter should keep 1 mm cortical clearance on each side."""
+        """Diameter follows the fill ratio once the clearance default is 0 mm."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
         analysis = _make_analysis(left_width=6.0)
 
         result = planner.plan_screw(analysis, "left")
         assert result is not None
-        assert result.diameter_mm == pytest.approx(4.0)
+        assert result.diameter_mm == pytest.approx(4.5)
 
     def test_diameter_is_reduced_until_trajectory_is_grade_a_or_b(
         self,
@@ -1015,21 +1082,17 @@ class TestHelperMethods:
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(6.0, "L4") == pytest.approx(4.0)
+        # min(0.8 * 6.0, 6.0 - 0) = 4.8 -> largest catalogue size at or under it.
+        assert planner._compute_diameter(6.0, "L4") == pytest.approx(4.5)
 
-    def test_compute_diameter_minimum_clamp(self):
-        """Width without 1 mm clearance each side should be rejected."""
+    def test_compute_diameter_falls_back_to_the_minimum(self):
+        """A pedicle under the smallest implant still gets the smallest implant."""
         ct, mask = _make_bone_cylinder()
         planner = AutoScrewPlanner(ct, mask)
 
-        assert planner._compute_diameter(5.0, "L4") is None
-
-    def test_compute_diameter_too_narrow(self):
-        """Width below MIN_SCREW_DIAMETER should return None."""
-        ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
-
-        assert planner._compute_diameter(3.5, "T4") is None
+        assert planner._compute_diameter(5.0, "L4") == pytest.approx(4.0)
+        assert planner._compute_diameter(3.5, "T4") == pytest.approx(4.0)
+        assert planner._compute_diameter(0.0, "L4") == pytest.approx(4.0)
 
     def test_compute_diameter_maximum_clamp(self):
         """Very wide pedicle should clamp to MAX_SCREW_DIAMETER."""
@@ -1227,12 +1290,12 @@ class TestDiameterRule:
     def test_diameter_capped_at_80_percent_and_clearance(self):
         ct, mask = TestGrading()._cube()
         planner = AutoScrewPlanner(ct, mask)
-        # width 7.0 -> min(0.8*7=5.6, 7-2=5.0) -> floor to 0.5 -> 5.0
-        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.0)
-        # width 10 -> min(8.0, 8.0) -> 8.0 -> capped by level preset/automatic max (7.0 for L4)
+        # width 7.0 -> min(0.8*7=5.6, 7-0=7.0) -> floor to the catalogue -> 5.5
+        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.5)
+        # width 10 -> min(8.0, 10.0) -> capped by the level preset/automatic max
         assert planner._compute_diameter(10.0, "L4") == pytest.approx(7.0)
-        # too narrow
-        assert planner._compute_diameter(5.5, "L4") is None
+        # too narrow for the fill ratio: the smallest implant, never nothing
+        assert planner._compute_diameter(5.5, "L4") == pytest.approx(4.0)
 
 
 class TestPlannerConfig:
@@ -1383,6 +1446,122 @@ class TestOptimizerMode:
         assert len(results) == 1
         assert "Optimizer found no feasible trajectory; legacy planner used" in results[0].warnings
 
+    def test_construct_pool_is_wide_enough_to_move_angles(self):
+        """10 near-identical bests cannot harmonise anything; the pool is 40."""
+        from src.core import auto_screw_planner as module
+
+        assert module._CONSTRUCT_TOP_K == 40
+
+
+# ---------------------------------------------------------------------------
+# Construct alignment metrics and summary
+# ---------------------------------------------------------------------------
+
+def _alignment_screw(vertebra_name, side, convergence_angle, **overrides):
+    """A PlannedScrew carrying only what the construct stamping reads."""
+    defaults = dict(
+        vertebra_name=vertebra_name,
+        side=side,
+        entry_lps=np.array([20.0, 30.0, 0.0]),
+        target_lps=np.array([20.0, -10.0, 0.0]),
+        length_mm=40.0,
+        diameter_mm=6.0,
+        convergence_angle=float(convergence_angle),
+        craniocaudal_angle=0.0,
+        mean_bone_density=400.0,
+        min_bone_density=200.0,
+        gertzbein_grade="A",
+        confidence=0.8,
+    )
+    defaults.update(overrides)
+    return PlannedScrew(**defaults)
+
+
+class TestConstructAlignmentMetrics:
+    def test_stamping_records_deviation_and_side_spread(self):
+        screws = [
+            _alignment_screw("L3", "left", 5.0),
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 15.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert [s.metrics["convergence_deviation_deg"] for s in screws] == pytest.approx(
+            [-5.0, 0.0, 5.0]
+        )
+        for screw in screws:
+            assert screw.metrics["convergence_spread_deg"] == pytest.approx(
+                math.sqrt(50.0 / 3.0)
+            )
+
+    def test_stamping_leaves_the_sacral_screw_without_a_deviation(self):
+        screws = [
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 10.0),
+            _alignment_screw("S1", "left", 40.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert "convergence_deviation_deg" not in screws[2].metrics
+        assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(0.0)
+
+    def test_stamping_keeps_the_two_sides_apart(self):
+        screws = [
+            _alignment_screw("L4", "left", 10.0),
+            _alignment_screw("L5", "left", 10.0),
+            _alignment_screw("L4", "right", 5.0),
+            _alignment_screw("L5", "right", 25.0),
+        ]
+
+        AutoScrewPlanner._stamp_convergence_alignment(screws)
+
+        assert screws[0].metrics["convergence_spread_deg"] == pytest.approx(0.0)
+        assert screws[2].metrics["convergence_spread_deg"] == pytest.approx(10.0)
+
+
+class TestConstructSummary:
+    def test_summary_reports_rod_fit_and_convergence_for_both_sides(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        screws = [
+            _alignment_screw(
+                "L4", "left", 10.0,
+                metrics={"rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81},
+            ),
+            _alignment_screw(
+                "L4", "right", 10.0,
+                metrics={"rod_misalignment_mm": 0.92, "convergence_spread_deg": 3.44},
+            ),
+        ]
+
+        assert construct_summary(screws) == (
+            "Construct: rod fit 1.2 mm (L), 0.9 mm (R) "
+            "· convergence spread 2.8° (L), 3.4° (R)"
+        )
+
+    def test_summary_names_only_the_sides_that_have_screws(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        screws = [
+            _alignment_screw(
+                "L4", "left", 10.0,
+                metrics={"rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81},
+            )
+        ]
+
+        summary = construct_summary(screws)
+
+        assert summary == "Construct: rod fit 1.2 mm (L) · convergence spread 2.8° (L)"
+        assert "(R)" not in summary
+
+    def test_summary_is_empty_without_construct_metrics(self):
+        from src.core.auto_screw_planner import construct_summary
+
+        assert construct_summary([_alignment_screw("L4", "left", 10.0)]) == ""
+        assert construct_summary([]) == ""
+
 
 class TestPlanAllProgressAndCancel:
     """``plan_all`` narrates each ``(level, side)`` and can stop between them."""
@@ -1437,5 +1616,371 @@ class TestPlanAllProgressAndCancel:
         assert planner.last_run_cancelled is False
 
 
+class TestNarrowPedicle:
+    """A narrow or untrustworthy width is a finding, never a reason to skip."""
+
+    def test_a_flagged_width_no_longer_drops_the_side(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.pedicle_analyzer import PedicleAnalyzer
+        from src.core.planner_config import PlannerConfig
+        from tests.test_pedicle_analyzer import _make_narrow_corridor_phantom
+
+        mask = _make_narrow_corridor_phantom(label=29)  # L3
+        arr = sitk.GetArrayFromImage(mask)
+        ct = sitk.GetImageFromArray(np.where(arr > 0, 400, -50).astype(np.int16))
+        ct.CopyInformation(mask)
+        analyzer = PedicleAnalyzer(mask)
+        analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+        assert analysis.width_flags["left"] == "implausible"
+
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        planner.plan_all([analysis])
+
+        reasons = [reason for _name, _side, reason in planner.skipped_sides]
+        assert not any("too narrow" in reason for reason in reasons)
+        assert not any("width uncertain" in reason for reason in reasons)
+
+    def test_a_planned_screw_on_a_flagged_side_carries_both_warnings(self):
+        from src.core.auto_screw_planner import (
+            WIDTH_UNCERTAIN_SCREW_WARNING,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=8.0)
+        analysis.width_flags["left"] = "implausible"
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert WIDTH_UNCERTAIN_SCREW_WARNING in screw.warnings
+        # An untrustworthy measurement is planned as if it were narrow.
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["narrow_pedicle"] is True
+
+    def test_a_flagged_width_is_not_described_as_narrow(self):
+        """The gate flags a width outside its band in either direction.
+
+        An implausibly *wide* side used to produce "Narrow pedicle (24.0 mm):
+        4.0 mm screw is 17 % of the width" -- a sentence that contradicts its
+        own number.  The policy is unchanged; only the words are.
+        """
+        from src.core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            WIDTH_UNCERTAIN_SCREW_WARNING,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=24.0)
+        analysis.width_flags["left"] = "implausible"
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["width_uncertain"] is True
+        assert not any(
+            warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+            for warning in screw.warnings
+        )
+        # Stated once, and first: it is why the screw looks the way it does.
+        assert screw.warnings[0] == WIDTH_UNCERTAIN_SCREW_WARNING
+        assert screw.warnings.count(WIDTH_UNCERTAIN_SCREW_WARNING) == 1
+
+    def test_a_trusted_narrow_width_still_quotes_itself(self):
+        """The narrow note is only retired for widths that were not believed."""
+        from src.core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["width_uncertain"] is False
+        assert screw.warnings[0].startswith(NARROW_PEDICLE_WARNING_PREFIX)
+
+    def test_a_narrow_side_is_planned_with_the_smallest_screw(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5, right_width=4.5)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        screws = planner.plan_all([analysis], sides="left")
+
+        assert planner.skipped_sides == []
+        assert len(screws) == 1
+        screw = screws[0]
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+        assert screw.warnings[0] == (
+            "Narrow pedicle (4.5 mm): 4.0 mm screw is 89 % of the width — "
+            "verify the measurement or accept a lateral (in-out-in) breach"
+        )
+
+    def test_a_normal_side_is_not_marked_narrow(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(_make_analysis(left_width=8.0), "left")
+
+        assert screw is not None
+        assert screw.metrics["narrow_pedicle"] is False
+        assert screw.metrics["pedicle_width_mm"] == pytest.approx(8.0)
+        assert not any(w.startswith("Narrow pedicle") for w in screw.warnings)
+
+    def test_the_narrow_threshold_is_configurable(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=6.0)
+        relaxed = AutoScrewPlanner(ct, mask)
+        strict = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(narrow_pedicle_mm=7.0)
+        )
+
+        assert relaxed._is_narrow_side(analysis, "left") is False
+        assert strict._is_narrow_side(analysis, "left") is True
+
+    def test_a_graded_screw_records_the_directional_breach(self):
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        screw = planner.plan_screw(_make_analysis(), "left")
+
+        assert screw is not None
+        for key in (
+            "medial_breach_mm", "lateral_breach_mm",
+            "craniocaudal_breach_mm", "medial_wall_mm",
+        ):
+            assert isinstance(screw.metrics[key], float)
+        assert screw.metrics["medial_breach_mm"] <= screw.breach_mm + 1e-9
+
+    def test_the_legacy_path_slides_a_narrow_entry_off_the_medial_wall(self):
+        """C1: never skip for width, but never hand the canal a screw either.
+
+        The analysed axis runs down the medial edge of this corridor, so the
+        4.0 mm narrow implant placed on it hangs into the canal.  The legacy
+        path must try the lateral entry shifts before it accepts that.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_thin_medial_wall_phantom()
+        analysis = _make_analysis(
+            left_center=np.array([40.0, 37.0, 20.0]),
+            body_center=np.array([40.0, 18.0, 20.0]),
+            left_width=4.5,                     # below the 5.0 mm narrow threshold
+        )
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        on_axis = planner._grader.grade(
+            np.array([40.0, 44.5, 20.0]), np.array([40.0, 9.5, 20.0]),
+            4.0, label=27, side="left",
+        )
+        assert on_axis is not None and on_axis.medial_breach_mm > 0.0, (
+            "the phantom must breach medially on the unshifted entry"
+        )
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert screw.entry_lps[0] > 40.0        # slid laterally, away from the canal
+        assert any(
+            w.startswith("Entry moved") and "medial wall" in w for w in screw.warnings
+        )
+
+    def test_a_narrow_entry_that_already_clears_the_canal_is_left_alone(self):
+        """The shift search must be a no-op when the axis entry is already clean."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert not any(w.startswith("Entry moved") for w in screw.warnings)
+
+    def test_a_narrow_side_with_no_clean_shift_is_still_placed(self):
+        """Policy: width never skips a side, so the least bad entry is kept."""
+        from src.core.auto_screw_planner import AutoScrewPlanner, medial_breach_warning
+
+        ct, mask = _make_thin_medial_wall_phantom(lateral_edge=41)
+        analysis = _make_analysis(
+            left_center=np.array([40.0, 37.0, 20.0]),
+            body_center=np.array([40.0, 18.0, 20.0]),
+            left_width=4.5,
+        )
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["medial_breach_mm"] > 0.0
+        assert medial_breach_warning(screw.metrics["medial_breach_mm"]) in screw.warnings
+
+    def test_a_shift_re_seats_on_the_cortex_of_a_sloped_lamina(self):
+        """C1 fix: a shift re-seats with ``_find_entry_point``, not a translate.
+
+        On the sloped corridor of ``_make_sloped_lamina_phantom``, translating
+        the already-seated unshifted entry sideways lands it in the air past
+        the receded cortex at every one of the three lateral shifts -- the bug
+        this fix corrects.  Re-seating each shift on the pedicle centre with
+        ``_find_entry_point`` finds the real surface instead, and the
+        resulting trajectory clears the medial wall with no breach anywhere.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_sloped_lamina_phantom()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        label = 27
+        pedicle_center = np.array([40.0, 37.0, 20.0])
+        oriented_axis = np.array([0.0, 1.0, 0.0])
+        body_center = np.array([40.0, 18.0, 20.0])
+        diameter = 4.0
+
+        entry = planner._find_entry_point(pedicle_center, oriented_axis, label)
+        assert entry is not None
+        lateral = planner._lateral_direction(oriented_axis, "left")
+        assert lateral is not None
+
+        for shift in (1.0, 2.0, 3.0):
+            translated = entry + lateral * shift
+            assert not planner._is_point_inside_mask(translated, label), (
+                "the phantom must put a naive lateral translate off the cortex"
+            )
+
+        target = planner._find_best_target(
+            entry, oriented_axis, body_center, label, diameter, None
+        )
+        assert target is not None
+        on_axis = planner._grader.grade(
+            entry, target, diameter, label=label, side="left"
+        )
+        assert on_axis is not None and on_axis.medial_breach_mm > 0.0, (
+            "the phantom must breach medially on the unshifted entry"
+        )
+
+        new_entry, new_target, shift_used = planner._least_medial_entry(
+            "left", entry, target, oriented_axis, pedicle_center, body_center,
+            label, diameter, None,
+        )
+
+        assert shift_used == pytest.approx(3.0)
+        result = planner._grader.grade(
+            new_entry, new_target, diameter, label=label, side="left"
+        )
+        assert result is not None
+        assert result.breach_mm == 0.0
+        assert result.medial_breach_mm == 0.0
+
+    def test_no_planner_path_still_says_too_narrow(self):
+        """The width-based skip is gone from the product; nothing may put it back."""
+        import pathlib
+
+        source = pathlib.Path(__file__).resolve().parent.parent / "src"
+        offenders = sorted(
+            str(path.relative_to(source))
+            for path in source.rglob("*.py")
+            if "too narrow" in path.read_text(encoding="utf-8")
+        )
+
+        assert offenders == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestEndplateOptionAndMetric:
+    """The endplate trajectory is switchable, and always measured."""
+
+    _NORMAL_10_DEG = np.array([0.0, math.sin(math.radians(10.0)), math.cos(math.radians(10.0))])
+
+    def test_endplate_parallel_on_tilts_the_trajectory_and_reads_zero(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        # Measured on this phantom today: craniocaudal +9.64, endplate -0.36.
+        assert result.craniocaudal_angle > 3.0          # aimed up along the endplate
+        assert result.metrics["endplate_angle_deg"] == pytest.approx(0.0, abs=2.0)
+
+    def test_endplate_parallel_off_keeps_the_trajectory_horizontal(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert result.target_lps[2] == pytest.approx(result.entry_lps[2])
+        assert result.craniocaudal_angle == pytest.approx(0.0, abs=0.1)
+        # The metric is a measurement, not a setting: it is still recorded, and
+        # it now says the screw is 10 degrees caudal of the endplate.
+        assert result.metrics["endplate_angle_deg"] == pytest.approx(-10.0, abs=0.5)
+
+    def test_endplate_parallel_off_does_not_claim_the_endplate_was_unavailable(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+
+        result = planner.plan_screw(_make_analysis(), "left")
+
+        assert result is not None
+        assert not any("Upper endplate unavailable" in w for w in result.warnings)
+
+    def test_metric_is_absent_when_the_endplate_is_unknown(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        result = planner.plan_screw(_make_analysis(), "left")
+
+        assert result is not None
+        assert "endplate_angle_deg" not in result.metrics
+
+    def test_rough_endplate_fit_warning_reaches_the_screw(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 2.3
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert endplate_fit_warning(2.3) in result.warnings
+
+    def test_a_tight_endplate_fit_says_nothing(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 0.4
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert not any("Upper endplate fit is rough" in w for w in result.warnings)

@@ -33,6 +33,7 @@ from .trajectory_optimizer import (
     DENSITY_HIGH_HU,
     DENSITY_LOW_HU,
     SAFETY_CAP_MM,
+    TIP_MARGIN_RELIEF_MM,
     TIP_SEGMENT_MM,
     RunProgress,
 )
@@ -283,7 +284,11 @@ def _plan_cbt_screw(
     # end a millimetre behind the anterior cortex.  Measured over the distal
     # TIP_SEGMENT_MM exactly as the optimiser measures it, so a CBT screw and a
     # traditional one are held to the same anterior rule.
-    tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
+    # The relief is :data:`TIP_MARGIN_RELIEF_MM`, not the configured wall
+    # clearance: the tip rule was calibrated against a 1 mm clearance, and
+    # coupling it to the setting silently moved the anterior margin whenever
+    # the default changed.
+    tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
     tip_entries = targets - dirs * TIP_SEGMENT_MM
 
     best_key: Optional[Tuple[float, float, float]] = None
@@ -352,6 +357,25 @@ def _plan_cbt_screw(
         body_center,
         [CBT_CONTRAINDICATION_NOTE],
         pedicle_width,
+        # Never narrow: CBT sizes its own diameter from ``CBT_DEFAULTS`` rather
+        # than stepping down to ``MIN_SCREW_DIAMETER``, and its feasibility rule
+        # is undirected zero-breach with no medial/lateral split, so the narrow
+        # policy is not applied here.  Flagging it anyway produced a warning
+        # whose premise ("this level got the smallest screw") was false and
+        # whose percentage could exceed 100.  The isthmus width still travels
+        # out in ``pedicle_width_mm``, and CBT's own contraindication note is
+        # what marks the level.
+        narrow=False,
+        # The width is still the analyser's, so its verdict still travels: a
+        # flagged number must not read as a measurement here either.
+        width_uncertain=analysis.width_flags.get(side) == "implausible",
+        # Measured, not aimed along: CBT's cranial trajectory is deliberately
+        # not endplate-parallel, but the inspector's Endplate row is a
+        # measurement of the chosen trajectory.  Omitting it left the row
+        # blank until the first drag, when ``ScrewTool._endplate_angle``
+        # computed it from this same normal -- a number that appeared because
+        # the user nudged the screw.
+        upper_endplate_normal=analysis.upper_endplate_normal,
     )
     # ``span`` is the catalogue length by construction; recomputing it from the
     # end points would only add float noise to a nominal implant size.

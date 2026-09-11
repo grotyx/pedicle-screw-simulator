@@ -128,6 +128,11 @@ class CollapsibleGroupBox(QWidget):
     def is_collapsed(self) -> bool:
         return self._is_collapsed
 
+    @property
+    def title(self) -> str:
+        """The section header text, used to name the section in the tab map."""
+        return self._toggle_button.text()
+
     def set_title(self, title: str) -> None:
         self._toggle_button.setText(title)
 

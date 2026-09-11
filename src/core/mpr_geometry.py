@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import vtk
@@ -31,6 +32,9 @@ class ScrewMPRAxes:
     cross_section: vtk.vtkMatrix4x4
     cross_section_center: Point3D
     distance_from_entry_mm: float
+    rotation_deg: float = 0.0
+    long_axis_offset_mm: Tuple[float, float] = (0.0, 0.0)
+    cross_section_offset_mm: Tuple[float, float] = (0.0, 0.0)
 
     @property
     def long_axis_1(self) -> vtk.vtkMatrix4x4:
@@ -72,6 +76,57 @@ def world_to_slice(point: Point3D, axes: vtk.vtkMatrix4x4) -> Point3D:
     except np.linalg.LinAlgError as exc:
         raise ValueError("reslice axes matrix is not invertible") from exc
     return _transform_point(point, inverse)
+
+
+# (negative-direction letter, positive-direction letter) per LPS axis.
+_LPS_AXIS_LETTERS = (("R", "L"), ("A", "P"), ("I", "S"))
+
+# A column whose dominant component falls below this is only approximately
+# aligned with a patient axis, so its letters are marked with a suffix.
+ORIENTATION_OBLIQUE_THRESHOLD = 0.7
+ORIENTATION_OBLIQUE_SUFFIX = "'"
+
+
+def _axis_letters(column: np.ndarray) -> Tuple[str, str]:
+    """Return (letter along +column, letter along -column) for one axis."""
+    norm = float(np.linalg.norm(column))
+    if norm <= 1e-9:
+        return ("?", "?")
+    unit = column / norm
+    axis = int(np.argmax(np.abs(unit)))
+    negative_letter, positive_letter = _LPS_AXIS_LETTERS[axis]
+    if unit[axis] < 0.0:
+        positive_letter, negative_letter = negative_letter, positive_letter
+    if abs(unit[axis]) < ORIENTATION_OBLIQUE_THRESHOLD:
+        positive_letter += ORIENTATION_OBLIQUE_SUFFIX
+        negative_letter += ORIENTATION_OBLIQUE_SUFFIX
+    return positive_letter, negative_letter
+
+
+def orientation_letters(axes: vtk.vtkMatrix4x4) -> Dict[str, str]:
+    """Name the patient direction at each edge of a resliced image.
+
+    Column 0 of a reslice matrix points along screen-right and column 1
+    along screen-up, so the letters follow any plane -- standard or
+    screw-aligned -- without a per-plane table.  A column that is only
+    approximately aligned with a patient axis (dominant component below
+    ``ORIENTATION_OBLIQUE_THRESHOLD``) is suffixed with ``'``.
+
+    Args:
+        axes: Reslice matrix mapping slice-local points into LPS world mm.
+
+    Returns:
+        ``{"top": ..., "bottom": ..., "left": ..., "right": ...}``.
+    """
+    matrix = _matrix_to_numpy(axes)
+    right_letter, left_letter = _axis_letters(matrix[:3, 0])
+    top_letter, bottom_letter = _axis_letters(matrix[:3, 1])
+    return {
+        "top": top_letter,
+        "bottom": bottom_letter,
+        "left": left_letter,
+        "right": right_letter,
+    }
 
 
 def project_screw_to_slice(
@@ -139,12 +194,58 @@ def _make_reslice_axes(
     return axes
 
 
+def _rotate_about_axis(
+    vector: np.ndarray,
+    axis: np.ndarray,
+    angle_deg: float,
+) -> np.ndarray:
+    """Rotate ``vector`` about the unit ``axis`` by the right-hand-rule angle.
+
+    Positive angles follow the right-hand rule about ``axis``; an angle of
+    exactly zero returns a copy of ``vector`` so that the default screw MPR
+    matrices stay bit-for-bit identical to the un-rotated ones.
+    """
+    angle = math.radians(float(angle_deg))
+    if angle == 0.0:
+        return np.array(vector, dtype=float)
+    vector = np.asarray(vector, dtype=float)
+    axis = np.asarray(axis, dtype=float)
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    return (
+        vector * cos_angle
+        + np.cross(axis, vector) * sin_angle
+        + axis * float(np.dot(axis, vector)) * (1.0 - cos_angle)
+    )
+
+
 def build_screw_mpr_axes(
     entry: Point3D,
     target: Point3D,
     position_fraction: float = 0.5,
+    *,
+    rotation_deg: float = 0.0,
+    long_axis_offset_mm: Tuple[float, float] = (0.0, 0.0),
+    cross_section_offset_mm: Tuple[float, float] = (0.0, 0.0),
 ) -> ScrewMPRAxes:
-    """Build two long-axis and one perpendicular reslice matrix for a screw."""
+    """Build two long-axis and one perpendicular reslice matrix for a screw.
+
+    ``rotation_deg`` spins both long-axis planes about the screw like a
+    navigation probe view. Positive angles follow the right-hand rule about
+    the screw axis, which points from ``entry`` to ``target``: ``+90`` maps
+    ``transverse_axis`` onto ``superior_axis``.
+
+    ``long_axis_offset_mm`` is ``(oblique_axial, oblique_sagittal)``; the
+    oblique-axial plane origin moves along ``+superior_axis`` and the
+    oblique-sagittal plane origin along ``+transverse_axis``.
+
+    ``cross_section_offset_mm`` is ``(u, v)`` and shifts the cross-section
+    origin in-plane along ``transverse_axis`` and ``superior_axis``; the
+    along-screw position stays ``position_fraction``.
+
+    Calling this with only the three positional arguments reproduces the
+    pre-rotation matrices bit-for-bit.
+    """
     entry_array = np.asarray(entry, dtype=float)
     target_array = np.asarray(target, dtype=float)
     trajectory = target_array - entry_array
@@ -165,24 +266,38 @@ def build_screw_mpr_axes(
             screw_axis,
         ) * screw_axis
     superior_axis = superior_axis / np.linalg.norm(superior_axis)
+    rotation = float(rotation_deg)
+    if rotation != 0.0:
+        superior_axis = _rotate_about_axis(superior_axis, screw_axis, rotation)
+        superior_axis = superior_axis / np.linalg.norm(superior_axis)
     transverse_axis = np.cross(superior_axis, screw_axis)
     transverse_axis = transverse_axis / np.linalg.norm(transverse_axis)
 
+    axial_offset = float(long_axis_offset_mm[0])
+    sagittal_offset = float(long_axis_offset_mm[1])
+    cross_offset_u = float(cross_section_offset_mm[0])
+    cross_offset_v = float(cross_section_offset_mm[1])
+
     fraction = min(max(float(position_fraction), 0.0), 1.0)
     midpoint = (entry_array + target_array) / 2.0
-    cross_section_center = entry_array + fraction * trajectory
+    cross_section_center = (
+        entry_array
+        + fraction * trajectory
+        + cross_offset_u * transverse_axis
+        + cross_offset_v * superior_axis
+    )
 
     oblique_axial = _make_reslice_axes(
         transverse_axis,
         screw_axis,
         -superior_axis,
-        midpoint,
+        midpoint + axial_offset * superior_axis,
     )
     oblique_sagittal = _make_reslice_axes(
         -screw_axis,
         superior_axis,
         transverse_axis,
-        midpoint,
+        midpoint + sagittal_offset * transverse_axis,
     )
     cross_section = _make_reslice_axes(
         transverse_axis,
@@ -197,4 +312,7 @@ def build_screw_mpr_axes(
         cross_section=cross_section,
         cross_section_center=tuple(float(value) for value in cross_section_center),
         distance_from_entry_mm=fraction * length,
+        rotation_deg=rotation,
+        long_axis_offset_mm=(axial_offset, sagittal_offset),
+        cross_section_offset_mm=(cross_offset_u, cross_offset_v),
     )

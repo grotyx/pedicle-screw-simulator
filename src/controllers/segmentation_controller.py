@@ -47,7 +47,7 @@ class AutoSegmentationThread(QThread):
 
     def __init__(self, sitk_image, task: str, device: str, work_dir: str,
                  roi_subset=None, fast=False, force_split=False,
-                 subregion_model=None):
+                 subregion_model=None, refine: bool = True):
         super().__init__()
         self.sitk_image = sitk_image
         self.task = task
@@ -57,6 +57,7 @@ class AutoSegmentationThread(QThread):
         self.fast = fast
         self.force_split = force_split
         self.subregion_model = subregion_model
+        self.refine = refine
         self._holder = ProcessHolder()
 
     def request_cancel(self) -> None:
@@ -81,6 +82,7 @@ class AutoSegmentationThread(QThread):
                 progress_callback=self._on_progress,
                 process_holder=self._holder,
                 subregion_model=self.subregion_model,
+                refine=self.refine,
             )
             self.progress.emit("Segmentation completed.")
             self.finished.emit(result)
@@ -114,6 +116,11 @@ class SegmentationController:
         self._heartbeat_timer: Optional[QTimer] = None
         self._last_segmentation_mask_path: Optional[str] = None
         self._last_segmentation_method: str = "totalsegmentator"
+        # How the mask now in use was produced. `_last_raw_mask_path` is set
+        # only when `mask_path` points at a refined copy, so its presence is
+        # the single fact "refinement ran".
+        self._last_raw_mask_path: Optional[str] = None
+        self._last_refinement_notes: list[str] = []
         self._segmentation_label_map: Dict[int, str] = {}
         self._updating_segmentation_label_ui = False
         self._vertebrae_isolated: bool = False
@@ -216,6 +223,7 @@ class SegmentationController:
             fast=fast,
             force_split=force_split,
             subregion_model=self._resolve_subregion_model(),
+            refine=self._window.seg_refine_check.isChecked(),
         )
         self._segmentation_thread.progress.connect(self._on_progress)
         self._segmentation_thread.finished.connect(self._on_finished)
@@ -385,6 +393,10 @@ class SegmentationController:
             # `run_planning` plan screws on a mask with no vertebra labels.
             self._last_segmentation_mask_path = result.mask_path
             self._last_segmentation_method = result.method
+            self._last_raw_mask_path = getattr(result, "raw_mask_path", None)
+            self._last_refinement_notes = list(
+                getattr(result, "refinement_notes", None) or []
+            )
             self._window.statusbar.showMessage("Resampling pedicle mask…")
             QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -402,6 +414,15 @@ class SegmentationController:
             # replaced the mask these screws were measured against, and grades
             # taken from the previous one would be presented as current.
             self._window._tool_ctrl.screw_tool.set_grader(grader)
+            # The per-level pedicle analyses were measured on the *old* mask,
+            # and boundary refinement moves exactly the walls their isthmus
+            # width is taken between.  Keeping them would have re-graded each
+            # screw against the new mask while re-deriving its width, narrow
+            # verdict and endplate angle from the old one -- one row, two
+            # masks, nothing on screen saying so.  Dropping them makes those
+            # metrics "not measured" until the next planning run, which the
+            # merge already knows how to carry through.
+            self._window._tool_ctrl.screw_tool.set_analysis_by_level(None)
             self._window.statusbar.showMessage("Re-grading screws…")
             QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -420,8 +441,13 @@ class SegmentationController:
                     "Threshold mask ready · planning unavailable"
                 )
             else:
+                from src.core.mask_refinement import refinement_status_text
+
                 self._window.seg_status_label.setText(
-                    f"Segmentation ready · {len(detected)} vertebrae detected"
+                    f"Segmentation ready · {len(detected)} vertebrae detected · "
+                    + refinement_status_text(
+                        self._last_raw_mask_path, self._last_refinement_notes
+                    )
                     + self._pedicle_status_suffix(result)
                 )
             self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
@@ -542,6 +568,20 @@ class SegmentationController:
             # The model ran but its output was unusable (missing label / read error).
             return " · pedicle model unavailable: mask could not be read"
         return ""
+
+    def mask_refinement_metadata(self) -> Dict[str, bool]:
+        """Plan-file record of how the mask behind these screws was produced.
+
+        Read off the same two result fields the status label uses, so a plan can
+        never claim a CT-guided mask the app did not actually build.
+        """
+        from src.core.mask_refinement import CT_GUIDED_NOTE
+
+        enabled = self._last_raw_mask_path is not None
+        return {
+            "enabled": enabled,
+            "ct_guided": enabled and CT_GUIDED_NOTE in self._last_refinement_notes,
+        }
 
     def _on_error(self, error: str):
         """Handle segmentation failure."""
@@ -828,6 +868,8 @@ class SegmentationController:
             self.restore_full_volume()
         self._last_segmentation_mask_path = None
         self._last_segmentation_method = "totalsegmentator"
+        self._last_raw_mask_path = None
+        self._last_refinement_notes = []
         self._last_pedicle_mask = None
         self._last_vtk_mask = None
         self._detected_vertebra_labels = []

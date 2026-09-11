@@ -9,7 +9,7 @@ morphology analysis.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -78,6 +78,21 @@ class PedicleAnalysisResult:
     left_pedicle_width: float = 0.0
     right_pedicle_width: float = 0.0
 
+    # The smaller of the two width estimates (bounding-box extent of the
+    # isthmus neighbourhood vs. inscribed diameter of the isthmus slice).  The
+    # reported width is the larger; this is the conservative floor a reviewer
+    # can compare it against.  On the axial-fallback path it equals the width:
+    # that path produces only one estimate, so there is no smaller one.
+    left_width_lower_bound_mm: float = 0.0
+    right_width_lower_bound_mm: float = 0.0
+
+    # Sides whose measured width failed their level's plausibility band, keyed
+    # by side.  The only value is ``"implausible"``; a believable width leaves
+    # no entry, so ``width_flags.get(side)`` is the whole check.  The planner
+    # treats a flagged side as narrow -- smallest implant, level marked -- and
+    # warns that the width itself could not be trusted.
+    width_flags: Dict[str, str] = field(default_factory=dict)
+
     # Pedicle craniocaudal height at the isthmus (mm)
     left_pedicle_height: float = 0.0
     right_pedicle_height: float = 0.0
@@ -101,6 +116,12 @@ class PedicleAnalysisResult:
 
     # Superior vertebral-body endplate plane normal (LPS, +Z oriented)
     upper_endplate_normal: Optional[np.ndarray] = None
+
+    # RMS residual of that plane fit over its retained inliers (mm), or None
+    # when no plane was fitted.  A rough fit means the endplate direction the
+    # planner aims along is a guess, so the number travels with the normal
+    # instead of leaving the planner to trust it blindly.
+    endplate_fit_rmse_mm: Optional[float] = None
 
     # Overall analysis status
     success: bool = False

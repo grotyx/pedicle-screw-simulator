@@ -988,3 +988,245 @@ def test_a_live_workspace_just_under_the_ceiling_is_still_kept(tmp_path):
 
     assert removed == 0
     assert live.exists()
+
+
+# ---------------------------------------------------------------------------
+# W2 -- TotalSegmentator output is refined before anyone measures it
+# ---------------------------------------------------------------------------
+
+
+def _blocky_vertebra_mask(image):
+    """A label-28 blob on `image`'s grid, in one-voxel-deep steps."""
+    import numpy as np
+
+    size_x, size_y, size_z = image.GetSize()
+    array = np.zeros((size_z, size_y, size_x), np.uint8)
+    array[1:-1, 1:-1, 1:-1] = 28
+    array[1, 1:-1, 1:-1] = 0                       # a step on the caudal face
+    mask = sitk.GetImageFromArray(array)
+    mask.CopyInformation(image)
+    return mask
+
+
+def _fake_blocky_totalseg(tmp_path):
+    def fake_total(image, work_dir, **_kwargs):
+        path = Path(work_dir) / "totalseg_multilabel.nii.gz"
+        sitk.WriteImage(_blocky_vertebra_mask(image), str(path))
+        return str(path)
+
+    return fake_total
+
+
+def _refinable_image():
+    """A CT big enough for a 0.75 mm sigma to mean something."""
+    image = sitk.Image([24, 24, 20], sitk.sitkInt16)
+    image = image + 400
+    image.SetSpacing((0.5, 0.5, 0.5))
+    return image
+
+
+def test_refinement_writes_a_refined_mask_and_keeps_the_raw_one(
+    tmp_path, monkeypatch
+):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    result = ts.run_segmentation_with_fallback(
+        image=_refinable_image(), work_dir=str(tmp_path), device="cpu"
+    )
+
+    assert result.method == "totalsegmentator"
+    assert Path(result.mask_path).name == ts.REFINED_MASK_NAME
+    assert Path(result.mask_path).exists()
+    assert Path(result.raw_mask_path).name == "totalseg_multilabel.nii.gz"
+    assert Path(result.raw_mask_path).exists()
+    assert result.refinement_notes
+
+
+def test_refine_false_leaves_the_raw_mask_in_place(tmp_path, monkeypatch):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    def _never(*_args, **_kwargs):
+        raise AssertionError("refinement must not run when refine=False")
+
+    from src.core import mask_refinement
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _never)
+
+    result = ts.run_segmentation_with_fallback(
+        image=_refinable_image(),
+        work_dir=str(tmp_path),
+        device="cpu",
+        refine=False,
+    )
+
+    assert Path(result.mask_path).name == "totalseg_multilabel.nii.gz"
+    assert result.raw_mask_path is None
+    assert result.refinement_notes == []
+
+
+def test_the_threshold_fallback_is_never_refined(tmp_path, monkeypatch):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: False)
+
+    def _never(*_args, **_kwargs):
+        raise AssertionError("a threshold mask has no vertebra labels to refine")
+
+    from src.core import mask_refinement
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _never)
+
+    result = ts.run_segmentation_with_fallback(
+        image=_refinable_image(), work_dir=str(tmp_path), device="cpu", refine=True
+    )
+
+    assert result.method == "threshold_fallback"
+    assert result.raw_mask_path is None
+    assert result.refinement_notes == []
+
+
+def test_a_failing_refinement_keeps_the_raw_mask_and_notes_the_reason(
+    tmp_path, monkeypatch
+):
+    """A blocky mask still plans screws; a crashed run plans none."""
+    from src.core import mask_refinement
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    def _boom(*_args, **_kwargs):
+        raise MemoryError("not enough memory for the soft mask")
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _boom)
+
+    result = ts.run_segmentation_with_fallback(
+        image=_refinable_image(), work_dir=str(tmp_path), device="cpu"
+    )
+
+    assert result.success is True
+    assert Path(result.mask_path).name == "totalseg_multilabel.nii.gz"
+    assert result.raw_mask_path is None
+    assert any("not enough memory" in note for note in result.refinement_notes)
+
+
+def test_refinement_progress_reaches_the_callback(tmp_path, monkeypatch):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+    messages = []
+
+    ts.run_segmentation_with_fallback(
+        image=_refinable_image(),
+        work_dir=str(tmp_path),
+        device="cpu",
+        progress_callback=messages.append,
+    )
+
+    assert any("Refining mask boundaries" in message for message in messages)
+
+
+def test_cancel_during_refinement_aborts_the_run(tmp_path, monkeypatch):
+    """Cancel pressed while the mask is being refined ends the run at once."""
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    holder = ts.ProcessHolder()
+    holder.cancelled = True
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=holder,
+        )
+
+    # No half-written refined mask is left for a later run to pick up.
+    assert not (tmp_path / ts.REFINED_MASK_NAME).exists()
+
+
+def test_refinement_cancellation_is_not_swallowed_as_a_failure(
+    tmp_path, monkeypatch
+):
+    """``RefinementCancelled`` must not fall into the keep-the-raw-mask path."""
+    from src.core import mask_refinement
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    def _cancelled(*_args, **_kwargs):
+        raise mask_refinement.RefinementCancelled("cancelled between vertebrae")
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _cancelled)
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=ts.ProcessHolder(),
+        )
+
+
+def test_refinement_sees_a_cancel_raised_after_the_run_started(
+    tmp_path, monkeypatch
+):
+    """The holder is polled during refinement, not only before it."""
+    from src.core import mask_refinement
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+
+    holder = ts.ProcessHolder()
+    captured = {}
+
+    def _capture(mask, ct, *_args, should_cancel=None, **_kwargs):
+        captured["before"] = should_cancel()
+        holder.terminate()
+        captured["after"] = should_cancel()
+        raise mask_refinement.RefinementCancelled("cancelled between vertebrae")
+
+    monkeypatch.setattr(mask_refinement, "refine_vertebra_mask", _capture)
+
+    with pytest.raises(ts.SegmentationCancelled):
+        ts.run_segmentation_with_fallback(
+            image=_refinable_image(),
+            work_dir=str(tmp_path),
+            device="cpu",
+            process_holder=holder,
+        )
+
+    assert captured == {"before": False, "after": True}
+
+
+def test_refinement_progress_tells_the_user_cancel_is_available(
+    tmp_path, monkeypatch
+):
+    from src.core import totalseg_integration as ts
+
+    monkeypatch.setattr(ts, "is_totalsegmentator_available", lambda: True)
+    monkeypatch.setattr(ts, "run_totalsegmentator", _fake_blocky_totalseg(tmp_path))
+    messages = []
+
+    ts.run_segmentation_with_fallback(
+        image=_refinable_image(),
+        work_dir=str(tmp_path),
+        device="cpu",
+        progress_callback=messages.append,
+    )
+
+    assert any(
+        "Cancel stops after the current vertebra" in message for message in messages
+    )

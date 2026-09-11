@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import QApplication
 
 import src.controllers.plan_controller as plan_controller_module
 import src.ui.main_window as main_window_module
+from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
 
 
@@ -100,6 +101,13 @@ def _v1_plan_payload(grade="A"):
     }
 
 
+def _plan_payload_with_metrics(metrics):
+    """A plan payload for one screw carrying the given ``metrics`` dict."""
+    payload = _v1_plan_payload()
+    payload["screws"][0]["metrics"] = metrics
+    return payload
+
+
 def _load_plan(window, monkeypatch, tmp_path, payload):
     """Drive ``load_dialog`` against a plan file, with the dialogs silenced."""
     _load_volume(window)
@@ -167,4 +175,65 @@ def test_the_screw_list_row_reflects_the_regraded_screw(
     _load_plan(window, monkeypatch, tmp_path, _v1_plan_payload(grade="A"))
 
     assert window.screw_list_widget.count() == 1
-    assert "Grade N/A" in window.screw_list_widget.item(0).text()
+    assert "Grade N/A" in window.screw_list_widget.rowText(0)
+
+
+def test_saved_plans_record_the_mask_refinement_settings(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """A plan is only as good as the mask its screws were measured against."""
+    from src.core.mask_refinement import CT_GUIDED_NOTE
+
+    window = ui_main_window
+    _load_volume(window)
+    window._seg_ctrl._last_raw_mask_path = "raw.nii.gz"
+    window._seg_ctrl._last_refinement_notes = [CT_GUIDED_NOTE]
+
+    path = tmp_path / "saved.json"
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(path), "JSON Files (*.json)")),
+    )
+
+    window._plan_ctrl.save_dialog()
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["metadata"]["mask_refinement"] == {
+        "enabled": True,
+        "ct_guided": True,
+    }
+
+
+def test_loading_a_narrow_pedicle_screw_colours_the_3d_screw_red_on_first_draw(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """The 3D screw must be red the instant it is drawn, not only after regrade.
+
+    ``_apply_loaded_plan`` used to add the 3D screw with no ``color=`` at all,
+    relying on the later unconditional ``regrade_all()`` call to repaint it.
+    Stubbing out ``regrade_all`` here isolates the first draw: if the initial
+    ``add_screw`` call is still colourless, this catches it even though the
+    final on-screen state would otherwise self-heal.
+    """
+    window = ui_main_window
+    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: None)
+
+    payload = _plan_payload_with_metrics({"narrow_pedicle": True})
+    _load_plan(window, monkeypatch, tmp_path, payload)
+
+    expected = tuple(value / 255.0 for value in COLOR_SCREW_BREACH)
+    assert window.viewer_3d.screws[0].color == expected
+
+
+def test_loading_a_normal_screw_colours_the_3d_screw_with_the_default_colour(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: None)
+
+    payload = _plan_payload_with_metrics({"narrow_pedicle": False})
+    _load_plan(window, monkeypatch, tmp_path, payload)
+
+    expected = tuple(value / 255.0 for value in COLOR_SCREW)
+    assert window.viewer_3d.screws[0].color == expected

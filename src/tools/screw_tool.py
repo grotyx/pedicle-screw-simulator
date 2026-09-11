@@ -9,12 +9,12 @@ Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
 import math
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from src.models.screw import Screw
 
+from ..core.screw_geometry import endplate_angle_deg
 from ..utils.constants import (
-    CORTICAL_WALL_CLEARANCE_MM,
     DEFAULT_SCREW_DIAMETER,
     DEFAULT_SCREW_LENGTH,
     GRADE_A_DESCRIPTION,
@@ -32,9 +32,9 @@ from ..utils.constants import (
 #: Warning prefixes the grader owns: they are regenerated on every evaluation so
 #: a re-graded screw can never keep a note that contradicts its current grade.
 #: The texts must match :mod:`src.core.bone_quality`,
-#: :mod:`src.core.breach_classification` and
-#: :mod:`src.core.auto_screw_planner` verbatim, or a planner-authored note will
-#: survive an edit that disproves it.  Everything else a screw carries — the
+#: :mod:`src.core.breach_classification` (including its medial-breach note)
+#: and :mod:`src.core.auto_screw_planner` verbatim, or a planner-authored note
+#: will survive an edit that disproves it.  Everything else a screw carries — the
 #: CBT contraindication note, the optimiser fallback note, the diameter
 #: step-down note — describes how the screw was *chosen*, not how it grades,
 #: and is left alone.
@@ -53,6 +53,7 @@ _DERIVED_WARNING_PREFIXES = (
     "Trajectory/body HU ratio",
     "Facet violation grade",
     "High convergence angle",
+    "Medial breach",
 )
 
 #: Metrics that need the pedicle analysis (isthmus and vertebral-body centres)
@@ -64,6 +65,21 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     "pedicle_mean_hu",
     "body_mean_hu",
     "trajectory_body_ratio",
+    # Needs the level's upper-endplate plane, which only a pedicle analysis has.
+    # Deliberately *not* in _GRADER_MEASURED_METRIC_KEYS: a mid-drag frame
+    # outside the mask must not delete a planner measurement this tool may have
+    # no way to reproduce (see _clear_grading).
+    "endplate_angle_deg",
+    # The isthmus width of the level the screw is *now* in, and the verdict
+    # drawn from it.  Both need the analysis registry, and both are read by
+    # something the surgeon looks at rather than reads -- the plan table's
+    # Pedicle column, the cockpit's Pedicle row and the colour of the screw in
+    # 3D and on the MPR planes -- so a screw dragged from a narrow level to a
+    # wide one has to stop being red.  Also kept out of
+    # _GRADER_MEASURED_METRIC_KEYS, for the same reason as the endplate angle.
+    "pedicle_width_mm",
+    "narrow_pedicle",
+    "width_uncertain",
 )
 
 #: The metrics this tool measures from the trajectory in front of it, and so
@@ -81,12 +97,29 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "heary_direction",
     "facet_grade",
     "facet_text",
+    "medial_breach_mm",
+    "lateral_breach_mm",
+    "craniocaudal_breach_mm",
+    "medial_wall_mm",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold
 #: (:meth:`src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`), so a
 #: manual and an auto screw are flagged at the same convergence.
 _HIGH_CONVERGENCE_ANGLE_DEG = 30.0
+
+#: Thresholds an untouched tool judges a screw against.  They mirror
+#: :class:`~src.core.planner_config.PlannerConfig`'s own defaults rather than
+#: importing it: constructing a ``PlannerConfig`` pulls in the optimiser (for
+#: its default weights), which this module has no other reason to load.
+#: ``tests/test_screw_tool.py`` asserts the two stay equal.  Whoever owns the
+#: active config -- the planning controller after a run, the main window
+#: whenever the Planning-parameters panel changes -- pushes the real values in
+#: through :meth:`ScrewTool.set_wall_clearance_mm` and
+#: :meth:`ScrewTool.set_narrow_pedicle_mm`, so a manual edit and an auto screw
+#: are never judged against different numbers.
+DEFAULT_WALL_CLEARANCE_MM = 0.0
+DEFAULT_NARROW_PEDICLE_MM = 5.0
 
 if TYPE_CHECKING:
     from ..core.screw_grading import GradeResult, ScrewGrader
@@ -129,6 +162,18 @@ class ScrewTool:
         # Segmentation-based grader (None until a mask is available)
         self._grader: Optional["ScrewGrader"] = None
 
+        # Pedicle analyses keyed by mask label, handed over by the planning
+        # controller after a run.  The tool reads only ``upper_endplate_normal``
+        # from them, so any object with that attribute works.
+        self._analysis_by_level: Dict[int, Any] = {}
+
+        # Thresholds the active PlannerConfig owns, pushed in by whoever holds
+        # it.  Without them a manual edit and an auto screw would be judged
+        # against different numbers -- the drag itself would then appear to
+        # have changed the screw.
+        self._wall_clearance_mm = float(DEFAULT_WALL_CLEARANCE_MM)
+        self._narrow_pedicle_mm = float(DEFAULT_NARROW_PEDICLE_MM)
+
         # Callbacks
         self._on_screw_placed: Optional[Callable[[Screw], None]] = None
         self._on_state_changed: Optional[Callable[[str], None]] = None
@@ -153,6 +198,106 @@ class ScrewTool:
     @property
     def grader(self) -> Optional["ScrewGrader"]:
         return self._grader
+
+    def set_analysis_by_level(self, analyses: Optional[Mapping[int, Any]]) -> None:
+        """Register the pedicle analyses behind the current plan, by mask label.
+
+        A manually placed screw has no analysis of its own, so without this the
+        tool cannot re-measure anything that needs one.  ``None`` clears it (a
+        new study's analyses do not describe the old study's vertebrae).
+        """
+        self._analysis_by_level = dict(analyses or {})
+
+    def set_wall_clearance_mm(self, value: float) -> None:
+        """Adopt the active plan's cortical clearance for the manual note.
+
+        The planner only writes ``"Cortical clearance ..."`` when a screw's
+        wall falls below :attr:`PlannerConfig.wall_clearance_mm`; at the
+        shipped default of 0 mm it never does.  Reading a fixed constant here
+        instead made the *first drag* of an auto screw invent a note the plan
+        never carried -- a warning that appeared because the user nudged the
+        screw, not because anything about it changed.
+        """
+        self._wall_clearance_mm = max(0.0, float(value))
+
+    def set_narrow_pedicle_mm(self, value: float) -> None:
+        """Adopt the active plan's narrow-pedicle threshold.
+
+        Used when a re-grade re-reads the width of the level the screw is now
+        in; the verdict has to be the one the planner would have reached for
+        that width, or a drag between levels could recolour a screw by a rule
+        the plan was never made under.
+        """
+        self._narrow_pedicle_mm = float(value)
+
+    def _analysis_for(self, label: int) -> Optional[Any]:
+        """The analysis for one mask label, from this registry or the grader's."""
+        analysis = self._analysis_by_level.get(int(label))
+        if analysis is not None:
+            return analysis
+        # The grader may carry an analysis cache instead; prefer this tool's own
+        # registry, then fall back to whatever the grader offers.
+        lookup = getattr(self._grader, "analysis_for", None)
+        return lookup(int(label)) if callable(lookup) else None
+
+    def _endplate_angle(self, screw: Screw, label: int) -> Optional[float]:
+        """Signed angle to the level's upper endplate, or None if unknown."""
+        analysis = self._analysis_for(label)
+        normal = getattr(analysis, "upper_endplate_normal", None)
+        if normal is None:
+            return None
+        return endplate_angle_deg(screw.entry_point, screw.target_point, normal)
+
+    def _pedicle_width(
+        self, screw: Screw, label: int
+    ) -> Tuple[Optional[float], Optional[bool], Optional[bool]]:
+        """This side's isthmus width at ``label``, its narrow verdict and its trust.
+
+        ``(None, None, None)`` -- "not measured" -- whenever the level is not
+        in the registry or the screw has no side, so :meth:`_merge_metrics`
+        keeps whatever the planner recorded.  A drag *between* levels is the
+        case that matters: without this the screw would keep the width of the
+        vertebra it left, and stay red for a pedicle it is no longer in.
+
+        The verdict mirrors
+        :meth:`src.core.auto_screw_planner.AutoScrewPlanner._is_narrow_side`
+        exactly, threshold included, or an edited screw and a planned one would
+        disagree about the same pedicle.  So do the *preconditions*: the
+        planner only ever reaches that verdict for a side it actually detected,
+        and ``PedicleAnalysisResult`` defaults an undetected side's width to
+        ``0.0``.  Reading that default back was the bug -- a manual screw on
+        the side the analyser missed came out red, "0.0 mm", and carrying a
+        warning that a 4.0 mm screw filled 100 % of the pedicle, none of which
+        had ever been measured.  An analysis that failed, a side with no
+        isthmus centre and a non-positive width are all "not measured".
+
+        The registry is documented as accepting any object with the attributes
+        this tool reads, so each check is skipped on an object that does not
+        model it at all -- absent means "this stand-in has nothing to say about
+        detection", while a present ``None`` (which the real
+        :class:`~src.core.vertebra.PedicleAnalysisResult` always has for an
+        undetected side) means "not found".
+        """
+        side = self._screw_side(screw)
+        analysis = self._analysis_for(label)
+        if side is None or analysis is None:
+            return None, None, None
+        if not getattr(analysis, "success", True):
+            return None, None, None
+        center_attr = f"{side}_pedicle_center"
+        if hasattr(analysis, center_attr) and getattr(analysis, center_attr) is None:
+            return None, None, None
+        width = getattr(analysis, f"{side}_pedicle_width", None)
+        if not isinstance(width, (int, float)) or isinstance(width, bool):
+            return None, None, None
+        width = float(width)
+        if width <= 0.0:
+            return None, None, None
+        flags = getattr(analysis, "width_flags", None)
+        uncertain = bool(
+            isinstance(flags, Mapping) and flags.get(side) == "implausible"
+        )
+        return width, bool(width < self._narrow_pedicle_mm or uncertain), uncertain
 
     def set_screw_parameters(
         self,
@@ -332,7 +477,12 @@ class ScrewTool:
             self._clear_grading(screw)
             screw.warnings.append("Not graded: run segmentation first")
             return
-        result = self._grader.grade(screw.entry_point, screw.target_point, screw.diameter)
+        result = self._grader.grade(
+            screw.entry_point,
+            screw.target_point,
+            screw.diameter,
+            side=self._screw_side(screw),
+        )
         if result is None:
             self._clear_grading(screw)
             screw.warnings.append(
@@ -345,6 +495,7 @@ class ScrewTool:
         screw.min_hu = result.min_hu
         measured, derived_warnings = self._compute_metrics(screw, result)
         screw.metrics = self._merge_metrics(screw.metrics, measured)
+        self._refresh_narrow_pedicle_warning(screw, measured)
         if not screw.vertebra_level:
             from ..core.pedicle_analyzer import VERTEBRA_LABELS
             screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
@@ -355,15 +506,64 @@ class ScrewTool:
             screw.warnings.append(
                 f"Breach distance {result.breach_mm:.1f} mm (grade {result.grade})"
             )
-        # ScrewTool holds no PlannerConfig, so it reads the raw constant that
-        # PlannerConfig.wall_clearance_mm defaults to. Once planner configs are
-        # user-editable this must follow the active config instead (or take an
-        # optional threshold from whoever installs the grader), or a manual and
-        # an auto screw will be judged against different clearances.
-        if 0 < result.min_wall_mm < CORTICAL_WALL_CLEARANCE_MM:
+        # The active plan's clearance, not a fixed constant: the planner only
+        # writes this note below its own `wall_clearance_mm`, so at the shipped
+        # default of 0 mm there is no threshold to fall below and no note to
+        # write.  Judging a dragged screw by a stricter number than the one
+        # that planned it made the drag itself look like the problem.
+        if 0 < result.min_wall_mm < self._wall_clearance_mm:
             screw.warnings.append(
                 f"Cortical clearance {result.min_wall_mm:.1f} mm below "
-                f"{CORTICAL_WALL_CLEARANCE_MM:.0f} mm"
+                f"{self._wall_clearance_mm:.1f} mm"
+            )
+
+    @staticmethod
+    def _refresh_narrow_pedicle_warning(
+        screw: Screw, measured: Dict[str, Any]
+    ) -> None:
+        """Re-state the planner's narrow-pedicle note for the width just read.
+
+        The note is planner-owned, so it is deliberately absent from
+        :data:`_DERIVED_WARNING_PREFIXES` -- stripping it there would delete it
+        on every re-grade of a screw whose level this tool cannot re-measure,
+        and the tool could never put it back.  It is rewritten here instead,
+        and only when :meth:`_pedicle_width` actually produced a verdict: the
+        same condition under which ``pedicle_width_mm`` / ``narrow_pedicle``
+        are refreshed, so the note and the number the cockpit shows can never
+        disagree.  Without a verdict (no analysis for the level the screw is
+        now in) both are left exactly as the planner wrote them.
+
+        The diameter is the screw's current one, so a step-down that ends the
+        narrowness retracts the note along with the flag.
+
+        The "width uncertain" note is rewritten by the same rule and is
+        mutually exclusive with the narrow one, exactly as in
+        :meth:`~src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`:
+        a width the analyser rejected may not be quoted back as millimetres.
+        A screw dragged out of a flagged level has to lose the note with it.
+        """
+        from ..core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            WIDTH_UNCERTAIN_SCREW_WARNING,
+            narrow_pedicle_warning,
+        )
+
+        width = measured.get("pedicle_width_mm")
+        narrow = measured.get("narrow_pedicle")
+        if width is None or narrow is None:
+            return
+        uncertain = bool(measured.get("width_uncertain"))
+        screw.warnings = [
+            warning
+            for warning in screw.warnings
+            if not warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+            and warning != WIDTH_UNCERTAIN_SCREW_WARNING
+        ]
+        if uncertain:
+            screw.warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
+        elif narrow:
+            screw.warnings.append(
+                narrow_pedicle_warning(float(width), screw.diameter)
             )
 
     @staticmethod
@@ -404,9 +604,22 @@ class ScrewTool:
         so that both halves of one measurement are produced together — the
         clinical notes a reviewer reads next to a grade have to describe the
         same trajectory the grade does.
+
+        The medial/lateral/craniocaudal split needs to know which side of the
+        spine the screw is on.  A screw with no side leaves all four ``None`` —
+        "not measured", which is what :meth:`_merge_metrics` writes through, so
+        an auto screw that loses its side never keeps a stale canal number.
+
+        ``endplate_angle_deg`` needs the level's endplate plane, which arrives
+        through :meth:`set_analysis_by_level`; without it the value is ``None``
+        ("not measured") and :meth:`_merge_metrics` keeps whatever the planner
+        recorded.  ``pedicle_width_mm`` / ``narrow_pedicle`` come from the same
+        registry and behave the same way, but for a louder reason: they decide
+        the colour of the screw, so a drag that moves it to another level has
+        to move the width with it.
         """
         from ..core.bone_quality import assess_bone_quality
-        from ..core.breach_classification import facet_violation_grade
+        from ..core.breach_classification import facet_violation_grade, medial_breach_warning
 
         quality = assess_bone_quality(
             self._grader,
@@ -418,6 +631,25 @@ class ScrewTool:
         facet_grade, facet_text = facet_violation_grade(
             self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
         )
+
+        side = self._screw_side(screw)
+        directional: Dict[str, Any] = {
+            "medial_breach_mm": None,
+            "lateral_breach_mm": None,
+            "craniocaudal_breach_mm": None,
+            "medial_wall_mm": None,
+        }
+        if side is not None:
+            directional = {
+                "medial_breach_mm": float(result.medial_breach_mm),
+                "lateral_breach_mm": float(result.lateral_breach_mm),
+                "craniocaudal_breach_mm": float(result.craniocaudal_breach_mm),
+                "medial_wall_mm": float(result.medial_wall_mm),
+            }
+
+        pedicle_width, narrow, width_uncertain = self._pedicle_width(
+            screw, result.label
+        )
         metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -425,6 +657,11 @@ class ScrewTool:
             "body_mean_hu": quality.body_mean_hu,
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
+            "endplate_angle_deg": self._endplate_angle(screw, result.label),
+            "pedicle_width_mm": pedicle_width,
+            "narrow_pedicle": narrow,
+            "width_uncertain": width_uncertain,
+            **directional,
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
@@ -438,6 +675,9 @@ class ScrewTool:
             warnings.append(
                 f"High convergence angle {screw.medial_angle:.1f}° — verify on CT"
             )
+        medial_breach = directional["medial_breach_mm"]
+        if medial_breach is not None and medial_breach > 0.0:
+            warnings.append(medial_breach_warning(medial_breach))
         return metrics, warnings
 
     @staticmethod
@@ -474,12 +714,12 @@ class ScrewTool:
         ``rod_misalignment_mm``, and ``trajectory_type`` /
         ``cbt_cranial_angle_deg``.
 
-        The three :data:`_PEDICLE_ANALYSIS_METRIC_KEYS` need centres this tool
-        never has, so a ``None`` from that cause is not allowed to overwrite a
-        planner measurement.  ``trajectory_body_ratio`` is the exception among
-        them: it is purely derived, so it is recomputed from the new trajectory
-        HU against the preserved body HU rather than left behind describing the
-        old trajectory.
+        The :data:`_PEDICLE_ANALYSIS_METRIC_KEYS` need centres (or an endplate
+        plane) this tool may not have, so a ``None`` from that cause is not
+        allowed to overwrite a planner measurement.  ``trajectory_body_ratio``
+        is the exception among them: it is purely derived, so it is recomputed
+        from the new trajectory HU against the preserved body HU rather than
+        left behind describing the old trajectory.
         """
         merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
         for key, value in measured.items():
@@ -529,6 +769,18 @@ class ScrewTool:
             result.breach_point_lps, result.breach_centre_lps, "left"
         )
         return "mediolateral" if label in ("medial", "lateral") else label
+
+    @staticmethod
+    def _screw_side(screw: Screw) -> Optional[str]:
+        """The screw's side as the grader wants it, or ``None`` when unknown.
+
+        A manually placed screw often has no side yet, and the medial/lateral
+        split is undefined without one -- the grader would then report the whole
+        breach as medial, which would put a canal warning on a screw that left
+        the vertebra laterally.  ``None`` keeps the split unmeasured instead.
+        """
+        side = str(getattr(screw, "side", "") or "").strip().lower()
+        return side if side in ("left", "right") else None
 
     def _reset_state(self):
         """Reset tool state."""
