@@ -11,7 +11,7 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 > 검증을 뜻하지 않습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와
 > 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
-## [Unreleased]
+## [0.2.1] - 2026-09-12
 
 세 가지 주요 계획 단계를 안내하는 작업 단계 표시줄(workflow bar), 3D에서 보는
 Screw MPR, 그리고 나사 head를 후방 피질골(dorsal cortex)에 배치하고 각 나사를
@@ -70,6 +70,10 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 
 ### 수정
 
+- 0.2.0 README와 사용설명서에 테마가 네 가지("어두운 테마 하나와 밝은 테마 셋")라고
+  잘못 적혀 있었습니다. 실제 테마는 0.1.0부터 그대로 세 가지(Soft Light, Graphite
+  Blue, Graphite Mint)이며, 0.2.0에서는 기본 테마만 Graphite Blue로 바뀌었습니다.
+  아래 0.2.0 항목도 이에 맞게 정정했습니다.
 - 계획된 나사가 짧고 head가 뼈에 묻혀 있었습니다. 샘플 연구에서 각 나사
   자체 축을 따라 측정했을 때 head는 lamina 안쪽 5–21 mm에 있었고 tip은
   anterior cortex보다 5–20 mm 못 미치는 곳에서 멈췄습니다. 샘플 연구(정제된
@@ -254,6 +258,6 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

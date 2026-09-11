@@ -11,7 +11,7 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
-## [Unreleased]
+## [0.2.1] - 2026-09-12
 
 A workflow bar for the three main planning steps, a 3D view of Screw MPR, and
 a planner fix that seats screw heads on the dorsal cortex, runs each screw to
@@ -71,6 +71,10 @@ from the head.
 
 ### Fixed
 
+- The 0.2.0 README and user guides said the app offers four themes ("one
+  dark and three light"). There are three, unchanged since 0.1.0: Soft Light,
+  Graphite Blue and Graphite Mint; 0.2.0 only changed the default to Graphite
+  Blue. The 0.2.0 entry below has been corrected to match.
 - Planned screws were short with buried heads: measured along each screw's
   own axis on the sample study, heads sat 5-21 mm inside the lamina and tips
   stopped 5-20 mm short of the anterior cortex. On the sample study (refined
@@ -278,6 +282,6 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

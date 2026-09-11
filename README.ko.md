@@ -4,7 +4,7 @@
 
 DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
 
-**버전:** 0.2.0
+**버전:** 0.2.1
 
 **주요 검증 환경:** macOS, Python 3.12
 
@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.2.0 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
+`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.2.1 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
 
 ## 단독 실행 패키지
 
@@ -199,7 +199,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 연구에 이 프로그램을 사용했다면 GitHub의 **Cite this repository** 기능이나 [`CITATION.cff`](CITATION.cff)를 사용하십시오.
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.0) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.1) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
 
