@@ -22,6 +22,7 @@ from src.core.trajectory_optimizer import (
     MAX_DIAMETER_STEPS,
     MAX_ENTRY_SHORTFALL_MM,
     SAFETY_CAP_MM,
+    TIP_MARGIN_RELIEF_MM,
     TIP_SEGMENT_MM,
     OptimizerWeights,
     _seat_entries,
@@ -192,6 +193,68 @@ def test_tip_margin_rejects_trajectories_without_anterior_clearance():
     ) == []
 
 
+def _flat_candidate(min_wall_mm):
+    """One synthetic anterior trajectory with a chosen wall measurement."""
+    return BatchResult(
+        breach_mm=np.zeros(1),
+        min_wall_mm=np.array([float(min_wall_mm)]),
+        mean_hu=np.array([300.0]),
+        min_hu=np.array([300.0]),
+    )
+
+
+def test_the_tip_margin_follows_the_named_relief_not_the_wall_clearance():
+    """I2: the anterior tip test was calibrated at 3 mm and must stay there.
+
+    It used to read ``anterior_margin_mm - wall_clearance_mm``, so W7's change
+    of the clearance default from 1.0 to 0.0 silently tightened every side's
+    anterior margin from 3.0 to 4.0 mm.  A tip with exactly the calibrated
+    3.0 mm of wall must now survive at every clearance setting.
+    """
+    _ct, _mask, analysis = _setup()
+    entries = np.array([[60.0, 58.0, 32.0]])
+    targets = np.array([[60.0, 28.0, 32.0]])
+    lengths = np.array([30.0])
+    tip = _flat_candidate(PlannerConfig().anterior_margin_mm - TIP_MARGIN_RELIEF_MM)
+
+    for clearance in (0.0, 1.0, 2.0):
+        config = PlannerConfig(wall_clearance_mm=clearance)
+        ranked = score_candidates(
+            _flat_candidate(2.0), entries, targets, lengths, 6.0, analysis, "left",
+            config, OptimizerWeights(), tip_batch=tip,
+        )
+        assert ranked, f"the clearance of {clearance} mm moved the anterior margin"
+
+    # ...and one tenth of a millimetre short of it is still rejected.
+    assert score_candidates(
+        _flat_candidate(2.0), entries, targets, lengths, 6.0, analysis, "left",
+        PlannerConfig(), OptimizerWeights(),
+        tip_batch=_flat_candidate(
+            PlannerConfig().anterior_margin_mm - TIP_MARGIN_RELIEF_MM - 0.1
+        ),
+    ) == []
+
+
+def test_a_buried_entry_is_admitted_up_to_the_shortfall_bound():
+    """A shortfall is countersinking depth, so 5 mm of it is placeable.
+
+    The entry sits *inside* bone; containment of the shaft is a separate test
+    the grader still enforces.  7 mm is past the bound and still rejected.
+    """
+    _ct, _mask, analysis = _setup()
+    entries = np.array([[60.0, 58.0, 32.0]])
+    targets = np.array([[60.0, 28.0, 32.0]])
+    lengths = np.array([30.0])
+    args = (
+        _flat_candidate(2.0), entries, targets, lengths, 6.0, analysis, "left",
+        PlannerConfig(), OptimizerWeights(),
+    )
+
+    assert MAX_ENTRY_SHORTFALL_MM == 6.0
+    assert score_candidates(*args, surface_shortfall_mm=np.array([5.0]))
+    assert score_candidates(*args, surface_shortfall_mm=np.array([7.0])) == []
+
+
 # ------------------------------------------------------------------- behaviour
 def test_diameter_steps_down_when_recommendation_does_not_fit():
     ct, mask, analysis = _setup()
@@ -200,8 +263,8 @@ def test_diameter_steps_down_when_recommendation_does_not_fit():
     recommended = planner._compute_diameter(analysis.left_pedicle_width, analysis.vertebra.name)
     assert recommended == 6.5
     best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
-    assert best.diameter == 5.5
-    assert "Diameter reduced from 6.5 to 5.5 mm for cortical containment" in best.warnings
+    assert best.diameter == 6.0
+    assert "Diameter reduced from 6.5 to 6.0 mm for cortical containment" in best.warnings
 
 
 def test_right_side_convergence_is_mirrored():
@@ -596,18 +659,22 @@ def test_flat_phantom_without_an_endplate_normal_is_unaffected():
     [
         (
             "left",
-            [60.60776862183425, 59.446827135542726, 32.0],
-            [55.398323291826344, 29.902594545176484, 32.0],
+            [60.45684167277018, 59.47005701480833, 32.0],
+            [57.193686867268895, 34.68393548046307, 32.0],
         ),
         (
             "right",
-            [29.392231378165743, 59.446827135542726, 32.0],
-            [34.601676708173656, 29.902594545176484, 32.0],
+            [29.54315832722982, 59.47005701480833, 32.0],
+            [32.806313132731105, 34.68393548046307, 32.0],
         ),
     ],
 )
 def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, target):
     """With the option off the chosen screw is bit-for-bit what it was before W8.
+
+    The literals moved once since, when the anterior tip test was decoupled from
+    the wall clearance (:data:`TIP_MARGIN_RELIEF_MM`): the restored 3 mm margin
+    admits the 6.0 mm implant this phantom used to have to step past.
 
     Only the *winner* is pinned, not the whole ranked list: with the option off
     every candidate scores a neutral 1.0 for the endplate component, which adds
@@ -622,7 +689,7 @@ def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, targe
 
     assert best.entry == pytest.approx(entry)
     assert best.target == pytest.approx(target)
-    assert best.score == pytest.approx(1.2424242424242422)
+    assert best.score == pytest.approx(1.2242424242424241)
 
 
 # ------------------------------------------------------- convergence spread

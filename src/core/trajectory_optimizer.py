@@ -62,11 +62,34 @@ def endplate_band_relaxed_warning(tolerance_deg: float) -> str:
 #: Length of the distal segment the anterior-margin check is measured over (mm).
 TIP_SEGMENT_MM = 4.0
 
+#: Relief subtracted from ``anterior_margin_mm`` before the distal
+#: :data:`TIP_SEGMENT_MM` is tested (mm).  The tip test was calibrated while the
+#: wall clearance defaulted to 1.0 mm and the margin was written as
+#: ``anterior_margin_mm - wall_clearance_mm``, i.e. an effective 3.0 mm.  W7
+#: dropped the clearance default to 0.0, which silently tightened the tip test
+#: to the full 4.0 mm for every side, narrow or not, and pushed sides into the
+#: legacy fallback.  Naming the relief restores the calibrated 3.0 mm and keeps
+#: a future clearance change from moving the anterior margin with it.
+TIP_MARGIN_RELIEF_MM = 1.0
+
 #: How far the seated entry may sit anterior of the posterior cortex before the
 #: trajectory counts as unreachable.  A pedicle is continuous with the lamina, so
 #: a few millimetres of countersinking is normal; more than this means a drill
 #: would have to cross air (or another structure) to reach the corridor.
-MAX_ENTRY_SHORTFALL_MM = 3.0
+#:
+#: The shortfall measures *burial*, not exposure: the entry sits inside bone,
+#: anterior of the cortex the posterior ray-cast reached, so a larger value can
+#: never admit a screw hanging in air.  Containment is a separate, unrelaxed
+#: test -- the grader still requires ``breach_mm <= 0`` and the configured wall
+#: clearance over the whole shaft -- so the only thing this bound buys is a
+#: shallower countersink.  Part of what it measures is an artefact besides:
+#: ``surface_reach`` is cast along the *pedicle axis* while ``travel`` runs
+#: along each candidate's own direction, so an obliquely angled candidate on a
+#: tilted axis reports a shortfall from the geometry of the two rays alone.  At
+#: 3 mm that made this the sole binder on tilted levels whose trajectories were
+#: otherwise contained; 6 mm still rejects an entry buried in the lamina with
+#: no drillable bone behind it (the arch phantom reports 12 mm and up).
+MAX_ENTRY_SHORTFALL_MM = 6.0
 
 #: How many catalogue steps below the recommended diameter the search may go
 #: before giving up.  Bounds the worst-case runtime of :func:`optimize_screw`.
@@ -600,7 +623,7 @@ def score_candidates(
             & (convergence <= config.max_convergence_deg + 1e-6)
         )
     if tip_batch is not None:
-        tip_margin = max(config.anterior_margin_mm - config.wall_clearance_mm, 0.0)
+        tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
     if surface_shortfall_mm is not None:
         shortfall = np.asarray(surface_shortfall_mm, dtype=np.float64).reshape(-1)
