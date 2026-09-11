@@ -791,10 +791,13 @@ def test_on_finished_omits_a_side_with_no_construct_metrics(controller_with_wind
 class _FinishedThread:
     """Stand-in for a finished ``_PlanningThread``."""
 
-    def __init__(self, cancelled=False, skipped_sides=(), generation=0):
+    def __init__(
+        self, cancelled=False, skipped_sides=(), generation=0, planner_mode="optimizer"
+    ):
         self.cancelled = cancelled
         self.skipped_sides = list(skipped_sides)
         self.cancel_requested = False
+        self.planner_mode = planner_mode
         # A fresh controller sits at generation 0, so the default matches the
         # run a test that never called ``run_planning`` is standing in for.
         self.generation = generation
@@ -1450,3 +1453,49 @@ def test_reset_state_clears_the_endplate_analysis_registry(controller_with_windo
     ctrl.reset_state()
 
     assert tool._analysis_by_level == {}
+
+
+def test_on_finished_explains_that_legacy_cannot_harmonise(controller_with_window):
+    import src.controllers.auto_placement_controller as module
+
+    ctrl, window = controller_with_window
+    ctrl._on_finished(
+        _current_thread(ctrl, planner_mode="legacy"),
+        [_planned("L4", "left")],
+    )
+
+    assert module.CONSTRUCT_LEGACY_NOTE in window.auto_screw_status._text
+    assert "Construct:" not in window.auto_screw_status._text
+
+
+def test_on_finished_does_not_nag_about_legacy_in_optimizer_mode(
+    controller_with_window,
+):
+    import src.controllers.auto_placement_controller as module
+
+    ctrl, window = controller_with_window
+    ctrl._on_finished(
+        _current_thread(ctrl, planner_mode="optimizer"),
+        [_planned("L4", "left", metrics={
+            "rod_misalignment_mm": 1.24, "convergence_spread_deg": 2.81,
+        })],
+    )
+
+    assert module.CONSTRUCT_LEGACY_NOTE not in window.auto_screw_status._text
+
+
+def test_planning_thread_records_the_mode_it_ran_in():
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+    from src.core.planner_config import PlannerConfig
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+        config=PlannerConfig(mode="legacy"),
+    )
+
+    assert thread.planner_mode == "legacy"
+    assert _thread_for().planner_mode == "optimizer"

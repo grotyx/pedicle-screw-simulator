@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 #: How many dropped sides the status note names before it starts counting.
 _MAX_NAMED_DROPPED_SIDES = 4
 
+#: What the status line says instead of a construct summary when the run had no
+#: candidates to harmonise.  Legacy planning places each screw on its own, so
+#: there is nothing to report and no number that would be honest.
+CONSTRUCT_LEGACY_NOTE = "Construct alignment needs Optimizer mode"
+
 
 class _PlanningThread(QThread):
     """Background thread for pedicle analysis + screw planning."""
@@ -52,6 +57,10 @@ class _PlanningThread(QThread):
         self._ct = ct_image
         self._labels = labels
         self._config = config
+        #: Planner back-end this run used, so the finished handler can explain
+        #: a missing construct summary even if the user has since switched the
+        #: combo box.
+        self.planner_mode = (config or PlannerConfig()).mode
         # Optional (z, y, x) boolean pedicle mask from the subregion model.
         self._pedicle_mask = pedicle_mask
         self._cancel = threading.Event()
@@ -409,9 +418,12 @@ class AutoPlacementController:
             )
             # Only the sides that actually have screws: a side with none must
             # never be reported as a perfectly fitted rod that does not exist.
-            summary = construct_summary(planned)
-            if summary:
-                status += " " + summary
+            if getattr(thread, "planner_mode", "optimizer") == "legacy":
+                status += " " + CONSTRUCT_LEGACY_NOTE
+            else:
+                summary = construct_summary(planned)
+                if summary:
+                    status += " " + summary
         status += note
         self._window.auto_screw_status.setText(status)
         self._window.statusbar.showMessage(status)

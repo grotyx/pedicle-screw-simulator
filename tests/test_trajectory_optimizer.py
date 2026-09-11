@@ -562,6 +562,11 @@ def test_neutral_endplate_component_does_not_change_the_ranking():
     assert np.allclose(with_weight[0].target, without_weight[0].target)
 
 
+def test_endplate_band_relaxed_warning_formats_a_fractional_tolerance():
+    """The ``:g`` formatting must not truncate a non-integer tolerance."""
+    assert "±12.5°" in endplate_band_relaxed_warning(12.5)
+
+
 def test_impossible_band_is_relaxed_with_a_warning_instead_of_dropping_the_side():
     ct, mask, analysis = _tilted_setup()
     config = PlannerConfig(endplate_tolerance_deg=0.0)

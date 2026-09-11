@@ -144,11 +144,11 @@ Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 
   - **Centering(중심성)** — 궤적이 척추경 협부(isthmus) 중심에 얼마나 가깝게 지나가는지를 협부 반폭 대비로 나타낸 값입니다.
 - **Legacy** — 최적화기가 추가되기 전부터 사용하던 원래의 탐욕적(greedy) entry/target 탐색 방식입니다.
 
-기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Rod**(기본값 30% / 0.3)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Rod 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
+기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Construct alignment**(기본값 30% / 0.3, 내부적으로는 `rod` 가중치)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추고 수렴하는 레벨들의 각도를 서로 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Construct alignment 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
 
 어떤 후보가 실현 가능하려면 피질골 천공이 전혀 없어야 하고, 설정된 최소 벽 여유거리를 유지해야 하며, 수렴각이 설정 범위 안에 있어야 하고, 원위(팁 쪽) 4 mm 구간에서 설정된 anterior margin을 확보해야 합니다. 스크류 단면이 들어가려면 posterior cortex 안쪽으로 3 mm 넘게 entry를 밀어 넣어야 하는 경우에도 실제 드릴이 그만큼의 뼈를 통과할 수 없으므로 도달 불가능한 것으로 보고 제외합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
 
-같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이도록 조정합니다 — 이는 로드를 얼마나 구부려야 하는지를 대신 나타내는 값입니다. 이때 Rod 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Rod misalignment L *x* mm / R *y* mm" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`이 함께 기록됩니다.
+같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이고 이웃 레벨의 수렴각이 서로 맞도록 조정합니다 — 이는 로드를 얼마나 구부리고 비틀어야 하는지를 대신 나타내는 값입니다. 이때 Construct alignment 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`, `convergence_deviation_deg`가 함께 기록됩니다. Legacy 방식은 스크류를 각각 따로 배치하므로 조화시킬 대상이 없습니다 — 이 경우 상태 줄에는 대신 "Construct alignment needs Optimizer mode"가 표시됩니다.
 
 실행 시간은 일반적인 CT 기준 척추경 한 개당 약 2–3초이며, 다중 레벨 증례는 척추경을 하나씩 순서대로 계획하기 때문에 그만큼 더 걸립니다. 현재 버전에는 계획 중 레벨별 진행 표시가 없으며, "Analyzing vertebral pedicles...", "Analyzed N vertebrae, M with pedicle data. Planning screws...", "Planned N screw trajectories." 세 개의 큰 단계 메시지만 표시됩니다.
 
@@ -181,7 +181,10 @@ Screw MPR에는 선택한 스크류가 표시됩니다. Standard MPR에는 현�
 
 - **Convergence(수렴각):** 정중선 방향으로의 axial 각도이며 부호가 있습니다. 양수는 medial(팁이 정중선을 향함), 음수는 lateral을 의미합니다.
 - **Craniocaudal(두미측각):** axial 평면 위로의 궤적 상승각이며 부호가 있습니다. 양수는 cranial입니다. 스크류가 수렴하는 경우 이 값은 sagittal 투영각과 약간 다를 수 있습니다.
+- **Endplate(종판각):** 상위 종판(upper endplate) 대비 궤적의 부호 있는 각도이며, 양수는 팁이 cranial 쪽, 0은 평행을 뜻합니다. "Parallel to upper endplate" 계획 옵션을 켜면 설정된 endplate band 안에서 0°를 직접 목표로 삼습니다.
+- **Alignment(정렬):** 이 스크류가 다중 스크류 construct 안에서 어떻게 놓이는지 — 로드 선 대비 오프셋(`rod _x_ mm`)과 이웃 레벨과의 수렴각 차이(`conv ±_y_°`)를 나타냅니다. Optimizer가 construct를 조정한 경우에만 채워지며(5.6절 참고), Legacy 모드 스크류는 이 행이 비어 있습니다.
 - **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급입니다. 등급 계산에는 HU가 전혀 사용되지 않으며, 함께 표시되는 궤적의 평균·최소 HU는 참고용 정보일 뿐입니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
+- **Pedicle(척추경):** 측정된 척추경 협부(isthmus) 폭입니다. 해당 레벨이 "Narrow pedicle" 임계값보다 좁으면 빨간색으로 표시되며, 이는 플래너가 카탈로그에서 가장 작은 직경을 사용하고 medial 벽을 보호하기 위해 lateral(in-out-in) 천공 허용치를 제한했다는 뜻입니다.
 
 자동 크기 결정은 직경을 측정된 척추경 협부(isthmus) 폭의 80% 이하이면서 각 방향으로 최소 1 mm의 피질골 여유를 확보하도록 설정하고, 팁을 anterior cortex보다 최소 4 mm 뒤쪽에 위치시키며, 길이는 25–55 mm 카탈로그에서 5 mm 간격으로 선택합니다. 이 값은 작업을 위한 기본 설정이며 모든 환자에게 적용되는 임상 권고가 아닙니다.
 
