@@ -98,6 +98,26 @@ def _make_h_vertebra_mask(
     return new_img
 
 
+def _make_fused_pedicle_with_transverse_process(label: int = 29) -> sitk.Image:
+    """A vertebra whose pedicle is fused to the body, plus a detached process.
+
+    On any axial slice the body and pedicle form one component, so the only
+    *other* component is the transverse-process fragment sitting about 16 mm
+    lateral of the isthmus centre -- far enough that no pedicle measurement
+    could come from it, close enough that "nearest non-body component" picks
+    it.  At 1 mm spacing the fragment measures roughly 8 mm, comfortably
+    inside the 5-22 mm lumbar band.
+    """
+    img = _make_mask(shape=(40, 60, 60))
+    arr = sitk.GetArrayFromImage(img)
+    arr[20:40, 5:30, 20:40] = label      # body
+    arr[20:40, 28:40, 30:42] = label     # pedicle, continuous with the body
+    arr[20:40, 34:46, 48:56] = label     # detached transverse process
+    fused = sitk.GetImageFromArray(arr)
+    fused.CopyInformation(img)
+    return fused
+
+
 def _make_connected_vertebra_mask(label: int = 27) -> sitk.Image:
     """Build a single-component body/pedicle phantom like a real mask."""
     img = _make_mask(shape=(40, 60, 60))
@@ -1489,7 +1509,39 @@ class TestWidthPlausibilityGate:
         assert result.left_pedicle_width == pytest.approx(8.0, abs=1.0)
         assert result.method == "coronal_isthmus+axial_recheck"
         assert result.width_flags == {}
-        assert not result.warnings
+        # A replaced width is a clinical number the reviewer never saw being
+        # replaced, so the swap is stated rather than left to ``method``.
+        assert result.warnings == [
+            "left pedicle width re-measured axially (2.0 → 8.0 mm) — verify on CT"
+        ]
+
+    def test_the_recheck_refuses_a_posterior_element_fragment(self):
+        """The nearest non-body component is not automatically the pedicle.
+
+        At the isthmus the pedicle is usually continuous with the body, so the
+        nearest *separate* component is routinely a transverse process.  Its
+        width lands squarely inside the lumbar band, so believing it replaced
+        a real measurement with a fragment's and cleared the flag -- silently,
+        with only a ``+axial_recheck`` method tag to show for it.
+        """
+        mask = _make_fused_pedicle_with_transverse_process(label=29)  # L3
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        result = PedicleAnalysisResult(vertebra=vertebra)
+        result.left_pedicle_center = np.array([36.0, 34.0, 30.0])
+        result.left_pedicle_width = 2.0
+        result.method = "coronal_isthmus"
+
+        # The fragment is measurable and plausible -- that is exactly why it
+        # used to win -- so the guard, not the band, has to be what refuses it.
+        assert analyzer._axial_recheck_width(binary, result, "left") is None
+
+        analyzer._apply_plausibility_gate(result, binary)
+
+        assert result.left_pedicle_width == pytest.approx(2.0)
+        assert result.width_flags["left"] == "implausible"
+        assert "axial_recheck" not in result.method
 
     def test_recheck_above_the_ceiling_also_replaces_the_lower_bound(self):
         """A replaced width takes its lower bound with it.

@@ -66,6 +66,12 @@ def endplate_fit_warning(rmse_mm: float) -> str:
     )
 
 
+#: Lateral offset from the vertebral body below which the axial re-check stops
+#: using the sign of the offset to tell left from right.  At a smaller offset
+#: the recorded centre sits on the body's own column and the sign is noise.
+_AXIAL_RECHECK_SIDE_MARGIN_MM: float = 2.0
+
+
 # Labels for which pedicle analysis is not meaningful.
 _SKIP_PEDICLE_LABELS: frozenset = frozenset({25})  # sacrum
 
@@ -147,6 +153,15 @@ class PedicleAnalyzer:
     # thoracolumbar pedicle and every dysplastic one worth planning around.
     LUMBAR_WIDTH_RANGE_MM: Tuple[float, float] = (5.0, 22.0)
     THORACIC_WIDTH_RANGE_MM: Tuple[float, float] = (3.5, 18.0)
+    # How far an axial re-check component's centroid may sit from the recorded
+    # isthmus centre before it is refused (mm).  At the isthmus the pedicle is
+    # usually continuous with the body, so the *nearest* non-body component is
+    # often a transverse-process or spinous fragment several centimetres away;
+    # a 30x15-voxel TP fragment at 0.39 mm measures about 5.9 mm, which lands
+    # inside the lumbar band and silently replaced the real width.  Ten
+    # millimetres is wider than any isthmus centroid offset and far short of
+    # the transverse process.
+    MAX_AXIAL_RECHECK_OFFSET_MM: float = 10.0
 
     def __init__(
         self,
@@ -850,9 +865,17 @@ class PedicleAnalyzer:
         :meth:`analyze_pedicle` does; the pedicle is whichever remaining
         component is nearest the recorded isthmus centre.
 
-        Returns ``None`` when the slice holds nothing but the body -- a pedicle
-        fused to the body in the axial plane has no second opinion to give, and
-        an answer measured off the body would be worse than none.
+        Candidates are refused unless they sit within
+        :attr:`MAX_AXIAL_RECHECK_OFFSET_MM` of the recorded centre *and* on the
+        same side of the body as it: without both, the nearest non-body
+        component is routinely a posterior-element fragment whose width happens
+        to fall inside the plausible band, and believing it replaced a real
+        measurement with a fragment's.
+
+        Returns ``None`` when the slice holds nothing but the body, or nothing
+        near enough to be this pedicle -- a pedicle fused to the body in the
+        axial plane has no second opinion to give, and an answer measured off
+        the body (or off a transverse process) would be worse than none.
         """
         center = self._recorded_center(result, side)
         if center is None:
@@ -869,19 +892,34 @@ class PedicleAnalyzer:
             return None
         sizes = ndi.sum(axial_slice, labeled, index=range(1, n_components + 1))
         body_id = int(np.argmax(sizes)) + 1
+        sx, sy, _ = self._spacing
         target_yx = np.array([float(index[1]), float(index[0])])
+        # Millimetres, not voxels: the in-plane spacings need not be equal, and
+        # the cap below is an anatomical distance.
+        scale_yx = np.array([float(sy), float(sx)])
+        body_x = float(ndi.center_of_mass(axial_slice, labeled, body_id)[1])
+        target_offset_mm = (target_yx[1] - body_x) * float(sx)
         best: Optional[Tuple[float, np.ndarray]] = None
         for comp_id in range(1, n_components + 1):
             if comp_id == body_id:
                 continue
             coords = np.argwhere(labeled == comp_id)  # (n, 2) -> y, x
-            distance = float(np.linalg.norm(coords.mean(axis=0) - target_yx))
+            centroid = coords.mean(axis=0)
+            distance = float(np.linalg.norm((centroid - target_yx) * scale_yx))
+            if distance > self.MAX_AXIAL_RECHECK_OFFSET_MM:
+                continue                 # too far away to be this pedicle
+            # Same side of the body as the recorded centre.  Skipped when the
+            # centre sits essentially on the body's own column, where the sign
+            # carries no information and the distance cap is the whole check.
+            if abs(target_offset_mm) >= _AXIAL_RECHECK_SIDE_MARGIN_MM:
+                comp_offset_mm = (float(centroid[1]) - body_x) * float(sx)
+                if comp_offset_mm * target_offset_mm <= 0.0:
+                    continue
             if best is None or distance < best[0]:
                 best = (distance, coords)
         if best is None:
             return None
         voxels_zyx = np.column_stack([np.full(best[1].shape[0], z), best[1]])
-        sx, sy, _ = self._spacing
         return float(self._measure_pedicle_width(voxels_zyx, sx * sy))
 
     def _apply_plausibility_gate(
@@ -935,6 +973,10 @@ class PedicleAnalyzer:
                 else:
                     result.right_pedicle_width = second
                     result.right_width_lower_bound_mm = second
+                result.warnings.append(
+                    f"{side} pedicle width re-measured axially "
+                    f"({width:.1f} → {second:.1f} mm) — verify on CT"
+                )
                 rechecked = True
                 continue
             if side not in result.width_flags:
