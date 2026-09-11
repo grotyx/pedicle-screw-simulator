@@ -523,6 +523,12 @@ def test_inspector_shows_the_construct_alignment_row(ui_main_window):
         metrics={"rod_misalignment_mm": 1.24, "convergence_deviation_deg": -2.13},
     )
     index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    # Written after the add: the tool re-measures these over the screws it
+    # holds, and a lone screw is trivially on its own rod line.  This test is
+    # about how the row renders the numbers, not about how they are measured.
+    screw.metrics.update(
+        {"rod_misalignment_mm": 1.24, "convergence_deviation_deg": -2.13}
+    )
     window.update_selected_screw_inspector(index, screw, False)
 
     assert window.selected_screw_alignment.text() == "rod 1.2 mm · conv -2.1°"

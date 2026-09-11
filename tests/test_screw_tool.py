@@ -104,7 +104,10 @@ def test_regrade_keeps_every_planner_authored_metric():
     metrics = tool.get_screws()[0].metrics
     assert metrics["score"] == pytest.approx(1.9)
     assert metrics["score_components"] == {"safety": 0.9, "density": 0.4}
-    assert metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+    # Not preserved but re-measured: the rod fit describes the set of heads,
+    # and one head is always on its own line.  See
+    # test_the_rod_fit_follows_the_heads_instead_of_the_plan.
+    assert metrics["rod_misalignment_mm"] == pytest.approx(0.0)
     assert metrics["trajectory_type"] == "cbt"
     assert metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
     # The pedicle analysis behind these is gone, so they are kept, not blanked.
@@ -265,7 +268,8 @@ def test_ungradable_screw_drops_only_what_it_measured():
     # Everything the plan still knows: kept.
     assert screw.metrics["score"] == pytest.approx(1.9)
     assert screw.metrics["score_components"] == {"safety": 0.9, "density": 0.4}
-    assert screw.metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+    # Re-measured over the current heads rather than carried across.
+    assert screw.metrics["rod_misalignment_mm"] == pytest.approx(0.0)
     assert screw.metrics["trajectory_type"] == "cbt"
     assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
     assert screw.metrics["pedicle_mean_hu"] == pytest.approx(210.0)
@@ -293,7 +297,8 @@ def test_a_drag_through_open_space_and_back_restores_the_full_bundle():
     assert inside.grade == "A"
     assert inside.metrics["score"] == pytest.approx(1.9)
     assert inside.metrics["score_components"] == {"safety": 0.9, "density": 0.4}
-    assert inside.metrics["rod_misalignment_mm"] == pytest.approx(2.5)
+    # Re-measured each frame, not carried: it describes the heads, not the plan.
+    assert inside.metrics["rod_misalignment_mm"] == pytest.approx(0.0)
     assert inside.metrics["trajectory_type"] == "cbt"
     assert inside.metrics["cbt_cranial_angle_deg"] == pytest.approx(24.0)
     assert inside.metrics["body_mean_hu"] == pytest.approx(150.0)
@@ -975,3 +980,131 @@ def test_a_still_narrow_screw_keeps_one_note_quoting_the_current_width():
 
     assert screw.metrics["narrow_pedicle"] is True
     assert _narrow_warnings(screw) == [narrow_pedicle_warning(4.2, 5.0)]
+
+
+# --------------------------------------------------------------------------
+# The construct metrics describe the set, so an edit has to re-measure them
+# --------------------------------------------------------------------------
+
+
+def _construct_screw(level, z, *, convergence=10.0, x=34.0, planned=True):
+    """One screw of a three-level left-side construct, heads on a straight line."""
+    metrics = {"score": 1.0}
+    if planned:
+        # Carrying the rod key is what marks a screw as part of a construct the
+        # optimiser harmonised; the value is overwritten on the first re-stamp.
+        metrics["rod_misalignment_mm"] = 0.0
+    screw = Screw(
+        entry_point=(x, 38.0, float(z)),
+        target_point=(x, 22.0, float(z)),
+        diameter=5.0,
+        vertebra_level=level,
+        side="left",
+        source="auto" if planned else "manual",
+        metrics=metrics,
+    )
+    screw.medial_angle = float(convergence)
+    return screw
+
+
+def _construct_tool():
+    """A tall single-label block so three screws at different z all grade."""
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[10:50, 20:40, 20:50] = 28
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(np.where(arr > 0, 350, -50).astype(np.int16))
+    ct.CopyInformation(mask)
+    tool = ScrewTool(_VolumeManager())
+    tool.set_grader(ScrewGrader(mask, ct))
+    return tool
+
+
+def test_the_rod_fit_follows_the_heads_instead_of_the_plan():
+    """Dragging one head off the line changes the fit for the whole side.
+
+    The planner stamped this once and nothing refreshed it, so the cockpit's
+    Alignment row kept quoting the rod offset of a trajectory the user had
+    already replaced.
+    """
+    tool = _construct_tool()
+    for level, z in (("L3", 20.0), ("L4", 30.0), ("L5", 40.0)):
+        tool.add_screw(_construct_screw(level, z))
+    tool.regrade_all()
+
+    # Collinear heads: a perfect fit.
+    assert all(
+        s.metrics["rod_misalignment_mm"] == pytest.approx(0.0)
+        for s in tool.get_screws()
+    )
+
+    tool.replace_screw(
+        1, entry_point=(40.0, 38.0, 30.0), target_point=(40.0, 22.0, 30.0)
+    )
+
+    offsets = [s.metrics["rod_misalignment_mm"] for s in tool.get_screws()]
+    assert all(offset > 0.5 for offset in offsets)
+    # One number for the side, carried by every screw on it.
+    assert offsets[0] == pytest.approx(offsets[1])
+    assert offsets[1] == pytest.approx(offsets[2])
+
+
+def test_removing_a_screw_refits_the_rod_for_the_rest():
+    tool = _construct_tool()
+    for level, z, x in (("L3", 20.0, 34.0), ("L4", 30.0, 40.0), ("L5", 40.0, 34.0)):
+        tool.add_screw(_construct_screw(level, z, x=x))
+    tool.regrade_all()
+    assert tool.get_screws()[0].metrics["rod_misalignment_mm"] > 0.5
+
+    tool.remove_screw(1)                  # the head that was off the line
+
+    assert all(
+        s.metrics["rod_misalignment_mm"] == pytest.approx(0.0)
+        for s in tool.get_screws()
+    )
+
+
+def test_the_convergence_spread_follows_an_edited_angle():
+    tool = _construct_tool()
+    for level, z in (("L3", 20.0), ("L4", 30.0), ("L5", 40.0)):
+        tool.add_screw(_construct_screw(level, z, convergence=10.0))
+    tool.regrade_all()
+    assert all(
+        s.metrics["convergence_spread_deg"] == pytest.approx(0.0)
+        for s in tool.get_screws()
+    )
+
+    # Swing the middle screw's tip medially; its convergence changes with it.
+    tool.replace_screw(
+        1, entry_point=(34.0, 38.0, 30.0), target_point=(24.0, 22.0, 30.0)
+    )
+
+    assert tool.get_screws()[1].metrics["convergence_spread_deg"] > 1.0
+
+
+def test_a_hand_placed_screw_never_acquires_an_alignment_it_was_not_part_of():
+    """Absence of the metric is how the status line knows a construct is unharmonised.
+
+    ``construct_summary`` reads it that way, so a manual screw that gained one
+    here would report a rod fit for a construct that was never planned.
+    """
+    tool = _construct_tool()
+    tool.add_screw(_construct_screw("L4", 30.0, planned=False))
+    tool.regrade_all()
+
+    metrics = tool.get_screws()[0].metrics
+    assert "rod_misalignment_mm" not in metrics
+    assert "convergence_spread_deg" not in metrics
+
+
+def test_a_manual_screw_does_not_bend_the_planned_rod_line():
+    tool = _construct_tool()
+    for level, z in (("L3", 20.0), ("L4", 30.0), ("L5", 40.0)):
+        tool.add_screw(_construct_screw(level, z))
+    tool.regrade_all()
+
+    tool.add_screw(_construct_screw("L4", 30.0, x=48.0, planned=False))
+
+    planned = tool.get_screws()[:3]
+    assert all(
+        s.metrics["rod_misalignment_mm"] == pytest.approx(0.0) for s in planned
+    )

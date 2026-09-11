@@ -28,6 +28,7 @@ import SimpleITK as sitk
 from .bone_quality import assess_bone_quality
 from .breach_classification import facet_violation_grade, heary_direction, medial_breach_warning
 from .cbt_planner import plan_cbt_screws
+from .construct_alignment import stamp_alignment
 from .pedicle_analyzer import (
     ENDPLATE_FIT_RMSE_WARNING_MM,
     VERTEBRA_LABELS,
@@ -39,11 +40,8 @@ from .screw_grading import ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
     Candidate,
     RunProgress,
-    convergence_deviations_deg,
-    convergence_spread_deg,
     optimize_construct,
     optimize_screw,
-    rod_misalignment_mm,
 )
 from .vertebra import PedicleAnalysisResult, Vertebra
 
@@ -816,8 +814,7 @@ class AutoScrewPlanner:
             )
             self.skipped_sides = skipped
             self.last_run_cancelled = reporter.cancelled
-            self._stamp_rod_misalignment(screws)
-            self._stamp_convergence_alignment(screws)
+            self._stamp_construct_alignment(screws)
             return screws
 
         reporter = RunProgress(
@@ -937,8 +934,7 @@ class AutoScrewPlanner:
             else:
                 self._record_skip(analysis.vertebra.name, side, reason)
 
-        self._stamp_rod_misalignment(results)
-        self._stamp_convergence_alignment(results)
+        self._stamp_construct_alignment(results)
         return results
 
     @staticmethod
@@ -1039,39 +1035,22 @@ class AutoScrewPlanner:
             self.skipped_sides.append((name, side, reason))
 
     @staticmethod
-    def _stamp_rod_misalignment(screws: List[PlannedScrew]) -> None:
-        """Record each side's head-to-rod-line RMS deviation on its screws."""
-        for side in ("left", "right"):
-            on_side = [s for s in screws if s.side == side]
-            if not on_side:
-                continue
-            deviation = rod_misalignment_mm(
-                np.asarray([s.entry_lps for s in on_side], dtype=np.float64)
-            )
-            for screw in on_side:
-                screw.metrics["rod_misalignment_mm"] = deviation
+    def _stamp_construct_alignment(screws: List[PlannedScrew]) -> None:
+        """Record each side's rod fit and convergence agreement on its screws.
 
-    @staticmethod
-    def _stamp_convergence_alignment(screws: List[PlannedScrew]) -> None:
-        """Record how far each screw's convergence sits from its side's agreement.
-
-        Each side is measured on its own: the two rods are bent independently
-        and a left-side outlier says nothing about the right.  A screw whose
-        level is excluded from the term (S1) gets the side's spread but no
-        deviation of its own, because it was never asked to agree.
+        Shares its implementation with the re-stamp the screw tool runs after
+        every edit (see :mod:`src.core.construct_alignment`): these numbers
+        describe the set, so a dragged screw and a planned one have to be
+        measured the same way or the cockpit would contradict the plan.
         """
-        for side in ("left", "right"):
-            on_side = [s for s in screws if s.side == side]
-            if not on_side:
-                continue
-            angles = [float(s.convergence_angle) for s in on_side]
-            levels = [_LEVEL_LABELS.get(s.vertebra_name) for s in on_side]
-            spread = convergence_spread_deg(angles, levels)
-            deviations = convergence_deviations_deg(angles, levels)
-            for screw, deviation in zip(on_side, deviations, strict=True):
-                screw.metrics["convergence_spread_deg"] = spread
-                if deviation is not None:
-                    screw.metrics["convergence_deviation_deg"] = float(deviation)
+        stamp_alignment(
+            screws,
+            side_of=lambda s: s.side,
+            entry_of=lambda s: s.entry_lps,
+            convergence_of=lambda s: s.convergence_angle,
+            level_of=lambda s: _LEVEL_LABELS.get(s.vertebra_name),
+            metrics_of=lambda s: s.metrics,
+        )
 
     # =====================================================================
     # Entry / target point finding
