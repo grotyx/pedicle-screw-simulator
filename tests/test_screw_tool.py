@@ -748,6 +748,127 @@ def test_an_implausible_width_still_counts_as_narrow():
     assert screw.metrics["narrow_pedicle"] is True
 
 
+def test_an_implausible_width_is_reported_as_untrusted_not_as_narrow():
+    """The gate flags a width outside its band in *either* direction.
+
+    A 21 mm pedicle is planned under the narrow policy because the number
+    cannot be trusted, not because it is small, so the note may not quote it
+    back as "4.0 mm screw is 19 % of the width".
+    """
+    from src.core.auto_screw_planner import (
+        NARROW_PEDICLE_WARNING_PREFIX,
+        WIDTH_UNCERTAIN_SCREW_WARNING,
+    )
+
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(21.0, 21.0, flags={"left": "implausible"})}
+    )
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["width_uncertain"] is True
+    assert WIDTH_UNCERTAIN_SCREW_WARNING in screw.warnings
+    assert not any(
+        warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+        for warning in screw.warnings
+    )
+
+
+def test_leaving_a_flagged_level_retracts_the_uncertainty_note():
+    from src.core.auto_screw_planner import WIDTH_UNCERTAIN_SCREW_WARNING
+
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {
+            28: _WidthAnalysis(21.0, 21.0, flags={"left": "implausible"}),
+            29: _WidthAnalysis(9.2, 9.2),
+        }
+    )
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert WIDTH_UNCERTAIN_SCREW_WARNING in screw.warnings
+
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+
+    assert moved.metrics["width_uncertain"] is False
+    assert WIDTH_UNCERTAIN_SCREW_WARNING not in moved.warnings
+
+
+def _undetected_left_analysis():
+    """A real analysis result whose left pedicle was never found.
+
+    ``PedicleAnalysisResult`` defaults an undetected side's width to ``0.0``,
+    which is the trap: read back as a measurement it makes every screw on that
+    side a 0.0 mm "narrow pedicle" the analyser never measured.
+    """
+    from src.core.vertebra import PedicleAnalysisResult, Vertebra
+
+    vertebra = Vertebra(
+        label=28,
+        name="L2",
+        centroid_lps=np.array([30.0, 30.0, 25.0]),
+        bounding_box=(np.zeros(3), np.full(3, 60.0)),
+        volume_mm3=1000.0,
+        mask_indices=np.zeros((1, 3), dtype=int),
+    )
+    result = PedicleAnalysisResult(vertebra=vertebra)
+    result.success = True                # the *right* side was found
+    result.right_pedicle_center = np.array([24.0, 36.0, 25.0])
+    result.right_pedicle_width = 9.2
+    return result
+
+
+def test_a_side_the_analyser_never_found_is_not_measured():
+    """The 0.0 mm default is "not found", not "a pedicle 0.0 mm wide"."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _undetected_left_analysis()})
+    screw = _narrow_l2_screw(25.0)       # side="left", the side that is missing
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    # Left untouched, so the screw keeps whatever put it there.
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+    assert screw.metrics["narrow_pedicle"] is True
+    assert not any("0.0 mm" in warning for warning in screw.warnings)
+
+
+def test_the_found_side_of_a_half_detected_level_is_still_measured():
+    """Only the missing side is unknown; the other one is a real measurement."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _undetected_left_analysis()})
+    screw = _narrow_l2_screw(25.0)
+    screw.side = "right"
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(9.2)
+    assert screw.metrics["narrow_pedicle"] is False
+
+
+def test_a_failed_analysis_measures_nothing():
+    tool = _two_level_tool()
+    analysis = _undetected_left_analysis()
+    analysis.success = False
+    analysis.left_pedicle_center = np.array([36.0, 36.0, 25.0])
+    analysis.left_pedicle_width = 18.0
+    tool.set_analysis_by_level({28: analysis})
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+    assert screw.metrics["narrow_pedicle"] is True
+
+
 def test_the_narrow_threshold_follows_the_configured_one():
     tool = _two_level_tool()
     tool.set_analysis_by_level({28: _WidthAnalysis(6.0, 6.0)})

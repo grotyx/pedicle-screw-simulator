@@ -79,6 +79,7 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     # _GRADER_MEASURED_METRIC_KEYS, for the same reason as the endplate angle.
     "pedicle_width_mm",
     "narrow_pedicle",
+    "width_uncertain",
 )
 
 #: The metrics this tool measures from the trajectory in front of it, and so
@@ -249,33 +250,54 @@ class ScrewTool:
 
     def _pedicle_width(
         self, screw: Screw, label: int
-    ) -> Tuple[Optional[float], Optional[bool]]:
-        """This side's isthmus width at ``label``, and whether it counts narrow.
+    ) -> Tuple[Optional[float], Optional[bool], Optional[bool]]:
+        """This side's isthmus width at ``label``, its narrow verdict and its trust.
 
-        ``(None, None)`` -- "not measured" -- whenever the level is not in the
-        registry or the screw has no side, so :meth:`_merge_metrics` keeps
-        whatever the planner recorded.  A drag *between* levels is the case
-        that matters: without this the screw would keep the width of the
+        ``(None, None, None)`` -- "not measured" -- whenever the level is not
+        in the registry or the screw has no side, so :meth:`_merge_metrics`
+        keeps whatever the planner recorded.  A drag *between* levels is the
+        case that matters: without this the screw would keep the width of the
         vertebra it left, and stay red for a pedicle it is no longer in.
 
         The verdict mirrors
         :meth:`src.core.auto_screw_planner.AutoScrewPlanner._is_narrow_side`
         exactly, threshold included, or an edited screw and a planned one would
-        disagree about the same pedicle.
+        disagree about the same pedicle.  So do the *preconditions*: the
+        planner only ever reaches that verdict for a side it actually detected,
+        and ``PedicleAnalysisResult`` defaults an undetected side's width to
+        ``0.0``.  Reading that default back was the bug -- a manual screw on
+        the side the analyser missed came out red, "0.0 mm", and carrying a
+        warning that a 4.0 mm screw filled 100 % of the pedicle, none of which
+        had ever been measured.  An analysis that failed, a side with no
+        isthmus centre and a non-positive width are all "not measured".
+
+        The registry is documented as accepting any object with the attributes
+        this tool reads, so each check is skipped on an object that does not
+        model it at all -- absent means "this stand-in has nothing to say about
+        detection", while a present ``None`` (which the real
+        :class:`~src.core.vertebra.PedicleAnalysisResult` always has for an
+        undetected side) means "not found".
         """
         side = self._screw_side(screw)
         analysis = self._analysis_for(label)
         if side is None or analysis is None:
-            return None, None
+            return None, None, None
+        if not getattr(analysis, "success", True):
+            return None, None, None
+        center_attr = f"{side}_pedicle_center"
+        if hasattr(analysis, center_attr) and getattr(analysis, center_attr) is None:
+            return None, None, None
         width = getattr(analysis, f"{side}_pedicle_width", None)
         if not isinstance(width, (int, float)) or isinstance(width, bool):
-            return None, None
+            return None, None, None
+        width = float(width)
+        if width <= 0.0:
+            return None, None, None
         flags = getattr(analysis, "width_flags", None)
-        implausible = (
+        uncertain = bool(
             isinstance(flags, Mapping) and flags.get(side) == "implausible"
         )
-        width = float(width)
-        return width, bool(width < self._narrow_pedicle_mm or implausible)
+        return width, bool(width < self._narrow_pedicle_mm or uncertain), uncertain
 
     def set_screw_parameters(
         self,
@@ -513,9 +535,16 @@ class ScrewTool:
 
         The diameter is the screw's current one, so a step-down that ends the
         narrowness retracts the note along with the flag.
+
+        The "width uncertain" note is rewritten by the same rule and is
+        mutually exclusive with the narrow one, exactly as in
+        :meth:`~src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`:
+        a width the analyser rejected may not be quoted back as millimetres.
+        A screw dragged out of a flagged level has to lose the note with it.
         """
         from ..core.auto_screw_planner import (
             NARROW_PEDICLE_WARNING_PREFIX,
+            WIDTH_UNCERTAIN_SCREW_WARNING,
             narrow_pedicle_warning,
         )
 
@@ -523,12 +552,16 @@ class ScrewTool:
         narrow = measured.get("narrow_pedicle")
         if width is None or narrow is None:
             return
+        uncertain = bool(measured.get("width_uncertain"))
         screw.warnings = [
             warning
             for warning in screw.warnings
             if not warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+            and warning != WIDTH_UNCERTAIN_SCREW_WARNING
         ]
-        if narrow:
+        if uncertain:
+            screw.warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
+        elif narrow:
             screw.warnings.append(
                 narrow_pedicle_warning(float(width), screw.diameter)
             )
@@ -614,7 +647,9 @@ class ScrewTool:
                 "medial_wall_mm": float(result.medial_wall_mm),
             }
 
-        pedicle_width, narrow = self._pedicle_width(screw, result.label)
+        pedicle_width, narrow, width_uncertain = self._pedicle_width(
+            screw, result.label
+        )
         metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -625,6 +660,7 @@ class ScrewTool:
             "endplate_angle_deg": self._endplate_angle(screw, result.label),
             "pedicle_width_mm": pedicle_width,
             "narrow_pedicle": narrow,
+            "width_uncertain": width_uncertain,
             **directional,
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
