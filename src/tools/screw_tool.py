@@ -473,6 +473,7 @@ class ScrewTool:
         screw.min_hu = result.min_hu
         measured, derived_warnings = self._compute_metrics(screw, result)
         screw.metrics = self._merge_metrics(screw.metrics, measured)
+        self._refresh_narrow_pedicle_warning(screw, measured)
         if not screw.vertebra_level:
             from ..core.pedicle_analyzer import VERTEBRA_LABELS
             screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
@@ -492,6 +493,44 @@ class ScrewTool:
             screw.warnings.append(
                 f"Cortical clearance {result.min_wall_mm:.1f} mm below "
                 f"{self._wall_clearance_mm:.1f} mm"
+            )
+
+    @staticmethod
+    def _refresh_narrow_pedicle_warning(
+        screw: Screw, measured: Dict[str, Any]
+    ) -> None:
+        """Re-state the planner's narrow-pedicle note for the width just read.
+
+        The note is planner-owned, so it is deliberately absent from
+        :data:`_DERIVED_WARNING_PREFIXES` -- stripping it there would delete it
+        on every re-grade of a screw whose level this tool cannot re-measure,
+        and the tool could never put it back.  It is rewritten here instead,
+        and only when :meth:`_pedicle_width` actually produced a verdict: the
+        same condition under which ``pedicle_width_mm`` / ``narrow_pedicle``
+        are refreshed, so the note and the number the cockpit shows can never
+        disagree.  Without a verdict (no analysis for the level the screw is
+        now in) both are left exactly as the planner wrote them.
+
+        The diameter is the screw's current one, so a step-down that ends the
+        narrowness retracts the note along with the flag.
+        """
+        from ..core.auto_screw_planner import (
+            NARROW_PEDICLE_WARNING_PREFIX,
+            narrow_pedicle_warning,
+        )
+
+        width = measured.get("pedicle_width_mm")
+        narrow = measured.get("narrow_pedicle")
+        if width is None or narrow is None:
+            return
+        screw.warnings = [
+            warning
+            for warning in screw.warnings
+            if not warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+        ]
+        if narrow:
+            screw.warnings.append(
+                narrow_pedicle_warning(float(width), screw.diameter)
             )
 
     @staticmethod

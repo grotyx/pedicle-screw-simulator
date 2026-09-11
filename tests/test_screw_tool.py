@@ -15,6 +15,10 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
+from src.core.auto_screw_planner import (
+    NARROW_PEDICLE_WARNING_PREFIX,
+    narrow_pedicle_warning,
+)
 from src.core.screw_grading import ScrewGrader
 from src.models.screw import Screw
 from src.tools.screw_tool import ScrewTool
@@ -786,3 +790,67 @@ def test_an_ungradable_frame_does_not_erase_the_pedicle_width():
     assert screw.grade == "N/A"
     assert screw.metrics["narrow_pedicle"] is True
     assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+
+
+# --------------------------------------------------------------------------
+# The narrow-pedicle note follows the width it quotes
+# --------------------------------------------------------------------------
+
+
+def _narrow_warnings(screw):
+    return [
+        warning
+        for warning in screw.warnings
+        if warning.startswith(NARROW_PEDICLE_WARNING_PREFIX)
+    ]
+
+
+def test_a_narrow_pedicle_note_retracts_once_the_width_is_no_longer_narrow():
+    """The cockpit and the note have to agree about the same pedicle."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(6.6, 6.6)})
+    tool.set_narrow_pedicle_mm(7.0)
+    screw = _narrow_l2_screw(25.0)
+    screw.warnings = [narrow_pedicle_warning(6.6, screw.diameter)]
+    tool.add_screw(screw)
+
+    tool.regrade_all()
+    assert screw.metrics["narrow_pedicle"] is True
+    assert _narrow_warnings(screw) == [narrow_pedicle_warning(6.6, 5.0)]
+
+    tool.set_narrow_pedicle_mm(6.0)
+    tool.regrade_all()
+
+    assert screw.metrics["narrow_pedicle"] is False
+    assert _narrow_warnings(screw) == []
+
+
+def test_a_narrow_pedicle_note_survives_a_drag_into_an_unanalysed_level():
+    """Without an analysis there is no verdict to replace the planner's."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(4.5, 4.5)})
+    screw = _narrow_l2_screw(25.0)
+    screw.warnings = [narrow_pedicle_warning(4.5, screw.diameter)]
+    tool.add_screw(screw)
+
+    # Label 29 is outside the registry, so the width cannot be re-derived.
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+
+    assert moved.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+    assert _narrow_warnings(moved) == [narrow_pedicle_warning(4.5, 5.0)]
+
+
+def test_a_still_narrow_screw_keeps_one_note_quoting_the_current_width():
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(4.2, 4.2)})
+    screw = _narrow_l2_screw(25.0)
+    screw.warnings = [narrow_pedicle_warning(4.5, screw.diameter)]
+    tool.add_screw(screw)
+
+    tool.regrade_all()
+    tool.regrade_all()
+
+    assert screw.metrics["narrow_pedicle"] is True
+    assert _narrow_warnings(screw) == [narrow_pedicle_warning(4.2, 5.0)]
