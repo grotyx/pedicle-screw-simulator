@@ -46,6 +46,19 @@ ENDPLATE_TOLERANCE_DEG = 15.0
 #: chasing it would sweep the whole grid out of the vertebra.
 MAX_ENDPLATE_RECENTRE_DEG = 20.0
 
+#: How far the convergence sweep may be shifted off the pedicle axis so that
+#: its rotation *offsets* land on the configured *absolute* window (degrees).
+#: :func:`generate_candidates` sweeps ``conv`` as a rotation of the pedicle
+#: axis, while :func:`score_candidates` filters the *measured* convergence
+#: against ``[min_convergence_deg, max_convergence_deg]``; on an axis that
+#: converges strongly on its own the two disagree by exactly that angle and the
+#: entire grid can land outside the window.  A pedicle axis more than 60
+#: degrees off the sagittal plane is a mis-fit rather than an anatomy, and
+#: recentring further would aim the grid across the vertebral body instead of
+#: down the corridor, so the shift is clamped here the way
+#: :data:`MAX_ENDPLATE_RECENTRE_DEG` clamps the endplate one.
+MAX_CONVERGENCE_RECENTRE_DEG = 60.0
+
 #: Prefix of the note left on every candidate when the endplate band had to be
 #: dropped.  Callers match on the prefix; the text carries the tolerance.
 ENDPLATE_BAND_RELAXED_PREFIX = "Endplate band relaxed"
@@ -399,6 +412,13 @@ def generate_candidates(
     upper-endplate normal, the craniocaudal window is centred on the
     endplate-parallel direction rather than on the pedicle axis, so
     ``craniocaudal_range_deg`` reads as "how far either side of the endplate".
+
+    The convergence window is recentred the same way, but unconditionally: the
+    swept ``conv`` is a rotation *offset* from the axis while
+    ``score_candidates`` tests the *measured* angle, so the sweep is shifted by
+    the axis's own convergence (clamped to
+    :data:`MAX_CONVERGENCE_RECENTRE_DEG`) to make the two agree.  On an axis
+    that is already anteroposterior the shift is zero and the grid is unchanged.
     """
     empty = (np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
     center, axis, width = _side_data(analysis, side)
@@ -445,13 +465,29 @@ def generate_candidates(
                 MAX_ENDPLATE_RECENTRE_DEG,
             )
         )
+    # ``conv`` below *rotates* ``base``, so it is an offset from the pedicle
+    # axis's own convergence, while ``score_candidates`` filters the *measured*
+    # absolute angle against the same window.  Shift the offsets back by the
+    # axis's own convergence -- the recentring ``craniocaudal_center`` already
+    # does for the endplate -- so the swept angles are the configured window as
+    # measured, instead of that window plus whatever the axis brings with it.
+    base_convergence = float(_trajectory_angles(base[None, :], side)[0][0])
+    convergence_center = float(
+        np.clip(
+            -base_convergence,
+            -MAX_CONVERGENCE_RECENTRE_DEG,
+            MAX_CONVERGENCE_RECENTRE_DEG,
+        )
+    )
     medial_sign = -1.0 if side == "left" else 1.0
 
     directions = np.array(
         [
             _unit(_rotate(_rotate(base, z_axis, medial_sign * conv), craniocaudal_axis, cc))
             for conv in np.arange(
-                config.min_convergence_deg, config.max_convergence_deg + 1e-9, convergence_step_deg
+                convergence_center + config.min_convergence_deg,
+                convergence_center + config.max_convergence_deg + 1e-9,
+                convergence_step_deg,
             )
             for cc in np.arange(
                 craniocaudal_center + craniocaudal_range_deg[0],

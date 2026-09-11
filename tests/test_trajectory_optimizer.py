@@ -19,6 +19,7 @@ from src.core.screw_grading import BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
     DEFAULT_WEIGHTS,
     ENDPLATE_BAND_RELAXED_PREFIX,
+    MAX_CONVERGENCE_RECENTRE_DEG,
     MAX_DIAMETER_STEPS,
     MAX_ENTRY_SHORTFALL_MM,
     SAFETY_CAP_MM,
@@ -26,6 +27,7 @@ from src.core.trajectory_optimizer import (
     TIP_SEGMENT_MM,
     OptimizerWeights,
     _seat_entries,
+    _trajectory_angles,
     endplate_band_relaxed_warning,
     generate_candidates,
     make_planner,
@@ -690,6 +692,120 @@ def test_endplate_option_off_preserves_the_winning_trajectory(side, entry, targe
     assert best.entry == pytest.approx(entry)
     assert best.target == pytest.approx(target)
     assert best.score == pytest.approx(1.2242424242424241)
+
+
+# -------------------------------------------------- convergence recentring
+def _rotate_axis_about_z(analysis, side, degrees):
+    """Point one pedicle axis ``degrees`` medially, leaving the phantom alone.
+
+    A mis-fitted or genuinely oblique pedicle axis is the real-world version of
+    this; rotating the analysis is the phantom-scale equivalent and keeps the
+    corridor the optimiser has to find exactly where it was.
+    """
+    radians = math.radians(degrees)
+    medial_sign = -1.0 if side == "left" else 1.0
+    # Posterior-pointing, so the insertion direction ``-axis`` converges by
+    # ``degrees`` toward the midline.
+    axis = np.array(
+        [-medial_sign * math.sin(radians), math.cos(radians), 0.0], dtype=float
+    )
+    setattr(analysis, f"{side}_pedicle_axis", axis)
+    return axis
+
+
+def _base_convergence(analysis, side):
+    """The measured convergence of the pedicle axis's own insertion direction."""
+    from src.core.trajectory_optimizer import _side_data, _unit
+
+    posterior = _unit(_side_data(analysis, side)[1])
+    if posterior[1] < 0.0:
+        posterior = -posterior
+    return float(_trajectory_angles(-posterior[None, :], side)[0][0])
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_a_strongly_converging_axis_still_yields_feasible_candidates(side):
+    """The sweep is an offset from the axis; the filter is on the measurement.
+
+    With the pedicle axis rotated 50 degrees medially the unshifted sweep put
+    every candidate at 45-85 degrees of *measured* convergence, outside the
+    configured [-5, 35] window, so ``score_candidates`` rejected the whole
+    grid and the side fell through to the legacy fallback.  Recentring the
+    sweep on the axis's own convergence puts the measured angles back in the
+    window without changing the window itself.
+    """
+    ct, mask, analysis = _setup()
+    _rotate_axis_about_z(analysis, side, 50.0)
+    assert _base_convergence(analysis, side) == pytest.approx(50.0)
+    config = PlannerConfig()
+
+    ranked = optimize_screw(ScrewGrader(mask, ct), analysis, side, config)
+
+    assert ranked, "a converging axis must not empty the candidate pool"
+    assert all(
+        config.min_convergence_deg - 1e-6
+        <= c.convergence_deg
+        <= config.max_convergence_deg + 1e-6
+        for c in ranked
+    )
+
+
+def test_the_recentred_sweep_brackets_the_configured_window():
+    """The generated grid spans the window as *measured*, not as an offset."""
+    ct, mask, analysis = _setup()
+    _rotate_axis_about_z(analysis, "left", 50.0)
+    config = PlannerConfig()
+
+    entries, targets, _lengths = generate_candidates(
+        grader := ScrewGrader(mask, ct), analysis, "left", config, corridor_radius_mm=2.5
+    )
+    assert grader is not None and entries.shape[0] > 0
+    measured, _cc = _trajectory_angles(targets - entries, "left")
+
+    assert measured.min() == pytest.approx(config.min_convergence_deg, abs=2.5)
+    assert measured.max() == pytest.approx(config.max_convergence_deg, abs=2.5)
+
+
+def test_an_anteroposterior_axis_is_not_recentred_at_all():
+    """The anatomical phantom's axis is +Y, so the shift is exactly zero.
+
+    This is what keeps the pinned winners in this file unchanged by the
+    recentring: it only moves a grid whose axis converges on its own.
+    """
+    ct, mask, analysis = _setup()
+    config = PlannerConfig(endplate_parallel=False)
+    assert _base_convergence(analysis, "left") == pytest.approx(0.0)
+
+    best = optimize_screw(ScrewGrader(mask, ct), analysis, "left", config)[0]
+
+    assert best.entry == pytest.approx([60.45684167277018, 59.47005701480833, 32.0])
+    assert best.target == pytest.approx([57.193686867268895, 34.68393548046307, 32.0])
+
+
+def test_the_convergence_recentring_is_clamped():
+    """An axis 80 degrees off the sagittal plane is a mis-fit, not an anatomy.
+
+    Past the clamp the grid would be aimed across the vertebral body rather
+    than down the corridor, so the shift stops at
+    ``MAX_CONVERGENCE_RECENTRE_DEG`` and the side is allowed to fail.
+    """
+    ct, mask, analysis = _setup()
+    _rotate_axis_about_z(analysis, "left", 80.0)
+    config = PlannerConfig()
+    grader = ScrewGrader(mask, ct)
+
+    entries, targets, _lengths = generate_candidates(
+        grader, analysis, "left", config, corridor_radius_mm=2.5
+    )
+
+    assert entries.shape[0] > 0
+    measured, _cc = _trajectory_angles(targets - entries, "left")
+    # 80 degrees of axis less the 60 degree clamp leaves the sweep 20 degrees
+    # medial of the configured window.
+    shortfall = 80.0 - MAX_CONVERGENCE_RECENTRE_DEG
+    assert measured.min() == pytest.approx(
+        config.min_convergence_deg + shortfall, abs=2.5
+    )
 
 
 # ------------------------------------------------------- convergence spread
