@@ -192,6 +192,14 @@ class AutoScrewPlanner:
         18.0,
     )
 
+    #: Lateral entry shifts (mm) a narrow side is tried at before the medial
+    #: wall is given up on.  The legacy path cannot step the diameter down --
+    #: it is already on the smallest implant -- so sliding the corridor away
+    #: from the canal is the only protection left, and it is the same move the
+    #: optimiser makes with :data:`NARROW_ENTRY_GRID_MM`.  A lateral wall
+    #: breach is recoverable; a medial one is the nerve root and the canal.
+    NARROW_LATERAL_SHIFTS_MM: Tuple[float, ...] = (0.0, 1.0, 2.0, 3.0)
+
     @property
     def MIN_SCREW_LENGTH(self) -> float:
         return self.config.implant_lengths_mm[0]
@@ -361,6 +369,28 @@ class AutoScrewPlanner:
             logger.info("Target point search failed for %s %s", vertebra.name, side)
             return None, f"no {side} target point in the vertebral body"
 
+        # 4b. A narrow side is already on the smallest implant, so the
+        #     diameter step-down below cannot help it.  Slide the entry
+        #     laterally instead and keep whichever trajectory leaves the least
+        #     screw in the canal.  The side is never dropped for width: if even
+        #     the best shift breaches medially it is placed and warned about.
+        if narrow:
+            entry, target, lateral_shift = self._least_medial_entry(
+                side,
+                entry,
+                target,
+                oriented_axis,
+                body_center,
+                vertebra.label,
+                diameter,
+                endplate_normal,
+            )
+            if lateral_shift > 0.0:
+                warnings.append(
+                    f"Entry moved {lateral_shift:.0f} mm laterally to protect "
+                    f"the medial wall"
+                )
+
         # 5. Enforce length constraints.
         length = float(np.linalg.norm(target - entry))
         if length < self.MIN_SCREW_LENGTH:
@@ -439,6 +469,113 @@ class AutoScrewPlanner:
             narrow=narrow,
         )
         return planned, None
+
+    def _least_medial_entry(
+        self,
+        side: str,
+        entry: np.ndarray,
+        target: np.ndarray,
+        oriented_axis: np.ndarray,
+        body_center: np.ndarray,
+        vertebra_label: int,
+        diameter: float,
+        endplate_normal: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray, float]:
+        """The narrow policy's lateral slide: ``(entry, target, shift_mm)``.
+
+        Grades the trajectory at each of :attr:`NARROW_LATERAL_SHIFTS_MM` and
+        keeps the one with the smallest ``medial_breach_mm``, breaking ties on
+        the smallest total breach so a shift is only taken when it buys
+        something.  The unshifted entry is graded first and wins every tie,
+        which makes this a no-op on a side whose axis already clears the canal.
+        """
+        best_key = self._medial_breach_key(entry, target, diameter, vertebra_label, side)
+        best = (entry, target, 0.0)
+        lateral = self._lateral_direction(oriented_axis, side)
+        if lateral is None or best_key == (0.0, 0.0):
+            return best
+
+        for shift in self.NARROW_LATERAL_SHIFTS_MM:
+            if shift <= 0.0:
+                continue
+            shifted_entry = entry + lateral * float(shift)
+            if not self._is_point_inside_mask(shifted_entry, vertebra_label):
+                # Off the entry surface entirely; a further shift only leaves
+                # the bone behind, so there is nothing more to try.
+                break
+            shifted_target = self._find_best_target(
+                shifted_entry,
+                oriented_axis,
+                body_center,
+                vertebra_label,
+                diameter,
+                endplate_normal,
+            )
+            if shifted_target is None:
+                continue
+            key = self._medial_breach_key(
+                shifted_entry, shifted_target, diameter, vertebra_label, side
+            )
+            if key < best_key:
+                best_key = key
+                best = (shifted_entry, shifted_target, float(shift))
+                if best_key == (0.0, 0.0):
+                    break
+        return best
+
+    def _medial_breach_key(
+        self,
+        entry: np.ndarray,
+        target: np.ndarray,
+        diameter: float,
+        vertebra_label: int,
+        side: str,
+    ) -> Tuple[float, float]:
+        """``(medial_breach_mm, breach_mm)``, the narrow slide's ranking key.
+
+        Graded with ``side=`` so the medial half is measured toward the canal
+        rather than as an undirected minimum.  An ungradeable trajectory is
+        ranked as the worst possible rather than as a clean one.
+        """
+        result = self._grader.grade(
+            entry, target, diameter, label=int(vertebra_label), side=side
+        )
+        if result is None:
+            margin = float(self._grader.crop_margin_mm)
+            return (margin, margin)
+        return (float(result.medial_breach_mm), float(result.breach_mm))
+
+    @staticmethod
+    def _lateral_direction(
+        oriented_axis: np.ndarray,
+        side: str,
+    ) -> Optional[np.ndarray]:
+        """Unit vector perpendicular to the pedicle axis in the axial plane.
+
+        Oriented away from the midline -- ``+X`` for a left pedicle, ``-X`` for
+        a right one, LPS -- so a positive step along it is always the
+        in-out-in direction.  ``None`` when no such direction exists: a purely
+        craniocaudal axis has no axial projection, and an axis that already
+        runs mediolaterally has an axial perpendicular with no ``X`` component
+        at all, which is not a lateral slide by any reading.
+        """
+        axial = np.array(
+            [float(oriented_axis[0]), float(oriented_axis[1]), 0.0], dtype=np.float64
+        )
+        norm = float(np.linalg.norm(axial))
+        if norm <= 1e-9:
+            return None
+        lateral = np.cross(np.array([0.0, 0.0, 1.0]), axial / norm)
+        norm = float(np.linalg.norm(lateral))
+        if norm <= 1e-9:
+            return None
+        lateral = lateral / norm
+        if abs(float(lateral[0])) <= 1e-9:
+            return None
+        outward = 1.0 if side == "left" else -1.0
+        if outward * float(lateral[0]) < 0.0:
+            lateral = -lateral
+        return lateral
 
     def _finalise_screw(
         self,

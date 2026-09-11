@@ -76,6 +76,37 @@ def _make_bone_cylinder(
     return ct_img, mask_img
 
 
+def _make_thin_medial_wall_phantom(
+    label: int = 27,
+    hu_value: float = 500.0,
+    medial_edge: int = 39,
+    lateral_edge: int = 50,
+) -> tuple:
+    """A left corridor whose medial wall only survives a lateral entry.
+
+    The vertebral body is deliberately generous (x = 15..59, y = 5..31) so that
+    nothing but the pedicle corridor can ever breach.  The corridor itself runs
+    ``x = medial_edge..lateral_edge``, and the analysis hands the planner an
+    isthmus centre at x = 40 on a straight posteroanterior axis: a 4.0 mm screw
+    placed on that axis spans x = 38..42 and hangs into the canal, while the
+    same screw a couple of millimetres lateral is fully contained.
+
+    ``lateral_edge`` narrows the corridor for the case where no shift can save
+    the medial wall.
+    """
+    shape = (40, 60, 70)
+    ct_arr = np.full(shape, -1000.0, dtype=np.float32)
+    mask_arr = np.zeros(shape, dtype=np.uint8)
+
+    ct_arr[10:30, 5:32, 15:60] = hu_value
+    mask_arr[10:30, 5:32, 15:60] = label
+
+    ct_arr[14:27, 30:46, medial_edge:lateral_edge] = hu_value
+    mask_arr[14:27, 30:46, medial_edge:lateral_edge] = label
+
+    return _make_image(ct_arr), _make_image(mask_arr)
+
+
 def _make_vertebra(
     label: int = 27,
     name: str = "L5",
@@ -1660,6 +1691,73 @@ class TestNarrowPedicle:
         ):
             assert isinstance(screw.metrics[key], float)
         assert screw.metrics["medial_breach_mm"] <= screw.breach_mm + 1e-9
+
+    def test_the_legacy_path_slides_a_narrow_entry_off_the_medial_wall(self):
+        """C1: never skip for width, but never hand the canal a screw either.
+
+        The analysed axis runs down the medial edge of this corridor, so the
+        4.0 mm narrow implant placed on it hangs into the canal.  The legacy
+        path must try the lateral entry shifts before it accepts that.
+        """
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_thin_medial_wall_phantom()
+        analysis = _make_analysis(
+            left_center=np.array([40.0, 37.0, 20.0]),
+            body_center=np.array([40.0, 18.0, 20.0]),
+            left_width=4.5,                     # below the 5.0 mm narrow threshold
+        )
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        on_axis = planner._grader.grade(
+            np.array([40.0, 44.5, 20.0]), np.array([40.0, 9.5, 20.0]),
+            4.0, label=27, side="left",
+        )
+        assert on_axis is not None and on_axis.medial_breach_mm > 0.0, (
+            "the phantom must breach medially on the unshifted entry"
+        )
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert screw.entry_lps[0] > 40.0        # slid laterally, away from the canal
+        assert any(
+            w.startswith("Entry moved") and "medial wall" in w for w in screw.warnings
+        )
+
+    def test_a_narrow_entry_that_already_clears_the_canal_is_left_alone(self):
+        """The shift search must be a no-op when the axis entry is already clean."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert not any(w.startswith("Entry moved") for w in screw.warnings)
+
+    def test_a_narrow_side_with_no_clean_shift_is_still_placed(self):
+        """Policy: width never skips a side, so the least bad entry is kept."""
+        from src.core.auto_screw_planner import AutoScrewPlanner, medial_breach_warning
+
+        ct, mask = _make_thin_medial_wall_phantom(lateral_edge=41)
+        analysis = _make_analysis(
+            left_center=np.array([40.0, 37.0, 20.0]),
+            body_center=np.array([40.0, 18.0, 20.0]),
+            left_width=4.5,
+        )
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["medial_breach_mm"] > 0.0
+        assert medial_breach_warning(screw.metrics["medial_breach_mm"]) in screw.warnings
 
     def test_no_planner_path_still_says_too_narrow(self):
         """The width-based skip is gone from the product; nothing may put it back."""
