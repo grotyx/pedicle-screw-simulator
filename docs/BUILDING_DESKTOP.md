@@ -74,7 +74,7 @@ To use it from a source install:
        fold_0/checkpoint_final.pth
    ```
 3. Install `nnunetv2` in the same environment running the app (`nnUNetv2_predict` must resolve next to the interpreter's `Scripts`/`bin` folder).
-4. Point the app at the `.../nnUNetTrainer__nnUNetPlans__3d_fullres` folder with the **Model directory** field under Segmentation → Advanced, or the `PSS_SUBREGION_MODEL_DIR` environment variable, then enable **Use pedicle subregion model**.
+4. Point the app at the `.../nnUNetTrainer__nnUNetPlans__3d_fullres` folder with the **Model directory** field under **Advanced options** on the Segment page, or the `PSS_SUBREGION_MODEL_DIR` environment variable, then enable **Use pedicle subregion model**.
 
 **Current limitation:** the Spine_Subregions release asset currently published upstream uses nnU-Net **v1**-style folder naming (`nnUNetTrainerV2__nnUNetPlansv2.1`), not the nnU-Net **v2** results layout shown above that this app's stage-2 runner expects. Until the weights are re-exported or converted for nnU-Net v2, pointing the **Model directory** field at that release's folder will not be recognized as a valid model, and the segmentation status line will read "pedicle model unavailable" rather than "pedicle model used".
 

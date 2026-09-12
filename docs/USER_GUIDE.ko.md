@@ -95,11 +95,11 @@ MPR/3D 화면 위의 표시줄에는 "① Study → ② Segment → ③ Plan →
 ### 오른쪽 패널, 페이지별 안내
 
 - **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
-- **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 헤더 토글에 대한 안내문.
+- **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 화면 머리글 토글에 대한 안내문.
 - **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 원래 Study 탭의 Segmentation 섹션에 있었음 — 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
 - **Review:** 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
 
-### 3D 헤더: Vertebrae / Full CT
+### 3D 화면 머리글: Vertebrae / Full CT
 
 3D 화면 머리글에는 제목 옆에 두 상태를 오가는 **Vertebrae / Full CT** 토글이 있습니다. 이 토글은 항상 실제로 화면에 보이는 상태를 그대로 반영하며 — 자동 isolation이 실패해 Full CT로 되돌아간 경우도 포함됩니다 — 이제 3D에서 CT volume 표시 여부를 결정하는 유일한 요소입니다(5.2절 참고).
 
@@ -143,7 +143,7 @@ Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 �
 
 #### 자동 isolation과 3D 토글
 
-TotalSegmentator 실행이 실제로 척추 라벨을 찾아내면(성공한 경우) 버튼을 누를 필요 없이 자동으로 척추를 isolate하고 패널을 **Plan** 단계로 전환합니다. Threshold fallback은 isolate할 척추 라벨 자체가 없으므로 절대 자동으로 isolate되지 않습니다. 이때 Segment 페이지의 isolate/restore 버튼은 비활성 상태로 남으며, 3D 헤더 토글도 이와 일치합니다.
+TotalSegmentator 실행이 실제로 척추 라벨을 찾아내면(성공한 경우) 버튼을 누를 필요 없이 자동으로 척추를 isolate하고 패널을 **Plan** 단계로 전환합니다. Threshold fallback은 isolate할 척추 라벨 자체가 없으므로 절대 자동으로 isolate되지 않습니다. 이때 Segment 페이지의 isolate/restore 버튼은 비활성 상태로 남으며, 3D 화면 머리글 토글도 이와 일치합니다.
 
 상태 표시줄에는 감지된 범위가 함께 표시됩니다. 예를 들어 "Segmentation ready · 7 vertebrae detected (T12–S1) · Refined (CT-guided)"처럼 나오고, 선택적인 pedicle 모델 단계가 실행된 경우 그 결과 문구가 뒤에 붙습니다(5.11절 참고).
 
@@ -165,7 +165,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 **Plan** 페이지의 **Levels to plan** 체크박스를 사용합니다(레벨 선택은 계획에 관한 결정이므로 Study 탭의 Segmentation 섹션에서 이곳으로 옮겼습니다).
 
-- 체크한 척추가 3D에 표시됩니다 — 다만 이제 3D 헤더 토글이 CT 표시 여부를 담당하므로(5.2절), 레벨 체크를 해제해도 Full CT 모드에서 CT 자체가 가려지지는 않습니다.
+- 체크한 척추가 3D에 표시됩니다 — 다만 이제 3D 화면 머리글 토글이 CT 표시 여부를 담당하므로(5.2절), 레벨 체크를 해제해도 Full CT 모드에서 CT 자체가 가려지지는 않습니다.
 - **Plan Screws**는 동일하게 체크한 레벨만 사용합니다.
 - **All** / **Clear**로 감지된 모든 레벨을 한 번에 체크하거나 해제할 수 있습니다.
 
@@ -297,7 +297,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 #### Review 페이지 구성
 
-**Review** 페이지는 레벨별 스크류 목록을 중심으로 구성되며(예전에는 고정된 "Planning Cockpit" 요약 아래에 작은 표로 눌려 있었습니다), 이제 페이지 대부분을 차지합니다. 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 Position 슬라이더·Rotation 스핀박스·Reset view 버튼 한 줄이 추가로 나타납니다(5.8절 참고).
+**Review** 페이지는 레벨별 스크류 목록을 중심으로 구성되며(예전에는 고정된 "Planning Cockpit" 요약 아래에 작은 표로 눌려 있었습니다), 이제 페이지 대부분을 차지합니다. 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
 
 목록 자체는 오른쪽 끝에 기존 **Source** 열 대신 **⚠** 열을 두어, 해당 스크류의 경고 개수(0이면 빈칸)를 표시합니다. 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다 — auto/manual 출처 정보는 아래의 접이식 Details 섹션으로 옮겨졌습니다(CSV 내보내기에는 원래대로 그대로 남아 있습니다, 9절 참고). 빠르게 훑어볼 때는 스크류가 어떻게 배치되었는지보다 경고 개수가 더 중요하기 때문입니다.
 

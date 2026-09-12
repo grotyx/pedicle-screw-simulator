@@ -34,8 +34,8 @@ Screw MPR 스크류의 등급 판정 기준이 되는 척추 하나만 여는 3D
 - TotalSegmentator 실행이 척추 라벨을 감지하면(threshold fallback은
   제외) 척추를 자동으로 isolate하고, 패널을 Plan 단계로 전환합니다.
 - Screw MPR의 3D cross-section이 이제 실제 텍스처가 입혀진 CT 단면이 되어,
-  Cross-section 창과 똑같이 Position·회전·plane 오프셋을 따라가며 패널 자체의
-  window/level로 렌더링됩니다. 선택한 스크류의 등급 판정 기준이 되는 척추만
+  Cross-section 창과 똑같이 Position·회전·plane 오프셋을 따라가며 Study 페이지의
+  Window/Level 설정으로 렌더링됩니다. 선택한 스크류의 등급 판정 기준이 되는 척추만
   그 평면에서 열려 불투명하게 표시되고 주변은 흐리게 처리되며, 다른 모든
   레벨은 Vertebrae·Full CT 두 모드 모두에서 그대로 남습니다. 새로 추가된
   **Cut View** 버튼은 entry 쪽에서 스크류를 따라 cross-section을 내려다보도록

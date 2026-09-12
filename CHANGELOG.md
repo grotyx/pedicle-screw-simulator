@@ -36,7 +36,7 @@ by borrowing the nearest well-fitted neighbouring level instead.
   the Plan step.
 - Screw MPR's 3D cross-section is a real textured CT slice, following
   Position, rotation, and the plane offsets exactly like the pane, rendered
-  at the panel's own window/level; only the vertebra the selected screw is
+  at the Study page's Window/Level settings; only the vertebra the selected screw is
   graded against is cut open at that plane, shown opaque against a faded
   surrounding, while every other level -- in both Vertebrae and Full CT mode
   -- stays whole. A new **Cut View** button points the camera down the screw
