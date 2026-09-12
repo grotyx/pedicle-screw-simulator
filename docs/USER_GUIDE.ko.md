@@ -71,32 +71,37 @@ Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니�
 
 Planning 작업화면은 다음 영역으로 구성됩니다.
 
-- **작업 단계 표시줄(workflow bar):** MPR/3D 화면 위에서 Open DICOM, Segment, Plan Screws를 순서대로 안내하는 표시줄
+- **작업 단계 표시줄(workflow bar):** MPR/3D 화면 위에서 ① Study, ② Segment, ③ Plan, ④ Review 네 단계로 오른쪽 패널을 전환하는 표시줄 — 더 이상 스스로 어떤 동작도 실행하지 않습니다
 - **Axial, Sagittal, Coronal MPR:** crosshair, segmentation, 측정 및 스크류가 표시되는 동기화 CT 단면
-- **3D 화면:** CT volume, 척추 메시, 스크류 및 선택적인 MPR plane — **Screw MPR**이 활성화된 동안에는 표준 axial/sagittal/coronal plane 대신 스크류 정렬 plane이 표시됩니다(5.8절 참고)
-- **Selected Screw 검사창:** 작업 중인 스크류의 요약 — 크기, 각도, 종판각, construct 정렬, 등급, HU 통계, facet·Heary 분류, 척추경 판정
-- **제어 탭:** **Study**(시리즈·표시·분할), **Planning**(레벨 선택, Planning parameters, 제안 생성, Screw Review 표), **Tools**(수동 배치와 측정)
+- **3D 화면:** CT volume, 척추 메시, 스크류 및 선택적인 MPR plane — **Screw MPR**이 활성화된 동안에는 표준 axial/sagittal/coronal plane 대신 스크류 정렬 plane이 표시됩니다(5.8절 참고). 머리글에는 **Vertebrae / Full CT** 토글이 있습니다(5.2절 참고)
+- **오른쪽 단계 패널:** 작업 단계 표시줄의 각 단계에 대응하는 페이지 — Study, Segment, Plan, Review — 아래에서 페이지별로 설명합니다
 - **도구 모음:** Select, Add Screw, Distance, Angle
 
 ### 작업 단계 표시줄
 
-MPR/3D 화면 위의 표시줄에는 "① Open DICOM → ② Segment → ③ Plan Screws"가 표시됩니다. 각 단계는 이름이 가리키는 기존 동작을 그대로 실행합니다 — 별도의 작업 절차가 아니라 그 동작으로 가는 바로가기이며, 각 단계가 가리키는 탭 버튼은 그대로 남아 있고 이전과 똑같이 동작합니다.
+MPR/3D 화면 위의 표시줄에는 "① Study → ② Segment → ③ Plan → ④ Review"가 표시됩니다. 단계를 클릭하면 오른쪽 패널에 해당 페이지가 표시됩니다. 어떤 단계든 항상 클릭할 수 있는데, study 상태와 무관하게 모든 페이지에 언제든 접근할 수 있기 때문입니다 — 표시줄은 이제 이동만 담당하며, Open DICOM, Run Auto Segmentation, Plan Screws를 직접 실행하지 않습니다(해당 버튼들은 각자의 페이지에 있으며, 아래에서 설명합니다).
 
-| 단계 | 실행하는 동작 |
-|---|---|
-| ① Open DICOM | **Open DICOM Folder**(`Ctrl+O`) — 5.1절과 같은 폴더 선택 대화상자 |
-| ② Segment | **Study** 탭의 **Run Auto Segmentation** — 5.2절과 동일 |
-| ③ Plan Screws | **Planning** 탭의 **Plan Screws** — 5.4절과 동일 |
+완료된 단계에는 체크 표시("✓ Study")가 붙습니다. 다음에 할 일은 주요 동작으로 강조되어 표시줄이 항상 다음 할 일을 가리키며, 현재 화면에 표시된 단계의 버튼 아래에는 작은 표시가 붙어 지금 어떤 페이지가 열려 있는지(다음에 할 일과는 별개로) 보여줍니다. 각 단계에 마우스를 올리면 무엇을 해야 하는지, 또는 무엇이 아직 막고 있는지 알려주는 tooltip이 나타납니다.
 
-완료된 단계에는 체크 표시("✓ Open DICOM")가 붙습니다. 아직 해야 할 다음 단계는 비활성 상태라도 주요 동작으로 강조되어, 표시줄이 항상 다음에 할 일을 가리킵니다. 해당 동작을 아직 쓸 수 없으면(아직 study가 없거나, segmentation이 실행 중이거나, 선택한 척추 레벨이 없으면) 단계는 흐리게 표시됩니다. 각 단계에 마우스를 올리면 tooltip이 나타나며, 대기 중인 단계는 무엇이 있어야 풀리는지 알려줍니다.
+| 단계 | 완료 조건 | Tooltip |
+|---|---|---|
+| ① Study | DICOM study를 불러온 상태 | "Study loaded — open another one here", 또는 "Open a DICOM series folder" |
+| ② Segment | TotalSegmentator mask가 존재(threshold fallback은 포함되지 않음) | "Run TotalSegmentator on the loaded study", 또는 "Open a DICOM series first" |
+| ③ Plan | 자동으로 계획된 스크류가 존재 | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Plan step", 또는 "Run segmentation first" |
+| ④ Review | 완료로 표시되는 일이 없음 — 끝내야 할 단계가 아니라 도착지입니다 | "Review the screws level by level", 또는 "Plan or place screws first" |
 
-| 단계 | Tooltip |
-|---|---|
-| ① Open DICOM | "Open a DICOM series folder" |
-| ② Segment | "Run TotalSegmentator on the loaded study", 또는 study를 열기 전에는 "Open a DICOM series first" |
-| ③ Plan Screws | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Planning tab", 또는 "Run segmentation first" |
+수동으로 배치한 스크류는 ③ 완료 조건에 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 표시줄 전체가 초기화되고 패널은 Segment 페이지로 전환됩니다. TotalSegmentator 실행이 척추 라벨을 찾으면 패널은 Plan 페이지로 전환됩니다. 목록·MPR·3D에서 스크류를 선택하거나 Screw MPR을 켜면 패널은 Review 페이지로 전환됩니다 — 다만 이렇게 전환되는 것은 Screw MPR을 *켤* 때뿐입니다: 일단 켜진 뒤에는 어느 페이지로 옮겨가든 패널이 그 페이지에 그대로 머무르며, Screw MPR을 다시 끈다고 해서 그 자체로 페이지가 바뀌지는 않습니다.
 
-② 단계는 TotalSegmentator mask가 만들어진 경우에만 완료로 표시됩니다 — threshold fallback으로는 계획을 진행할 수 없으므로, 실제 segmentation이 성공할 때까지 이 단계는 열려 있습니다. ③ 단계는 자동으로 계획된 스크류가 존재할 때만 완료로 표시됩니다. 수동으로 배치한 스크류는 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 표시줄 전체가 초기화되고, 현재 segmentation을 지우면 ② 단계가 다시 열립니다.
+### 오른쪽 패널, 페이지별 안내
+
+- **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
+- **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 헤더 토글에 대한 안내문.
+- **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 원래 Study 탭의 Segmentation 섹션에 있었음 — 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
+- **Review:** 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
+
+### 3D 헤더: Vertebrae / Full CT
+
+3D 화면 머리글에는 제목 옆에 두 상태를 오가는 **Vertebrae / Full CT** 토글이 있습니다. 이 토글은 항상 실제로 화면에 보이는 상태를 그대로 반영하며 — 자동 isolation이 실패해 Full CT로 되돌아간 경우도 포함됩니다 — 이제 3D에서 CT volume 표시 여부를 결정하는 유일한 요소입니다(5.2절 참고).
 
 ### 배치
 
@@ -118,23 +123,31 @@ MPR/3D 화면 위의 표시줄에는 "① Open DICOM → ② Segment → ③ Pla
 
 ## 5. 기본 계획 과정
 
-작업 단계 표시줄(4절 참고)은 이 절과 대응합니다. ① 단계는 5.1절, ② 단계는 5.2절, ③ 단계는 5.3절에서 레벨을 체크한 뒤의 5.4절입니다. 생성된 제안의 검토와 수정은 5.8절 이후와 6절에서 이어집니다.
+작업 단계 표시줄의 네 페이지(4절 참고)는 이 절의 순서와 대략 대응합니다. Study는 5.1절, Segment는 5.2절, Plan은 5.3절(레벨)·5.4절(제안)·5.5절(매개변수)에 해당합니다. 생성된 제안의 검토와 수정은 5.8절 이후, Review 페이지(5.9/5.10절), 6절에서 이어집니다.
 
 ### 5.1 CT 열기
 
-1. **Open DICOM Folder**를 누르거나 `Ctrl+O`를 사용합니다.
+1. **Study** 페이지에서 **Open DICOM…**을 누릅니다(툴바 버튼과 File 메뉴의 **Open DICOM Folder**(`Ctrl+O`)도 그대로 사용할 수 있습니다).
 2. DICOM 시리즈가 들어 있는 폴더를 선택합니다.
 3. 여러 시리즈가 있으면 사용할 CT 시리즈를 선택합니다.
 4. 세 MPR과 3D에서 해부학 구조와 방향이 올바른지 확인합니다.
 
 ### 5.2 자동 분할
 
-1. **Run Auto Segmentation**을 누릅니다.
+1. **Segment** 페이지에서 **Run Auto Segmentation**을 누릅니다.
 2. GPU를 우선 사용하고 필요한 경우 CPU로 다시 시도합니다.
 3. 척추 라벨과 3D 메시가 나타날 때까지 기다립니다.
 4. 스크류 계획 전에 segmentation 경계를 확인합니다.
 
 Standalone에는 TotalSegmentator가 이미 포함되어 있습니다. 최초 모델 다운로드나 추론에 실패하면 프로그램이 이유를 표시하고 threshold fallback을 생성합니다. 대체 결과를 임상적으로 정확하다고 가정하면 안 됩니다. 소스 설치에서는 `--with-totalseg`로 AI 실행환경을 추가할 수 있습니다.
+
+#### 자동 isolation과 3D 토글
+
+TotalSegmentator 실행이 실제로 척추 라벨을 찾아내면(성공한 경우) 버튼을 누를 필요 없이 자동으로 척추를 isolate하고 패널을 **Plan** 단계로 전환합니다. Threshold fallback은 isolate할 척추 라벨 자체가 없으므로 절대 자동으로 isolate되지 않습니다. 이때 Segment 페이지의 isolate/restore 버튼은 비활성 상태로 남으며, 3D 헤더 토글도 이와 일치합니다.
+
+상태 표시줄에는 감지된 범위가 함께 표시됩니다. 예를 들어 "Segmentation ready · 7 vertebrae detected (T12–S1) · Refined (CT-guided)"처럼 나오고, 선택적인 pedicle 모델 단계가 실행된 경우 그 결과 문구가 뒤에 붙습니다(5.11절 참고).
+
+isolate된 화면과 전체 화면은 3D 화면 머리글의 **Vertebrae / Full CT** 토글, 또는 Segment 페이지의 같은 기능 버튼(현재 상태에 따라 **Isolate Vertebrae** 또는 **Restore Full Volume**으로 표시됨) 어느 쪽으로도 전환할 수 있으며, 두 컨트롤은 항상 서로 일치합니다. 이제 3D에서 CT volume 자체가 보이는지 여부는 이 토글이 결정합니다 — **Levels to plan**(5.3절)에서 레벨을 체크하거나 해제하면 어떤 척추가 표시되는지는 바뀌지만, Full CT 모드에서 CT 자체를 가리거나 보여주지는 않습니다.
 
 #### CT 기준 경계 정제(Refine boundaries against CT)
 
@@ -142,24 +155,23 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 **Refine boundaries against CT**를 켜 둔 채로(기본값) 사용하면 경계 부분을 CT 자체로 다시 판정합니다. 라벨마다 안티에일리어싱을 적용하고, 표면에서 1.5 mm 이내의 복셀을 골밀도로 재배정하며, 내부 구멍을 3D로 메우고, 각 척추에서 가장 큰 연결성분만 남깁니다. 512 × 512 × 292 연구에서 약 1–2초가 추가되며 취소할 수 있습니다.
 
-상태 표시줄에 현재 사용 중인 마스크가 `Refined mask` 또는 `Raw mask`로 표시되고, 정제가 건드리지 않기로 한 라벨이 함께 나옵니다. 어떤 라벨의 부피를 30 % 넘게 바꾸는 정제는 교정이 아니라 실패로 보고 거부하며, 원본 라벨을 그대로 씁니다.
+상태 표시줄에 현재 사용 중인 마스크가 `Refined (CT-guided)`, `Refined (anti-alias only)`(CT 기반 단계는 실행되지 못했지만 안티에일리어싱 단계는 라벨을 다듬은 경우), 또는 `Raw mask`로 표시되고, 정제가 건드리지 않기로 한 라벨이 함께 나옵니다. 어떤 라벨의 부피를 30 % 넘게 바꾸는 정제는 교정이 아니라 실패로 보고 거부하며, 원본 라벨을 그대로 씁니다.
 
 모델 출력을 있는 그대로 보고 싶을 때, 예를 들어 다른 도구의 마스크와 비교할 때는 이 옵션을 끄십시오.
 
-**자동 분할을 다시 실행하면 현재 계획의 근거가 된 척추경 분석이 폐기됩니다.** 스크류 등급은 새 마스크로 즉시 다시 계산되지만, 척추경 폭·좁음 판정·종판 각도는 제안을 다시 생성할 때까지 표시되지 않습니다. 이 값들은 교체된 마스크를 분석해 얻은 것이므로, 다른 마스크에서 나온 등급 옆에 나란히 보여주면 오해를 부르기 때문입니다.
+**자동 분할을 다시 실행하면 현재 계획의 근거가 된 척추경 분석이 폐기됩니다.** 스크류 등급은 새 마스크로 즉시 다시 계산되지만, 척추경 폭·좁음 판정·종판 각도는 계획을 세웠을 때 기록된 값을 그대로 유지합니다 — 이 값들은 방금 교체된 마스크를 분석해 얻은 것이므로, 제안을 다시 생성하기 전까지는 스크류를 수정해도 다시 계산되지 않습니다.
 
 ### 5.3 척추 레벨 선택
 
-**Visible / Plan Levels** 체크박스를 사용합니다.
+**Plan** 페이지의 **Levels to plan** 체크박스를 사용합니다(레벨 선택은 계획에 관한 결정이므로 Study 탭의 Segmentation 섹션에서 이곳으로 옮겼습니다).
 
-- 체크한 척추가 3D에 표시됩니다.
+- 체크한 척추가 3D에 표시됩니다 — 다만 이제 3D 헤더 토글이 CT 표시 여부를 담당하므로(5.2절), 레벨 체크를 해제해도 Full CT 모드에서 CT 자체가 가려지지는 않습니다.
 - **Plan Screws**는 동일하게 체크한 레벨만 사용합니다.
-- **Isolate Vertebrae**는 MPR에서 척추 외 구조를 가립니다.
-- **Restore Full Volume**은 원래 CT로 돌아갑니다.
+- **All** / **Clear**로 감지된 모든 레벨을 한 번에 체크하거나 해제할 수 있습니다.
 
 ### 5.4 자동 스크류 생성
 
-**Plan Screws**를 누르면 수정 가능한 스크류가 목록에 바로 추가됩니다.
+**Plan** 페이지에서 **Plan Screws**를 누르면 수정 가능한 스크류가 목록에 바로 추가됩니다. 바로 아래의 **Clear All Screws**는 모든 스크류를 한 번에 제거합니다.
 
 현재 기본값:
 
@@ -183,7 +195,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 ### 5.5 계획 매개변수(Planning Parameters)
 
-**Planning** 아래의 접이식 **Planning parameters** 그룹에서는 자동 플래너가 스크류 크기와 위치를 정할 때 사용하는 설정을 조정할 수 있습니다. 각 값은 입력 즉시 검증되고 저장되므로(Qt `QSettings`), 프로그램을 다시 시작해도 유지됩니다.
+**Plan** 페이지의 접이식 **Planning parameters** 섹션에서는 자동 플래너가 스크류 크기와 위치를 정할 때 사용하는 설정을 조정할 수 있습니다(바로 옆의 접이식 **Manual Screw Defaults** 섹션에는 수동으로 추가하는 스크류의 기본 길이·직경이 있습니다). 각 값은 입력 즉시 검증되고 저장되므로(Qt `QSettings`), 프로그램을 다시 시작해도 유지됩니다.
 
 | 항목 | 기본값 | 의미 |
 |---|---:|---|
@@ -200,6 +212,18 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 **Reset Defaults**를 선택하면 이 열 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, Safety·Density 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
 
+#### 종판(endplate) 상태가 나쁠 때의 기준(reference)
+
+"Parallel to upper endplate"는 각 레벨을 그 레벨 자체의 상위 종판(upper endplate) 적합 평면(fit)을 따라 정렬합니다 — 다만 실제 증례에서는 일부 레벨의 상연(上緣)이 애초에 깔끔한 평면이 아닐 수 있습니다: 압박골절(compression fracture)이나 Schmorl node가 표면을 평면 적합이 따라갈 수 없는 형태로 변형시키며, 이렇게 망가진 적합에 맞춰 스크류를 정렬하면 실제 종판이 아니라 그 불규칙한 형태에 맞춰 기울어지게 됩니다. 플래너는 적합 자체의 잔차(RMSE)로 두 경우를 구분합니다.
+
+- **RMSE 1.5 mm 이하:** 적합을 신뢰하고 그대로 사용합니다 — `endplate_reference` = `own`, 경고 없음.
+- **1.5–3.0 mm:** 여전히 해당 레벨 자체의 적합(`own`)을 사용하지만, rough-fit 경고("Upper endplate fit is rough (RMSE _x_.x mm) — check the sagittal view")가 함께 표시됩니다. 요추 CT 한 복셀이 약 1 mm이고, 1.5 mm는 적합이 mask 자체의 계단 노이즈와 더 이상 구별되지 않기 시작하는 지점이기 때문입니다.
+- **3.0 mm 초과, 또는 적합 자체가 없음:** 이제 해당 레벨 자체의 적합은 정렬 기준으로 신뢰하지 않습니다. 이 임계값은 요추 CT 슬라이스로 두세 장 깊이에 해당하며 — 1.5 mm 경고가 다루는 계단 노이즈보다 훨씬 깊고, 실제 압박골절이나 Schmorl node가 도달하는 깊이와 비슷합니다. 대신 플래너는 위아래 두 레벨 이내에 있는 가장 가까운 적합이 양호한(well-fitted, "신뢰 가능한") 레벨들의 역거리 가중 평균을 따라 정렬합니다 — `endplate_reference` = `neighbours` — 이때 경고에는 어느 레벨에서 빌려왔는지가 함께 표시됩니다. 자체 적합이 rough했던 경우는 "Endplate reference: own upper-endplate fit too rough (RMSE _x_.x mm); aimed along T12 and L3 — check the sagittal view"이고, 자체 적합 자체가 없었던 경우는 "Endplate reference: no upper-endplate fit; aimed along T12 and L3 — check the sagittal view"입니다. 도달 범위 안에 신뢰 가능한 이웃 레벨이 전혀 없으면 궤적은 수평(horizontal)으로 대체됩니다 — `endplate_reference` = `none` — 이때도 고유의 경고가 표시됩니다("...and no well-fitted neighbour; used horizontal sagittal trajectory", 또는 애초에 적합 자체가 없어 rough라고 할 것도 없는 경우에는 "Upper endplate unavailable; used horizontal sagittal trajectory").
+
+S1과 sacrum은 이웃 레벨 기준 차용에서 양방향 모두 제외됩니다. 요천추각(lumbosacral angle)은 L5 자체의 각도와 15–30° 차이가 나므로, S1은 자신의 적합 상태와 무관하게 L5에 법선(normal)을 빌려주지도, L5로부터 빌리지도 않습니다.
+
+실제로 어떤 기준이 쓰였든, 플래너는 종판각을 그 기준에 대해 보고합니다 — 신뢰하지 않기로 한 자체 적합을 기준으로 보고하는 일은 없습니다 — 그리고 이후 스크류의 재등급(5.9절, ScrewTool)도 같은 기준으로 같은 각도를 측정하므로 두 값이 서로 어긋나지 않습니다. 이 기준은 스크류마다 `endplate_reference`(`own` / `neighbours` / `none`)로 기록되어 Review 페이지의 Details 섹션(5.9절)에 표시되고, CSV의 마지막 열로 내보내집니다(9절 참고).
+
 ### 5.6 궤적 최적화기(Trajectory Optimizer)
 
 Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 두 가지 백엔드 중 하나를 선택합니다.
@@ -214,7 +238,7 @@ Planning Parameters의 **Planner** 콤보박스는 **Plan Screws**가 사용할 
 
 기본 가중치(패널에는 명목 가중치 대비 백분율, 0–300%로 표시): Safety 100%(1.0), Density 50%(0.5), Length 20%(0.2), Endplate 30%(0.3), Centering 30%(0.3)입니다. 여섯 번째 가중치인 **Construct alignment**(기본값 30% / 0.3, 내부적으로는 `rod` 가중치)는 스크류 한 개의 채점에는 영향을 주지 않으며, 아래에서 설명하듯 여러 스크류를 계획할 때 스크류 헤드를 같은 선상에 맞추고 수렴하는 레벨들의 각도를 서로 맞추기 위해 개별 스크류 점수를 얼마나 양보할 수 있는지만 제어합니다. 패널에는 Safety, Density, Construct alignment 가중치만 슬라이더로 노출되며, Length, Endplate, Centering 가중치는 이번 버전에서 기본값으로 고정되어 있습니다.
 
-어떤 후보가 실현 가능하려면 설정된 최소 벽 여유거리를 유지해야 하고, 수렴각이 설정 범위 안에 있어야 하며, 팁 앞쪽에 설정된 Anterior margin만큼의 뼈를 스크류 자체 축을 따라 anterior 척추체 피질골까지 확보해야 합니다 — 원위부 shaft도 나머지 shaft와 마찬가지로 골내 포함(containment) 조건과 설정된 Wall clearance만 만족하면 됩니다(5.4절 "진입점과 스크류 길이" 참고). 척추경 폭이 정상 범위이면 여기에 더해 피질골 천공이 전혀 없어야 하지만, "Narrow pedicle (mm)" 임계값(기본 5.0 mm)보다 좁은 narrow 척추경에서는 대신 최적화기가 카탈로그에서 가장 작은 직경(4.0 mm, **Selected Screw** 패널에 빨간색으로 표시)의 스크류를 배치하며, medial(척추관 쪽) 벽은 그대로 유지하면서 "Lateral breach cap (mm)" 한도(기본 2.0 mm)까지 lateral(in-out-in) 천공을 허용합니다 — 두 스핀박스는 모두 Planning parameters의 Wall clearance 옆에 있습니다. 헤드 자체는 스크류 축을 따라 후방 피질골(dorsal cortex)에 배치되며(5.4절 참고), 그 축을 따라 뒤쪽 15 mm 이내에 같은 척추의 뼈가 여전히 있으면 도달 불가능한 것으로 제외합니다. 실제 드릴이 그 뼈를 먼저 통과해야 하기 때문입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 순위 산정에 포함되므로, 위의 Length 가중치는 같은 궤적 위의 길이가 아니라 궤적들 사이를 비교합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. narrow 척추경의 경우 이 legacy 대체 경로도 해당 side를 포기하지 않습니다 — lateral shift 탐색이 찾아낸 것 중 medial 쪽으로 가장 덜 치우친 entry를 그대로 배치하며, 그 탐색 후에도 척추관 쪽 천공이 남아 있으면 조용히 받아들이거나 버리는 대신 스크류에 "Medial breach _x_.x mm — canal side" 경고를 표시합니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
+어떤 후보가 실현 가능하려면 설정된 최소 벽 여유거리를 유지해야 하고, 수렴각이 설정 범위 안에 있어야 하며, 팁 앞쪽에 설정된 Anterior margin만큼의 뼈를 스크류 자체 축을 따라 anterior 척추체 피질골까지 확보해야 합니다 — 원위부 shaft도 나머지 shaft와 마찬가지로 골내 포함(containment) 조건과 설정된 Wall clearance만 만족하면 됩니다(5.4절 "진입점과 스크류 길이" 참고). 척추경 폭이 정상 범위이면 여기에 더해 피질골 천공이 전혀 없어야 하지만, "Narrow pedicle (mm)" 임계값(기본 5.0 mm)보다 좁은 narrow 척추경에서는 대신 최적화기가 카탈로그에서 가장 작은 직경(4.0 mm, Review 페이지에 빨간색으로 표시)의 스크류를 배치하며, medial(척추관 쪽) 벽은 그대로 유지하면서 "Lateral breach cap (mm)" 한도(기본 2.0 mm)까지 lateral(in-out-in) 천공을 허용합니다 — 두 스핀박스는 모두 Planning parameters의 Wall clearance 옆에 있습니다. 헤드 자체는 스크류 축을 따라 후방 피질골(dorsal cortex)에 배치되며(5.4절 참고), 그 축을 따라 뒤쪽 15 mm 이내에 같은 척추의 뼈가 여전히 있으면 도달 불가능한 것으로 제외합니다. 실제 드릴이 그 뼈를 먼저 통과해야 하기 때문입니다. 각 궤적에서는 실현 가능한 가장 긴 길이만 순위 산정에 포함되므로, 위의 Length 가중치는 같은 궤적 위의 길이가 아니라 궤적들 사이를 비교합니다. 척추경의 권장 직경보다 카탈로그 기준 두 단계 이내의 어떤 직경으로도 실현 가능한 궤적을 찾지 못하면 해당 척추경은 legacy 방식으로 대신 계획되며, 스크류의 경고 목록에 "Optimizer found no feasible trajectory; legacy planner used"가 추가됩니다. narrow 척추경의 경우 이 legacy 대체 경로도 해당 side를 포기하지 않습니다 — lateral shift 탐색이 찾아낸 것 중 medial 쪽으로 가장 덜 치우친 entry를 그대로 배치하며, 그 탐색 후에도 척추관 쪽 천공이 남아 있으면 조용히 받아들이거나 버리는 대신 스크류에 "Medial breach _x_.x mm — canal side" 경고를 표시합니다. 테스트 결과 Optimizer 모드는 같은 증례를 Legacy 모드로 계획했을 때보다 Gertzbein 등급이 나빠지거나 벽 여유거리가 의미 있게 줄어드는 경우가 없었습니다.
 
 같은 방향(side)에 스크류가 두 개 이상 계획되는 경우, 최적화기는 각 척추경의 상위 후보들을 다시 순위 매겨 스크류 헤드가 공통의 한 직선에 가깝게 놓이고 이웃 레벨의 수렴각이 서로 맞도록 조정합니다 — 이는 로드를 얼마나 구부리고 비틀어야 하는지를 대신 나타내는 값입니다. 이때 Construct alignment 슬라이더 가중치에 따라 스크류 자신의 최고 점수 중 최대 10%까지만 양보할 수 있습니다. 계획이 끝나면 상태 표시줄과 auto-screw 상태 줄에 "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)" 형식으로 결과가 표시되고, 각 스크류의 metrics에는 `score`, `score_components`, `rod_misalignment_mm`, `convergence_deviation_deg`가 함께 기록됩니다. Legacy 방식은 스크류를 각각 따로 배치하므로 조화시킬 대상이 없습니다 — 이 경우 상태 줄에는 대신 "Construct alignment needs Optimizer mode"가 표시됩니다.
 
@@ -231,7 +255,7 @@ Planning Parameters의 **Trajectory** 콤보박스는 **Plan Screws**가 목표�
 
 계획된 모든 CBT 스크류에는 다음과 같은 고정 경고가 함께 표시되어, CT에서 이 술식의 금기사항을 직접 확인하도록 안내합니다. 플래너 스스로는 이를 자동으로 판별할 수 없기 때문입니다: "CBT consensus contraindications: spondylolisthesis grade >= 3, pars defect, absent lamina/isthmus, rotational deformity > 2° (Zhang 2024)". 실현 가능한 CBT 궤적이 없는 방향(side)은 traditional 궤적으로 대체되지 않고 그대로 제외됩니다. 두 술식은 헤드 위치가 서로 다르므로 섞어 쓰면 구조물(construct) 전체가 어긋나기 때문입니다.
 
-CBT 스크류도 traditional 스크류와 완전히 동일한 마무리 경로를 거쳐 등급이 매겨집니다 — 5.9절과 5.10절에서 설명한 것과 같은 mask 기반 Gertzbein-Robbins 천공·벽 여유거리 판정, HU 통계, 골질 경고, facet/Heary 분류를 그대로 사용하므로, CBT 스크류의 등급과 지표는 **Selected Screw** 패널과 내보내기에서 traditional 스크류와 직접 비교할 수 있습니다. 시작 각도의 근거는 Zeng 등(2024, *Orthopaedic Surgery*, CT 기반 CBT 궤적 형태계측 연구)이며, 금기사항 안내문의 근거는 Zhang 등(2024, *Asian Spine Journal*, CBT 적응증에 대한 Delphi 합의)입니다.
+CBT 스크류도 traditional 스크류와 완전히 동일한 마무리 경로를 거쳐 등급이 매겨집니다 — 5.9절과 5.10절에서 설명한 것과 같은 mask 기반 Gertzbein-Robbins 천공·벽 여유거리 판정, HU 통계, 골질 경고, facet/Heary 분류를 그대로 사용하므로, CBT 스크류의 등급과 지표는 Review 페이지와 내보내기에서 traditional 스크류와 직접 비교할 수 있습니다. 시작 각도의 근거는 Zeng 등(2024, *Orthopaedic Surgery*, CT 기반 CBT 궤적 형태계측 연구)이며, 금기사항 안내문의 근거는 Zhang 등(2024, *Asian Spine Journal*, CBT 적응증에 대한 Delphi 합의)입니다.
 
 ### 5.8 Screw MPR 검토
 
@@ -263,17 +287,27 @@ Oblique 단면은 고정되어 있지 않습니다. 스크류 정렬 검토를 �
 
 Screw MPR이 활성화되어 있는 동안 3D 화면은 이 모드에서는 어느 창에도 나오지 않는 표준 axial/sagittal/coronal plane 표시를 세 개의 스크류 정렬 plane으로 대체합니다. 각 plane은 스크류를 중심으로 한 80 mm 정사각형으로 그려지며, 그것을 보여주는 창의 머리글 색과 같은 색으로 표시됩니다: Oblique Axial은 axial 창의 색, Oblique Sagittal은 sagittal 창의 색, Cross-section은 coronal 창의 색입니다.
 
-CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다. 뒤에서 바라볼 때 절단면(cut face)은 Cross-section 창에 표시되는 단면과 같습니다. 절단면은 **Position**을 entry에서 tip 방향으로 옮길 때(Cross-section 창에서 마우스 휠을 한 칸 돌릴 때마다 1 mm씩) 함께 이동하며, 3D의 plane들은 회전, 옆으로의 오프셋, 스크류 수정 등 창을 움직이는 모든 조작을 따라갑니다. 스크류 자체는 절대 잘리지 않습니다. Screw MPR이 열려 있는 동안 다시 만들어진 척추 메시(예: segmentation을 다시 실행한 경우)도 같은 평면에서 잘립니다.
+Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가 입혀진 CT 단면으로 3D에 표시됩니다. Cross-section 창과 똑같이 **Position**, 회전, plane 오프셋을 그대로 따라가며, Study 페이지의 Window/Level 슬라이더(8절)로 렌더링됩니다. MPR 창 안에서 오른쪽 버튼 드래그로 바꾼 window/level은 그 창에만 적용되고 슬라이더 자체는 바뀌지 않으므로 3D 단면에는 반영되지 않습니다 — 3D와 창의 모습을 일치시키려면 슬라이더를 사용하십시오. 이는 **Vertebrae**와 **Full CT** 두 모드 모두에서 동일합니다(4절 참고).
 
-**Planes On / Off**(8절)는 현재 표시 중인 plane 세트가 표준이든 스크류 정렬이든 그대로 표시하거나 숨깁니다. **Std MPR**은 절단을 없애고 표준 plane으로 되돌립니다.
+선택한 스크류의 Gertzbein-Robbins 등급과 Endplate 각도를 실제로 측정하는 바로 그 척추만 해당 평면에서 열립니다. 장면 안의 다른 모든 레벨은 두 3D 모드 어느 쪽에서도 완전히 그대로 남습니다. 단면(slice) 자체는 잘린 척추 부분을 완전 불투명하게 보여주고 주변 해부 구조는 흐리게 처리하여, 지금 살펴보는 단면이 주변과 뚜렷이 구분되도록 합니다. 스크류 자체는 절대 잘리지 않습니다. Screw MPR이 열려 있는 동안 다시 만들어진 척추 메시(예: segmentation을 다시 실행한 경우)도 같은 평면에서 잘리며, **Position**을 entry에서 tip 방향으로 옮기면(또는 Cross-section 창에서 마우스 휠을 한 칸 돌릴 때마다 1 mm씩) 절단면도 함께 이동합니다. 선택한 스크류의 척추를 segmentation에서 확정할 수 없는 경우에는 단면은 그대로 표시되지만 절단은 일어나지 않습니다.
+
+**Planes On / Off**(8절)는 현재 표시 중인 plane 세트가 표준이든 스크류 정렬이든 그대로 표시하거나 숨기며, 텍스처 단면 자체에는 영향을 주지 않습니다. Screw MPR이 활성화된 동안 3D 화면 왼쪽 위에 나타나는 **Cut View**는 카메라를 entry 쪽에서 스크류를 따라 곧장 cross-section을 내려다보도록 맞춰 줍니다 — 절단면 안에서 궤적의 위치를 한눈에 파악할 때 유용합니다. 요청했을 때만 카메라를 다시 맞추며, 스스로 화면을 움직이는 일은 없습니다. **Std MPR**은 절단과 단면을 모두 없애고 표준 plane으로 되돌립니다.
 
 ### 5.9 스크류 측정값과 등급
 
-**Selected Screw** 패널에는 다음 값이 표시됩니다.
+#### Review 페이지 구성
+
+**Review** 페이지는 레벨별 스크류 목록을 중심으로 구성되며(예전에는 고정된 "Planning Cockpit" 요약 아래에 작은 표로 눌려 있었습니다), 이제 페이지 대부분을 차지합니다. 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 Position 슬라이더·Rotation 스핀박스·Reset view 버튼 한 줄이 추가로 나타납니다(5.8절 참고).
+
+목록 자체는 오른쪽 끝에 기존 **Source** 열 대신 **⚠** 열을 두어, 해당 스크류의 경고 개수(0이면 빈칸)를 표시합니다. 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다 — auto/manual 출처 정보는 아래의 접이식 Details 섹션으로 옮겨졌습니다(CSV 내보내기에는 원래대로 그대로 남아 있습니다, 9절 참고). 빠르게 훑어볼 때는 스크류가 어떻게 배치되었는지보다 경고 개수가 더 중요하기 때문입니다.
+
+동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
+
+**Review** 페이지에는 다음 값이 표시됩니다.
 
 - **Convergence(수렴각):** 정중선 방향으로의 axial 각도이며 부호가 있습니다. 양수는 medial(팁이 정중선을 향함), 음수는 lateral을 의미합니다.
 - **Craniocaudal(두미측각):** axial 평면 위로의 궤적 상승각이며 부호가 있습니다. 양수는 cranial입니다. 스크류가 수렴하는 경우 이 값은 sagittal 투영각과 약간 다를 수 있습니다.
-- **Endplate(종판각):** 상위 종판(upper endplate) 대비 궤적의 부호 있는 각도이며, 양수는 팁이 cranial 쪽, 0은 평행을 뜻합니다. "Parallel to upper endplate" 계획 옵션을 켜면 설정된 endplate band 안에서 0°를 직접 목표로 삼습니다.
+- **Endplate(종판각):** 실제로 측정 기준이 된 대상에 대한 궤적의 부호 있는 각도이며, 양수는 팁이 cranial 쪽, 0은 평행을 뜻합니다. "Parallel to upper endplate" 계획 옵션을 켜면 설정된 endplate band 안에서 0°를 직접 목표로 삼습니다. 기준은 보통 그 레벨 자체의 상위 종판 적합이지만, 적합이 rough하거나 없으면 대신 가장 가까운 적합이 양호한 이웃 레벨(들)이 됩니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. 기준이 `own`이면 이 행은 그냥 "+2.3°"처럼 표시되고, `neighbours`이면 "+2.3° vs T12, L3"처럼 표시되며 tooltip에 빌려온 레벨이 표시됩니다. `none`은 비교할 기준 자체가 없어 각도도 없으므로 "--"로 표시됩니다.
 - **Alignment(정렬):** 이 스크류가 다중 스크류 construct 안에서 어떻게 놓이는지 — 로드 선 대비 오프셋(`rod _x_ mm`)과 이웃 레벨과의 수렴각 차이(`conv ±_y_°`)를 나타냅니다. 두 값 모두 개별 스크류가 아니라 해당 쪽 전체를 설명하므로, 스크류를 하나라도 끌면 같은 쪽 모든 스크류에 대해 다시 측정되고, 하나를 지우면 남은 것들로 로드 선을 다시 맞춥니다. Optimizer가 construct를 조정한 경우에만 채워지며(5.6절 참고), Legacy 모드 스크류와 사용자가 직접 배치한 스크류는 이 행이 비어 있습니다.
 - **Safety(등급):** TotalSegmentator mask 위에서 원통 표면과 척추 경계 사이 거리로 계산한 Gertzbein-Robbins 등급입니다. 등급 계산에는 HU가 전혀 사용되지 않으며, 함께 표시되는 궤적의 평균·최소 HU는 참고용 정보일 뿐입니다. 해당 스크류의 척추에 TotalSegmentator mask가 없으면 등급은 `N/A`로 표시됩니다.
 - **Pedicle(척추경):** 측정된 척추경 협부(isthmus) 폭입니다. 해당 레벨이 "Narrow pedicle" 임계값보다 좁으면 빨간색으로 표시되며, 이는 플래너가 카탈로그에서 가장 작은 직경을 사용하고 medial 벽을 보호하기 위해 lateral(in-out-in) 천공 허용치를 제한했다는 뜻입니다. 폭 뒤에 `?`가 붙고 행에 "width not trusted"라고 표시되면서 같은 빨간색이 나타나는 경우는, 분석기가 그 측정값 자체를 신뢰할 수 없다고 판단한 것입니다(해당 레벨의 타당 범위를 위아래 어느 쪽으로든 벗어난 경우). 두 경우 모두 narrow 정책이 적용되지만, 신뢰할 수 있는 폭만 임상 수치로 인용됩니다.
@@ -286,9 +320,9 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 
 ### 5.10 스크류 골질(骨質) 지표(Screw Quality Metrics)
 
-스크류가 segmentation을 기준으로 등급이 매겨지면, **Selected Screw** 패널(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
+스크류가 segmentation을 기준으로 등급이 매겨지면, Review 페이지의 Details 섹션(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
 
-- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값입니다. 이는 3 mm 진입 구간을 제외하는 Selected Screw 패널의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
+- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값입니다. 이는 3 mm 진입 구간을 제외하는 Details의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
 - **Pedicle HU:** 척추경 협부(isthmus) 중심에서 10 mm 이내에 있는 궤적 샘플만으로 계산한 평균 HU입니다. 자동 계획된 스크류에서만 제공됩니다 — 수동 스크류는 기준이 될 isthmus 중심이 없기 때문입니다.
 - **Vertebral body HU(척추체 HU):** 척추체 중심에 위치한 8×8×6 mm 타원체 관심영역을 해당 척추의 segmentation label과 교차시켜 계산한 평균 HU입니다. 같은 이유로 자동 계획된 스크류에서만 제공됩니다.
 - **Trajectory/body HU 비율:** 궤적 평균 HU를 척추체 HU로 나눈 값입니다.
@@ -296,7 +330,7 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 - **Heary breach 방향:** 가장 심한 피질골 천공의 해부학적 방향 — medial, lateral, anterior, posterior, superior, inferior 중 하나입니다(Heary 2004). Side 정보가 없는 수동 스크류에서 medial/lateral 방향의 breach가 발생하면 "mediolateral"로, breach가 없으면 "none"으로 표시됩니다.
 - **후관절(facet) 침범 등급(0–3):** Babu(2012) 등급을 근사한 값으로, 스크류 근위부(entry에서 가까운 1/3) 구간과 상위(cephalad) 척추의 segmentation label 사이 관계로 판정합니다 — 0은 접촉 없음, 1은 1 mm 이내로 후관절에 접함, 2는 1 mm 미만으로 침범, 3은 1 mm 이상 침범을 의미합니다.
 
-측정값이 문헌 기준값을 넘으면 패널과 내보내기에 경고가 함께 표시됩니다.
+측정값이 문헌 기준값을 넘으면 Details와 내보내기에 경고가 함께 표시됩니다.
 
 | 지표 | 기준값 | 경고 | 참고문헌 |
 |---|---|---|---|
@@ -310,7 +344,7 @@ CT volume과 척추 메시는 cross-section에서 잘려 tip 쪽만 남습니다
 
 ### 5.11 척추경 세부영역(Subregion) 모델(선택 사항)
 
-Segmentation → Advanced에는 기본적으로 꺼져 있는 **Use pedicle subregion model** 옵션이 있습니다. 이를 켜면 척추를 pedicle/corpus/lamina/spinous/transverse/articular 세부영역으로 분할하는 로컬 nnU-Net 모델([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026)을 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 가리키는 경로에서 찾습니다. 이 경로는 `dataset.json`과 `fold_*/checkpoint_final.pth`가 있는 nnU-Net results 폴더여야 합니다.
+**Segment** 페이지의 **Advanced options** 토글을 누르면 기본적으로 꺼져 있는 **Use pedicle subregion model** 옵션이 나타납니다. 이를 켜면 척추를 pedicle/corpus/lamina/spinous/transverse/articular 세부영역으로 분할하는 로컬 nnU-Net 모델([MICN-Lab/Spine_Subregions](https://github.com/MICN-Lab/Spine_Subregions); Da Mutten et al., *J Imaging Inform Med* 2026)을 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 가리키는 경로에서 찾습니다. 이 경로는 `dataset.json`과 `fold_*/checkpoint_final.pth`가 있는 nnU-Net results 폴더여야 합니다.
 
 이 기능은 소스 설치 전용입니다. `nnunetv2`가 설치된 non-frozen Python 환경이 필요하며, 메모리 요구량은 TotalSegmentator의 `3d_fullres` 설정과 비슷합니다(GPU 권장). macOS·Windows standalone 패키지는 이 기능을 지원하지 않습니다. [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오. 참고: 현재 upstream에 공개된 Spine_Subregions release는 이 프로그램이 기대하는 nnU-Net v2 폴더 구조가 아니라 nnU-Net v1 방식의 폴더 구조를 사용하므로, 재출력(재변환)되기 전까지는 인식되지 않습니다 — 자세한 내용은 데스크톱 빌드 안내를 참고하십시오.
 
@@ -318,7 +352,13 @@ Segmentation → Advanced에는 기본적으로 꺼져 있는 **Use pedicle subr
 
 ## 6. 스크류 수정
 
-### 6.1 직접 수정
+### 6.1 Edit 메뉴
+
+Review 페이지의 **Edit** 버튼을 누르면 **Move entry point**, **Move tip point**, **Move whole screw**, **Cancel edit** 네 항목이 있는 메뉴가 열립니다. 앞의 세 항목 중 하나를 선택하면 head·tip·shaft를 더블클릭했을 때(6.2절)와 똑같이 선택한 스크류에서 해당 수정 모드가 시작됩니다. **Cancel edit**은 수정 모드를 종료하며, 스크류는 마지막으로 이동된 위치에 그대로 남습니다 — 이동을 취소하지 않으며, 직접 수정(6.2절)의 `Esc`와 동일하게 동작합니다. **Delete Screw**와 ‹ › 이전/다음 버튼도 같은 두 줄짜리 동작 구성 안에 있으며, **Delete Screw**는 두 번째 줄에 단독으로 놓입니다(5.9절 참고).
+
+### 6.2 직접 수정
+
+더블클릭 방식은 Edit 메뉴와 함께 그대로 사용할 수 있습니다.
 
 1. 큰 head를 더블클릭하면 entry point만 이동합니다.
 2. 뾰족한 tip 또는 원위부 shaft를 더블클릭하면 tip만 이동합니다.
@@ -329,7 +369,7 @@ Segmentation → Advanced에는 기본적으로 꺼져 있는 **Use pedicle subr
 
 MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 후 Screw MPR은 변경된 궤적에 다시 정렬됩니다.
 
-### 6.2 직경 입력
+### 6.3 직경 입력
 
 직경 입력칸은 축약 입력을 지원합니다.
 
@@ -342,11 +382,13 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 4.0–7.5 mm 범위에서 0.5 mm 간격으로 정규화됩니다.
 
-### 6.3 삭제
+### 6.4 삭제
 
 스크류를 선택하고 **Delete Screw** 또는 `Delete` 키를 사용합니다.
 
 ## 7. 수동 도구
+
+Add Screw, Distance, Angle은 도구 모음의 동작입니다. **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
 
 ### Add Screw
 
@@ -369,6 +411,8 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 - **Delete** 또는 `Delete` 키로 제거합니다.
 
 ## 8. 화면 조작
+
+**Window/Level**(window/level 슬라이더, Bone·Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋, opacity — 이전 이름은 **Validation**)은 모두 **Study** 페이지의 접이식 섹션입니다(4절 참고).
 
 ### MPR
 
@@ -406,7 +450,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 - 지원되는 계획 표를 CSV로 내보냅니다.
 - 지원되는 골 표면을 STL로 내보냅니다.
 
-계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열과 함께 schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`가 포함됩니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고).
 
 계획 파일, 스크린샷과 3D 메시는 DICOM 헤더가 없어도 환자와 연결될 수 있으므로 공유 전에 확인하십시오.
 
@@ -430,6 +474,10 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 ### 특정 스크류가 생성되지 않음
 
 허용되는 골내 궤적을 찾지 못하면 해당 방향을 건너뜁니다. Segmentation을 확인하고 스크류를 수동으로 추가하거나 수정하십시오.
+
+### 골절된 종판과 스크류가 평행하지 않음
+
+어떤 레벨의 상연(上緣)이 압박골절이나 Schmorl node로 손상되어 있으면, 플래너가 그 레벨의 스크류를 자체 종판이 아니라 이웃 레벨의 종판을 따라 정렬할 수 있습니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. Review 페이지의 "⚠ N warnings" 줄을 펼쳐 "Endplate reference: …" 경고나 "Upper endplate unavailable; used horizontal sagittal trajectory" 경고가 있는지 확인하십시오. Details 섹션의 Endplate 행 자체에는 `own`/`neighbours`/`none`이라는 글자가 그대로 나오지 않습니다 — `own`이면 그냥 각도("+2.3°")만 표시되고, `neighbours`이면 각도 뒤에 빌려온 레벨이 붙어("+2.3° vs T12, L3") tooltip에도 표시되며, `none`이면 비교할 기준 자체가 없어 "--"로 표시됩니다. 기준값 자체(`own`/`neighbours`/`none`)는 CSV 내보내기의 `endplate_reference` 열에서만 문자 그대로 확인할 수 있습니다(9절 참고). 이는 자체 적합을 신뢰할 수 없는 레벨에서 나타나는 정상적인 동작이며 버그가 아닙니다 — 어느 경우든 sagittal 화면에서 궤적을 직접 확인하십시오.
 
 ### 실행 문제
 

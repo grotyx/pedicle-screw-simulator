@@ -11,6 +11,79 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
+## [Unreleased]
+
+A step-based right-hand panel that follows the workflow bar, a local 3D cut
+that opens only the vertebra a Screw MPR screw is graded against instead of
+clipping the whole scene, and a planner fix that stops aiming a screw along
+an untrustworthy upper-endplate fit (a compression fracture or Schmorl node)
+by borrowing the nearest well-fitted neighbouring level instead.
+
+### Added
+
+- A four-page step panel (Study / Segment / Plan / Review) replaces the
+  pinned "Planning Cockpit" summary above a three-tab widget. The Review
+  page is built around the per-level screw list, with the selected screw's
+  key numbers (level/side, diameter, length, grade) shown large above it,
+  action buttons under the list, a collapsed "⚠ N warnings" line, and the
+  remaining metrics collapsed into a Details section.
+- The screw plan table's last column is now a per-row warning count (⚠),
+  replacing Source (see Changed).
+- The 3D viewport header carries a **Vertebrae / Full CT** toggle that always
+  reflects, and now owns, whether the CT volume is visible in 3D.
+- Vertebrae are isolated automatically once a TotalSegmentator run detects
+  vertebra labels (never for a threshold fallback), and the panel switches to
+  the Plan step.
+- Screw MPR's 3D cross-section is a real textured CT slice, following
+  Position, rotation, and the plane offsets exactly like the pane, rendered
+  at the panel's own window/level; only the vertebra the selected screw is
+  graded against is cut open at that plane, shown opaque against a faded
+  surrounding, while every other level -- in both Vertebrae and Full CT mode
+  -- stays whole. A new **Cut View** button points the camera down the screw
+  at the cross-section from the entry side.
+- `endplate_reference` (`own` / `neighbours` / `none`) records which
+  upper-endplate fit a screw's trajectory and angle were actually measured
+  against; shown in the Review page's Details section and exported as the
+  last CSV column.
+
+### Changed
+
+- The workflow bar now only navigates the four step pages; it no longer runs
+  Open DICOM, Run Auto Segmentation, or Plan Screws itself.
+- The vertebral-level checkboxes ("Visible / Plan Levels") moved from the
+  Study tab's Segmentation section to the Plan page ("Levels to plan"), and
+  no longer hide or show the CT volume itself in Full CT mode -- that is now
+  the 3D header toggle's job.
+- The Tools tab's "Validation" section moved to the Study page and was
+  renamed "3D Rendering".
+- Isolate Vertebrae and the 3D **Vertebrae / Full CT** toggle are disabled
+  for a threshold-fallback mask, which carries no vertebra labels to isolate
+  on; previously Isolate Vertebrae was enabled after any finished
+  segmentation, fallback included.
+- The Source column moved from the screw plan table to the collapsed Details
+  section; it stays in the CSV export, where it already was.
+- Measurements moved from the Tools tab to a collapsed section at the bottom
+  of the Review page, after the screw list, action buttons, Screw MPR
+  controls, and Details.
+
+### Fixed
+
+- Screw MPR no longer hides the 3D model: it used to clip the whole volume
+  and the whole vertebral mesh at one infinite plane, which for an oblique
+  screw removed everything cranial to the cut and, at every level, stripped
+  the posterior elements of every vertebra, not just the screw's own.
+- A level whose own upper-endplate fit is too rough to trust (RMSE above
+  3.0 mm, or no fit at all -- an L1/L2-type compression fracture or Schmorl
+  node) no longer tilts its screw to follow that broken fit. The planner
+  instead aims along the inverse-distance-weighted average of the nearest
+  well-fitted levels within two levels above and below (S1 and the sacrum
+  neither lend nor borrow), or falls back to a horizontal trajectory with no
+  such neighbour -- and reports the endplate angle, in both the planner and
+  ScrewTool's re-grade, against the reference actually used.
+- The pedicle subregion options had no way to open from the UI (already true
+  in 0.2.1); they now open from the **Advanced options** toggle on the
+  Segment step.
+
 ## [0.2.1] - 2026-09-12
 
 A workflow bar for the three main planning steps, a 3D view of Screw MPR, and
