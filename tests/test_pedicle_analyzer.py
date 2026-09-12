@@ -19,9 +19,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.pedicle_analyzer import (
     ENDPLATE_FIT_RMSE_WARNING_MM,
+    ENDPLATE_FIT_UNTRUSTED_RMSE_MM,
+    ENDPLATE_REFERENCE_NEIGHBOURS,
+    ENDPLATE_REFERENCE_NONE,
+    ENDPLATE_REFERENCE_OWN,
     VERTEBRA_LABELS,
     PedicleAnalyzer,
+    endplate_context_labels,
     endplate_fit_warning,
+    resolve_endplate_references,
 )
 from src.core.screw_geometry import endplate_slope_deg
 from src.core.vertebra import PedicleAnalysisResult, Vertebra
@@ -1606,6 +1612,166 @@ class TestEndplateFitQuality:
 
         assert result.upper_endplate_normal is None
         assert result.endplate_fit_rmse_mm is None
+
+
+# ---------------------------------------------------------------------------
+# Endplate reference resolution
+# ---------------------------------------------------------------------------
+
+def _slope_normal(slope_deg: float) -> np.ndarray:
+    """A +Z-oriented endplate normal whose craniocaudal slope is *slope_deg*.
+
+    Matches the (-a, -b, 1)-normalised convention ``endplate_slope_deg`` reads:
+    ``endplate_slope_deg(_slope_normal(s)) == s``.
+    """
+    rad = math.radians(slope_deg)
+    return np.array([0.0, math.sin(rad), math.cos(rad)], dtype=np.float64)
+
+
+def _make_level_analysis(
+    label: int,
+    name: str,
+    slope_deg: float = None,
+    rmse_mm: float = None,
+) -> PedicleAnalysisResult:
+    """A minimal analysis carrying only what endplate resolution reads."""
+    v = Vertebra(
+        label=label,
+        name=name,
+        centroid_lps=np.zeros(3),
+        bounding_box=(np.zeros(3), np.ones(3)),
+        volume_mm3=100.0,
+        mask_indices=np.zeros((1, 3), dtype=int),
+    )
+    result = PedicleAnalysisResult(vertebra=v)
+    if slope_deg is not None:
+        result.upper_endplate_normal = _slope_normal(slope_deg)
+    result.endplate_fit_rmse_mm = rmse_mm
+    return result
+
+
+class TestEndplateReferences:
+    """resolve_endplate_references and its supporting helpers."""
+
+    def test_endplate_slope_sign_convention(self):
+        """Pin the sign convention every other test in this class relies on."""
+        for slope in (-34.3, -12.3, -11.7, -2.2, 0.0, 5.8, 10.1):
+            assert endplate_slope_deg(_slope_normal(slope)) == pytest.approx(
+                slope, abs=1e-6
+            )
+
+    def test_untrusted_threshold_splits_the_reported_fits(self):
+        """The threshold sits strictly between the best untrusted RMSE (1.88 mm)
+        analogue and the worst trusted one (5.22 mm) in the reported study."""
+        assert 1.88 < ENDPLATE_FIT_UNTRUSTED_RMSE_MM < 5.22
+        assert ENDPLATE_FIT_UNTRUSTED_RMSE_MM == 3.0
+
+    def test_rough_levels_aim_along_distance_weighted_neighbours(self):
+        t12 = _make_level_analysis(32, "T12", -2.2, 0.46)
+        l1 = _make_level_analysis(31, "L1", -11.7, 5.22)
+        l2 = _make_level_analysis(30, "L2", -12.3, 6.82)
+        l3 = _make_level_analysis(29, "L3", 5.8, 1.87)
+        analyses = [t12, l1, l2, l3]
+
+        resolve_endplate_references(analyses)
+
+        assert l1.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert l1.endplate_reference_levels == ("T12", "L3")
+        assert endplate_slope_deg(l1.reference_endplate_normal) == pytest.approx(
+            0.47, abs=0.3
+        )
+
+        assert l2.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert l2.endplate_reference_levels == ("T12", "L3")
+        assert endplate_slope_deg(l2.reference_endplate_normal) == pytest.approx(
+            3.1, abs=0.3
+        )
+
+        assert t12.endplate_reference == ENDPLATE_REFERENCE_OWN
+        assert np.allclose(t12.reference_endplate_normal, t12.upper_endplate_normal)
+        assert l3.endplate_reference == ENDPLATE_REFERENCE_OWN
+        assert np.allclose(l3.reference_endplate_normal, l3.upper_endplate_normal)
+
+    def test_adjacent_neighbours_average_equally(self):
+        """Two donors one level away average with equal (1/1) weight."""
+        above = _make_level_analysis(32, "T12", 10.0, 0.5)
+        rough = _make_level_analysis(31, "L1", -20.0, 6.0)
+        below = _make_level_analysis(30, "L2", 20.0, 0.5)
+        analyses = [above, rough, below]
+
+        resolve_endplate_references(analyses)
+
+        assert rough.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert rough.endplate_reference_levels == ("T12", "L2")
+        assert endplate_slope_deg(rough.reference_endplate_normal) == pytest.approx(
+            15.0, abs=0.5
+        )
+
+    def test_no_trusted_neighbour_within_two_levels_gives_none(self):
+        rough = _make_level_analysis(31, "L1", -20.0, 6.0)
+        far_donor = _make_level_analysis(34, "T10", 5.0, 0.5)  # 3 levels away
+        analyses = [rough, far_donor]
+
+        resolve_endplate_references(analyses)
+
+        assert rough.endplate_reference == ENDPLATE_REFERENCE_NONE
+        assert rough.reference_endplate_normal is None
+        assert rough.endplate_reference_levels == ()
+
+    def test_missing_fit_borrows_from_neighbours(self):
+        """A level with no own fit at all still borrows like a rough one."""
+        above = _make_level_analysis(32, "T12", 4.0, 0.5)
+        missing = _make_level_analysis(31, "L1")  # no normal, no rmse
+        below = _make_level_analysis(30, "L2", 8.0, 0.5)
+        analyses = [above, missing, below]
+
+        resolve_endplate_references(analyses)
+
+        assert missing.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert missing.endplate_reference_levels == ("T12", "L2")
+        assert missing.reference_endplate_normal is not None
+
+    def test_s1_and_sacrum_never_donate_or_borrow(self):
+        l4 = _make_level_analysis(28, "L4", 8.0, 0.5)
+        l5 = _make_level_analysis(27, "L5", -20.0, 6.0)   # rough
+        s1 = _make_level_analysis(26, "S1", -34.3, 1.88)  # its own good fit
+
+        resolve_endplate_references([l4, l5, s1])
+
+        # L5 borrows only from L4: S1 must never be offered as a donor.
+        assert l5.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert l5.endplate_reference_levels == ("L4",)
+
+        # A rough S1 keeps its own fit -- S1 never borrows either.
+        rough_s1 = _make_level_analysis(26, "S1", -34.3, 6.0)
+        resolve_endplate_references([l4, rough_s1])
+        assert rough_s1.endplate_reference == ENDPLATE_REFERENCE_OWN
+        assert np.allclose(
+            rough_s1.reference_endplate_normal, rough_s1.upper_endplate_normal
+        )
+
+    def test_resolution_is_idempotent_and_keeps_the_raw_fit(self):
+        t12 = _make_level_analysis(32, "T12", -2.2, 0.46)
+        l1 = _make_level_analysis(31, "L1", -11.7, 5.22)
+        l3 = _make_level_analysis(29, "L3", 5.8, 1.87)
+        analyses = [t12, l1, l3]
+
+        resolve_endplate_references(analyses)
+        first_reference = l1.reference_endplate_normal.copy()
+        first_rmse = l1.endplate_fit_rmse_mm
+        first_normal = l1.upper_endplate_normal.copy()
+
+        resolve_endplate_references(analyses)
+
+        assert l1.endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS
+        assert np.allclose(l1.reference_endplate_normal, first_reference)
+        assert l1.endplate_fit_rmse_mm == first_rmse
+        assert np.allclose(l1.upper_endplate_normal, first_normal)
+
+    def test_endplate_context_labels_adds_detected_neighbours_within_two_levels(self):
+        selected = [30, 31]
+        available = list(range(26, 34))
+        assert endplate_context_labels(selected, available) == [28, 29, 32, 33]
 
 
 if __name__ == "__main__":

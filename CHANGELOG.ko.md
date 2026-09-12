@@ -11,6 +11,79 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 > 검증을 뜻하지 않습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와
 > 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
+## [0.2.2] - 2026-09-12
+
+작업 단계 표시줄을 따라가는 단계별 오른쪽 패널, 화면 전체가 아니라 선택한
+Screw MPR 스크류의 등급 판정 기준이 되는 척추 하나만 여는 3D 절단, 그리고
+압박골절이나 Schmorl node처럼 신뢰할 수 없는 상위 종판 적합을 그대로 따라
+스크류를 기울이는 대신 가장 가까운 적합이 양호한(well-fitted) 이웃 레벨을
+빌려 쓰도록 한 플래너 수정이 포함됩니다.
+
+### 추가
+
+- 세 탭 위젯 위에 고정되어 있던 "Planning Cockpit" 요약을 대신하는 4페이지
+  단계 패널(Study / Segment / Plan / Review). Review 페이지는 레벨별 스크류
+  목록을 중심으로 구성되며, 목록 위에는 선택한 스크류의 핵심 수치(레벨/side,
+  직경, 길이, 등급)가 크게 표시되고, 동작 버튼은 목록 바로 아래에, 경고는
+  "⚠ N warnings" 한 줄로 접혀 있으며, 나머지 지표는 Details 섹션에 접혀
+  있습니다.
+- 스크류 계획 표의 마지막 열이 이제 행마다의 경고 개수(⚠)이며, 기존 Source
+  열을 대체합니다(자세한 내용은 "변경" 참고).
+- 3D 화면 머리글에 **Vertebrae / Full CT** 토글이 추가되어, 3D에서 CT
+  volume이 보이는지 여부를 항상 반영하며 이제 그 여부를 직접 결정합니다.
+  3D segmentation overlay는 계속 "Show 3D" 체크박스가 결정합니다. 척추를
+  분리하면 overlay가 숨겨지고, Full CT로 돌아가면 그 체크박스가 켜져 있을
+  때만 다시 보입니다.
+- TotalSegmentator 실행이 척추 라벨을 감지하면(threshold fallback은
+  제외) 척추를 자동으로 isolate하고, 패널을 Plan 단계로 전환합니다.
+- Screw MPR의 3D cross-section이 이제 실제 텍스처가 입혀진 CT 단면이 되어,
+  Cross-section 창과 똑같이 Position·회전·plane 오프셋을 따라가며 Study 페이지의
+  Window/Level 설정으로 렌더링됩니다. 선택한 스크류의 등급 판정 기준이 되는 척추만
+  그 평면에서 열려 불투명하게 표시되고 주변은 흐리게 처리되며, 다른 모든
+  레벨은 Vertebrae·Full CT 두 모드 모두에서 그대로 남습니다. 새로 추가된
+  **Cut View** 버튼은 entry 쪽에서 스크류를 따라 cross-section을 내려다보도록
+  카메라를 맞춰 줍니다.
+- `endplate_reference`(`own` / `neighbours` / `none`)가 스크류의 궤적과
+  각도가 실제로 어느 상위 종판 적합을 기준으로 측정되었는지 기록합니다.
+  Review 페이지 Details 섹션에 표시되고 CSV의 마지막 열로 내보내집니다.
+
+### 변경
+
+- 작업 단계 표시줄은 이제 4페이지 사이를 이동하는 역할만 하며, 더 이상 Open
+  DICOM, Run Auto Segmentation, Plan Screws를 직접 실행하지 않습니다.
+- 척추 레벨 체크박스("Visible / Plan Levels")가 Study 탭의 Segmentation
+  섹션에서 Plan 페이지("Levels to plan")로 옮겨졌으며, Full CT 모드에서 CT
+  volume 자체를 가리거나 보여주는 역할은 더 이상 하지 않습니다 — 이제 3D
+  헤더 토글의 역할입니다.
+- Tools 탭의 "Validation" 섹션이 Study 페이지로 옮겨지면서 이름도
+  "3D Rendering"으로 바뀌었습니다.
+- Isolate Vertebrae 버튼과 3D **Vertebrae / Full CT** 토글은 이제
+  threshold-fallback mask(척추 라벨이 없음)에서는 비활성화됩니다. 이전에는
+  fallback을 포함해 segmentation이 끝나기만 하면 Isolate Vertebrae가
+  활성화되었습니다.
+- Source 열이 스크류 계획 표에서 접이식 Details 섹션으로 옮겨졌습니다. CSV
+  내보내기에는 원래대로 그대로 남아 있습니다.
+- Measurements가 Tools 탭에서 Review 페이지 하단의 접이식 섹션으로
+  옮겨졌습니다. 이 섹션은 스크류 목록, 동작 버튼, Screw MPR 컨트롤,
+  Details 다음에 위치합니다.
+
+### 수정
+
+- Screw MPR이 더 이상 3D 모델을 사라지게 하지 않습니다. 이전에는 volume
+  전체와 척추 메시 전체를 하나의 무한 평면으로 잘랐는데, oblique한 스크류의
+  경우 절단면보다 cranial한 모든 것이 사라졌고, 모든 레벨에서 해당 스크류의
+  척추뿐 아니라 모든 척추의 후방 요소가 함께 잘려나갔습니다.
+- 자체 상위 종판 적합을 신뢰할 수 없는 레벨(RMSE 3.0 mm 초과, 또는 적합
+  자체가 없음 — L1/L2에서 나타난 것과 같은 압박골절이나 Schmorl node)이 더
+  이상 그 망가진 적합을 따라 스크류를 기울이지 않습니다. 대신 위아래 두
+  레벨 이내의 가장 가까운 적합이 양호한 레벨들의 역거리 가중 평균을 따라
+  정렬하며(S1과 sacrum은 이웃 레벨 기준 차용에서 빌려주지도 빌리지도
+  않음), 그런 이웃이 없으면 수평 궤적으로 대체합니다. 플래너와 ScrewTool의
+  재등급 모두 실제로 사용된 기준에 대해 종판각을 보고합니다.
+- 척추경 subregion 옵션을 UI에서 열 방법이 없었습니다(0.2.1부터 이미
+  그랬음). 이제 Segment 단계의 **Advanced options** 토글로 열 수
+  있습니다.
+
 ## [0.2.1] - 2026-09-12
 
 세 가지 주요 계획 단계를 안내하는 작업 단계 표시줄(workflow bar), 3D에서 보는
@@ -258,6 +331,7 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
+[0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

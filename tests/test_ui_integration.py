@@ -169,6 +169,7 @@ class DummyViewer3D(QWidget):
     """Lightweight 3D viewer test double for UI workflow tests."""
 
     header_double_clicked = pyqtSignal(str)
+    isolation_requested = pyqtSignal(bool)
 
     def __init__(self, volume_manager, parent=None):
         super().__init__(parent)
@@ -185,9 +186,26 @@ class DummyViewer3D(QWidget):
         # Screw MPR in 3D: the last planes shown, or None once cleared.
         self.screw_mpr_planes = None
         self.screw_mpr_clear_count = 0
+        self.screw_mpr_label = None
+        self.screw_mpr_window_level = None
+        # (isolated, available) as last reported by set_isolation_state.
+        self.isolation_state = (False, False)
 
-    def show_screw_mpr(self, oblique_axial, oblique_sagittal, cross_section):
+    def set_isolation_state(self, isolated: bool, available: bool) -> None:
+        self.isolation_state = (bool(isolated), bool(available))
+
+    def show_screw_mpr(
+        self,
+        oblique_axial,
+        oblique_sagittal,
+        cross_section,
+        *,
+        vertebra_label=None,
+        window_level=None,
+    ):
         self.screw_mpr_planes = (oblique_axial, oblique_sagittal, cross_section)
+        self.screw_mpr_label = vertebra_label
+        self.screw_mpr_window_level = window_level
 
     def clear_screw_mpr(self):
         self.screw_mpr_planes = None
@@ -310,6 +328,17 @@ def _write_mask(image, path):
     sitk.WriteImage(mask, str(path))
 
 
+def _write_vertebra_mask(image, path, label=28):
+    """A mask carrying one real vertebra label (28 = L4), for the isolation
+    tests: a plain thresholded mask (see _write_mask) has no label
+    TotalSegmentator would ever emit, so ``_on_finished`` never treats it as
+    having detected vertebrae and never auto-isolates on it.
+    """
+    mask = sitk.Cast(image > 0, sitk.sitkUInt8) * int(label)
+    mask.CopyInformation(image)
+    sitk.WriteImage(mask, str(path))
+
+
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
     """Redirect MainWindow's QSettings into temp INI files.
@@ -392,7 +421,7 @@ def test_default_control_panel_expands_only_main_workflow(ui_main_window):
 
     assert window.segmentation_group.is_collapsed is False
     assert window.planning_group.is_collapsed is False
-    assert window.selected_screw_group.is_collapsed is False
+    assert window.selected_screw_group.property("role") == "review"
     assert all(
         group.is_collapsed
         for group in window.secondary_control_groups
@@ -590,6 +619,9 @@ def test_delete_key_removes_the_active_mpr_measurement(ui_main_window):
 
 
 def test_selected_vertebrae_can_be_shown_alone_in_3d(ui_main_window):
+    """The CT volume's 3D visibility now follows the isolation toggle, not
+    the level checkboxes: in Full CT mode the CT stays on screen whatever
+    levels are checked, and only an isolated session hides it."""
     window = ui_main_window
     window._seg_ctrl._last_vtk_mask = object()
     window._seg_ctrl._last_segmentation_mask_path = "mask.nii.gz"
@@ -598,11 +630,16 @@ def test_selected_vertebrae_can_be_shown_alone_in_3d(ui_main_window):
     window._vertebra_level_checks[29].setChecked(False)
 
     assert window.viewer_3d.vertebral_mesh_labels == [28, 30]
-    assert window.viewer_3d.volume_visible is False
+    assert window.viewer_3d.volume_visible is True
 
     window._toggle_vertebra_level_checks(True)
 
     assert window.viewer_3d.vertebral_mesh_labels == [28, 29, 30]
+
+    window._seg_ctrl._vertebrae_isolated = True
+    window._on_vertebra_level_selection_changed()
+
+    assert window.viewer_3d.volume_visible is False
 
 
 def test_segmented_vertebrae_use_shared_live_checkboxes(ui_main_window):
@@ -813,7 +850,7 @@ def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
     guided_index = window.workspace_mode_combo.findData("guided")
     assert guided_index >= 0
     assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
-    assert list(window.control_section_order) == ["Study", "Planning", "Tools"]
+    assert list(window.step_section_order) == ["Study", "Segment", "Plan", "Review"]
 
 
 def test_selected_screw_inspector_updates_from_list_selection(ui_main_window):
@@ -2319,7 +2356,7 @@ def _add_screw(window, source):
     window._tool_ctrl._add_screw_to_list(screw)
 
 
-def test_workflow_bar_sits_above_the_views_and_starts_at_open_dicom(ui_main_window):
+def test_workflow_bar_sits_above_the_views_and_starts_at_study(ui_main_window):
     window = ui_main_window
     bar = window.workflow_bar
     b = bar.buttons
@@ -2327,11 +2364,9 @@ def test_workflow_bar_sits_above_the_views_and_starts_at_open_dicom(ui_main_wind
     layout = bar.parentWidget().layout()
     assert layout.indexOf(bar) == 0
 
-    assert b[0].isEnabled() is True
+    assert all(button.isEnabled() for button in b)
     assert b[0].property("role") == "primary"
-    assert b[0].text() == "①  Open DICOM"
-    assert b[1].isEnabled() is False
-    assert b[2].isEnabled() is False
+    assert b[0].text() == "①  Study"
     assert b[1].toolTip() == "Open a DICOM series first"
 
 
@@ -2340,13 +2375,12 @@ def test_workflow_bar_advances_to_segment_after_a_study_loads(ui_main_window):
     _load_study(window, "WF-STUDY-1")
     b = window.workflow_bar.buttons
 
-    assert b[0].text() == "✓ Open DICOM"
+    assert b[0].text() == "✓ Study"
     assert b[0].property("role") == "secondary"
-    assert b[1].isEnabled() is True
     assert b[1].property("role") == "primary"
     assert b[1].toolTip() == "Run TotalSegmentator on the loaded study"
-    assert b[2].isEnabled() is False
     assert b[2].toolTip() == "Run segmentation first"
+    assert window.step_panel.current_step == "Segment"
 
 
 def test_workflow_bar_finishes_segment_for_a_totalsegmentator_mask(
@@ -2359,8 +2393,7 @@ def test_workflow_bar_finishes_segment_for_a_totalsegmentator_mask(
 
     assert b[1].text() == "✓ Segment"
     assert b[2].property("role") == "primary"
-    assert b[2].isEnabled() is False
-    assert b[2].toolTip() == "Select vertebral levels in the Planning tab"
+    assert b[2].toolTip() == "Select vertebral levels in the Plan step"
 
 
 def test_workflow_bar_keeps_segment_open_after_a_threshold_fallback(
@@ -2373,7 +2406,6 @@ def test_workflow_bar_keeps_segment_open_after_a_threshold_fallback(
 
     assert b[1].text() == "②  Segment"
     assert b[1].property("role") == "primary"
-    assert b[2].isEnabled() is False
 
 
 def test_workflow_bar_enables_plan_once_levels_are_selected(
@@ -2386,12 +2418,11 @@ def test_workflow_bar_enables_plan_once_levels_are_selected(
     b = window.workflow_bar.buttons
 
     assert window.auto_screw_plan_btn.isEnabled() is True
-    assert b[2].isEnabled() is True
     assert b[2].toolTip() == "Plan screws for the selected vertebral levels"
 
     window._toggle_vertebra_level_checks(False)
 
-    assert b[2].isEnabled() is False
+    assert b[2].toolTip() == "Select vertebral levels in the Plan step"
 
 
 def test_workflow_bar_finishes_plan_for_auto_screws_but_not_manual_ones(
@@ -2403,16 +2434,16 @@ def test_workflow_bar_finishes_plan_for_auto_screws_but_not_manual_ones(
     b = window.workflow_bar.buttons
 
     _add_screw(window, "manual")
-    assert b[2].text() == "③  Plan Screws"
+    assert b[2].text() == "③  Plan"
 
     _add_screw(window, "auto")
-    assert b[2].text() == "✓ Plan Screws"
-    assert not any(button.property("role") == "primary" for button in b)
+    assert b[2].text() == "✓ Plan"
+    assert b[3].property("role") == "primary"
 
     window.screw_list_widget.setCurrentRow(1)
     window._tool_ctrl.remove_selected_screw()
 
-    assert b[2].text() == "③  Plan Screws"
+    assert b[2].text() == "③  Plan"
     assert b[2].property("role") == "primary"
 
 
@@ -2430,15 +2461,14 @@ def test_workflow_bar_resets_when_a_new_study_is_loaded(
     _finish_segmentation(window, tmp_path, monkeypatch)
     _add_screw(window, "auto")
     b = window.workflow_bar.buttons
-    assert b[2].text() == "✓ Plan Screws"
+    assert b[2].text() == "✓ Plan"
 
     _load_study(window, "WF-STUDY-SECOND")
 
-    assert b[0].text() == "✓ Open DICOM"
+    assert b[0].text() == "✓ Study"
     assert b[1].text() == "②  Segment"
     assert b[1].property("role") == "primary"
-    assert b[2].text() == "③  Plan Screws"
-    assert b[2].isEnabled() is False
+    assert b[2].text() == "③  Plan"
 
 
 def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
@@ -2455,32 +2485,23 @@ def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
     assert b[1].property("role") == "primary"
 
 
-def test_workflow_bar_steps_run_the_same_actions_as_the_tab_buttons(
-    ui_main_window, monkeypatch, tmp_path
-):
+def test_workflow_bar_steps_navigate_to_their_pages(ui_main_window, tmp_path, monkeypatch):
+    """Every step now navigates -- it never runs Open DICOM / Segment / Plan
+    directly, since those actions live on the pages themselves."""
     window = ui_main_window
     b = window.workflow_bar.buttons
-    calls = []
 
-    monkeypatch.setattr(
-        window._dicom_ctrl, "open_folder", lambda: calls.append("open")
-    )
     b[0].click()
-    assert calls == ["open"]
+    assert window.step_panel.current_step == "Study"
 
-    _load_study(window, "WF-STUDY-8")
-    window.seg_run_btn.clicked.disconnect()
-    window.seg_run_btn.clicked.connect(lambda *_: calls.append("segment"))
     b[1].click()
-    assert calls == ["open", "segment"]
+    assert window.step_panel.current_step == "Segment"
 
-    _finish_segmentation(window, tmp_path, monkeypatch)
-    window.update_vertebra_level_checks([28, 29, 30])
-    window.auto_screw_plan_btn.clicked.disconnect()
-    window.auto_screw_plan_btn.clicked.connect(lambda *_: calls.append("plan"))
     b[2].click()
+    assert window.step_panel.current_step == "Plan"
 
-    assert calls == ["open", "segment", "plan"]
+    b[3].click()
+    assert window.step_panel.current_step == "Review"
 
 
 @pytest.mark.parametrize("close_first", [True, False])
@@ -2520,3 +2541,241 @@ def test_destroying_a_window_with_screw_rows_raises_nothing(
 
     assert exceptions == []
     assert sip.isdeleted(button)
+
+
+# ---------------------------------------------------------------------------
+# Automatic vertebra isolation and the 3D header toggle.
+# ---------------------------------------------------------------------------
+
+
+def test_totalsegmentator_result_isolates_vertebrae_automatically(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-1")
+    mask_path = tmp_path / "totalsegmentator_mask.nii.gz"
+    _write_vertebra_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window.viewer_3d.volume_visible is False
+    assert window.viewer_3d.isolation_state == (True, True)
+    assert window.vertebra_isolate_btn.text() == "Restore Full Volume"
+    assert window.step_panel.current_step == "Plan"
+
+
+def test_threshold_fallback_does_not_isolate_and_disables_the_toggle(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-2")
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    mask_path = tmp_path / "threshold_fallback_mask.nii.gz"
+    _write_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="threshold_fallback",
+            mask_path=str(mask_path),
+            message="fallback",
+            geometry_warnings=[],
+        )
+    )
+
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.isolation_state == (False, False)
+    assert window.vertebra_isolate_btn.isEnabled() is False
+
+
+def test_3d_header_toggle_switches_between_vertebrae_and_full_ct(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-3")
+    mask_path = tmp_path / "totalsegmentator_mask.nii.gz"
+    _write_vertebra_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is True
+
+    window.viewer_3d.isolation_requested.emit(False)
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.volume_visible is True
+
+    window.viewer_3d.isolation_requested.emit(True)
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window.viewer_3d.volume_visible is False
+
+
+def test_panel_button_and_header_toggle_stay_in_step(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-4")
+    mask_path = tmp_path / "totalsegmentator_mask.nii.gz"
+    _write_vertebra_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+
+    window.vertebra_isolate_btn.click()
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.isolation_state == (False, True)
+    assert window.vertebra_isolate_btn.text() == "Isolate Vertebrae"
+
+    window.vertebra_isolate_btn.click()
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window.viewer_3d.isolation_state == (True, True)
+    assert window.vertebra_isolate_btn.text() == "Restore Full Volume"
+
+
+def test_loading_a_study_shows_the_segment_step(ui_main_window):
+    window = ui_main_window
+    assert window.step_panel.current_step == "Study"
+
+    _load_study(window, "ISO-STUDY-5")
+
+    assert window.step_panel.current_step == "Segment"
+
+
+def test_study_page_open_button_opens_a_folder(monkeypatch, qtbot, isolated_qsettings):
+    """open_dicom_btn is wired directly to ``self._dicom_ctrl.open_folder``
+    (no lambda), so DicomController.open_folder has to be patched on the
+    class before construction -- the connection captures that exact
+    bound-method object, and an instance-attribute patch afterwards would
+    not reach it."""
+    from src.controllers.dicom_controller import DicomController
+
+    calls = []
+    monkeypatch.setattr(
+        DicomController, "open_folder", lambda self: calls.append("open")
+    )
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "soft_light")
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+
+    window.open_dicom_btn.click()
+
+    assert calls == ["open"]
+
+
+def test_window_level_sliders_refresh_the_3d_slice(monkeypatch, qtbot, isolated_qsettings):
+    """Screw MPR's on_window_level_changed must hear every window/level
+    change too, not just ViewController's -- and since the slider's
+    ``.connect(self._screw_mpr_ctrl.on_window_level_changed)`` captures that
+    exact bound-method object, the controller's class method has to be
+    patched before construction for a test double to see the calls."""
+    from src.controllers.screw_mpr_controller import ScrewMPRController
+
+    calls = []
+    monkeypatch.setattr(
+        ScrewMPRController,
+        "on_window_level_changed",
+        lambda self, *a: calls.append(a),
+    )
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "soft_light")
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+
+    window.window_slider.setValue(window.window_slider.value() + 10)
+    window.level_slider.setValue(window.level_slider.value() + 10)
+
+    assert len(calls) == 2
+
+
+def test_screw_counter_refreshes_when_rows_are_added_and_removed(ui_main_window):
+    """A planning run selects the first screw while the table has one row,
+    then appends the rest without reselecting -- the counter must follow the
+    table's row count, not just the last selection change."""
+    window = ui_main_window
+    first = Screw((0.0, 0.0, 0.0), (0.0, 0.0, 30.0))
+    window._tool_ctrl.add_existing_screw(first, select=True)
+    window._tool_ctrl.add_existing_screw(Screw((5.0, 5.0, 5.0), (5.0, 5.0, 35.0)))
+    window._tool_ctrl.add_existing_screw(Screw((9.0, 9.0, 9.0), (9.0, 9.0, 39.0)))
+
+    assert window.selected_screw_counter.text() == "Screw 1 of 3"
+
+    while window.screw_list_widget.count() > 0:
+        window.screw_list_widget.setCurrentRow(0)
+        window._tool_ctrl.remove_selected_screw()
+
+    assert window.selected_screw_counter.text() == "No screws"
+
+
+def test_segmentation_advanced_options_toggle_shows_and_hides_panel(
+    ui_main_window,
+):
+    window = ui_main_window
+
+    assert "Advanced options" in window.seg_advanced_toggle.text()
+    assert window.seg_advanced_toggle.isCheckable()
+    assert window.seg_advanced_panel.isHidden()
+
+    window.seg_advanced_toggle.setChecked(True)
+    assert not window.seg_advanced_panel.isHidden()
+
+    window.seg_advanced_toggle.setChecked(False)
+    assert window.seg_advanced_panel.isHidden()
+
+
+def test_isolation_hides_the_3d_overlay_and_full_ct_honours_show_3d(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Returning to Full CT must not turn the 3D overlay on against "Show 3D".
+
+    Viewer3D.set_volume_visible used to switch the overlay with the volume, so
+    restoring Full CT re-showed it while the checkbox read unchecked.  Now the
+    volume and the overlay are separate: isolation hides the overlay itself,
+    and restoring hands it back to the checkbox.
+    """
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-OVERLAY")
+    mask_path = tmp_path / "totalsegmentator_mask.nii.gz"
+    _write_vertebra_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window.viewer_3d.visible is False          # the mesh replaces it
+
+    window.seg_show_3d_check.setChecked(False)
+    window.viewer_3d.isolation_requested.emit(False)  # Full CT
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.volume_visible is True
+    assert window.viewer_3d.visible is False          # checkbox still wins
+
+    window.seg_show_3d_check.setChecked(True)
+    assert window.viewer_3d.visible is True

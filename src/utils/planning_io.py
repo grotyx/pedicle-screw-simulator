@@ -303,6 +303,11 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             # This column is what tells a reader which of the two it is
             # looking at, so a 24 mm "narrow" pedicle can be read correctly.
             "width_uncertain",
+            # Appended last, per the plan-file contract: which endplate this
+            # screw's angle was measured against ("own", "neighbours" or
+            # "none") -- without it a reader cannot tell an aligned screw from
+            # one that was never measured against an endplate at all.
+            "endplate_reference",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -345,4 +350,5 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "lateral_breach_mm"),
                 _metric_number(metrics, "endplate_angle_deg"),
                 _metric_flag(metrics, "width_uncertain"),
+                str(metrics.get("endplate_reference") or ""),
             ])

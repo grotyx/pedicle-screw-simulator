@@ -37,7 +37,7 @@ from .trajectory_optimizer import (
     TIP_SEGMENT_MM,
     RunProgress,
 )
-from .vertebra import PedicleAnalysisResult
+from .vertebra import PedicleAnalysisResult, aiming_endplate_normal
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .auto_screw_planner import PlannedScrew
@@ -375,7 +375,9 @@ def _plan_cbt_screw(
         # blank until the first drag, when ``ScrewTool._endplate_angle``
         # computed it from this same normal -- a number that appeared because
         # the user nudged the screw.
-        upper_endplate_normal=analysis.upper_endplate_normal,
+        upper_endplate_normal=aiming_endplate_normal(analysis),
+        endplate_reference=analysis.endplate_reference,
+        endplate_reference_levels=analysis.endplate_reference_levels,
     )
     # ``span`` is the catalogue length by construction; recomputing it from the
     # end points would only add float noise to a nominal implant size.

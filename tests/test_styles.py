@@ -135,6 +135,23 @@ def _rule(stylesheet: str, selector: str) -> dict[str, str]:
     return declarations
 
 
+def test_every_theme_styles_the_step_panel_review_and_3d_toggle():
+    for theme_name in THEMES:
+        stylesheet = load_stylesheet(theme_name)
+        assert "QWidget#planningCockpit" not in stylesheet
+        assert 'QPushButton#workflowStep[active="true"]' in stylesheet
+        assert "QWidget#reviewKeyNumbers {" in stylesheet
+        assert "QLabel#stepTitle {" in stylesheet
+        assert "QLabel#reviewKeyValue {" in stylesheet
+        assert "QLabel#screwGradeChip {" in stylesheet
+        for grade in ("A", "B", "C", "D", "E", "NA"):
+            assert f'QLabel#screwGradeChip[grade="{grade}"]' in stylesheet
+        assert "QToolButton#screwWarningsToggle {" in stylesheet
+        assert "QWidget#viewerHeaderBar {" in stylesheet
+        assert "QToolButton#isolationToggle {" in stylesheet
+        assert "QToolButton#isolationToggle:checked {" in stylesheet
+
+
 def test_a_disabled_current_workflow_step_does_not_look_pressable_in_every_theme():
     for theme_name, palette in THEMES.items():
         stylesheet = load_stylesheet(theme_name)

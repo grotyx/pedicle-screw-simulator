@@ -25,6 +25,12 @@ import vtk
 
 logger = logging.getLogger(__name__)
 
+# Name of the per-cell vtkIntArray recording which vertebral label a mesh
+# cell belongs to. Kept separate from "VertebraColors" (the cell scalars
+# used for rendering) so split_mesh_by_label can select cells by label
+# without disturbing which array drives the mesh's appearance.
+VERTEBRA_LABEL_ARRAY = "VertebraLabel"
+
 # TotalSegmentator vertebral body labels (T1 through sacrum)
 VERTEBRA_LABEL_MIN = 25
 VERTEBRA_LABEL_MAX = 43
@@ -482,6 +488,18 @@ def extract_vertebral_mesh(
         colors.FillComponent(2, b_byte)
 
         smoothed_with_normals.GetCellData().SetScalars(colors)
+
+        # Per-cell label so a caller can later isolate one vertebra's cells
+        # (split_mesh_by_label) without re-deriving it from geometry. Added
+        # via AddArray, not SetScalars, so "VertebraColors" stays the array
+        # that drives rendering.
+        label_array = vtk.vtkIntArray()
+        label_array.SetNumberOfComponents(1)
+        label_array.SetName(VERTEBRA_LABEL_ARRAY)
+        label_array.SetNumberOfTuples(n_out_cells)
+        label_array.FillComponent(0, label)
+        smoothed_with_normals.GetCellData().AddArray(label_array)
+
         appender.AddInputData(smoothed_with_normals)
         labels_found.append(label)
 
@@ -510,3 +528,120 @@ def extract_vertebral_mesh(
     )
 
     return result
+
+
+def split_mesh_by_label(
+    poly: vtk.vtkPolyData, label: int
+) -> Tuple[vtk.vtkPolyData, vtk.vtkPolyData]:
+    """Split a combined vertebral mesh into one vertebra and the rest.
+
+    Used by the Screw MPR 3D cut (viewer_3d.py): the screw's own vertebra is
+    shown as a separately clippable actor while every other level's geometry
+    ('rest') stays in the main actor, untouched.
+
+    Args:
+        poly: Combined mesh from extract_vertebral_mesh, with a per-cell
+            VERTEBRA_LABEL_ARRAY.
+        label: Vertebral label to extract.
+
+    Returns:
+        (matching, rest): `matching` holds only cells tagged with `label`,
+        `rest` holds every other cell. Both keep all of the input's cell
+        arrays (including "VertebraColors"). When the label array is absent
+        or the label has no cells, `matching` is empty and `rest` is a
+        shallow copy of the whole input.
+    """
+    empty = vtk.vtkPolyData()
+    if poly is None:
+        return empty, empty
+
+    label_array = poly.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY)
+    if label_array is None:
+        rest = vtk.vtkPolyData()
+        rest.ShallowCopy(poly)
+        return empty, rest
+
+    def _threshold(invert: bool) -> vtk.vtkPolyData:
+        threshold = vtk.vtkThreshold()
+        threshold.SetInputData(poly)
+        threshold.SetInputArrayToProcess(
+            0, 0, 0, vtk.vtkDataObject.FIELD_ASSOCIATION_CELLS, VERTEBRA_LABEL_ARRAY
+        )
+        threshold.SetLowerThreshold(float(label))
+        threshold.SetUpperThreshold(float(label))
+        threshold.SetInvert(invert)
+        threshold.Update()
+
+        geometry = vtk.vtkGeometryFilter()
+        geometry.SetInputConnection(threshold.GetOutputPort())
+        geometry.Update()
+
+        output = vtk.vtkPolyData()
+        output.DeepCopy(geometry.GetOutput())
+        return output
+
+    matching = _threshold(invert=False)
+    rest = _threshold(invert=True)
+
+    if matching.GetNumberOfCells() == 0:
+        rest = vtk.vtkPolyData()
+        rest.ShallowCopy(poly)
+
+    return matching, rest
+
+
+def label_world_bounds(
+    mask_image: vtk.vtkImageData, label: int, margin_mm: float = 0.0
+) -> Optional[Tuple[float, float, float, float, float, float]]:
+    """World-space bounding box of one label's voxels in a segmentation mask.
+
+    Used to size the Screw MPR 3D cut: the local mesh clip and the volume
+    crop box (viewer_3d.py) both need the same physical box around the
+    screw's own vertebra.
+
+    Args:
+        mask_image: Multilabel segmentation mask.
+        label: Label value to bound.
+        margin_mm: Padding added on every side, in millimetres.
+
+    Returns:
+        (xmin, xmax, ymin, ymax, zmin, zmax) in world coordinates, clamped to
+        the mask's own bounds, or None if the label has no voxels.
+    """
+    if mask_image is None:
+        return None
+
+    vois = _find_label_vois(mask_image, [label], (0, 0, 0))
+    voi = vois.get(label)
+    if voi is None:
+        return None
+
+    origin = mask_image.GetOrigin()
+    spacing = mask_image.GetSpacing()
+    mask_bounds = mask_image.GetBounds()
+
+    i0, i1, j0, j1, k0, k1 = voi
+    xmin = origin[0] + spacing[0] * i0 - margin_mm
+    xmax = origin[0] + spacing[0] * i1 + margin_mm
+    ymin = origin[1] + spacing[1] * j0 - margin_mm
+    ymax = origin[1] + spacing[1] * j1 + margin_mm
+    zmin = origin[2] + spacing[2] * k0 - margin_mm
+    zmax = origin[2] + spacing[2] * k1 + margin_mm
+
+    # vtkImageData spacing can be negative on some axes; normalize min/max
+    # before clamping so the clamp compares like with like.
+    if xmin > xmax:
+        xmin, xmax = xmax, xmin
+    if ymin > ymax:
+        ymin, ymax = ymax, ymin
+    if zmin > zmax:
+        zmin, zmax = zmax, zmin
+
+    xmin = max(xmin, mask_bounds[0])
+    xmax = min(xmax, mask_bounds[1])
+    ymin = max(ymin, mask_bounds[2])
+    ymax = min(ymax, mask_bounds[3])
+    zmin = max(zmin, mask_bounds[4])
+    zmax = min(zmax, mask_bounds[5])
+
+    return (xmin, xmax, ymin, ymax, zmin, zmax)

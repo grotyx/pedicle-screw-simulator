@@ -10,7 +10,7 @@ DICOM **LPS** coordinate system.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -64,6 +64,214 @@ def endplate_fit_warning(rmse_mm: float) -> str:
         f"Upper endplate fit is rough (RMSE {rmse_mm:.1f} mm) — "
         "check the sagittal view"
     )
+
+
+#: Endplate fit RMSE above which a level's *own* fit is untrusted for aiming
+#: (mm), rather than merely rough.  Every well-fitted level in the reported
+#: study came in at 1.88 mm or better (S1 1.88, L3 1.87, L5 1.49); every
+#: untrustworthy one started at 5.22 mm (L1) and climbed to 6.82 mm (L2).  3.0
+#: sits about 1.6x above the worst trusted fit and 1.7x below the best
+#: untrusted one (their geometric midpoint is about 3.1), and it is two to
+#: three lumbar CT slices deep -- far beyond the stair-step noise
+#: ``ENDPLATE_FIT_RMSE_WARNING_MM`` is about, and about the depth of a real
+#: superior-surface irregularity (a compression fracture or a Schmorl node).
+#: Between 1.5 and 3.0 mm the own fit is still used, with today's rough-fit
+#: warning; only past 3.0 mm does the planner stop trusting it to aim with.
+ENDPLATE_FIT_UNTRUSTED_RMSE_MM: float = 3.0
+
+#: How many levels up or down :func:`resolve_endplate_references` may search
+#: for a trusted donor.  Beyond two levels the segmental lordosis differs too
+#: much for a borrowed normal to be a better aim than a horizontal fallback.
+ENDPLATE_REFERENCE_MAX_LEVEL_GAP: int = 2
+
+#: Values :attr:`~src.core.vertebra.PedicleAnalysisResult.endplate_reference`
+#: may hold.
+ENDPLATE_REFERENCE_OWN = "own"
+ENDPLATE_REFERENCE_NEIGHBOURS = "neighbours"
+ENDPLATE_REFERENCE_NONE = "none"
+
+#: Sacrum and S1 never donate or borrow an endplate reference.  The
+#: lumbosacral angle differs from L5's own by 15-30 degrees, so borrowing
+#: across it would be worse than a rough own fit, and giving S1's normal to
+#: L5 (or the reverse) would tilt the receiving level badly.
+_ENDPLATE_REFERENCE_EXCLUDED_LABELS = frozenset({25, 26})
+
+#: Shared prefix of every endplate-reference warning, so a caller can spot one
+#: without matching the whole sentence.
+ENDPLATE_REFERENCE_WARNING_PREFIX = "Endplate reference"
+
+
+def endplate_neighbour_reference_warning(
+    rmse_mm: Optional[float], levels: Sequence[str]
+) -> str:
+    """Wording for a level aimed along a well-fitted neighbour instead of its own.
+
+    ``rmse_mm`` is ``None`` when the level had no own fit to be rough about at
+    all (a missing plane, not a bad one); the wording says which case applies.
+    """
+    joined = " and ".join(levels)
+    if rmse_mm is None:
+        return (
+            f"{ENDPLATE_REFERENCE_WARNING_PREFIX}: no upper-endplate fit; "
+            f"aimed along {joined} — check the sagittal view"
+        )
+    return (
+        f"{ENDPLATE_REFERENCE_WARNING_PREFIX}: own upper-endplate fit too "
+        f"rough (RMSE {rmse_mm:.1f} mm); aimed along {joined} — check the "
+        "sagittal view"
+    )
+
+
+def endplate_no_reference_warning(rmse_mm: float) -> str:
+    """Wording for a rough fit with no well-fitted neighbour to borrow from."""
+    return (
+        f"{ENDPLATE_REFERENCE_WARNING_PREFIX}: own upper-endplate fit too "
+        f"rough (RMSE {rmse_mm:.1f} mm) and no well-fitted neighbour; used "
+        "horizontal sagittal trajectory"
+    )
+
+
+def resolve_endplate_references(analyses: Sequence[PedicleAnalysisResult]) -> None:
+    """Decide, per analysis, what its screw should be aimed and measured against.
+
+    Idempotent, and safe to call over overlapping sets: a lone re-resolved
+    analysis first (see ``AutoScrewPlanner._plan_screw``), then the whole batch
+    including context levels (see ``AutoScrewPlanner.plan_all``).  Mutates
+    only ``endplate_reference``, ``reference_endplate_normal`` and
+    ``endplate_reference_levels`` -- never ``upper_endplate_normal`` or
+    ``endplate_fit_rmse_mm``, so the raw measurement always survives for
+    diagnostics regardless of which reference was chosen.
+
+    A level is *trusted* when it has its own normal, is not sacrum/S1, and its
+    fit RMSE is either unrecorded (``None`` -- every hand-built test analysis
+    looks like this, and must keep planning exactly as it does today) or at
+    most :data:`ENDPLATE_FIT_UNTRUSTED_RMSE_MM`.
+
+    * Sacrum/S1: reference is its own fit when it has one, else none -- it
+      never borrows and is never offered as a donor.
+    * A trusted level: reference is its own fit.
+    * Otherwise (a rough fit, or none at all): reference is the
+      inverse-distance-weighted average of the nearest trusted donor above and
+      the nearest trusted donor below (within
+      :data:`ENDPLATE_REFERENCE_MAX_LEVEL_GAP` levels; a higher
+      TotalSegmentator label is more cranial), oriented ``+Z``.  With one donor
+      this is just that donor's normal; with two adjacent donors it is a plain
+      average.  With no donor within reach, the reference is none.
+    """
+    by_label: Dict[int, PedicleAnalysisResult] = {
+        a.vertebra.label: a for a in analyses
+    }
+
+    def is_trusted(a: PedicleAnalysisResult) -> bool:
+        if a.vertebra.label in _ENDPLATE_REFERENCE_EXCLUDED_LABELS:
+            return False
+        if a.upper_endplate_normal is None:
+            return False
+        rmse = a.endplate_fit_rmse_mm
+        return rmse is None or rmse <= ENDPLATE_FIT_UNTRUSTED_RMSE_MM
+
+    for analysis in analyses:
+        label = analysis.vertebra.label
+
+        if label in _ENDPLATE_REFERENCE_EXCLUDED_LABELS:
+            if analysis.upper_endplate_normal is not None:
+                analysis.endplate_reference = ENDPLATE_REFERENCE_OWN
+                analysis.reference_endplate_normal = np.array(
+                    analysis.upper_endplate_normal, dtype=np.float64
+                )
+            else:
+                analysis.endplate_reference = ENDPLATE_REFERENCE_NONE
+                analysis.reference_endplate_normal = None
+            analysis.endplate_reference_levels = ()
+            continue
+
+        if is_trusted(analysis):
+            analysis.endplate_reference = ENDPLATE_REFERENCE_OWN
+            analysis.reference_endplate_normal = np.array(
+                analysis.upper_endplate_normal, dtype=np.float64
+            )
+            analysis.endplate_reference_levels = ()
+            continue
+
+        # Rough or missing own fit: find the nearest trusted donor above and
+        # below, each within ENDPLATE_REFERENCE_MAX_LEVEL_GAP levels.
+        above: Optional[PedicleAnalysisResult] = None
+        above_distance = 0
+        for distance in range(1, ENDPLATE_REFERENCE_MAX_LEVEL_GAP + 1):
+            candidate = by_label.get(label + distance)
+            if candidate is not None and is_trusted(candidate):
+                above, above_distance = candidate, distance
+                break
+        below: Optional[PedicleAnalysisResult] = None
+        below_distance = 0
+        for distance in range(1, ENDPLATE_REFERENCE_MAX_LEVEL_GAP + 1):
+            candidate = by_label.get(label - distance)
+            if candidate is not None and is_trusted(candidate):
+                below, below_distance = candidate, distance
+                break
+
+        donors: List[Tuple[PedicleAnalysisResult, int]] = []
+        if above is not None:
+            donors.append((above, above_distance))
+        if below is not None:
+            donors.append((below, below_distance))
+
+        if not donors:
+            analysis.endplate_reference = ENDPLATE_REFERENCE_NONE
+            analysis.reference_endplate_normal = None
+            analysis.endplate_reference_levels = ()
+            continue
+
+        weighted = np.zeros(3, dtype=np.float64)
+        for donor, distance in donors:
+            donor_normal = np.asarray(donor.upper_endplate_normal, dtype=np.float64)
+            donor_norm = float(np.linalg.norm(donor_normal))
+            if donor_norm <= 1e-9:
+                continue
+            weighted += (donor_normal / donor_norm) / float(distance)
+        norm = float(np.linalg.norm(weighted))
+        if norm <= 1e-9:
+            analysis.endplate_reference = ENDPLATE_REFERENCE_NONE
+            analysis.reference_endplate_normal = None
+            analysis.endplate_reference_levels = ()
+            continue
+
+        reference = weighted / norm
+        if reference[2] < 0.0:
+            reference = -reference
+        analysis.endplate_reference = ENDPLATE_REFERENCE_NEIGHBOURS
+        analysis.reference_endplate_normal = reference
+        # Cranial to caudal: the above donor (if any) first, then below.
+        levels: List[str] = []
+        if above is not None:
+            levels.append(above.vertebra.name)
+        if below is not None:
+            levels.append(below.vertebra.name)
+        analysis.endplate_reference_levels = tuple(levels)
+
+
+def endplate_context_labels(
+    selected: Sequence[int], available: Iterable[int]
+) -> List[int]:
+    """Labels near ``selected`` worth analysing as endplate context only.
+
+    A level the surgeon did not select for planning may still hold the
+    well-fitted normal a selected rough level needs to borrow.  Returns every
+    ``available`` label that is not itself selected, is not excluded from
+    donating (sacrum/S1), and lies within
+    :data:`ENDPLATE_REFERENCE_MAX_LEVEL_GAP` levels of some selected label.
+    """
+    selected_set = {int(s) for s in selected}
+    context: List[int] = []
+    for raw_label in available:
+        label = int(raw_label)
+        if label in selected_set or label in _ENDPLATE_REFERENCE_EXCLUDED_LABELS:
+            continue
+        if any(
+            abs(label - s) <= ENDPLATE_REFERENCE_MAX_LEVEL_GAP for s in selected_set
+        ):
+            context.append(label)
+    return sorted(context)
 
 
 #: Lateral offset from the vertebral body below which the axial re-check stops

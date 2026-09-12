@@ -1,5 +1,6 @@
 """Tests for the cortical bone trajectory (CBT / mCBT) planning mode."""
 
+import math
 import os
 import sys
 
@@ -14,6 +15,7 @@ from src.core.auto_screw_planner import AutoScrewPlanner
 from src.core.cbt_planner import cbt_directions, cbt_entry_point, plan_cbt_screw
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
+from src.core.screw_geometry import endplate_angle_deg, endplate_slope_deg
 from src.core.screw_grading import ScrewGrader
 from src.core.trajectory_optimizer import TIP_MARGIN_RELIEF_MM, TIP_SEGMENT_MM
 from src.utils.constants import CBT_CONTRAINDICATION_NOTE, CBT_DEFAULTS
@@ -212,6 +214,39 @@ def test_a_cbt_screw_reports_its_endplate_angle():
     assert "endplate_angle_deg" in screw.metrics
     # Cranially angled by construction, so it cannot read as endplate-parallel.
     assert screw.metrics["endplate_angle_deg"] > 5.0
+
+
+def test_cbt_endplate_metric_is_measured_against_the_reference():
+    """A resolved 'neighbours' reference is measured, not the raw own fit.
+
+    Mirrors ``test_a_cbt_screw_reports_its_endplate_angle`` but with the
+    analysis pre-resolved to a reference deliberately far from its own fit, so
+    a CBT screw measured against ``upper_endplate_normal`` directly (instead
+    of through ``aiming_endplate_normal``) would fail this.
+    """
+    ct, mask, analysis = _setup()
+    own_slope = endplate_slope_deg(analysis.upper_endplate_normal)
+    reference_slope = own_slope + 25.0
+    reference_normal = np.array(
+        [
+            0.0,
+            math.sin(math.radians(reference_slope)),
+            math.cos(math.radians(reference_slope)),
+        ]
+    )
+    analysis.endplate_reference = "neighbours"
+    analysis.reference_endplate_normal = reference_normal
+    analysis.endplate_reference_levels = ("L3", "L5")
+
+    screw = plan_cbt_screw(
+        ScrewGrader(mask, ct), analysis, "left", LABEL, PlannerConfig(trajectory="cbt")
+    )
+
+    assert screw is not None
+    expected = endplate_angle_deg(screw.entry_lps, screw.target_lps, reference_normal)
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(expected)
+    assert screw.metrics["endplate_reference"] == "neighbours"
+    assert screw.metrics["endplate_reference_levels"] == "L3, L5"
 
 
 def test_a_cbt_screw_on_a_flagged_width_marks_it_untrusted():

@@ -42,7 +42,7 @@ py -3.12 -m venv venv
 - `windows-2025`: Windows x64
 - `macos-15`: macOS Apple Silicon
 
-GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.1` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
+GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.2` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
 
 ## Standalone 기능 범위
 
@@ -74,7 +74,7 @@ dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
        fold_0/checkpoint_final.pth
    ```
 3. 프로그램을 실행하는 것과 동일한 환경에 `nnunetv2`를 설치합니다(`nnUNetv2_predict`가 인터프리터의 `Scripts`/`bin` 폴더 옆에서 실행 가능해야 합니다).
-4. Segmentation → Advanced의 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 `.../nnUNetTrainer__nnUNetPlans__3d_fullres` 폴더를 가리키도록 설정한 뒤 **Use pedicle subregion model**을 켭니다.
+4. Segment 페이지의 **Advanced options** 토글 안에 있는 **Model directory** 입력란(또는 `PSS_SUBREGION_MODEL_DIR` 환경변수)이 `.../nnUNetTrainer__nnUNetPlans__3d_fullres` 폴더를 가리키도록 설정한 뒤 **Use pedicle subregion model**을 켭니다.
 
 **현재 알려진 제한사항:** 현재 upstream에 공개된 Spine_Subregions release 자산은 위에서 설명한 nnU-Net **v2** results 폴더 구조가 아니라 nnU-Net **v1** 방식의 폴더 이름(`nnUNetTrainerV2__nnUNetPlansv2.1`)을 사용합니다. 이 가중치가 nnU-Net v2용으로 재출력(재변환)되기 전까지는 해당 release 폴더를 **Model directory**에 지정해도 유효한 모델로 인식되지 않으며, segmentation 상태 표시줄에는 "pedicle model used" 대신 "pedicle model unavailable"이 표시됩니다.
 

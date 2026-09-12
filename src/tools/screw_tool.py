@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, 
 from src.models.screw import Screw
 
 from ..core.screw_geometry import endplate_angle_deg
+from ..core.vertebra import aiming_endplate_normal
 from ..utils.constants import (
     DEFAULT_SCREW_DIAMETER,
     DEFAULT_SCREW_LENGTH,
@@ -80,6 +81,11 @@ _PEDICLE_ANALYSIS_METRIC_KEYS = (
     "pedicle_width_mm",
     "narrow_pedicle",
     "width_uncertain",
+    # Which endplate reference the angle above was measured against, and (when
+    # it is "neighbours") the donor levels.  Same registry dependency as
+    # endplate_angle_deg, so a missing registry must not blank either.
+    "endplate_reference",
+    "endplate_reference_levels",
 )
 
 #: The metrics this tool measures from the trajectory in front of it, and so
@@ -163,8 +169,11 @@ class ScrewTool:
         self._grader: Optional["ScrewGrader"] = None
 
         # Pedicle analyses keyed by mask label, handed over by the planning
-        # controller after a run.  The tool reads only ``upper_endplate_normal``
-        # from them, so any object with that attribute works.
+        # controller after a run.  The tool reads ``upper_endplate_normal``
+        # (and, once resolved, ``endplate_reference`` /
+        # ``reference_endplate_normal`` / ``endplate_reference_levels`` via
+        # :func:`~src.core.vertebra.aiming_endplate_normal`) from them, so any
+        # object modelling that duck-typed surface works.
         self._analysis_by_level: Dict[int, Any] = {}
 
         # Thresholds the active PlannerConfig owns, pushed in by whoever holds
@@ -241,9 +250,18 @@ class ScrewTool:
         return lookup(int(label)) if callable(lookup) else None
 
     def _endplate_angle(self, screw: Screw, label: int) -> Optional[float]:
-        """Signed angle to the level's upper endplate, or None if unknown."""
+        """Signed angle to the level's endplate reference, or None if unknown.
+
+        Reads through :func:`aiming_endplate_normal`, so a re-grade measures
+        against the same reference the planner aimed and reported with --
+        the level's own fit, a neighbour-borrowed blend, or nothing at all --
+        rather than always falling back to the raw (possibly untrustworthy)
+        own fit.
+        """
         analysis = self._analysis_for(label)
-        normal = getattr(analysis, "upper_endplate_normal", None)
+        if analysis is None:
+            return None
+        normal = aiming_endplate_normal(analysis)
         if normal is None:
             return None
         return endplate_angle_deg(screw.entry_point, screw.target_point, normal)
@@ -658,6 +676,13 @@ class ScrewTool:
         pedicle_width, narrow, width_uncertain = self._pedicle_width(
             screw, result.label
         )
+        analysis = self._analysis_for(result.label)
+        endplate_reference = getattr(analysis, "endplate_reference", "") or None
+        endplate_reference_levels = (
+            ", ".join(getattr(analysis, "endplate_reference_levels", ()))
+            if endplate_reference == "neighbours"
+            else None
+        )
         metrics = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -666,6 +691,8 @@ class ScrewTool:
             "trajectory_body_ratio": quality.trajectory_body_ratio,
             "min_wall_mm": result.min_wall_mm,
             "endplate_angle_deg": self._endplate_angle(screw, result.label),
+            "endplate_reference": endplate_reference,
+            "endplate_reference_levels": endplate_reference_levels,
             "pedicle_width_mm": pedicle_width,
             "narrow_pedicle": narrow,
             "width_uncertain": width_uncertain,

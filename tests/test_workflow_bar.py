@@ -1,5 +1,9 @@
 """Unit and widget tests for the workflow bar: the state rule in isolation
 (``workflow_states``) and the QWidget that renders it (``WorkflowBar``).
+
+The bar now navigates a four-page step panel (Study/Segment/Plan/Review)
+rather than running the three primary actions directly, so every step stays
+clickable and ``workflow_states`` returns four states.
 """
 
 import itertools
@@ -17,6 +21,7 @@ from PyQt6.QtWidgets import QLabel
 from src.ui.styles import THEMES, load_stylesheet
 from src.ui.workflow_bar import (
     DONE_MARK,
+    STEP_NAMES,
     StepState,
     WorkflowBar,
     WorkflowStep,
@@ -41,93 +46,120 @@ def _states(**overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_session_points_at_open_dicom():
+def test_workflow_states_has_study_segment_plan_review():
+    assert STEP_NAMES == ("Study", "Segment", "Plan", "Review")
+    assert len(_states()) == 4
+
+
+def test_fresh_session_points_at_study():
     states = _states()
 
-    assert [state.done for state in states] == [False, False, False]
-    assert [state.enabled for state in states] == [True, False, False]
-    assert [state.current for state in states] == [True, False, False]
-    assert [state.hint for state in states] == [
-        "Open a DICOM series folder",
-        "Open a DICOM series first",
-        "Run segmentation first",
-    ]
+    assert [state.done for state in states] == [False, False, False, False]
+    assert [state.enabled for state in states] == [True, True, True, True]
+    assert [state.current for state in states] == [True, False, False, False]
+    assert states[0].hint == "Open a DICOM series folder"
+    assert states[1].hint == "Open a DICOM series first"
+    assert states[2].hint == "Run segmentation first"
+    assert states[3].hint == "Plan or place screws first"
+
+
+def test_every_step_stays_clickable():
+    for combo in itertools.product([False, True], repeat=6):
+        (
+            has_volume,
+            segment_available,
+            has_mask,
+            plan_available,
+            has_plan,
+            has_screws,
+        ) = combo
+        states = workflow_states(
+            has_volume=has_volume,
+            segment_available=segment_available,
+            has_mask=has_mask,
+            plan_available=plan_available,
+            has_plan=has_plan,
+            has_screws=has_screws,
+        )
+        assert [state.enabled for state in states] == [True, True, True, True]
 
 
 def test_loaded_volume_finishes_step_one_and_points_at_segment():
     states = _states(has_volume=True)
 
-    assert [state.done for state in states] == [True, False, False]
-    assert [state.enabled for state in states] == [True, True, False]
-    assert [state.current for state in states] == [False, True, False]
+    assert [state.done for state in states] == [True, False, False, False]
+    assert [state.current for state in states] == [False, True, False, False]
+    assert states[0].hint == "Study loaded — open another one here"
     assert states[1].hint == "Run TotalSegmentator on the loaded study"
     assert states[2].hint == "Run segmentation first"
 
 
-def test_segment_stays_current_while_its_button_is_disabled():
-    states = _states(has_volume=True, segment_available=False)
-
-    assert states[1].enabled is False
-    assert states[1].current is True
-
-
-def test_mask_without_levels_points_at_a_disabled_plan_step():
+def test_mask_without_levels_points_at_plan():
     states = _states(has_volume=True, has_mask=True, plan_available=False)
 
-    assert [state.done for state in states] == [True, True, False]
+    assert [state.done for state in states] == [True, True, False, False]
     assert states[2].current is True
-    assert states[2].enabled is False
-    assert states[2].hint == "Select vertebral levels in the Planning tab"
+    assert states[2].hint == "Select vertebral levels in the Plan step"
 
 
-def test_mask_with_levels_enables_the_plan_step():
+def test_mask_with_levels_names_the_plan_hint():
     states = _states(has_volume=True, has_mask=True, plan_available=True)
 
-    assert states[2].enabled is True
     assert states[2].hint == "Plan screws for the selected vertebral levels"
 
 
-def test_finished_plan_leaves_no_current_step():
+def test_review_becomes_current_once_a_plan_exists():
     states = _states(
         has_volume=True, has_mask=True, plan_available=True, has_plan=True
     )
 
-    assert all(state.done for state in states)
-    assert not any(state.current for state in states)
+    assert [state.done for state in states] == [True, True, True, False]
+    assert [state.current for state in states] == [False, False, False, True]
 
 
-def test_plan_step_needs_a_mask_even_when_its_button_is_enabled():
-    states = _states(has_volume=True, has_mask=False, plan_available=True)
+def test_review_hint_reflects_whether_screws_exist():
+    states = _states(has_screws=False)
+    assert states[3].hint == "Plan or place screws first"
 
-    assert states[2].enabled is False
+    states = _states(has_screws=True)
+    assert states[3].hint == "Review the screws level by level"
 
 
 def test_a_previous_studys_mask_or_plan_finishes_nothing_without_a_volume():
     states = _states(has_volume=False, has_mask=True, has_plan=True)
-    assert [state.done for state in states] == [False, False, False]
-    assert [state.current for state in states] == [True, False, False]
+    assert [state.done for state in states] == [False, False, False, False]
+    assert [state.current for state in states] == [True, False, False, False]
 
     states = _states(has_volume=True, has_mask=False, has_plan=True)
-    assert [state.done for state in states] == [True, False, False]
+    assert [state.done for state in states] == [True, False, False, False]
 
 
 @pytest.mark.parametrize(
-    "combo", list(itertools.product([False, True], repeat=5))
+    "combo", list(itertools.product([False, True], repeat=6))
 )
 def test_states_are_consistent_for_every_input(combo):
-    has_volume, segment_available, has_mask, plan_available, has_plan = combo
+    (
+        has_volume,
+        segment_available,
+        has_mask,
+        plan_available,
+        has_plan,
+        has_screws,
+    ) = combo
     states = workflow_states(
         has_volume=has_volume,
         segment_available=segment_available,
         has_mask=has_mask,
         plan_available=plan_available,
         has_plan=has_plan,
+        has_screws=has_screws,
     )
 
-    assert len(states) == 3
-    assert states[0].enabled is True
+    assert len(states) == 4
+    assert all(state.enabled for state in states)
     for i in (1, 2):
         assert not states[i].done or states[i - 1].done
+    assert states[3].done is False
 
     current_indices = [i for i, state in enumerate(states) if state.current]
     first_not_done = next(
@@ -136,10 +168,7 @@ def test_states_are_consistent_for_every_input(combo):
     expected = [] if first_not_done is None else [first_not_done]
     assert current_indices == expected
 
-    if states[1].enabled:
-        assert has_volume
-    if states[2].enabled:
-        assert has_mask and plan_available
+    # The Plan step is never marked done unless a plan actually exists.
     if states[2].done:
         assert has_plan
 
@@ -159,9 +188,10 @@ def _build_bar(qtbot):
         return _run
 
     steps = [
-        WorkflowStep("Open DICOM", _recorder("Open DICOM")),
+        WorkflowStep("Study", _recorder("Study")),
         WorkflowStep("Segment", _recorder("Segment")),
-        WorkflowStep("Plan Screws", _recorder("Plan Screws")),
+        WorkflowStep("Plan", _recorder("Plan")),
+        WorkflowStep("Review", _recorder("Review")),
     ]
     bar = WorkflowBar(steps)
     qtbot.addWidget(bar)
@@ -172,9 +202,10 @@ def test_bar_numbers_each_step_and_joins_them_with_arrows(qtbot):
     bar, _calls = _build_bar(qtbot)
 
     assert [button.text() for button in bar.buttons] == [
-        "①  Open DICOM",
+        "①  Study",
         "②  Segment",
-        "③  Plan Screws",
+        "③  Plan",
+        "④  Review",
     ]
     assert bar.objectName() == "workflowBar"
     assert all(button.objectName() == "workflowStep" for button in bar.buttons)
@@ -184,7 +215,7 @@ def test_bar_numbers_each_step_and_joins_them_with_arrows(qtbot):
         for child in bar.findChildren(QLabel)
         if child.objectName() == "workflowChevron"
     ]
-    assert len(chevrons) == 2
+    assert len(chevrons) == 3
     assert all(chevron.text() == "→" for chevron in chevrons)
 
 
@@ -195,22 +226,26 @@ def test_done_steps_show_a_check_mark_instead_of_their_number(qtbot):
         [
             StepState(True, done=True),
             StepState(True, current=True),
-            StepState(False),
+            StepState(True),
+            StepState(True),
         ]
     )
 
     texts = [button.text() for button in bar.buttons]
-    assert texts == ["✓ Open DICOM", "②  Segment", "③  Plan Screws"]
-    assert texts[0] == f"{DONE_MARK} Open DICOM"
+    assert texts[0] == f"{DONE_MARK} Study"
+    assert texts[1] == "②  Segment"
 
+    # A re-render back to not-done (e.g. a new study loaded) clears the
+    # check mark rather than leaving the previous render's text behind.
     bar.set_states(
-        [StepState(True), StepState(True), StepState(False)]
+        [
+            StepState(True),
+            StepState(True, current=True),
+            StepState(True),
+            StepState(True),
+        ]
     )
-    assert [button.text() for button in bar.buttons] == [
-        "①  Open DICOM",
-        "②  Segment",
-        "③  Plan Screws",
-    ]
+    assert bar.buttons[0].text() == "①  Study"
 
 
 def test_roles_mark_the_current_step_primary_and_finished_ones_secondary(qtbot):
@@ -220,17 +255,22 @@ def test_roles_mark_the_current_step_primary_and_finished_ones_secondary(qtbot):
         [
             StepState(True, done=True),
             StepState(True, current=True),
-            StepState(False),
+            StepState(True),
+            StepState(True),
         ]
     )
     assert [button.property("role") for button in bar.buttons] == [
         "secondary",
         "primary",
         "",
+        "",
     ]
 
+    # Three steps done plus the current Review step: secondary, secondary,
+    # secondary, primary -- the last step is never itself marked "done".
     bar.set_states(
         [
+            StepState(True, done=True),
             StepState(True, done=True),
             StepState(True, done=True),
             StepState(True, current=True),
@@ -239,8 +279,24 @@ def test_roles_mark_the_current_step_primary_and_finished_ones_secondary(qtbot):
     assert [button.property("role") for button in bar.buttons] == [
         "secondary",
         "secondary",
+        "secondary",
         "primary",
     ]
+
+
+def test_set_active_marks_only_the_shown_step(qtbot):
+    bar, _calls = _build_bar(qtbot)
+
+    bar.set_active(2)
+    assert [button.property("active") for button in bar.buttons] == [
+        "false",
+        "false",
+        "true",
+        "false",
+    ]
+
+    bar.set_active(None)
+    assert [button.property("active") for button in bar.buttons] == ["false"] * 4
 
 
 def test_set_states_applies_enabled_state_and_hint(qtbot):
@@ -248,8 +304,9 @@ def test_set_states_applies_enabled_state_and_hint(qtbot):
 
     states = [
         StepState(True, hint="first"),
-        StepState(False, hint="second"),
+        StepState(True, hint="second"),
         StepState(True, hint="third"),
+        StepState(True, hint="fourth"),
     ]
     bar.set_states(states)
 
@@ -261,31 +318,34 @@ def test_set_states_applies_enabled_state_and_hint(qtbot):
 def test_set_states_ignores_extra_and_missing_states(qtbot):
     bar, _calls = _build_bar(qtbot)
 
-    before_text = bar.buttons[2].text()
-    before_enabled = bar.buttons[2].isEnabled()
-    before_tooltip = bar.buttons[2].toolTip()
+    # Fewer states than buttons: the untouched buttons are left alone rather
+    # than raising or being blanked out.
+    bar.set_states([StepState(True, hint="only one")])
+    assert bar.buttons[0].toolTip() == "only one"
+    assert bar.buttons[1].text() == "②  Segment"
 
-    bar.set_states([StepState(True), StepState(False)])
+    # More states than buttons: the extra state is silently ignored.
+    bar.set_states(
+        [
+            StepState(True, hint="a"),
+            StepState(True, hint="b"),
+            StepState(True, hint="c"),
+            StepState(True, hint="d"),
+            StepState(True, hint="e"),
+        ]
+    )
+    assert [button.toolTip() for button in bar.buttons] == ["a", "b", "c", "d"]
 
-    assert bar.buttons[2].text() == before_text
-    assert bar.buttons[2].isEnabled() == before_enabled
-    assert bar.buttons[2].toolTip() == before_tooltip
 
-    # Four states for a three-button bar must not raise.
-    bar.set_states([StepState(True)] * 4)
-
-
-def test_clicking_a_step_runs_its_action_only_when_enabled(qtbot):
+def test_clicking_a_step_always_runs_its_action(qtbot):
     bar, calls = _build_bar(qtbot)
     bar.set_states(
-        [StepState(True), StepState(False), StepState(True)]
+        [StepState(True), StepState(True), StepState(True), StepState(True)]
     )
 
     qtbot.mouseClick(bar.buttons[0], Qt.MouseButton.LeftButton)
-    assert calls == ["Open DICOM"]
-
-    qtbot.mouseClick(bar.buttons[1], Qt.MouseButton.LeftButton)
-    assert calls == ["Open DICOM"]
+    qtbot.mouseClick(bar.buttons[3], Qt.MouseButton.LeftButton)
+    assert calls == ["Study", "Review"]
 
 
 def test_steps_past_the_circled_digits_are_numbered_plainly(qtbot):
@@ -302,3 +362,4 @@ def test_every_theme_styles_the_workflow_bar():
         assert "QWidget#workflowBar" in stylesheet
         assert "QPushButton#workflowStep" in stylesheet
         assert "QLabel#workflowChevron" in stylesheet
+        assert 'QPushButton#workflowStep[active="true"]' in stylesheet

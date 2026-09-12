@@ -7,8 +7,13 @@ import math
 from typing import Optional, Tuple
 
 from src.core.mpr_geometry import build_screw_mpr_axes
+from src.core.pedicle_analyzer import VERTEBRA_LABELS
 
 logger = logging.getLogger(__name__)
+
+# vertebra_level name ("L4") -> TotalSegmentator label id (28): the fallback
+# used when the screw's grader has not (yet) resolved a label from the mask.
+_LABEL_BY_LEVEL_NAME = {name: label for label, name in VERTEBRA_LABELS.items()}
 
 ROTATION_STEP_DEG = 5.0
 PLANE_STEP_MM = 1.0
@@ -49,6 +54,10 @@ class ScrewMPRController:
         self._rotation_deg = 0.0
         self._long_offsets = [0.0, 0.0]
         self._cross_offset = [0.0, 0.0]
+        # (row, entry, target) -> resolved vertebra label, so wheel steps
+        # (Position/rotation/offset only, entry/target unchanged) do not
+        # re-sample the grader or re-walk VERTEBRA_LABELS on every notch.
+        self._label_cache: dict = {}
 
     @property
     def is_active(self) -> bool:
@@ -139,6 +148,11 @@ class ScrewMPRController:
         self._selected_index = None
         self._reset_view_state()
         self._sync_rotation_control()
+        # A re-run or replaced segmentation between sessions must not leave a
+        # stale label (from the old grader, or a stale level-name fallback)
+        # cached against unchanged screw geometry; each Screw MPR session
+        # re-resolves from the grader current at enter() time.
+        self._label_cache.clear()
         if was_active:
             for viewer in self._window._get_mpr_viewers():
                 viewer.clear_custom_reslice_axes()
@@ -436,11 +450,75 @@ class ScrewMPRController:
             f"({axes.distance_from_entry_mm:.1f} mm from entry)"
         )
         # The same three matrices, into 3D: the screw-aligned planes replace the
-        # standard indicators, and the volume opens at the cross-section so the
-        # slice in the cross-section pane can be found in the model.
+        # standard indicators, and a textured slice opens at the cross-section
+        # -- with only the screw's own vertebra cut, everything else stays whole.
         show = getattr(self._viewer_3d(), "show_screw_mpr", None)
         if callable(show):
-            show(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+            show(
+                axes.oblique_axial,
+                axes.oblique_sagittal,
+                axes.cross_section,
+                vertebra_label=self._vertebra_label_for(screw),
+                window_level=self._window_level(),
+            )
+
+    def _vertebra_label_for(self, screw) -> Optional[int]:
+        """Resolve the TotalSegmentator label the 3D cut should apply to.
+
+        (1) The grader's ``detect_label`` -- the most frequent vertebral
+        label along the entry-target axis -- is the same rule the screw's
+        grade is computed against, so the vertebra cut in 3D matches the
+        vertebra the grade is about.
+        (2) Otherwise, the screw's own ``vertebra_level`` name ('L4') mapped
+        through the same label table pedicle_analyzer uses.
+        (3) Otherwise ``None`` (slice only, no cut).
+        """
+        entry = tuple(float(value) for value in screw.entry_point)
+        target = tuple(float(value) for value in screw.target_point)
+        key = (self._selected_index, entry, target)
+        if key in self._label_cache:
+            return self._label_cache[key]
+
+        label: Optional[int] = None
+        grader = getattr(
+            getattr(getattr(self._window, "_tool_ctrl", None), "screw_tool", None),
+            "grader",
+            None,
+        )
+        if grader is not None:
+            try:
+                label = grader.detect_label(entry, target)
+            except Exception:
+                logger.warning(
+                    "_vertebra_label_for: grader.detect_label failed", exc_info=True
+                )
+                label = None
+        if label is None:
+            level_name = str(getattr(screw, "vertebra_level", "") or "").strip()
+            label = _LABEL_BY_LEVEL_NAME.get(level_name)
+
+        self._label_cache[key] = label
+        return label
+
+    def _window_level(self) -> Optional[Tuple[float, float]]:
+        """Read the panel's window/level sliders for the 3D cross-section slice."""
+        window_slider = getattr(self._window, "window_slider", None)
+        level_slider = getattr(self._window, "level_slider", None)
+        if window_slider is None or level_slider is None:
+            return None
+        return (float(window_slider.value()), float(level_slider.value()))
+
+    def on_window_level_changed(self, *_args) -> None:
+        """Re-push the 3D cross-section slice's colours when the panel changes them.
+
+        The panel's Window/Level sliders live outside this controller (Study
+        tab); the ui task wires their ``valueChanged`` signals here so the 3D
+        slice keeps matching what the surgeon set, without this controller
+        depending on the sliders existing at all when Screw MPR is inactive.
+        """
+        if not self._active or self._selected_index is None:
+            return
+        self._reapply()
 
     def _viewer_3d(self):
         """The window's 3D viewer, or ``None`` for a stand-in window without one."""

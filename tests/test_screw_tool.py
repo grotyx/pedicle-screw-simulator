@@ -545,6 +545,80 @@ def test_regrade_refreshes_a_stale_endplate_angle_when_the_level_is_registered()
     assert screw.metrics["endplate_angle_deg"] == pytest.approx(-10.0, abs=0.5)
 
 
+class _ResolvedAnalysis:
+    """Duck-typed stand-in modelling a *resolved* endplate reference.
+
+    Distinct from ``_Analysis`` above: this one carries
+    ``endplate_reference`` (and, when applicable, ``reference_endplate_normal``
+    / ``endplate_reference_levels``), so ``aiming_endplate_normal`` reads
+    through it instead of falling back to ``upper_endplate_normal`` directly.
+    """
+
+    def __init__(self, upper_normal, endplate_reference, reference_normal=None, levels=()):
+        self.upper_endplate_normal = upper_normal
+        self.endplate_reference = endplate_reference
+        self.reference_endplate_normal = reference_normal
+        self.endplate_reference_levels = levels
+
+
+_TWENTY_DEGREE_ENDPLATE = (0.0, math.sin(math.radians(20.0)), math.cos(math.radians(20.0)))
+
+
+def test_regrade_measures_the_endplate_angle_against_the_reference():
+    """A resolved 'neighbours' reference is measured, not the raw own fit."""
+    tool = _split_density_tool()
+    tool.set_analysis_by_level(
+        {
+            28: _ResolvedAnalysis(
+                _TEN_DEGREE_ENDPLATE,
+                "neighbours",
+                _TWENTY_DEGREE_ENDPLATE,
+                ("T12", "L3"),
+            )
+        }
+    )
+    screw = Screw(
+        entry_point=(35.0, 38.0, 30.0),
+        target_point=(35.0, 22.0, 30.0),   # horizontal
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    # Measured against the 20-degree reference, not the 10-degree own fit.
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(-20.0, abs=0.5)
+    assert screw.metrics["endplate_reference"] == "neighbours"
+    assert screw.metrics["endplate_reference_levels"] == "T12, L3"
+
+
+def test_regrade_reports_no_endplate_angle_when_the_reference_is_none():
+    """A resolved 'none' reference reports nothing, and keeps the prior value."""
+    tool = _split_density_tool()
+    tool.set_analysis_by_level(
+        {28: _ResolvedAnalysis(_TEN_DEGREE_ENDPLATE, "none")}
+    )
+    screw = Screw(
+        entry_point=(35.0, 38.0, 30.0),
+        target_point=(35.0, 22.0, 30.0),
+        diameter=5.0,
+        vertebra_level="L3",
+        side="left",
+        metrics={"endplate_angle_deg": 2.4},
+    )
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    # The merge rule keeps a planner-recorded angle when a re-grade cannot
+    # measure a new one -- "none" means no reference, not zero.
+    assert screw.metrics["endplate_angle_deg"] == pytest.approx(2.4)
+    assert screw.metrics["endplate_reference"] == "none"
+    assert screw.metrics["endplate_reference_levels"] is None
+
+
 def test_an_ungradable_frame_does_not_erase_the_endplate_angle():
     """A screw dragged briefly outside the mask must come back with its metric."""
     tool = _split_density_tool()

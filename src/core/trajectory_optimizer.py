@@ -26,7 +26,7 @@ import SimpleITK as sitk
 from .planner_config import PlannerConfig
 from .screw_geometry import endplate_slope_deg
 from .screw_grading import ENTRY_ZONE_MM, BatchResult, ScrewGrader
-from .vertebra import PedicleAnalysisResult
+from .vertebra import PedicleAnalysisResult, aiming_endplate_normal
 
 logger = logging.getLogger(__name__)
 
@@ -583,7 +583,7 @@ def generate_candidates(
     # band itself is applied to the measured angle, not to this offset).
     craniocaudal_center = 0.0
     slope_deg = (
-        endplate_slope_deg(analysis.upper_endplate_normal)
+        endplate_slope_deg(aiming_endplate_normal(analysis))
         if config.endplate_parallel
         else None
     )
@@ -791,11 +791,8 @@ def score_candidates(
 
     center, _axis, width = _side_data(analysis, side)
     max_length = max(config.implant_lengths_mm)
-    normal = (
-        _unit(analysis.upper_endplate_normal)
-        if analysis.upper_endplate_normal is not None
-        else None
-    )
+    aiming_normal = aiming_endplate_normal(analysis)
+    normal = _unit(aiming_normal) if aiming_normal is not None else None
     half_width = max(float(width) / 2.0, 1.0)
 
     deltas = targets - entries
@@ -849,7 +846,7 @@ def score_candidates(
     # surgeon can see is better than a missing one they have to explain.
     band_relaxed = False
     endplate_slope = (
-        endplate_slope_deg(analysis.upper_endplate_normal)
+        endplate_slope_deg(aiming_endplate_normal(analysis))
         if config.endplate_parallel
         else None
     )

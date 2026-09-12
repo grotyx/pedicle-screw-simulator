@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from ..core.auto_screw_planner import NARROW_PEDICLE_WARNING_PREFIX
 from ..utils.screw_metrics import (
     is_narrow_pedicle,
     pedicle_cell_text,
@@ -18,8 +19,55 @@ from ..utils.screw_metrics import (
 )
 from .styles import DEFAULT_THEME, get_theme
 
+
+def screw_warning_lines(screw) -> list[str]:
+    """Full, human-readable warning text for one screw, most-relevant first.
+
+    This always leads with a grade/breach status line -- "Grade N/A", "an
+    estimated breach", or "no estimated breach" -- ahead of the planner/
+    grader's own ``warnings`` list, with any narrow-pedicle note moved to the
+    very front since it explains why the screw is the size it is. The Review
+    step's warning card and the plan table's per-row tooltip both build their
+    text from this one function, so they can never disagree about what a
+    screw's warnings are.
+    """
+    breach_distance = float(getattr(screw, "breach_distance", 0.0) or 0.0)
+    grade = str(getattr(screw, "grade", "") or "")
+    lines = list(getattr(screw, "warnings", []) or [])
+    if grade == "N/A":
+        lines.insert(0, "Grade N/A — run segmentation to grade this screw.")
+    elif breach_distance > 0.0:
+        lines.insert(
+            0, f"Estimated breach {breach_distance:.1f} mm — verify on CT."
+        )
+    else:
+        lines.insert(0, "No estimated breach — CT review is still required.")
+    lines.sort(key=lambda line: not line.startswith(NARROW_PEDICLE_WARNING_PREFIX))
+    return lines
+
+
+def screw_warning_count(screw) -> int:
+    """How many things about this screw are worth a second look.
+
+    Counts the planner/grader's own ``warnings`` list plus one more for
+    "no grade yet" or "an estimated breach" -- the same always-shown line
+    :func:`screw_warning_lines` inserts ahead of the list, so the plan
+    table's per-row count and the expanded text agree on what "N warnings"
+    means. The "no estimated breach" line does not add to the count: it is
+    shown but is not itself something to worry about.
+    """
+    warnings = list(getattr(screw, "warnings", []) or [])
+    grade = str(getattr(screw, "grade", "") or "")
+    breach_distance = float(getattr(screw, "breach_distance", 0.0) or 0.0)
+    extra = 1 if grade == "N/A" or breach_distance > 0.0 else 0
+    return len(warnings) + extra
+
 #: Column headers, in display order. Kept short so they survive the default
-#: control-panel width; the units live in COLUMN_TOOLTIPS instead.
+#: control-panel width; the units live in COLUMN_TOOLTIPS instead. Source
+#: (auto/manual) moved to the Review step's Details section and the CSV
+#: export -- at a glance, whether a screw has warnings matters more than
+#: how it was placed (Surgimap and Stryker's planners both lead with a
+#: QA-at-a-glance column rather than provenance).
 COLUMN_TITLES = (
     "#",
     "Level",
@@ -28,7 +76,7 @@ COLUMN_TITLES = (
     "Ø",
     "Len",
     "Grade",
-    "Source",
+    "⚠",
 )
 
 #: Header tooltips, in display order -- this is where the units went.
@@ -40,7 +88,7 @@ COLUMN_TOOLTIPS = (
     "Screw diameter (mm)",
     "Screw length (mm)",
     "Gertzbein-Robbins breach grade",
-    "Auto-planned or manually placed",
+    "Number of warnings — the Review step lists them",
 )
 
 #: Index of the column that carries the coloured narrow-pedicle chip.
@@ -49,12 +97,15 @@ PEDICLE_COLUMN = 3
 #: Index of the column that carries the coloured grade chip.
 GRADE_COLUMN = 6
 
+#: Index of the column that carries the per-row warning count.
+WARNINGS_COLUMN = 7
+
 #: Columns sized to their content: the number, the three measurements and the
 #: two chips, neither of which may elide.
-_FIT_COLUMNS = (0, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN)
+_FIT_COLUMNS = (0, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
 
 #: Columns that absorb the leftover width.
-_STRETCH_COLUMNS = (1, 2, 7)
+_STRETCH_COLUMNS = (1, 2)
 
 #: Floor under every column. Qt applies one minimum to the whole header, so
 #: this stays modest -- the grade chip gets its full width from
@@ -76,15 +127,16 @@ GRADE_TOKENS = {
 
 
 def screw_row_cells(index: int, screw) -> tuple[str, ...]:
-    """Return the eight display strings for one screw, in column order."""
+    """Return the eight display strings for one screw, in column order.
+
+    Source (auto/manual) is not one of them any more -- it moved to the
+    Review step's Details section and stays in the CSV export -- so this
+    row's last cell is the warning count instead (blank at zero).
+    """
     level = getattr(screw, "vertebra_level", None) or "Manual"
     side_value = getattr(screw, "side", None)
     side = str(side_value).capitalize() if side_value else "--"
-    source = (
-        "Auto"
-        if str(getattr(screw, "source", "manual")) == "auto"
-        else "Manual"
-    )
+    warning_count = screw_warning_count(screw)
     return (
         str(index + 1),
         str(level),
@@ -93,7 +145,7 @@ def screw_row_cells(index: int, screw) -> tuple[str, ...]:
         f"{float(screw.diameter):.1f}",
         f"{float(screw.length):.1f}",
         f"Grade {screw.grade}",
-        source,
+        str(warning_count) if warning_count > 0 else "",
     )
 
 
@@ -129,7 +181,10 @@ class ScrewPlanTable(QTableWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.setMinimumHeight(160)
-        self.setMaximumHeight(220)
+        # No maximum any more: the Review step is built around this table,
+        # which should absorb whatever vertical room the panel can give it
+        # rather than being capped and squeezed to a few visible rows.
+        self.setMaximumHeight(16777215)
 
         for column, tooltip in enumerate(COLUMN_TOOLTIPS):
             header_item = self.horizontalHeaderItem(column)
@@ -208,13 +263,16 @@ class ScrewPlanTable(QTableWidget):
             )
 
     def apply_theme(self, theme_name: str) -> None:
-        """Repaint every grade and narrow-pedicle chip after a palette change."""
+        """Repaint every grade, narrow-pedicle, and warning chip after a palette change."""
         self._theme_name = str(theme_name)
         for row in range(self.rowCount()):
             chip = self.item(row, GRADE_COLUMN)
             if chip is not None:
                 self._paint_grade_chip(row, self._grade_of_row(row))
                 self._paint_pedicle_chip(row, self._narrow_of_row(row))
+            warning_item = self.item(row, WARNINGS_COLUMN)
+            if warning_item is not None:
+                self._paint_warning_cell(row)
 
     # -- Internals ---------------------------------------------------------
 
@@ -243,6 +301,25 @@ class ScrewPlanTable(QTableWidget):
             self.setItem(row, column, item)
         self._paint_grade_chip(row, str(screw.grade))
         self._paint_pedicle_chip(row, is_narrow_pedicle(screw_metrics(screw)))
+        item = self.item(row, WARNINGS_COLUMN)
+        if item is not None:
+            # The same lines the Review card shows, so a row counted only for
+            # Grade N/A or a breach (no planner warnings at all) still gets a
+            # tooltip that explains the count instead of "No warnings
+            # recorded for this screw".
+            item.setToolTip("\n".join(screw_warning_lines(screw)))
+        self._paint_warning_cell(row)
+
+    def _paint_warning_cell(self, row: int) -> None:
+        """Colour the warning-count cell with the theme's warning colour."""
+        item = self.item(row, WARNINGS_COLUMN)
+        if item is None:
+            return
+        text = item.text().strip()
+        if not text or text == "0":
+            item.setForeground(QColor())
+            return
+        item.setForeground(QColor(get_theme(self._theme_name)["warning"]))
 
     def _paint_pedicle_chip(self, row: int, narrow: bool) -> None:
         """Chip a narrow pedicle in the danger colour; leave the rest plain.

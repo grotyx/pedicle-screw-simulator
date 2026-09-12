@@ -17,7 +17,12 @@ import SimpleITK as sitk
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
-from src.core.pedicle_analyzer import endplate_fit_warning
+from src.core.pedicle_analyzer import (
+    ENDPLATE_REFERENCE_NEIGHBOURS,
+    ENDPLATE_REFERENCE_WARNING_PREFIX,
+    endplate_fit_warning,
+    endplate_no_reference_warning,
+)
 from src.core.planner_config import PlannerConfig
 from src.core.vertebra import PedicleAnalysisResult, Vertebra
 
@@ -2055,6 +2060,79 @@ class TestEndplateOptionAndMetric:
 
         assert result is not None
         assert not any("Upper endplate fit is rough" in w for w in result.warnings)
+
+    def test_a_fit_under_three_millimetres_is_still_its_own_reference(self):
+        """2.3 mm is rough enough to warn about, but not untrusted (< 3.0 mm)."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 2.3
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert result.metrics["endplate_reference"] == "own"
+        assert endplate_fit_warning(2.3) in result.warnings
+
+    def test_a_rough_fit_aims_along_the_neighbour_reference(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        rough_normal = np.array(
+            [0.0, math.sin(math.radians(-12.0)), math.cos(math.radians(-12.0))]
+        )
+        analysis = _make_analysis(upper_endplate_normal=rough_normal)
+        analysis.endplate_fit_rmse_mm = 5.2
+        # Pre-resolved, as plan_all would have done over the whole batch: a
+        # rough own fit (-12 deg) but a trusted neighbour reference (+10 deg).
+        analysis.endplate_reference = ENDPLATE_REFERENCE_NEIGHBOURS
+        analysis.reference_endplate_normal = self._NORMAL_10_DEG
+        analysis.endplate_reference_levels = ("T12", "L3")
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert result.craniocaudal_angle > 3.0
+        assert result.metrics["endplate_angle_deg"] == pytest.approx(0.0, abs=2.0)
+        assert result.metrics["endplate_reference"] == "neighbours"
+        assert result.metrics["endplate_reference_levels"] == "T12, L3"
+        assert any(
+            w.startswith(ENDPLATE_REFERENCE_WARNING_PREFIX) for w in result.warnings
+        )
+
+    def test_a_lone_rough_fit_falls_back_to_horizontal(self):
+        """No plan_all batch behind it, and no donor: resolves alone to none."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 5.2
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert result.craniocaudal_angle == pytest.approx(0.0, abs=0.1)
+        assert "endplate_angle_deg" not in result.metrics
+        assert analysis.endplate_reference == "none"
+        assert endplate_no_reference_warning(5.2) in result.warnings
+
+    def test_plan_all_reads_neighbours_from_the_endplate_context(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        rough_normal = np.array(
+            [0.0, math.sin(math.radians(-12.0)), math.cos(math.radians(-12.0))]
+        )
+        analysis = _make_analysis(label=27, name="L5", upper_endplate_normal=rough_normal)
+        analysis.endplate_fit_rmse_mm = 5.2
+        # Label 28 (L4) is one level above L5 -- close enough to donate.
+        context = _make_analysis(
+            label=28, name="L4", upper_endplate_normal=self._NORMAL_10_DEG
+        )
+        context.endplate_fit_rmse_mm = 0.5
+
+        results = planner.plan_all([analysis], endplate_context=[context])
+
+        left = next(r for r in results if r.side == "left")
+        assert left.metrics["endplate_reference"] == "neighbours"
+        assert left.metrics["endplate_reference_levels"] == "L4"
 
 
 class TestHeadOnTheCortex:

@@ -194,8 +194,14 @@ class TestViewer3DInterface:
         assert viewer.pan_mode_toggle.isChecked() is False
         assert "Shift" in viewer.pan_mode_toggle.toolTip()
 
-        assert viewer.reset_view_button.parent() is viewer.viewport_container
+        # Reset View and Cut View share one top-left row so neither button
+        # overlaps the plane toggle beneath it.
+        assert viewer.top_left_controls.parent() is viewer.viewport_container
+        assert viewer.reset_view_button.parent() is viewer.top_left_controls
         assert viewer.reset_view_button.text() == "Reset View"
+        assert viewer.screw_mpr_view_button.parent() is viewer.top_left_controls
+        assert viewer.screw_mpr_view_button.text() == "Cut View"
+        assert viewer.screw_mpr_view_button.isHidden() is True
         assert viewer.model_opacity_controls.parent() is viewer.viewport_container
         assert viewer.model_opacity_slider.parent() is viewer.model_opacity_controls
         assert viewer.model_opacity_slider.minimum() == 0
@@ -1367,20 +1373,75 @@ class TestCpuRaycastFallback:
 
 
 class TestScrewMprIn3D:
-    """Screw MPR shows its own planes in 3D and opens the volume at the cut."""
+    """Screw MPR shows a textured slice in 3D and cuts only the screw's own vertebra."""
+
+    #: The mask's z<20 block (label 28) vs. z>=20 block (label 29).
+    LABEL_LOWER = 28
+    LABEL_UPPER = 29
 
     @staticmethod
     def _viewer():
+        import numpy as np
         import vtk
+        from vtk.util.numpy_support import numpy_to_vtk
 
+        from src.core.vertebral_mesh import extract_vertebral_mesh
         from src.ui.viewer_3d import Viewer3D
+        from src.utils.vtk_helpers import MAPPER_KIND_CPU
+
+        dims = (40, 60, 40)  # x, y, z -- covers the (0,40,0)->(0,0,0) screw in _axes()
+        spacing = (1.0, 1.0, 1.0)
+        shape_zyx = (dims[2], dims[1], dims[0])
+
+        ct_image = vtk.vtkImageData()
+        ct_image.SetDimensions(*dims)
+        ct_image.SetSpacing(*spacing)
+        ct_image.SetOrigin(0.0, 0.0, 0.0)
+        ct_array = np.full(shape_zyx, -1000, dtype=np.int16)
+        ct_array[:, 10:50, 10:30] = 700  # an arbitrary bone block
+        ct_scalars = numpy_to_vtk(ct_array.ravel(), deep=True)
+        ct_scalars.SetName("ImageScalars")
+        ct_image.GetPointData().SetScalars(ct_scalars)
+
+        mask_image = vtk.vtkImageData()
+        mask_image.SetDimensions(*dims)
+        mask_image.SetSpacing(*spacing)
+        mask_image.SetOrigin(0.0, 0.0, 0.0)
+        mask_array = np.empty(shape_zyx, dtype=np.int16)
+        mask_array[:20, :, :] = TestScrewMprIn3D.LABEL_LOWER
+        mask_array[20:, :, :] = TestScrewMprIn3D.LABEL_UPPER
+        mask_scalars = numpy_to_vtk(mask_array.ravel(), deep=True)
+        mask_scalars.SetName("ImageScalars")
+        mask_image.GetPointData().SetScalars(mask_scalars)
+
+        poly_data = extract_vertebral_mesh(
+            mask_image, labels=[TestScrewMprIn3D.LABEL_LOWER, TestScrewMprIn3D.LABEL_UPPER]
+        )
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._renderer = vtk.vtkRenderer()
+        viewer._mapper_kind = MAPPER_KIND_CPU
         viewer._volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
+        viewer._volume_property = vtk.vtkVolumeProperty()
+        viewer._volume = vtk.vtkVolume()
+        viewer._volume.SetMapper(viewer._volume_mapper)
+        viewer._volume.SetProperty(viewer._volume_property)
+        viewer._volume.SetVisibility(1)
+        viewer._volume_added = True
+        viewer._segmentation_actor = None
+        viewer._downsampled_image = ct_image
+        viewer._segmentation_mask_image = mask_image
+
         mesh_mapper = vtk.vtkPolyDataMapper()
+        mesh_mapper.SetInputData(poly_data)
+        mesh_mapper.ScalarVisibilityOn()
+        mesh_mapper.SetScalarModeToUseCellData()
+        mesh_mapper.SelectColorArray("VertebraColors")
         viewer._vertebral_mesh_actor = vtk.vtkActor()
         viewer._vertebral_mesh_actor.SetMapper(mesh_mapper)
+        viewer._vertebral_mesh_poly = poly_data
+        viewer._vertebral_mesh_split_cache = {}
+
         viewer._plane_actors = {
             plane: {"actor": vtk.vtkActor(), "outline_actor": vtk.vtkActor()}
             for plane in ("axial", "sagittal", "coronal")
@@ -1389,15 +1450,29 @@ class TestScrewMprIn3D:
         viewer._screw_mpr_actors = {}
         viewer._screw_mpr_active = False
         viewer._screw_mpr_clip = None
+        viewer._screw_mpr_slice_actor = None
+        viewer._screw_mpr_slice_reslice = None
+        viewer._screw_mpr_slice_mask_reslice = None
+        viewer._screw_mpr_slice_color_map = None
+        viewer._screw_mpr_slice_alpha_filter = None
+        viewer._screw_mpr_cut_actor = None
+        viewer._screw_mpr_cut_volume = None
+        viewer._screw_mpr_cut_label = None
+        viewer._screw_mpr_cut_volume_source = None
+        viewer._screw_mpr_cross_section_axes = None
+        viewer._screw_mpr_window_level = None
+
+        viewer.volume_manager = SimpleNamespace(get_vtk_image=lambda: ct_image)
         viewer.vtk_widget = SimpleNamespace(safe_render=lambda: None)
         viewer.plane_visibility_toggle = None
+        viewer.screw_mpr_view_button = SimpleNamespace(setVisible=lambda v: None)
         return viewer
 
     @staticmethod
-    def _axes():
+    def _axes(fraction=0.25):
         from src.core.mpr_geometry import build_screw_mpr_axes
 
-        return build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), 0.25)
+        return build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), fraction)
 
     def test_the_screw_planes_replace_the_standard_ones(self):
         viewer = self._viewer()
@@ -1411,49 +1486,266 @@ class TestScrewMprIn3D:
         assert set(viewer._screw_mpr_actors) == {
             "oblique_axial", "oblique_sagittal", "cross_section",
         }
-        assert all(
-            data["actor"].GetVisibility() == 1
-            for data in viewer._screw_mpr_actors.values()
+        # The cross-section's filled quad stays hidden -- the textured slice
+        # actor covers that plane instead (avoids z-fighting); its outline
+        # frames the slice and stays visible like the other two planes.
+        for name, data in viewer._screw_mpr_actors.items():
+            assert data["actor"].GetVisibility() == (0 if name == "cross_section" else 1)
+            assert data["outline_actor"].GetVisibility() == 1
+
+    def test_no_global_clip_reaches_the_volume_or_the_whole_mesh(self):
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
         )
 
-    def test_the_volume_and_mesh_are_cut_at_the_cross_section(self):
+        volume_planes = viewer._volume_mapper.GetClippingPlanes()
+        assert volume_planes is None or volume_planes.GetNumberOfItems() == 0
+        mesh_planes = viewer._vertebral_mesh_actor.GetMapper().GetClippingPlanes()
+        assert mesh_planes is None or mesh_planes.GetNumberOfItems() == 0
+
+    def test_only_the_screws_vertebra_is_cut(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_ARRAY
+
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        cut_actor = viewer._screw_mpr_cut_actor
+        assert cut_actor is not None
+        cut_poly = cut_actor.GetMapper().GetInput()
+        label_range = cut_poly.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY).GetRange()
+        assert label_range == (self.LABEL_LOWER, self.LABEL_LOWER)
+
+        clipping = cut_actor.GetMapper().GetClippingPlanes()
+        assert clipping.GetNumberOfItems() == 1
+        plane = clipping.GetItemAsObject(0)
+        assert plane.GetOrigin() == pytest.approx((0.0, 30.0, 0.0))
+        assert plane.GetNormal() == pytest.approx((0.0, -1.0, 0.0))
+
+        main_poly = viewer._vertebral_mesh_actor.GetMapper().GetInput()
+        main_label_array = main_poly.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY)
+        if main_label_array is not None:
+            main_range = main_label_array.GetRange()
+            assert self.LABEL_LOWER not in (main_range[0], main_range[1])
+            assert not (main_range[0] <= self.LABEL_LOWER <= main_range[1])
+
+    def test_full_ct_is_cut_only_inside_the_vertebra_box(self):
+        from src.core.vertebral_mesh import label_world_bounds
+        from src.ui.viewer_3d import SCREW_MPR_CUT_MARGIN_MM, VOLUME_CROP_OUTSIDE_BOX
+
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        assert viewer._volume_mapper.GetCropping() == 1
+        assert viewer._volume_mapper.GetCroppingRegionFlags() == VOLUME_CROP_OUTSIDE_BOX
+        expected_bounds = label_world_bounds(
+            viewer._segmentation_mask_image, self.LABEL_LOWER, SCREW_MPR_CUT_MARGIN_MM
+        )
+        assert tuple(viewer._volume_mapper.GetCroppingRegionPlanes()) == pytest.approx(
+            expected_bounds
+        )
+
+        cut_volume = viewer._screw_mpr_cut_volume
+        assert cut_volume is not None
+        assert viewer._renderer.GetVolumes().IsItemPresent(cut_volume)
+        clipping = cut_volume.GetMapper().GetClippingPlanes()
+        assert clipping.GetNumberOfItems() == 1
+
+    def test_the_cross_section_slice_is_textured_and_follows_the_plane(self):
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        slice_actor = viewer._screw_mpr_slice_actor
+        assert slice_actor is not None
+        assert slice_actor.GetVisibility() == 1
+        user_matrix = slice_actor.GetUserMatrix()
+        for row in range(4):
+            for col in range(4):
+                assert user_matrix.GetElement(row, col) == pytest.approx(
+                    axes.cross_section.GetElement(row, col)
+                )
+
+        image = slice_actor.GetInput()
+        # World (0, 30, 10) -- inside the screw's own vertebra (z=10 < 20) --
+        # sits at local plane coords u=0 (transverse), v=10 (superior); pixel
+        # index = local + half, half=40, spacing=1mm.
+        inside_alpha = image.GetScalarComponentAsDouble(40, 50, 0, 3)
+        assert inside_alpha == pytest.approx(255)
+        # World (0, 30, 30) -- the OTHER vertebra (z=30 >= 20) -- must read as
+        # translucent context, not part of the cut.
+        outside_alpha = image.GetScalarComponentAsDouble(40, 70, 0, 3)
+        assert outside_alpha == pytest.approx(round(0.35 * 255))
+
+        moved = self._axes(fraction=0.75)
+        viewer.show_screw_mpr(
+            moved.oblique_axial, moved.oblique_sagittal, moved.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+        moved_matrix = viewer._screw_mpr_slice_actor.GetUserMatrix()
+        assert moved_matrix.GetElement(1, 3) == pytest.approx(10.0)
+
+    def test_without_a_label_the_slice_shows_and_nothing_is_cut(self):
         viewer = self._viewer()
         axes = self._axes()
 
         viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
 
-        clip = viewer._screw_mpr_clip
-        assert viewer._volume_mapper.GetClippingPlanes().GetNumberOfItems() == 1
+        assert viewer._screw_mpr_slice_actor is not None
+        assert viewer._screw_mpr_slice_actor.GetVisibility() == 1
+        assert viewer._screw_mpr_cut_actor is None
+        assert viewer._screw_mpr_cut_volume is None
+        assert viewer._volume_mapper.GetCropping() == 0
+
+        image = viewer._screw_mpr_slice_actor.GetInput()
+        assert image.GetScalarComponentAsDouble(40, 50, 0, 3) == pytest.approx(255)
+        assert image.GetScalarComponentAsDouble(40, 70, 0, 3) == pytest.approx(255)
+
+    def test_another_screws_level_moves_the_cut(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_ARRAY
+
+        viewer = self._viewer()
+        axes = self._axes()
+
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_UPPER,
+        )
+
+        cut_actor = viewer._screw_mpr_cut_actor
+        cut_poly = cut_actor.GetMapper().GetInput()
+        label_range = cut_poly.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY).GetRange()
+        assert label_range == (self.LABEL_UPPER, self.LABEL_UPPER)
+        assert cut_actor.GetMapper().GetClippingPlanes().GetNumberOfItems() == 1
         assert (
-            viewer._vertebral_mesh_actor.GetMapper().GetClippingPlanes().GetNumberOfItems()
+            viewer._screw_mpr_cut_volume.GetMapper().GetClippingPlanes().GetNumberOfItems()
             == 1
         )
-        # 25 % along a 40 mm screw from y=40 toward y=0, keeping the tip side.
-        assert clip.GetOrigin() == pytest.approx((0.0, 30.0, 0.0))
-        assert clip.GetNormal() == pytest.approx((0.0, -1.0, 0.0))
+
+    def test_hiding_the_volume_hides_the_cut_volume(self):
+        viewer = self._viewer()
+        axes = self._axes()
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        viewer.set_volume_visible(False)
+
+        assert viewer._screw_mpr_cut_volume.GetVisibility() == 0
+
+        viewer.set_volume_visible(True)
+
+        assert viewer._screw_mpr_cut_volume.GetVisibility() == 1
 
     def test_moving_the_cut_does_not_stack_clipping_planes(self):
-        from src.core.mpr_geometry import build_screw_mpr_axes
+        viewer = self._viewer()
+        for fraction in (0.25, 0.5, 0.75):
+            axes = self._axes(fraction)
+            viewer.show_screw_mpr(
+                axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+                vertebra_label=self.LABEL_LOWER,
+            )
+
+        assert viewer._screw_mpr_clip.GetOrigin() == pytest.approx((0.0, 10.0, 0.0))
+        assert (
+            viewer._screw_mpr_cut_actor.GetMapper().GetClippingPlanes().GetNumberOfItems()
+            == 1
+        )
+        assert (
+            viewer._screw_mpr_cut_volume.GetMapper().GetClippingPlanes().GetNumberOfItems()
+            == 1
+        )
+
+    def test_repeated_position_steps_scan_the_mask_only_once(self, monkeypatch):
+        """A Position/rotation step with the same label must not re-scan the mask.
+
+        label_world_bounds runs scipy's find_objects over the whole mask; on
+        a long thoracolumbar mask that cost, paid on every wheel notch, stalls
+        the GUI thread. The viewer must cache the label's box and only
+        recompute it for a new label or a swapped mask.
+        """
+        import src.ui.viewer_3d as viewer_3d_module
+
+        calls = {"count": 0}
+        original = viewer_3d_module.label_world_bounds
+
+        def counting_label_world_bounds(*args, **kwargs):
+            calls["count"] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            viewer_3d_module, "label_world_bounds", counting_label_world_bounds
+        )
 
         viewer = self._viewer()
         for fraction in (0.25, 0.5, 0.75):
-            axes = build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), fraction)
+            axes = self._axes(fraction)
             viewer.show_screw_mpr(
-                axes.oblique_axial, axes.oblique_sagittal, axes.cross_section
+                axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+                vertebra_label=self.LABEL_LOWER,
             )
 
-        assert viewer._volume_mapper.GetClippingPlanes().GetNumberOfItems() == 1
-        assert viewer._screw_mpr_clip.GetOrigin() == pytest.approx((0.0, 10.0, 0.0))
+        # _resolve_screw_mpr_label and _apply_screw_mpr_volume_cut each ask
+        # for this label's box, but the cache means only the very first
+        # show_screw_mpr call actually scans the mask.
+        count_after_same_label = calls["count"]
+        assert count_after_same_label == 1
+
+        # A different label must still be resolved with a fresh scan.
+        axes = self._axes(0.75)
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_UPPER,
+        )
+        assert calls["count"] > count_after_same_label
+
+        # A swapped mask (e.g. segmentation re-run) must also be rescanned
+        # even for a label already seen.
+        count_after_new_label = calls["count"]
+        viewer._segmentation_mask_image = self._viewer()._segmentation_mask_image
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_UPPER,
+        )
+        assert calls["count"] > count_after_new_label
 
     def test_clearing_restores_the_standard_view(self):
         viewer = self._viewer()
         axes = self._axes()
-        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
 
         viewer.clear_screw_mpr()
 
-        planes = viewer._volume_mapper.GetClippingPlanes()
-        assert planes is None or planes.GetNumberOfItems() == 0
+        assert viewer._volume_mapper.GetCropping() == 0
+        assert viewer._screw_mpr_cut_actor is None
+        assert viewer._screw_mpr_cut_volume is None
+        assert viewer._vertebral_mesh_actor.GetMapper().GetInput() is viewer._vertebral_mesh_poly
+        assert viewer._screw_mpr_slice_actor.GetVisibility() == 0
         assert viewer.screw_mpr_active is False
         assert all(
             data["actor"].GetVisibility() == 1 for data in viewer._plane_actors.values()
@@ -1474,12 +1766,69 @@ class TestScrewMprIn3D:
             data["actor"].GetVisibility() == 0
             for data in viewer._screw_mpr_actors.values()
         )
-        # ...and turning them back on shows the screw planes, not the standard ones.
+        # ...and turning them back on shows the screw planes (except the
+        # cross-section's own filled quad, which the slice replaces), not
+        # the standard ones.
         viewer.set_plane_indicators_visible(True)
-        assert all(
-            data["actor"].GetVisibility() == 1
-            for data in viewer._screw_mpr_actors.values()
-        )
+        for name, data in viewer._screw_mpr_actors.items():
+            assert data["actor"].GetVisibility() == (0 if name == "cross_section" else 1)
         assert all(
             data["actor"].GetVisibility() == 0 for data in viewer._plane_actors.values()
         )
+
+    def test_cut_view_looks_down_the_screw_from_the_entry_side(self):
+        from src.ui.viewer_3d import SCREW_MPR_CUT_VIEW_DISTANCE_MM
+
+        viewer = self._viewer()
+        axes = self._axes()
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        viewer.focus_screw_mpr_cut()
+
+        camera = viewer._renderer.GetActiveCamera()
+        assert camera.GetFocalPoint() == pytest.approx((0.0, 30.0, 0.0))
+        expected_position = (0.0, 30.0 + SCREW_MPR_CUT_VIEW_DISTANCE_MM, 0.0)
+        assert camera.GetPosition() == pytest.approx(expected_position)
+        assert camera.GetViewUp() == pytest.approx((0.0, 0.0, 1.0))
+
+
+class TestVolumeVisibilityLeavesTheOverlayAlone:
+    """Showing or hiding the CT volume must not decide the segmentation overlay.
+
+    set_volume_visible used to switch the overlay actor as well, so restoring
+    Full CT -- or changing the checked levels in Full CT mode -- turned the 3D
+    overlay back on while the "Show 3D" checkbox still read unchecked.
+    """
+
+    @staticmethod
+    def _viewer():
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume = vtk.vtkVolume()
+        viewer._segmentation_actor = vtk.vtkActor()
+        viewer._volume_added = False
+        return viewer
+
+    def test_showing_the_volume_keeps_a_hidden_overlay_hidden(self):
+        viewer = self._viewer()
+        viewer._segmentation_actor.SetVisibility(0)
+
+        viewer.set_volume_visible(True)
+
+        assert viewer._volume.GetVisibility() == 1
+        assert viewer._segmentation_actor.GetVisibility() == 0
+
+    def test_hiding_the_volume_keeps_a_visible_overlay_visible(self):
+        viewer = self._viewer()
+        viewer._segmentation_actor.SetVisibility(1)
+
+        viewer.set_volume_visible(False)
+
+        assert viewer._volume.GetVisibility() == 0
+        assert viewer._segmentation_actor.GetVisibility() == 1
