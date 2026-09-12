@@ -1276,16 +1276,20 @@ class Viewer3D(QWidget):
     def set_volume_visible(self, visible: bool) -> None:
         """Toggle visibility of the volume rendering actor.
 
-        Vertebral mesh and screw actors remain visible regardless.
+        Vertebral mesh and screw actors remain visible regardless, and so does
+        the segmentation overlay: its visibility belongs to the "Show 3D"
+        checkbox (``set_segmentation_visible``).  This used to switch the
+        overlay too, so every caller that showed the volume -- restoring Full
+        CT, or changing the checked levels in Full CT mode -- silently turned
+        the overlay back on while the checkbox still read unchecked.  A caller
+        that wants the overlay hidden with the volume, as isolation does, now
+        says so itself.
 
         Args:
             visible: True to show volume rendering, False to hide.
         """
         if self._volume is not None:
             self._volume.SetVisibility(int(visible))
-        # Also toggle segmentation overlay if present
-        if self._segmentation_actor is not None:
-            self._segmentation_actor.SetVisibility(int(visible))
         # The Screw MPR cut volume always mirrors the main volume, so
         # isolated mode (volume hidden) never shows a stray cut box.
         cut_volume = self.__dict__.get("_screw_mpr_cut_volume")

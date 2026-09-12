@@ -691,9 +691,15 @@ class SegmentationController:
             if self._window.viewer_3d is not None:
                 self._window.viewer_3d.set_volume_visible(False)
 
-            # Hide segmentation overlay (redundant when masked)
+            # Hide segmentation overlay (redundant when masked).  The 3D one
+            # is hidden here explicitly: set_volume_visible no longer touches
+            # it, so that showing the volume again cannot override the
+            # "Show 3D" checkbox.  Restoring puts both back from the
+            # checkboxes (update_visibility).
             for viewer in self._window._get_mpr_viewers():
                 viewer.set_segmentation_visible(False)
+            if self._window.viewer_3d is not None:
+                self._window.viewer_3d.set_segmentation_visible(False)
 
             self._window.statusbar.showMessage("Vertebral bodies isolated")
             self._sync_isolation_controls()
@@ -723,13 +729,14 @@ class SegmentationController:
         for viewer in self._window._get_mpr_viewers():
             viewer.restore_original_input()
 
-        # Restore segmentation visibility based on checkbox state
-        self.update_visibility()
-
         self._vm.clear_vertebral_mask()
         self._vertebrae_isolated = False
         if self._window.viewer_3d is not None:
             self._window.viewer_3d.set_volume_visible(True)
+
+        # Overlays come back exactly as the "Show 2D" / "Show 3D" checkboxes
+        # say -- last, so nothing after it can override them.
+        self.update_visibility()
         self._window.statusbar.showMessage("Full volume restored")
         self._sync_isolation_controls()
 

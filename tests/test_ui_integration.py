@@ -2743,3 +2743,39 @@ def test_segmentation_advanced_options_toggle_shows_and_hides_panel(
 
     window.seg_advanced_toggle.setChecked(False)
     assert window.seg_advanced_panel.isHidden()
+
+
+def test_isolation_hides_the_3d_overlay_and_full_ct_honours_show_3d(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Returning to Full CT must not turn the 3D overlay on against "Show 3D".
+
+    Viewer3D.set_volume_visible used to switch the overlay with the volume, so
+    restoring Full CT re-showed it while the checkbox read unchecked.  Now the
+    volume and the overlay are separate: isolation hides the overlay itself,
+    and restoring hands it back to the checkbox.
+    """
+    window = ui_main_window
+    _load_study(window, "ISO-STUDY-OVERLAY")
+    mask_path = tmp_path / "totalsegmentator_mask.nii.gz"
+    _write_vertebra_mask(_create_test_image(), mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+            geometry_warnings=[],
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window.viewer_3d.visible is False          # the mesh replaces it
+
+    window.seg_show_3d_check.setChecked(False)
+    window.viewer_3d.isolation_requested.emit(False)  # Full CT
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.volume_visible is True
+    assert window.viewer_3d.visible is False          # checkbox still wins
+
+    window.seg_show_3d_check.setChecked(True)
+    assert window.viewer_3d.visible is True

@@ -1793,3 +1793,42 @@ class TestScrewMprIn3D:
         expected_position = (0.0, 30.0 + SCREW_MPR_CUT_VIEW_DISTANCE_MM, 0.0)
         assert camera.GetPosition() == pytest.approx(expected_position)
         assert camera.GetViewUp() == pytest.approx((0.0, 0.0, 1.0))
+
+
+class TestVolumeVisibilityLeavesTheOverlayAlone:
+    """Showing or hiding the CT volume must not decide the segmentation overlay.
+
+    set_volume_visible used to switch the overlay actor as well, so restoring
+    Full CT -- or changing the checked levels in Full CT mode -- turned the 3D
+    overlay back on while the "Show 3D" checkbox still read unchecked.
+    """
+
+    @staticmethod
+    def _viewer():
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._volume = vtk.vtkVolume()
+        viewer._segmentation_actor = vtk.vtkActor()
+        viewer._volume_added = False
+        return viewer
+
+    def test_showing_the_volume_keeps_a_hidden_overlay_hidden(self):
+        viewer = self._viewer()
+        viewer._segmentation_actor.SetVisibility(0)
+
+        viewer.set_volume_visible(True)
+
+        assert viewer._volume.GetVisibility() == 1
+        assert viewer._segmentation_actor.GetVisibility() == 0
+
+    def test_hiding_the_volume_keeps_a_visible_overlay_visible(self):
+        viewer = self._viewer()
+        viewer._segmentation_actor.SetVisibility(1)
+
+        viewer.set_volume_visible(False)
+
+        assert viewer._volume.GetVisibility() == 0
+        assert viewer._segmentation_actor.GetVisibility() == 1
