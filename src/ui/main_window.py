@@ -576,6 +576,19 @@ class MainWindow(QMainWindow):
         index = STEP_NAMES.index(name)
         self.workflow_bar.set_active(index)
 
+    def _on_seg_advanced_toggled(self, checked: bool) -> None:
+        """Show or hide the Segment page's advanced options panel.
+
+        The panel (task/device/quality/label controls and the pedicle
+        subregion model settings) starts hidden so the common path -- Run
+        Auto Segmentation with defaults -- stays uncluttered; this toggle is
+        its only way back into view.
+        """
+        self.seg_advanced_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+        )
+        self.seg_advanced_panel.setVisible(checked)
+
     def _on_screw_rows_changed(self, *_args) -> None:
         """A screw row appeared or went, so step 3 may have finished or reopened.
 
@@ -587,8 +600,47 @@ class MainWindow(QMainWindow):
         window can run its DeferredDelete inside a *later* test's event
         loop, after seg_run_btn's C++ object is already gone, and a lambda
         calling _refresh_workflow_bar() then raises on the deleted button.
+
+        Rows also arrive outside of a selection change -- an auto-plan run
+        selects the first screw while the table still holds one row, then
+        appends the rest -- so the "Screw N of M" counter must be
+        re-derived here too, or it is left stuck at "Screw 1 of 1".
         """
         self._refresh_workflow_bar()
+        self._refresh_screw_counter()
+
+    @staticmethod
+    def _format_screw_counter(current_row: int, count: int) -> str:
+        """Format the Review header's screw counter for one shared spot.
+
+        Used both when a screw is selected and when the table's row count
+        changes out from under the current selection, so the two paths
+        cannot disagree on the wording.
+        """
+        if count <= 0 or current_row < 0:
+            return "No screws"
+        return f"Screw {current_row + 1} of {count}"
+
+    def _refresh_screw_counter(self) -> None:
+        """Re-derive the Review header's screw counter from the table.
+
+        Guarded like :meth:`_refresh_workflow_bar`: this fires from a
+        table-model signal, which can arrive on a half-built window (before
+        ``screw_list_widget`` exists) or a half-destroyed one (after Qt has
+        started tearing down this window's C++ side).
+        """
+        widget = self.__dict__.get("screw_list_widget")
+        counter = self.__dict__.get("selected_screw_counter")
+        if (
+            widget is None
+            or counter is None
+            or sip.isdeleted(widget)
+            or sip.isdeleted(counter)
+        ):
+            return
+        counter.setText(
+            self._format_screw_counter(widget.currentRow(), widget.count())
+        )
 
     def _pane_name_for(self, obj: QObject) -> Optional[str]:
         """Which maximisable pane contains *obj*, if any.
@@ -852,6 +904,18 @@ class MainWindow(QMainWindow):
         advanced_layout.addLayout(subregion_dir_row, 14, 0, 1, 2)
 
         self.seg_advanced_panel.hide()
+
+        self.seg_advanced_toggle = QToolButton()
+        self.seg_advanced_toggle.setObjectName("segAdvancedToggle")
+        self.seg_advanced_toggle.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.seg_advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.seg_advanced_toggle.setText("Advanced options")
+        self.seg_advanced_toggle.setCheckable(True)
+        self.seg_advanced_toggle.setChecked(False)
+        self.seg_advanced_toggle.toggled.connect(self._on_seg_advanced_toggled)
+        segment_layout.addWidget(self.seg_advanced_toggle)
         segment_layout.addWidget(self.seg_advanced_panel)
         segment_layout.addStretch()
 
@@ -2754,7 +2818,9 @@ class MainWindow(QMainWindow):
         title_style.unpolish(self.selected_screw_title)
         title_style.polish(self.selected_screw_title)
         if screw is None:
-            self.selected_screw_counter.setText("No screws")
+            self.selected_screw_counter.setText(
+                self._format_screw_counter(-1, self.screw_list_widget.count())
+            )
             self.selected_screw_title.setText("No screw selected")
             previous = self.selected_screw_diameter.blockSignals(True)
             self.selected_screw_diameter.setValue(DEFAULT_SCREW_DIAMETER)
@@ -2776,7 +2842,7 @@ class MainWindow(QMainWindow):
 
         screw_count = self.screw_list_widget.count()
         self.selected_screw_counter.setText(
-            f"Screw {index + 1} of {screw_count}"
+            self._format_screw_counter(index, screw_count)
         )
         self.screw_list_widget.scrollToRow(index)
 

@@ -2708,3 +2708,38 @@ def test_window_level_sliders_refresh_the_3d_slice(monkeypatch, qtbot, isolated_
     window.level_slider.setValue(window.level_slider.value() + 10)
 
     assert len(calls) == 2
+
+
+def test_screw_counter_refreshes_when_rows_are_added_and_removed(ui_main_window):
+    """A planning run selects the first screw while the table has one row,
+    then appends the rest without reselecting -- the counter must follow the
+    table's row count, not just the last selection change."""
+    window = ui_main_window
+    first = Screw((0.0, 0.0, 0.0), (0.0, 0.0, 30.0))
+    window._tool_ctrl.add_existing_screw(first, select=True)
+    window._tool_ctrl.add_existing_screw(Screw((5.0, 5.0, 5.0), (5.0, 5.0, 35.0)))
+    window._tool_ctrl.add_existing_screw(Screw((9.0, 9.0, 9.0), (9.0, 9.0, 39.0)))
+
+    assert window.selected_screw_counter.text() == "Screw 1 of 3"
+
+    while window.screw_list_widget.count() > 0:
+        window.screw_list_widget.setCurrentRow(0)
+        window._tool_ctrl.remove_selected_screw()
+
+    assert window.selected_screw_counter.text() == "No screws"
+
+
+def test_segmentation_advanced_options_toggle_shows_and_hides_panel(
+    ui_main_window,
+):
+    window = ui_main_window
+
+    assert "Advanced options" in window.seg_advanced_toggle.text()
+    assert window.seg_advanced_toggle.isCheckable()
+    assert window.seg_advanced_panel.isHidden()
+
+    window.seg_advanced_toggle.setChecked(True)
+    assert not window.seg_advanced_panel.isHidden()
+
+    window.seg_advanced_toggle.setChecked(False)
+    assert window.seg_advanced_panel.isHidden()
