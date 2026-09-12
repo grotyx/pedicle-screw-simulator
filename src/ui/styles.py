@@ -261,7 +261,7 @@ QPushButton {{
     color: {t["text_primary"]};
     border: 1px solid {t["border"]};
     border-radius: 4px;
-    padding: 5px 14px;
+    padding: 5px 10px;
     min-height: 22px;
     font-weight: 500;
 }}
@@ -507,10 +507,71 @@ QTabWidget#controlTabs QTabBar::tab:selected {{
 QTabWidget#controlTabs QTabBar::tab:hover:!selected {{
     color: {t["text_primary"]};
 }}
-QWidget#planningCockpit {{
+QPushButton#workflowStep[active="true"] {{
+    border-bottom: 3px solid {t["accent"]};
+}}
+
+/* ===== Review step ===== */
+QWidget#reviewKeyNumbers {{
     background-color: {t["bg_secondary"]};
     border: 2px solid {t["accent"]};
     border-radius: 10px;
+}}
+QLabel#stepTitle {{
+    color: {t["text_primary"]};
+    font-size: 15px;
+    font-weight: 800;
+}}
+QLabel#reviewKeyValue {{
+    font-size: 15px;
+    font-weight: 700;
+    color: {t["text_primary"]};
+}}
+QLabel#screwGradeChip {{
+    background-color: {t["grade_na"]};
+    color: {t["grade_text"]};
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-weight: 800;
+}}
+QLabel#screwGradeChip[grade="A"] {{ background-color: {t["grade_a"]}; }}
+QLabel#screwGradeChip[grade="B"] {{ background-color: {t["grade_b"]}; }}
+QLabel#screwGradeChip[grade="C"] {{ background-color: {t["grade_c"]}; }}
+QLabel#screwGradeChip[grade="D"] {{ background-color: {t["grade_d"]}; }}
+QLabel#screwGradeChip[grade="E"] {{ background-color: {t["grade_d"]}; }}
+QLabel#screwGradeChip[grade="NA"] {{ background-color: {t["grade_na"]}; }}
+QToolButton#screwWarningsToggle {{
+    background: transparent;
+    border: none;
+    color: {t["warning_text"]};
+    font-weight: 700;
+    text-align: left;
+    padding: 3px 2px;
+}}
+QToolButton#screwWarningsToggle:disabled {{
+    color: {t["text_secondary"]};
+}}
+
+/* ===== 3D viewer header ===== */
+QWidget#viewerHeaderBar {{
+    background: transparent;
+}}
+QToolButton#isolationToggle {{
+    background-color: {t["bg_tertiary"]};
+    color: {t["text_secondary"]};
+    border: 1px solid {t["border"]};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+QToolButton#isolationToggle:checked {{
+    background-color: {t["accent"]};
+    border-color: {t["accent"]};
+    color: {t["button_text"]};
+}}
+QToolButton#isolationToggle:disabled {{
+    color: {t["text_disabled"]};
 }}
 
 /* ===== Planning Cockpit ===== */
@@ -554,7 +615,7 @@ QLabel#workflowChevron {{
     font-size: 15px;
 }}
 QPushButton#screwReviewNav {{
-    min-width: 78px;
+    min-width: 28px;
     padding: 5px 8px;
     font-weight: 700;
 }}
@@ -582,6 +643,11 @@ QLabel#screwDragHint {{
 QLabel#screwNarrowLegend {{
     color: {t["text_secondary"]};
     font-size: 11px;
+}}
+QLabel#mutedHint {{
+    color: {t["text_secondary"]};
+    font-size: 11px;
+    font-style: italic;
 }}
 MPRViewer, Viewer3D {{
     background-color: {t["viewer_bg"]};

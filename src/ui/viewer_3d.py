@@ -31,6 +31,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import vtk
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -420,6 +421,10 @@ class Viewer3D(QWidget):
     """
 
     header_double_clicked = pyqtSignal(str)  # ("3d") — maximise request
+    #: Emitted only from a user click on the header Vertebrae/Full CT toggle
+    #: (True = Vertebrae requested); never from set_isolation_state, which
+    #: blocks signals while it reflects the controller's actual state.
+    isolation_requested = pyqtSignal(bool)
 
     # Render state: GUARD blocks renders during pipeline setup, NORMAL allows them.
     _RS_GUARD = 0
@@ -567,6 +572,38 @@ class Viewer3D(QWidget):
         # in this inline sheet used to override it on the light palettes.
         self.label.setStyleSheet("font-weight: bold; padding: 2px;")
         self.label.doubleClicked.connect(self.header_double_clicked)
+
+        self.header_bar = QWidget(self)
+        self.header_bar.setObjectName("viewerHeaderBar")
+        header_bar_layout = QHBoxLayout(self.header_bar)
+        header_bar_layout.setContentsMargins(0, 0, 0, 0)
+        header_bar_layout.setSpacing(4)
+        header_bar_layout.addWidget(self.label, 1)
+
+        self.show_vertebrae_btn = QToolButton(self.header_bar)
+        self.show_vertebrae_btn.setObjectName("isolationToggle")
+        self.show_vertebrae_btn.setText("Vertebrae")
+        self.show_vertebrae_btn.setCheckable(True)
+        self.show_vertebrae_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.show_vertebrae_btn.setToolTip(
+            "Show only the segmented vertebrae (MPR views are masked too)"
+        )
+        self.show_full_ct_btn = QToolButton(self.header_bar)
+        self.show_full_ct_btn.setObjectName("isolationToggle")
+        self.show_full_ct_btn.setText("Full CT")
+        self.show_full_ct_btn.setCheckable(True)
+        self.show_full_ct_btn.setChecked(True)
+        self.show_full_ct_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.show_full_ct_btn.setToolTip("Show the whole CT volume")
+        self._isolation_button_group = QButtonGroup(self.header_bar)
+        self._isolation_button_group.setExclusive(True)
+        self._isolation_button_group.addButton(self.show_vertebrae_btn)
+        self._isolation_button_group.addButton(self.show_full_ct_btn)
+        for button in (self.show_vertebrae_btn, self.show_full_ct_btn):
+            button.setEnabled(False)
+        self.show_vertebrae_btn.toggled.connect(self._on_isolation_toggle_clicked)
+        header_bar_layout.addWidget(self.show_vertebrae_btn)
+        header_bar_layout.addWidget(self.show_full_ct_btn)
 
         self.viewport_container = QWidget(self)
         viewport_layout = QGridLayout(self.viewport_container)
@@ -726,8 +763,42 @@ class Viewer3D(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
         )
 
-        layout.addWidget(self.label)
+        layout.addWidget(self.header_bar)
         layout.addWidget(self.viewport_container, stretch=1)
+
+    def _on_isolation_toggle_clicked(self, checked: bool) -> None:
+        """Emit a user request only -- never fired by set_isolation_state."""
+        self.isolation_requested.emit(bool(checked))
+
+    def set_isolation_state(self, isolated: bool, available: bool) -> None:
+        """Reflect the controller's real isolation state without re-emitting.
+
+        Called after every isolate/restore attempt (including a failed one,
+        which snaps the toggle back to Full CT) so the header always shows
+        what is actually on screen rather than what was last requested.
+        """
+        for button in (self.show_vertebrae_btn, self.show_full_ct_btn):
+            button.setEnabled(bool(available))
+        self.show_vertebrae_btn.setToolTip(
+            "Show only the segmented vertebrae (MPR views are masked too)"
+            if available
+            else "Run TotalSegmentator segmentation first"
+        )
+        # Both buttons' signals must be blocked for the whole exchange: the
+        # exclusive QButtonGroup can otherwise force the *other* button's
+        # checked state (and fire its toggled signal) after this method has
+        # already restored that button's own block, turning a state sync
+        # into a spurious isolation_requested emission.
+        blocked = [
+            (button, button.blockSignals(True))
+            for button in (self.show_vertebrae_btn, self.show_full_ct_btn)
+        ]
+        try:
+            self.show_vertebrae_btn.setChecked(bool(isolated))
+            self.show_full_ct_btn.setChecked(not isolated)
+        finally:
+            for button, previous in blocked:
+                button.blockSignals(previous)
 
     def _build_volume_mapper(self) -> vtk.vtkVolumeMapper:
         """Select and configure the volume mapper for the current platform."""

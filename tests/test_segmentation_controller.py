@@ -723,3 +723,209 @@ def test_finished_drops_the_analyses_measured_on_the_old_mask(
     )
 
     assert screw_tool._analysis_by_level == {}
+
+
+# ---------------------------------------------------------------------------
+# Automatic vertebra isolation after a TotalSegmentator run
+# ---------------------------------------------------------------------------
+
+
+def _write_vertebra_mask(image, path, label=28):
+    """A mask carrying one real vertebra label (28 = L4).
+
+    ``_write_mask`` above thresholds the whole CT into label 1, which is not
+    a label TotalSegmentator would ever emit, so ``_on_finished`` never
+    detects a vertebra on it and never auto-isolates.
+    """
+    mask = sitk.Cast(image > 0, sitk.sitkUInt8) * int(label)
+    mask.CopyInformation(image)
+    sitk.WriteImage(mask, str(path))
+
+
+def test_on_finished_isolates_only_a_totalsegmentator_mask_with_vertebrae(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    # A threshold-fallback result pops a real "Fallback Used" QMessageBox,
+    # which would block this test forever waiting for a click that never
+    # comes on the offscreen platform.
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-1", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+
+    # A threshold fallback never isolates, whatever labels its mask happens
+    # to carry: it has no vertebra labels to isolate *on*.
+    threshold_mask = tmp_path / "threshold_mask.nii.gz"
+    _write_vertebra_mask(image, threshold_mask)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="threshold_fallback",
+            mask_path=str(threshold_mask),
+            message="fallback",
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is False
+
+    # TotalSegmentator with a real vertebra label isolates automatically.
+    ts_mask = tmp_path / "ts_mask.nii.gz"
+    _write_vertebra_mask(image, ts_mask)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(ts_mask),
+            message="ok",
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is True
+    assert window._seg_ctrl.isolation_available is True
+
+
+def test_failed_auto_isolation_shows_no_modal(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """The automatic post-segmentation isolate must never pop a dialog: a
+    surgeon who did not ask to isolate should not be interrupted by a modal
+    over something that failed on its own initiative."""
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-2", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+
+    shown = []
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox,
+        "warning",
+        lambda *a, **k: shown.append(a),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("masked volume could not be produced")
+
+    monkeypatch.setattr(window._seg_ctrl._vm, "set_vertebral_mask", _boom)
+
+    mask_path = tmp_path / "ts_mask_fail.nii.gz"
+    _write_vertebra_mask(image, mask_path)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert shown == []
+    # An automatic isolate really was attempted (and failed) rather than the
+    # controller trivially never trying -- and the toggle snapped back to
+    # "not isolated" rather than getting stuck showing the wrong state.
+    assert window.statusbar.currentMessage().startswith(
+        "Could not isolate vertebrae automatically"
+    )
+    assert window.viewer_3d.isolation_state == (False, True)
+    assert window.vertebra_isolate_btn.text() == "Isolate Vertebrae"
+
+
+def test_threshold_rerun_after_totalsegmentator_restores_full_volume(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """A stale isolation must not survive a result it cannot apply to.
+
+    If a TotalSegmentator run isolated the vertebrae and a later run on the
+    same study falls back to threshold (or detects no vertebrae), the surgeon
+    would otherwise be stuck looking at the previous run's masked volume with
+    both the panel button and the header toggle disabled and no way back to
+    the full CT.
+    """
+    window = ui_main_window
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-3", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+
+    ts_mask = tmp_path / "ts_mask_ok.nii.gz"
+    _write_vertebra_mask(image, ts_mask)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(ts_mask),
+            message="ok",
+        )
+    )
+    assert window._seg_ctrl._vertebrae_isolated is True
+
+    threshold_mask = tmp_path / "threshold_mask_2.nii.gz"
+    _write_mask(image, threshold_mask)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="threshold_fallback",
+            mask_path=str(threshold_mask),
+            message="fallback",
+        )
+    )
+
+    assert window._seg_ctrl._vertebrae_isolated is False
+    assert window.viewer_3d.volume_visible is True
+    assert window.viewer_3d.isolation_state == (False, False)
+    assert window.vertebra_isolate_btn.text() == "Isolate Vertebrae"
+
+
+def test_isolate_keeps_the_checked_level_subset_on_the_mesh(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Toggling isolation must not silently re-select every detected level.
+
+    isolate_vertebrae used to rebuild the mesh from every detected label
+    (including a level the surgeon had just unchecked), which both threw away
+    that selection and re-ran marching cubes over the whole mask a second
+    time right after `_on_finished` had already built the same mesh.
+    """
+    window = ui_main_window
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "warning", lambda *a, **k: None
+    )
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-4", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "ts_mask_subset.nii.gz"
+    _write_vertebra_mask(image, mask_path, label=28)
+    window._on_segmentation_finished(
+        SegmentationRunResult(
+            success=True,
+            method="totalsegmentator",
+            mask_path=str(mask_path),
+            message="ok",
+        )
+    )
+    ctrl = window._seg_ctrl
+    # Restore to Full CT, then select a level subset by hand -- as the
+    # checkboxes would -- before toggling back to Vertebrae.
+    ctrl.restore_full_volume()
+    ctrl.show_vertebrae_by_labels([28])
+    assert window.viewer_3d.vertebral_mesh_labels == [28]
+
+    ctrl.isolate_vertebrae()
+
+    assert window.viewer_3d.vertebral_mesh_labels == [28]
+    assert window.viewer_3d.volume_visible is False

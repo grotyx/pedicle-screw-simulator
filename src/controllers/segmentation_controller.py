@@ -135,6 +135,19 @@ class SegmentationController:
         self._pending_subregion_message: str = ""
 
     @property
+    def isolation_available(self) -> bool:
+        """Whether the current mask carries vertebra labels to isolate on.
+
+        A threshold fallback has no labels -- isolating on it would show the
+        surgeon nothing but the (mostly bone) threshold blob, indistinguishable
+        from a bug -- so it is never treated as available.
+        """
+        return (
+            self._last_segmentation_mask_path is not None
+            and self._last_segmentation_method == "totalsegmentator"
+        )
+
+    @property
     def is_running(self) -> bool:
         """Return True if a segmentation thread is currently active."""
         return (
@@ -352,6 +365,15 @@ class SegmentationController:
             result.method, result.mask_path, result.message,
         )
 
+        # A new result invalidates whatever mask the previous run isolated on
+        # (a threshold re-run has no vertebra labels at all, and a fresh
+        # TotalSegmentator pass may detect none). Starting every result from
+        # the full CT means the auto-isolate below is the only path back into
+        # isolation, and a run that does not qualify for it leaves the
+        # surgeon looking at the whole volume rather than a stale masked one.
+        if self._vertebrae_isolated:
+            self.restore_full_volume()
+
         try:
             import numpy as np
             import SimpleITK as sitk
@@ -443,15 +465,26 @@ class SegmentationController:
             else:
                 from src.core.mask_refinement import refinement_status_text
 
+                range_text = ""
+                if detected:
+                    from src.core.pedicle_analyzer import VERTEBRA_LABELS
+
+                    cranial = VERTEBRA_LABELS.get(max(detected), "?")
+                    caudal = VERTEBRA_LABELS.get(min(detected), "?")
+                    range_text = (
+                        f" ({cranial}–{caudal})"
+                        if cranial != caudal
+                        else f" ({cranial})"
+                    )
                 self._window.seg_status_label.setText(
-                    f"Segmentation ready · {len(detected)} vertebrae detected · "
+                    f"Segmentation ready · {len(detected)} vertebrae detected"
+                    f"{range_text} · "
                     + refinement_status_text(
                         self._last_raw_mask_path, self._last_refinement_notes
                     )
                     + self._pedicle_status_suffix(result)
                 )
-            self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
-            self._window.vertebra_isolate_btn.setEnabled(True)
+            self._sync_isolation_controls()
             self._window.statusbar.showMessage(result.message)
 
             if result.geometry_warnings:
@@ -476,6 +509,16 @@ class SegmentationController:
                     "Fallback Used",
                     result.message,
                 )
+            elif detected:
+                # TotalSegmentator with actual vertebra labels: isolate right
+                # away rather than making the surgeon hunt for the button, and
+                # point the panel at the Plan step now that levels exist.
+                # show_errors=False -- a failed automatic isolate should not
+                # interrupt with a modal for a step the user did not ask for.
+                self.isolate_vertebrae(show_errors=False)
+                show_step = getattr(self._window, "show_step", None)
+                if callable(show_step):
+                    show_step("Plan")
         except Exception as e:
             self._window.seg_status_label.setText(
                 "Segmentation completed, but overlay rendering failed."
@@ -596,14 +639,26 @@ class SegmentationController:
         )
         self._window.statusbar.showMessage("Auto segmentation failed")
 
-    def isolate_vertebrae(self) -> bool:
-        """Isolate vertebral bodies: mask MPR views and hide 3D volume."""
+    def isolate_vertebrae(self, show_errors: bool = True) -> bool:
+        """Isolate vertebral bodies: mask MPR views and hide the 3D volume.
+
+        ``show_errors=False`` is for the automatic call right after a
+        TotalSegmentator run: a modal dialog there would interrupt a workflow
+        the surgeon did not explicitly ask for, so a failure is logged and
+        surfaced in the status bar instead.
+        """
         if self._last_segmentation_mask_path is None:
-            QMessageBox.warning(
-                self._window,
-                "No Segmentation",
-                "Run auto segmentation first.",
-            )
+            if show_errors:
+                QMessageBox.warning(
+                    self._window,
+                    "No Segmentation",
+                    "Run auto segmentation first.",
+                )
+            else:
+                self._window.statusbar.showMessage(
+                    "Cannot isolate vertebrae: run segmentation first"
+                )
+            self._sync_isolation_controls()
             return False
 
         try:
@@ -611,17 +666,28 @@ class SegmentationController:
 
             from src.utils.vtk_helpers import sitk_to_vtk
 
-            mask_image = sitk.ReadImage(self._last_segmentation_mask_path)
-            vtk_mask = sitk_to_vtk(mask_image)
+            # Reuse the mask already resident in VTK form when available --
+            # the automatic post-segmentation call has it on hand, and
+            # re-reading + re-converting the mask file is unnecessary work.
+            vtk_mask = self._last_vtk_mask
+            if vtk_mask is None:
+                mask_image = sitk.ReadImage(self._last_segmentation_mask_path)
+                vtk_mask = sitk_to_vtk(mask_image)
 
             self._vm.set_vertebral_mask(vtk_mask)
             vertebral_only = self._vm.get_vertebral_only_image()
             if vertebral_only is None:
-                return False
+                raise RuntimeError("Masked volume could not be produced")
 
             for viewer in self._window._get_mpr_viewers():
                 viewer.set_reslice_input(vertebral_only)
 
+            self._vertebrae_isolated = True
+            # Only the volume's own visibility changes here -- the mesh keeps
+            # whatever level selection the checkboxes already built. Rebuilding
+            # it from every detected label would both discard an unchecked
+            # level and re-run marching cubes over the whole mask on the UI
+            # thread for a mesh `_on_finished` (or the checkboxes) already set.
             if self._window.viewer_3d is not None:
                 self._window.viewer_3d.set_volume_visible(False)
 
@@ -629,17 +695,21 @@ class SegmentationController:
             for viewer in self._window._get_mpr_viewers():
                 viewer.set_segmentation_visible(False)
 
-            self._vertebrae_isolated = True
-            self._window.vertebra_isolate_btn.setText("Restore Full Volume")
-            self._window.vertebra_isolate_btn.setEnabled(True)
-            self._window.vertebra_restore_btn.setEnabled(True)
             self._window.statusbar.showMessage("Vertebral bodies isolated")
+            self._sync_isolation_controls()
             return True
         except Exception as e:
             logger.exception("Failed to isolate vertebrae")
-            QMessageBox.warning(
-                self._window, "Error", f"Failed to isolate vertebrae: {e}"
-            )
+            self._vertebrae_isolated = False
+            if show_errors:
+                QMessageBox.warning(
+                    self._window, "Error", f"Failed to isolate vertebrae: {e}"
+                )
+            else:
+                self._window.statusbar.showMessage(
+                    f"Could not isolate vertebrae automatically: {e}"
+                )
+            self._sync_isolation_controls()
             return False
 
     def ensure_mpr_vertebrae_isolated(self) -> bool:
@@ -653,20 +723,24 @@ class SegmentationController:
         for viewer in self._window._get_mpr_viewers():
             viewer.restore_original_input()
 
-        if self._window.viewer_3d is not None:
-            self._window.viewer_3d.set_volume_visible(True)
-
         # Restore segmentation visibility based on checkbox state
         self.update_visibility()
 
         self._vm.clear_vertebral_mask()
         self._vertebrae_isolated = False
-        self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
-        self._window.vertebra_isolate_btn.setEnabled(
-            self._last_segmentation_mask_path is not None
-        )
-        self._window.vertebra_restore_btn.setEnabled(False)
+        if self._window.viewer_3d is not None:
+            self._window.viewer_3d.set_volume_visible(True)
         self._window.statusbar.showMessage("Full volume restored")
+        self._sync_isolation_controls()
+
+    def set_vertebrae_isolated(self, isolated: bool) -> bool:
+        """Drive isolation from the 3D header toggle (or any other caller)."""
+        if bool(isolated) == self._vertebrae_isolated:
+            return True
+        if isolated:
+            return self.isolate_vertebrae()
+        self.restore_full_volume()
+        return True
 
     def toggle_vertebrae_isolation(self) -> None:
         """Toggle the single visible isolation button between both states."""
@@ -674,6 +748,31 @@ class SegmentationController:
             self.restore_full_volume()
         else:
             self.isolate_vertebrae()
+
+    def _sync_isolation_controls(self) -> None:
+        """Reconcile the panel button, restore button, and 3D header toggle.
+
+        Called at the end of every isolate/restore/clear/reset path (including
+        a failed isolate) so all three controls always agree with the actual
+        state, whichever of them the user last touched.
+        """
+        window = self._window
+        available = self.isolation_available
+        isolate_btn = getattr(window, "vertebra_isolate_btn", None)
+        if isolate_btn is not None:
+            isolate_btn.setText(
+                "Restore Full Volume"
+                if self._vertebrae_isolated
+                else "Isolate Vertebrae"
+            )
+            isolate_btn.setEnabled(available)
+        restore_btn = getattr(window, "vertebra_restore_btn", None)
+        if restore_btn is not None:
+            restore_btn.setEnabled(self._vertebrae_isolated)
+        viewer_3d = getattr(window, "viewer_3d", None)
+        set_state = getattr(viewer_3d, "set_isolation_state", None)
+        if callable(set_state):
+            set_state(self._vertebrae_isolated, available)
 
     def show_selected_vertebrae(self) -> None:
         """Show only the selected segmented vertebrae in the 3D viewport."""
@@ -689,7 +788,7 @@ class SegmentationController:
                 "Select at least one vertebra for 3D display"
             )
             return
-        self._show_vertebral_mesh_only(selected_labels)
+        self._show_vertebral_mesh(selected_labels)
 
     def show_all_vertebrae(self) -> None:
         """Show all detected segmented vertebrae without the CT volume."""
@@ -706,7 +805,7 @@ class SegmentationController:
         if self._last_vtk_mask is None or not labels:
             self._window.statusbar.showMessage("Run segmentation first")
             return
-        self._show_vertebral_mesh_only(labels)
+        self._show_vertebral_mesh(labels)
 
     def show_vertebrae_by_labels(self, labels: list[int]) -> None:
         """Apply the compact 3D vertebra multi-selection immediately."""
@@ -714,19 +813,29 @@ class SegmentationController:
             self._window.statusbar.showMessage("Run segmentation first")
             return
         if labels:
-            self._show_vertebral_mesh_only(sorted(set(labels)))
+            self._show_vertebral_mesh(sorted(set(labels)))
             return
-
-        self._window.viewer_3d.clear_vertebral_mesh()
-        self._window.viewer_3d.set_volume_visible(True)
+        self._show_vertebral_mesh([])
         self._window.statusbar.showMessage("No 3D vertebrae selected")
 
-    def _show_vertebral_mesh_only(self, labels: list[int]) -> None:
-        self._window.viewer_3d.set_vertebral_mesh(
-            self._last_vtk_mask,
-            labels=sorted(labels),
-        )
-        self._window.viewer_3d.set_volume_visible(False)
+    def _show_vertebral_mesh(self, labels: list[int]) -> None:
+        """Set the mesh's visible labels; the CT volume's visibility follows
+        the isolation toggle, not this selection. In Full CT mode the CT
+        therefore stays visible whatever levels are checked -- ownership of
+        the volume's visibility moved to the 3D header toggle, so changing
+        which levels are checked no longer hides or shows the CT itself.
+        """
+        window = self._window
+        if labels:
+            window.viewer_3d.set_vertebral_mesh(
+                self._last_vtk_mask,
+                labels=sorted(labels),
+            )
+        else:
+            window.viewer_3d.clear_vertebral_mesh()
+        window.viewer_3d.set_volume_visible(not self._vertebrae_isolated)
+        if not labels:
+            return
         names = [
             self._window.vertebra_display_list.item(index).text()
             for index in range(self._window.vertebra_display_list.count())
@@ -754,13 +863,12 @@ class SegmentationController:
         self._last_pedicle_mask = None
         self._window.clear_vertebra_display_options()
         self._window.seg_status_label.setText("Ready for automatic segmentation")
-        self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
-        self._window.vertebra_isolate_btn.setEnabled(False)
         self._last_segmentation_method = "totalsegmentator"
         self._last_vtk_mask = None
         self._detected_vertebra_labels = []
         self.refresh_label_options()
         self._window.statusbar.showMessage("Segmentation overlay cleared")
+        self._sync_isolation_controls()
 
     def apply_label_filter(self, _value=None):
         """Apply label filter to existing segmentation overlays."""
@@ -877,8 +985,6 @@ class SegmentationController:
             self._window._tool_ctrl.screw_tool.set_grader(None)
         self._window.clear_vertebra_display_options()
         self._window.seg_status_label.setText("Ready for automatic segmentation")
-        self._window.vertebra_isolate_btn.setText("Isolate Vertebrae")
-        self._window.vertebra_isolate_btn.setEnabled(False)
         self._window.seg_label_spin.setValue(0)
         self._window.seg_show_2d_check.setChecked(True)
         self._window.seg_show_3d_check.setChecked(True)
@@ -886,3 +992,4 @@ class SegmentationController:
         self.workspace.purge()
         # Nothing left to keep alive; the next run starts its own heartbeat.
         self._stop_heartbeat()
+        self._sync_isolation_controls()

@@ -205,35 +205,36 @@ def test_screw_mpr_toolbar_action_tracks_the_controller(ui_main_window):
     assert window._screw_mpr_action.isChecked() is False
 
 
-def test_control_panel_has_three_tabs_with_the_expected_sections(ui_main_window):
+def test_panel_is_a_four_page_step_stack(ui_main_window):
     window = ui_main_window
 
-    assert window.control_tabs.count() == 3
-    assert [
-        window.control_tabs.tabText(index)
-        for index in range(window.control_tabs.count())
-    ] == ["Study", "Planning", "Tools"]
-    assert window.control_section_order == {
-        "Study": ["Study", "Segmentation", "Window/Level"],
-        "Planning": [
-            "Planning",
-            "Planning parameters",
-            "Screw Parameters",
-            "Screw Review",
-        ],
-        "Tools": ["Measurement", "Measurement List", "Validation"],
+    from src.ui.workflow_bar import STEP_NAMES
+
+    assert STEP_NAMES == ("Study", "Segment", "Plan", "Review")
+    for name in STEP_NAMES:
+        assert window.step_panel.page(name) is not None
+    assert window.step_section_order == {
+        "Study": ["Study", "Window/Level", "3D Rendering"],
+        "Segment": ["Segmentation"],
+        "Plan": ["Planning", "Planning parameters", "Manual Screw Defaults"],
+        "Review": ["Details", "Measurements"],
     }
-    for tab, titles in window.control_section_order.items():
-        assert [
-            group.title for group in window.control_tab_sections[tab]
-        ] == titles
+    for step, titles in window.step_section_order.items():
+        assert [group.title for group in window.step_sections[step]] == titles
 
 
-def test_cockpit_is_pinned_outside_the_tab_widget(ui_main_window):
+def test_clicking_a_workflow_step_shows_its_page(ui_main_window):
     window = ui_main_window
 
-    assert window.planning_cockpit.objectName() == "planningCockpit"
-    assert window.control_tabs.isAncestorOf(window.planning_cockpit) is False
+    for index, name in enumerate(("Study", "Segment", "Plan", "Review")):
+        window.workflow_bar.buttons[index].click()
+        assert window.step_panel.current_step == name
+
+
+def test_selected_screw_group_is_the_review_page(ui_main_window):
+    window = ui_main_window
+
+    assert window.selected_screw_group.property("role") == "review"
     for widget in (
         window.selected_screw_counter,
         window.selected_screw_title,
@@ -242,8 +243,8 @@ def test_cockpit_is_pinned_outside_the_tab_widget(ui_main_window):
         window.screw_previous_btn,
         window.screw_next_btn,
     ):
-        assert window.planning_cockpit.isAncestorOf(widget)
-    assert window.control_tabs.isAncestorOf(window.screw_list_widget)
+        assert window.selected_screw_group.isAncestorOf(widget)
+    assert window.selected_screw_group.isAncestorOf(window.screw_list_widget)
 
 
 def test_sections_keep_their_default_collapsed_state(ui_main_window):
@@ -251,11 +252,346 @@ def test_sections_keep_their_default_collapsed_state(ui_main_window):
 
     assert window.segmentation_group.is_collapsed is False
     assert window.planning_group.is_collapsed is False
-    assert window.selected_screw_group.is_collapsed is False
-    assert window.selected_screw_group.property("role") == "review"
     assert all(
         group.is_collapsed for group in window.secondary_control_groups
     )
+
+
+def test_every_existing_control_lives_on_its_step_page(ui_main_window):
+    window = ui_main_window
+    study = window.step_panel.page("Study")
+    segment = window.step_panel.page("Segment")
+    plan = window.step_panel.page("Plan")
+    review = window.step_panel.page("Review")
+
+    attribute_to_page = {
+        "open_dicom_btn": study,
+        "info_label": study,
+        "window_slider": study,
+        "level_slider": study,
+        "_btn_bone": study,
+        "_btn_soft": study,
+        "tf_preset_combo": study,
+        "opacity_slider": study,
+        "seg_run_btn": segment,
+        "seg_refine_check": segment,
+        "seg_status_label": segment,
+        "vertebra_isolate_btn": segment,
+        "isolation_hint_label": segment,
+        "seg_advanced_panel": segment,
+        "vertebra_restore_btn": segment,
+        "vertebra_display_list": segment,
+        "vertebra_select_all_btn": plan,
+        "vertebra_clear_all_btn": plan,
+        "vertebra_level_container": plan,
+        "workspace_mode_combo": plan,
+        "auto_screw_review_notice": plan,
+        "auto_screw_plan_btn": plan,
+        "auto_screw_status": plan,
+        "_btn_clear_screws": plan,
+        "plan_mode_combo": plan,
+        "plan_trajectory_combo": plan,
+        "plan_fill_ratio_spin": plan,
+        "plan_wall_clearance_spin": plan,
+        "plan_anterior_margin_spin": plan,
+        "plan_max_convergence_spin": plan,
+        "plan_hu_threshold_spin": plan,
+        "plan_narrow_pedicle_spin": plan,
+        "plan_narrow_lateral_spin": plan,
+        "plan_endplate_parallel_check": plan,
+        "plan_endplate_tolerance_spin": plan,
+        "plan_reset_defaults_btn": plan,
+        "length_spin": plan,
+        "diameter_spin": plan,
+        "review_title_label": review,
+        "selected_screw_counter": review,
+        "selected_screw_title": review,
+        "selected_screw_grade": review,
+        "selected_screw_diameter": review,
+        "selected_screw_length": review,
+        "screw_warnings_toggle": review,
+        "selected_screw_warning": review,
+        "screw_list_widget": review,
+        "screw_previous_btn": review,
+        "screw_next_btn": review,
+        "screw_axis_mpr_btn": review,
+        "standard_mpr_btn": review,
+        "screw_edit_btn": review,
+        "remove_screw_btn": review,
+        "screw_edit_entry_btn": review,
+        "screw_edit_tip_btn": review,
+        "screw_edit_move_btn": review,
+        "screw_edit_cancel_btn": review,
+        "screw_axis_position_label": review,
+        "screw_axis_position_slider": review,
+        "screw_axis_rotation_spin": review,
+        "screw_mpr_reset_btn": review,
+        "screw_mpr_controls": review,
+        "selected_screw_metrics": review,
+        "screw_narrow_legend": review,
+        "screw_drag_hint": review,
+        "measure_mode_combo": review,
+        "measure_finish_btn": review,
+        "measure_clear_btn": review,
+        "measurement_list_widget": review,
+        "show_measurement_btn": review,
+        "edit_measurement_btn": review,
+        "remove_measurement_btn": review,
+    }
+    for attribute, page in attribute_to_page.items():
+        widget = getattr(window, attribute)
+        assert page.isAncestorOf(widget), attribute
+
+
+def test_review_list_fills_the_panel_at_1600x900(ui_main_window, qtbot):
+    from src.ui.step_panel import REVIEW_TABLE_MIN_VISIBLE_PX
+
+    window = ui_main_window
+    window.resize(1600, 900)
+    window.show()
+    qtbot.waitExposed(window)
+    # Pin the panel to the width a fresh 1600x900 launch gives it (a little
+    # over the 400 px the app starts every session at): splitter
+    # auto-redistribution can drift depending on what ran earlier in the same
+    # QApplication, and this test is about the Review page's own layout, not
+    # incidental splitter arithmetic.
+    window.main_splitter.setSizes([1100, 500])
+    # The collapsed sections animate their height shut over 200ms; without
+    # waiting for that the panel briefly reports its pre-collapse size.
+    qtbot.wait(350)
+    window.show_step("Review")
+    qtbot.wait(350)
+    window.main_splitter.setSizes([1100, 500])
+    qtbot.wait(50)
+
+    scroll = window.step_panel.scroll_area("Review")
+    assert scroll.verticalScrollBar().maximum() == 0
+    assert window.screw_list_widget.height() >= REVIEW_TABLE_MIN_VISIBLE_PX
+
+    # The scrolled widget must not need more room than the viewport gives it
+    # in either direction -- a wider content widget would silently clip
+    # (there is deliberately no horizontal scrollbar to reveal it).
+    viewport_size = scroll.viewport().size()
+    content_size = scroll.widget().size()
+    assert content_size.width() <= viewport_size.width()
+    assert content_size.height() <= viewport_size.height()
+
+    table_top_left = window.screw_list_widget.mapTo(scroll.widget(), window.screw_list_widget.rect().topLeft())
+    assert table_top_left.x() >= 0
+    assert table_top_left.y() >= 0
+    table_right = table_top_left.x() + window.screw_list_widget.width()
+    table_bottom = table_top_left.y() + window.screw_list_widget.height()
+    assert table_right <= content_size.width()
+    assert table_bottom <= content_size.height()
+
+    # Also check the panel at its real launch widths (400 px splitter width,
+    # 390 px container minimum): the action row's nav buttons and Screw
+    # MPR/Edit buttons must fit without a minimum width wider than the
+    # viewport, or the right edge of the page silently clips with no
+    # horizontal scrollbar to reach it.
+    for panel_width in (400, 390):
+        window.main_splitter.setSizes([1600 - panel_width, panel_width])
+        qtbot.wait(50)
+        viewport_size = scroll.viewport().size()
+        content_size = scroll.widget().size()
+        assert content_size.width() <= viewport_size.width(), (
+            f"Review page content ({content_size.width()}px) overflows the "
+            f"viewport ({viewport_size.width()}px) at panel width {panel_width}"
+        )
+
+
+def test_key_numbers_sit_above_the_list_and_actions_below(ui_main_window, qtbot):
+    window = ui_main_window
+    window.resize(1600, 900)
+    window.show()
+    qtbot.waitExposed(window)
+    window.show_step("Review")
+    QApplication.processEvents()
+
+    def top(widget):
+        return widget.mapTo(window.selected_screw_group, widget.rect().topLeft()).y()
+
+    assert top(window.selected_screw_title) < top(window.selected_screw_diameter)
+    assert top(window.selected_screw_diameter) < top(window.screw_list_widget)
+    assert top(window.screw_list_widget) < top(window.remove_screw_btn)
+    assert top(window.remove_screw_btn) < top(window.details_group)
+
+
+def test_warnings_collapse_into_one_line(ui_main_window, qtbot):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    window.show()
+    qtbot.waitExposed(window)
+    window.show_step("Review")
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        diameter=6.0,
+        vertebra_level="L4",
+        side="right",
+        grade="B",
+        breach_distance=1.2,
+        warnings=["warning one", "warning two"],
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.screw_warnings_toggle.text() == "⚠ 3 warnings"
+    assert window.selected_screw_warning.isVisible() is False
+    full_text = window.selected_screw_warning.text()
+    assert "warning one" in full_text
+    assert "warning two" in full_text
+
+    window.screw_warnings_toggle.setChecked(True)
+    assert window.selected_screw_warning.isVisible() is True
+    assert window.selected_screw_warning.text() == full_text
+
+
+def test_details_is_collapsed_and_holds_the_metric_rows(ui_main_window):
+    window = ui_main_window
+    assert window.details_group.is_collapsed is True
+    for widget in (
+        window.selected_screw_convergence,
+        window.selected_screw_craniocaudal,
+        window.selected_screw_endplate,
+        window.selected_screw_alignment,
+        window.selected_screw_hu,
+        window.selected_screw_source,
+        window.selected_screw_body_hu,
+        window.selected_screw_wall,
+        window.selected_screw_facet,
+        window.selected_screw_heary,
+        window.selected_screw_trajectory,
+        window.selected_screw_pedicle,
+    ):
+        assert window.details_group.isAncestorOf(widget)
+
+
+def test_details_endplate_row_names_the_neighbour_reference(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        diameter=6.0,
+        vertebra_level="L1",
+        side="right",
+        grade="B",
+        metrics={
+            "endplate_angle_deg": -3.2,
+            "endplate_reference": "neighbours",
+            "endplate_reference_levels": "T12, L3",
+        },
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert "T12, L3" in window.selected_screw_endplate.text()
+    assert "T12, L3" in window.selected_screw_endplate.toolTip()
+
+
+def test_screw_mpr_controls_show_only_while_active(ui_main_window, qtbot):
+    window = ui_main_window
+    window.show()
+    qtbot.waitExposed(window)
+    window.show_step("Review")
+    assert window.screw_mpr_controls.isVisible() is False
+
+    # Move off Review so the inactive -> active edge below has somewhere to
+    # switch away from -- otherwise "already on Review" would pass trivially.
+    window.show_step("Plan")
+    window._screw_mpr_ctrl._active = True
+    window.refresh_mode_indicators()
+    assert window.screw_mpr_controls.isVisible() is True
+    assert window.screw_axis_mpr_btn.isVisible() is False
+    assert window.standard_mpr_btn.isVisible() is True
+    # Screw MPR turning on switches the panel to Review.
+    assert window.step_panel.current_step == "Review"
+
+    window._screw_mpr_ctrl._active = False
+    window.refresh_mode_indicators()
+    assert window.screw_mpr_controls.isVisible() is False
+    assert window.screw_axis_mpr_btn.isVisible() is True
+
+
+def test_edit_menu_starts_the_edit_modes(monkeypatch, qtbot, isolated_qsettings):
+    """The Edit menu's actions call ScrewEditController.start/cancel.
+
+    The controller is created inside MainWindow.__init__ and its signals are
+    connected there too, so the class methods must be patched *before*
+    construction -- patching the instance afterwards would miss a direct
+    (non-lambda) ``.connect(self._screw_edit_ctrl.cancel)`` binding, which
+    captures that exact bound-method object rather than looking it up again
+    at call time.
+    """
+    from src.controllers.screw_edit_controller import ScrewEditController
+
+    calls = []
+    monkeypatch.setattr(
+        ScrewEditController, "start", lambda self, mode: calls.append(mode)
+    )
+    monkeypatch.setattr(
+        ScrewEditController, "cancel", lambda self, *a, **k: calls.append("cancel")
+    )
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    QApplication.instance().setProperty("themeName", "graphite_blue")
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+
+    window._screw_edit_move_entry_action.trigger()
+    window._screw_edit_move_tip_action.trigger()
+    window._screw_edit_move_whole_action.trigger()
+    window._screw_edit_cancel_action.trigger()
+
+    assert calls == ["entry", "tip", "move", "cancel"]
+
+
+def test_selecting_a_screw_shows_the_review_step(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    window.show_step("Study")
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        diameter=6.0,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.step_panel.current_step == "Review"
+    # show_step must also mark the workflow bar's Review button active, not
+    # only switch the visible page.
+    from src.ui.workflow_bar import STEP_NAMES
+
+    review_index = STEP_NAMES.index("Review")
+    assert window.workflow_bar.buttons[review_index].property("active") == "true"
+
+
+def test_plan_table_counts_warnings_per_row(ui_main_window):
+    from src.models.screw import Screw
+    from src.ui.screw_plan_table import WARNINGS_COLUMN
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        diameter=6.0,
+        vertebra_level="L4",
+        side="right",
+        grade="N/A",
+        warnings=["a", "b"],
+    )
+    window.screw_list_widget.addScrewRow(screw, 0)
+
+    item = window.screw_list_widget.item(0, WARNINGS_COLUMN)
+    assert item.text() == "3"
 
 
 def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
@@ -284,7 +620,7 @@ def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
         )
 
     assert table.count() == 2
-    assert table.rowText(0) == "1 · L3 · Left · -- · 6.5 · 40.0 · Grade A · Manual"
+    assert table.rowText(0) == "1 · L3 · Left · -- · 6.5 · 40.0 · Grade A · "
     assert "Grade D" in table.rowText(1)
 
     table.setCurrentRow(1)
@@ -367,7 +703,7 @@ def test_screw_plan_table_updates_a_row_in_place(ui_main_window):
     )
 
     assert table.count() == 1
-    assert table.rowText(0) == "1 · L5 · Left · -- · 7.5 · 50.0 · Grade C · Manual"
+    assert table.rowText(0) == "1 · L5 · Left · -- · 7.5 · 50.0 · Grade C · "
 
 
 def _grid_position(window, widget):
@@ -628,7 +964,7 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
         table.horizontalHeaderItem(column).text()
         for column in range(table.columnCount())
     ]
-    assert titles == ["#", "Level", "Side", "Pedicle", "Ø", "Len", "Grade", "Source"]
+    assert titles == ["#", "Level", "Side", "Pedicle", "Ø", "Len", "Grade", "⚠"]
 
     assert table.horizontalHeaderItem(3).toolTip() == "Measured pedicle width (mm)"
     assert table.horizontalHeaderItem(4).toolTip() == "Screw diameter (mm)"
@@ -638,17 +974,15 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
         for column in range(table.columnCount())
     )
 
+    from src.ui.screw_plan_table import WARNINGS_COLUMN
+
     fit = QHeaderView.ResizeMode.ResizeToContents
     stretch = QHeaderView.ResizeMode.Stretch
-    assert [header.sectionResizeMode(c) for c in (0, 3, 4, 5, GRADE_COLUMN)] == [
-        fit,
-        fit,
-        fit,
-        fit,
-        fit,
-    ]
-    assert [header.sectionResizeMode(c) for c in (1, 2, 7)] == [
-        stretch,
+    assert [
+        header.sectionResizeMode(c)
+        for c in (0, 3, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
+    ] == [fit, fit, fit, fit, fit, fit]
+    assert [header.sectionResizeMode(c) for c in (1, 2)] == [
         stretch,
         stretch,
     ]
@@ -677,7 +1011,7 @@ def test_grade_chip_column_is_wide_enough_for_its_text(ui_main_window):
     text_width = table.fontMetrics().horizontalAdvance(chip.text())
     assert table.columnWidth(GRADE_COLUMN) >= text_width
     # The values themselves are unchanged by the shorter headers.
-    assert table.rowText(0) == "1 · L4 · Left · -- · 6.5 · 40.0 · Grade B · Manual"
+    assert table.rowText(0) == "1 · L4 · Left · -- · 6.5 · 40.0 · Grade B · "
 
 
 def test_narrow_screws_render_red_in_3d_and_mpr(ui_main_window):
@@ -750,7 +1084,7 @@ def test_screw_plan_table_shows_the_pedicle_width_and_chips_the_narrow_ones(
     assert table.item(1, PEDICLE_COLUMN).background().color() != QColor(
         palette["grade_d"]
     )
-    assert table.rowText(0) == "1 · T11 · Left · 4.5 mm · 4.0 · 40.0 · Grade B · Manual"
+    assert table.rowText(0) == "1 · T11 · Left · 4.5 mm · 4.0 · 40.0 · Grade B · "
 
 
 def test_cockpit_shows_the_pedicle_row_and_the_narrow_legend(ui_main_window):

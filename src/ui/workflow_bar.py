@@ -1,15 +1,11 @@
-"""The three primary actions of a planning session, in order, above the views.
+"""The four workflow steps of a planning session, above the views.
 
-Opening a study, segmenting it and planning screws are the whole workflow,
-but the last two buttons lived inside the Study and Planning tabs, below the
-fold of a scrolled panel -- the one thing a first-time user needs to find was
-the hardest thing on screen to find.  This bar puts them in a row, numbered,
-where the eye starts: ``① Open DICOM → ② Segment → ③ Plan Screws``.
-
-It is a view, not a second copy of the workflow.  Each step runs the existing
-action it names, and :class:`MainWindow` tells it what state each step is in;
-the tab buttons stay exactly as they were, so nothing that relies on them
-changes.
+The bar used to run the three primary actions of a session directly (Open
+DICOM, Segment, Plan Screws); this now **navigates**, one step per page of
+the right-hand :class:`~src.ui.step_panel.StepPanel`. Every step is always
+clickable -- unlike the old three-action bar, a step is never disabled, since
+every page (Study/Segment/Plan/Review) is reachable at any time and the
+buttons that actually run an action live on the pages themselves.
 """
 
 from __future__ import annotations
@@ -26,14 +22,18 @@ _STEP_NUMBERS = ("①", "②", "③", "④", "⑤")
 #: Shown before a finished step's label.
 DONE_MARK = "✓"
 
+#: The four workflow steps, in panel order.
+STEP_NAMES = ("Study", "Segment", "Plan", "Review")
+
 
 @dataclass(frozen=True)
 class StepState:
     """What one step looks like right now.
 
     ``done`` marks a step already completed for this study; ``current`` is the
-    next thing to do, drawn as the primary action.  ``hint`` is the tooltip,
-    which for a disabled step should say what unlocks it.
+    next thing to do, drawn as the primary action.  ``hint`` is the tooltip.
+    Every step is ``enabled`` now that the bar only navigates: every page is
+    always reachable.
     """
 
     enabled: bool
@@ -44,7 +44,7 @@ class StepState:
 
 @dataclass(frozen=True)
 class WorkflowStep:
-    """One numbered step: its label and the action it runs."""
+    """One numbered step: its label and the action it runs (show its page)."""
 
     label: str
     action: Callable[[], None]
@@ -100,6 +100,15 @@ class WorkflowBar(QWidget):
                 button.style().unpolish(button)
                 button.style().polish(button)
 
+    def set_active(self, index: Optional[int]) -> None:
+        """Mark the button at *index* as the currently shown step (or none)."""
+        for i, button in enumerate(self._buttons):
+            active = "true" if i == index else "false"
+            if button.property("active") != active:
+                button.setProperty("active", active)
+                button.style().unpolish(button)
+                button.style().polish(button)
+
     @staticmethod
     def _text(index: int, label: str, *, done: bool) -> str:
         number = _STEP_NUMBERS[index] if index < len(_STEP_NUMBERS) else f"{index + 1}."
@@ -113,19 +122,27 @@ def workflow_states(
     has_mask: bool,
     plan_available: bool,
     has_plan: bool,
+    has_screws: bool = False,
 ) -> List[StepState]:
-    """The three steps' states from what the session has done so far.
+    """The four steps' states from what the session has done so far.
 
-    Kept free of Qt so the rule can be tested directly.  The *current* step is
-    the first one not yet done -- highlighted even while it is disabled, so the
-    bar always points at what comes next, and its tooltip says what it waits
-    for.  A later step never looks done while an earlier one is not: a plan
-    from a previous study must not show ③ as finished on a fresh one.
+    Kept free of Qt so the rule can be tested directly. Every step is always
+    ``enabled``: the bar only navigates, and every page is reachable whatever
+    the study's state. ``current`` is the first step not yet done, so once a
+    plan exists the Review step is the one highlighted.
     """
-    done = [has_volume, has_volume and has_mask, has_volume and has_mask and has_plan]
-    enabled = [True, has_volume and segment_available, has_mask and plan_available]
+    done = [
+        has_volume,
+        has_volume and has_mask,
+        has_volume and has_mask and has_plan,
+        False,
+    ]
     hints = [
-        "Open a DICOM series folder",
+        (
+            "Study loaded — open another one here"
+            if has_volume
+            else "Open a DICOM series folder"
+        ),
         (
             "Run TotalSegmentator on the loaded study"
             if has_volume
@@ -134,18 +151,23 @@ def workflow_states(
         (
             "Plan screws for the selected vertebral levels"
             if has_mask and plan_available
-            else "Select vertebral levels in the Planning tab"
+            else "Select vertebral levels in the Plan step"
             if has_mask
             else "Run segmentation first"
+        ),
+        (
+            "Review the screws level by level"
+            if has_screws
+            else "Plan or place screws first"
         ),
     ]
     first_open = next((i for i, finished in enumerate(done) if not finished), None)
     return [
         StepState(
-            enabled=enabled[i],
+            enabled=True,
             done=done[i],
             current=(i == first_open),
             hint=hints[i],
         )
-        for i in range(3)
+        for i in range(4)
     ]
