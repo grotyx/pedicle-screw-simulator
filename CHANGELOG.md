@@ -11,7 +11,7 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
-## [Unreleased]
+## [0.2.2] - 2026-09-12
 
 A step-based right-hand panel that follows the workflow bar, a local 3D cut
 that opens only the vertebra a Screw MPR screw is graded against instead of
@@ -30,7 +30,9 @@ by borrowing the nearest well-fitted neighbouring level instead.
 - The screw plan table's last column is now a per-row warning count (⚠),
   replacing Source (see Changed).
 - The 3D viewport header carries a **Vertebrae / Full CT** toggle that always
-  reflects, and now owns, whether the CT volume is visible in 3D.
+  reflects, and now owns, whether the CT volume is visible in 3D. The 3D
+  segmentation overlay stays under the "Show 3D" checkbox: isolating hides
+  it, and returning to Full CT shows it again only if that box is ticked.
 - Vertebrae are isolated automatically once a TotalSegmentator run detects
   vertebra labels (never for a threshold fallback), and the panel switches to
   the Plan step.
@@ -355,6 +357,7 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
+[0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

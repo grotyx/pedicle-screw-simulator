@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**Version:** 0.2.1
+**Version:** 0.2.2
 
 ## 1. Purpose and Safety
 

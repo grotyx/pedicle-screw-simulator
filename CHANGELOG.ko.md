@@ -11,7 +11,7 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 > 검증을 뜻하지 않습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와
 > 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
-## [Unreleased]
+## [0.2.2] - 2026-09-12
 
 작업 단계 표시줄을 따라가는 단계별 오른쪽 패널, 화면 전체가 아니라 선택한
 Screw MPR 스크류의 등급 판정 기준이 되는 척추 하나만 여는 3D 절단, 그리고
@@ -31,6 +31,9 @@ Screw MPR 스크류의 등급 판정 기준이 되는 척추 하나만 여는 3D
   열을 대체합니다(자세한 내용은 "변경" 참고).
 - 3D 화면 머리글에 **Vertebrae / Full CT** 토글이 추가되어, 3D에서 CT
   volume이 보이는지 여부를 항상 반영하며 이제 그 여부를 직접 결정합니다.
+  3D segmentation overlay는 계속 "Show 3D" 체크박스가 결정합니다. 척추를
+  분리하면 overlay가 숨겨지고, Full CT로 돌아가면 그 체크박스가 켜져 있을
+  때만 다시 보입니다.
 - TotalSegmentator 실행이 척추 라벨을 감지하면(threshold fallback은
   제외) 척추를 자동으로 isolate하고, 패널을 Plan 단계로 전환합니다.
 - Screw MPR의 3D cross-section이 이제 실제 텍스처가 입혀진 CT 단면이 되어,
@@ -328,6 +331,7 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
+[0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/grotyx/pedicle-screw-simulator/releases/tag/v0.1.0

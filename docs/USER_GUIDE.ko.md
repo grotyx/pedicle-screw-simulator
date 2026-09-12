@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**버전:** 0.2.1
+**버전:** 0.2.2
 
 ## 1. 목적과 안전 범위
 
