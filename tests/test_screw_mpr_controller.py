@@ -119,15 +119,70 @@ class _VolumeManager:
 
 
 class _ScrewTool:
-    def __init__(self, screws):
+    def __init__(self, screws, grader=None):
         self.screws = screws
+        self.grader = grader
 
     def get_screws(self):
         return list(self.screws)
 
 
+class _Grader:
+    """Stub grader: returns a fixed label, or raises when told to."""
+
+    def __init__(self, label=None, raises=False):
+        self.label = label
+        self.raises = raises
+        self.calls = []
+
+    def detect_label(self, entry, target):
+        self.calls.append((entry, target))
+        if self.raises:
+            raise RuntimeError("grader boom")
+        return self.label
+
+
+class _WLSlider:
+    """Stand-in for the Study tab's Window/Level QSlider."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def value(self):
+        return self._value
+
+    def setValue(self, value):
+        self._value = value
+
+
+class _Viewer3DRecorder:
+    """Records every show_screw_mpr / clear_screw_mpr call for assertions."""
+
+    def __init__(self):
+        self.calls = []
+        self.clear_count = 0
+
+    def show_screw_mpr(self, oblique_axial, oblique_sagittal, cross_section, **kwargs):
+        self.calls.append(
+            {
+                "vertebra_label": kwargs.get("vertebra_label"),
+                "window_level": kwargs.get("window_level"),
+            }
+        )
+
+    def clear_screw_mpr(self):
+        self.clear_count += 1
+
+
 class _Window:
-    def __init__(self, screws, row=0):
+    def __init__(
+        self,
+        screws,
+        row=0,
+        viewer_3d=None,
+        grader=None,
+        window_level=None,
+    ):
         self.axial_viewer = _Viewer()
         self.sagittal_viewer = _Viewer()
         self.coronal_viewer = _Viewer()
@@ -139,9 +194,13 @@ class _Window:
         self.screw_axis_rotation_spin = _SpinBox()
         self.screw_mpr_reset_btn = _Button()
         self.statusbar = _StatusBar()
-        self._tool_ctrl = SimpleNamespace(screw_tool=_ScrewTool(screws))
+        self._tool_ctrl = SimpleNamespace(screw_tool=_ScrewTool(screws, grader=grader))
         self.layout_mode = None
         self.inspector_updates = []
+        self.viewer_3d = viewer_3d
+        if window_level is not None:
+            self.window_slider = _WLSlider(window_level[0])
+            self.level_slider = _WLSlider(window_level[1])
 
     def set_view_layout(self, mode):
         self.layout_mode = mode
@@ -153,12 +212,30 @@ class _Window:
         self.inspector_updates.append((index, screw, review_active))
 
 
-def _screw(entry=(0.0, 0.0, 0.0), target=(0.0, 0.0, 40.0)):
-    return Screw(entry_point=entry, target_point=target, diameter=6.0)
+def _screw(entry=(0.0, 0.0, 0.0), target=(0.0, 0.0, 40.0), vertebra_level=""):
+    return Screw(
+        entry_point=entry,
+        target_point=target,
+        diameter=6.0,
+        vertebra_level=vertebra_level,
+    )
 
 
-def _make_controller(screws, row=0, loaded=True):
-    window = _Window(screws, row=row)
+def _make_controller(
+    screws,
+    row=0,
+    loaded=True,
+    viewer_3d=None,
+    grader=None,
+    window_level=None,
+):
+    window = _Window(
+        screws,
+        row=row,
+        viewer_3d=viewer_3d,
+        grader=grader,
+        window_level=window_level,
+    )
     controller = ScrewMPRController(_VolumeManager(loaded=loaded), window)
     return controller, window
 
@@ -545,3 +622,145 @@ def test_help_text_documents_every_screw_mpr_gesture():
         "right-hand rule",
     ):
         assert fragment in SCREW_MPR_CONTROLS_HELP
+
+
+def test_3d_view_receives_the_graders_label():
+    viewer_3d = _Viewer3DRecorder()
+    grader = _Grader(label=28)
+    controller, _window = _make_controller(
+        [_screw(vertebra_level="L3")], viewer_3d=viewer_3d, grader=grader,
+    )
+
+    controller.enter()
+
+    assert len(viewer_3d.calls) == 1
+    assert viewer_3d.calls[0]["vertebra_label"] == 28
+    # The grader is given the raw entry/target points, not the level name.
+    assert grader.calls == [((0.0, 0.0, 0.0), (0.0, 0.0, 40.0))]
+
+
+def test_label_falls_back_to_the_screws_level_name():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller(
+        [_screw(vertebra_level="L4")], viewer_3d=viewer_3d, grader=None,
+    )
+
+    controller.enter()
+
+    assert viewer_3d.calls[0]["vertebra_label"] == 28
+
+
+def test_label_is_none_without_a_grader_or_a_recognised_level():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller(
+        [_screw(vertebra_level="")], viewer_3d=viewer_3d, grader=None,
+    )
+
+    controller.enter()
+
+    assert viewer_3d.calls[0]["vertebra_label"] is None
+
+
+def test_a_failing_grader_falls_back_to_the_level_name():
+    viewer_3d = _Viewer3DRecorder()
+    grader = _Grader(raises=True)
+    controller, _window = _make_controller(
+        [_screw(vertebra_level="L4")], viewer_3d=viewer_3d, grader=grader,
+    )
+
+    controller.enter()
+
+    assert viewer_3d.calls[0]["vertebra_label"] == 28
+
+
+def test_label_is_cached_per_screw_geometry():
+    viewer_3d = _Viewer3DRecorder()
+    grader = _Grader(label=28)
+    controller, _window = _make_controller(
+        [_screw(vertebra_level="L3")], viewer_3d=viewer_3d, grader=grader,
+    )
+    controller.enter()
+    assert len(grader.calls) == 1
+
+    # Position-only changes keep the same entry/target -- must not re-sample.
+    controller.set_position(75)
+
+    assert len(grader.calls) == 1
+    assert viewer_3d.calls[-1]["vertebra_label"] == 28
+
+
+def test_exit_clears_the_label_cache_so_a_new_grader_is_resampled():
+    """A re-run segmentation between sessions must not keep a stale label.
+
+    Same screw geometry (same row, entry, target) across two sessions, but
+    the grader (segmentation) changes in between -- exit() must drop the
+    cache so the new session re-samples instead of replaying the old label.
+    """
+    viewer_3d = _Viewer3DRecorder()
+    old_grader = _Grader(label=28)
+    screw = _screw(vertebra_level="L3")
+    controller, window = _make_controller(
+        [screw], viewer_3d=viewer_3d, grader=old_grader,
+    )
+    controller.enter()
+    assert viewer_3d.calls[-1]["vertebra_label"] == 28
+    controller.exit()
+
+    new_grader = _Grader(label=29)
+    window._tool_ctrl.screw_tool.grader = new_grader
+
+    controller.enter()
+
+    assert len(new_grader.calls) == 1
+    assert viewer_3d.calls[-1]["vertebra_label"] == 29
+
+
+def test_window_level_comes_from_the_panel_sliders():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller(
+        [_screw()], viewer_3d=viewer_3d, window_level=(1200.0, 300.0),
+    )
+
+    controller.enter()
+
+    assert viewer_3d.calls[0]["window_level"] == pytest.approx((1200.0, 300.0))
+
+
+def test_window_level_is_none_without_panel_sliders():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller(
+        [_screw()], viewer_3d=viewer_3d, window_level=None,
+    )
+
+    controller.enter()
+
+    assert viewer_3d.calls[0]["window_level"] is None
+
+
+def test_on_window_level_changed_repushes_only_while_active():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller(
+        [_screw()], viewer_3d=viewer_3d, window_level=(1500.0, 400.0),
+    )
+
+    # Inactive: must not push anything (and must not raise for lack of state).
+    controller.on_window_level_changed()
+    assert len(viewer_3d.calls) == 0
+
+    controller.enter()
+    assert len(viewer_3d.calls) == 1
+
+    controller.on_window_level_changed()
+
+    assert len(viewer_3d.calls) == 2
+    assert viewer_3d.calls[-1]["window_level"] == pytest.approx((1500.0, 400.0))
+
+
+def test_exit_clears_the_3d_screw_mpr_view():
+    viewer_3d = _Viewer3DRecorder()
+    controller, _window = _make_controller([_screw()], viewer_3d=viewer_3d)
+    controller.enter()
+
+    controller.exit()
+
+    assert viewer_3d.clear_count == 1

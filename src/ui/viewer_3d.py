@@ -41,7 +41,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..core.vertebral_mesh import MESH_SMOOTHING_ITERATIONS, MESH_SMOOTHING_PASSBAND
+from ..core.vertebral_mesh import (
+    MESH_SMOOTHING_ITERATIONS,
+    MESH_SMOOTHING_PASSBAND,
+    label_world_bounds,
+    split_mesh_by_label,
+)
 from ..core.volume_manager import VolumeManager
 from ..core.volume_scale import assess_volume_scale
 from ..utils.constants import (
@@ -81,6 +86,37 @@ SCREW_MPR_PLANE_COLORS = {
 #: planes are unbounded; 40 mm either side of the screw covers a vertebra
 #: without an oblique quad sprawling across the whole volume.
 SCREW_MPR_PLANE_HALF_SIZE_MM = 40.0
+
+#: The textured cross-section slice is cropped to the same footprint as the
+#: plane indicator quad, so the slice never reads as bigger or smaller than
+#: the frame drawn around it.
+SCREW_MPR_SLICE_HALF_SIZE_MM = SCREW_MPR_PLANE_HALF_SIZE_MM
+
+#: Alpha (0-1) applied to slice pixels outside the screw's own vertebra.
+#: Kept translucent rather than hidden so the plane still reads as a slice
+#: through real anatomy, while opacity still marks where the vertebra (and
+#: therefore the cut) actually is.
+SCREW_MPR_SLICE_CONTEXT_ALPHA = 0.35
+
+#: Padding (mm) added around a vertebra's voxel bounding box before it is
+#: used to crop the main volume / size the cut volume, so the cut face sits
+#: just outside the bone rather than shaving its own surface.
+SCREW_MPR_CUT_MARGIN_MM = 2.0
+
+#: Window/level (HU) used to color the cross-section slice when the caller
+#: has none of its own -- the same bone default the MPR panel starts on.
+SCREW_MPR_DEFAULT_WINDOW_LEVEL = (1500.0, 400.0)
+
+#: Cropping-region flag set for a vtkVolumeMapper's 3x3x3 region grid that
+#: keeps every region EXCEPT the centre one (VTK_CROP_SUBVOLUME). Used to cut
+#: the vertebra's own box out of the main volume, leaving that box for the
+#: separate cut volume to render (clipped at the cross-section) so no level
+#: other than the screw's own is ever touched.
+VOLUME_CROP_OUTSIDE_BOX = 0x7FFFFFF & ~vtk.VTK_CROP_SUBVOLUME
+
+#: Distance (mm) the "Cut View" camera sits back from the cross-section
+#: centre, on the entry side, looking down the screw at the open cut face.
+SCREW_MPR_CUT_VIEW_DISTANCE_MM = 250.0
 
 # vtkSmartVolumeMapper render-mode enum -> log-friendly name.
 RENDER_MODE_NAMES = {
@@ -441,7 +477,41 @@ class Viewer3D(QWidget):
         # cross-section.  While active the standard indicators are hidden.
         self._screw_mpr_actors: dict = {}
         self._screw_mpr_active: bool = False
+        # The cross-section clipping plane -- now applied ONLY to the screw's
+        # own vertebra's cut actor/volume, never to the main volume or mesh
+        # mappers (see _apply_screw_mpr_cut / clear_screw_mpr).
         self._screw_mpr_clip: Optional[vtk.vtkPlane] = None
+        # Textured cross-section slice pipeline (built lazily; the actor is
+        # created once and reused so Position/rotation updates are cheap).
+        self._screw_mpr_slice_actor: Optional[vtk.vtkImageActor] = None
+        self._screw_mpr_slice_reslice: Optional[vtk.vtkImageReslice] = None
+        self._screw_mpr_slice_mask_reslice: Optional[vtk.vtkImageReslice] = None
+        self._screw_mpr_slice_color_map: Optional[vtk.vtkImageMapToWindowLevelColors] = None
+        self._screw_mpr_slice_alpha_filter: Optional[vtk.vtkImageThreshold] = None
+        # The local cut: the screw's own vertebra split out of the combined
+        # mesh (cut_actor) and out of the volume (cut_volume), each carrying
+        # _screw_mpr_clip as its only clipping plane. Every other level is
+        # left whole.
+        self._screw_mpr_cut_actor: Optional[vtk.vtkActor] = None
+        self._screw_mpr_cut_volume: Optional[vtk.vtkVolume] = None
+        self._screw_mpr_cut_volume_extract: Optional[vtk.vtkExtractVOI] = None
+        self._screw_mpr_cut_label: Optional[int] = None
+        self._screw_mpr_cut_volume_source: Optional[vtk.vtkImageData] = None
+        self._screw_mpr_cross_section_axes: Optional[vtk.vtkMatrix4x4] = None
+        self._screw_mpr_window_level: Optional[Tuple[float, float]] = None
+        self._screw_mpr_view_button: Optional[QToolButton] = None
+        # Unpadded world-box cache for the resolved cut label, keyed on
+        # (id(_segmentation_mask_image), label) so a Position/rotation/offset
+        # step (same label, same mask) never re-scans the mask with scipy's
+        # find_objects -- only a new label or a swapped mask does. A freed
+        # mask's id can be reused, so this cache is only safe because
+        # set_segmentation_mask/clear_segmentation_mask explicitly clear it
+        # whenever the mask identity changes.
+        self._screw_mpr_label_box_cache: Dict[Tuple[int, int], Optional[Tuple[float, float, float, float, float, float]]] = {}
+        # The full combined mesh, kept so the screw's vertebra can be split
+        # back out again (rebuild, or a different screw's level).
+        self._vertebral_mesh_poly: Optional[vtk.vtkPolyData] = None
+        self._vertebral_mesh_split_cache: Dict[int, Tuple[vtk.vtkPolyData, vtk.vtkPolyData]] = {}
 
         # Screw visualization
         self._screw_actors: List[ScrewVisual] = []
@@ -553,8 +623,38 @@ class Viewer3D(QWidget):
             "background: rgba(45, 54, 64, 225); }"
         )
         self.reset_view_button.clicked.connect(self.reset_to_initial_view)
+
+        self.screw_mpr_view_button = QToolButton(self.viewport_container)
+        self.screw_mpr_view_button.setObjectName("screwMprViewButton")
+        self.screw_mpr_view_button.setText("Cut View")
+        self.screw_mpr_view_button.setToolTip(
+            "Look down the screw at the cross-section from the entry side"
+        )
+        self.screw_mpr_view_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.screw_mpr_view_button.setStyleSheet(
+            "QToolButton#screwMprViewButton {"
+            "background: rgba(24, 29, 35, 210); color: #e8eef4;"
+            "border: 1px solid rgba(205, 218, 228, 90);"
+            "border-radius: 7px; padding: 5px 9px;"
+            "font-size: 11px; font-weight: 600; }"
+            "QToolButton#screwMprViewButton:hover {"
+            "background: rgba(45, 54, 64, 225); }"
+        )
+        self.screw_mpr_view_button.clicked.connect(self.focus_screw_mpr_cut)
+        # Only meaningful while Screw MPR is active -- see show_screw_mpr /
+        # clear_screw_mpr.
+        self.screw_mpr_view_button.setVisible(False)
+
+        # Reset View and Cut View share the top-left corner as one row so
+        # neither button overlaps the plane toggle beneath it.
+        self.top_left_controls = QWidget(self.viewport_container)
+        top_left_layout = QHBoxLayout(self.top_left_controls)
+        top_left_layout.setContentsMargins(0, 0, 0, 0)
+        top_left_layout.setSpacing(5)
+        top_left_layout.addWidget(self.reset_view_button)
+        top_left_layout.addWidget(self.screw_mpr_view_button)
         viewport_layout.addWidget(
-            self.reset_view_button,
+            self.top_left_controls,
             0,
             0,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
@@ -703,11 +803,13 @@ class Viewer3D(QWidget):
         if self._volume_mapper and hasattr(self, '_target_sample_dist'):
             coarse = max(self._target_sample_dist * 3.0, 3.0)
             self._volume_mapper.SetSampleDistance(coarse)
+            self._sync_screw_mpr_cut_volume_quality()
 
     def _on_interaction_end(self, obj, event):
         """Restore fine sampling after interaction ends."""
         if self._volume_mapper and hasattr(self, '_target_sample_dist'):
             self._volume_mapper.SetSampleDistance(self._target_sample_dist)
+            self._sync_screw_mpr_cut_volume_quality()
             self._request_render()
 
     def zoom_camera(self, factor: float) -> None:
@@ -794,6 +896,7 @@ class Viewer3D(QWidget):
         for prop in (
             self._vertebral_mesh_actor,
             self._segmentation_actor,
+            self.__dict__.get("_screw_mpr_cut_actor"),
         ):
             if prop is not None and prop.GetVisibility():
                 picker.AddPickList(prop)
@@ -913,6 +1016,7 @@ class Viewer3D(QWidget):
         # Coarse sampling for fast first frame
         coarse_dist = max(self._target_sample_dist * 2.0, 2.0)
         self._volume_mapper.SetSampleDistance(coarse_dist)
+        self._sync_screw_mpr_cut_volume_quality()
 
         logger.info("  Phase 1 render (sample_dist=%.2f)...", coarse_dist)
         _flush_logs()
@@ -1012,6 +1116,13 @@ class Viewer3D(QWidget):
         mapper.SetInputData(self._downsampled_image)
         self._target_sample_dist = sample_dist
         mapper.SetSampleDistance(sample_dist)
+        self._sync_screw_mpr_cut_volume_quality()
+        # The cut volume's vtkExtractVOI reads from the old _downsampled_image
+        # by identity; re-applying the cut (a no-op unless Screw MPR is
+        # active) rebuilds it against the new one instead of leaving it to
+        # render stale, mismatched data until the next Position step.
+        if self.__dict__.get("_screw_mpr_active", False):
+            self._apply_screw_mpr_cut(self.__dict__.get("_screw_mpr_cut_label"))
         self._request_render()
         _flush_logs()
 
@@ -1027,6 +1138,7 @@ class Viewer3D(QWidget):
             return
         if hasattr(self, '_target_sample_dist'):
             self._volume_mapper.SetSampleDistance(self._target_sample_dist)
+            self._sync_screw_mpr_cut_volume_quality()
             logger.info("  Phase 2 render (sample_dist=%.2f)",
                         self._target_sample_dist)
         self._request_render()
@@ -1085,6 +1197,7 @@ class Viewer3D(QWidget):
             self._volume_mapper.SetBlendModeToMaximumIntensity()
         else:
             self._volume_mapper.SetBlendModeToComposite()
+        self._sync_screw_mpr_cut_volume_quality()
 
         if self._volume_added:
             self._request_render()
@@ -1102,6 +1215,11 @@ class Viewer3D(QWidget):
         # Also toggle segmentation overlay if present
         if self._segmentation_actor is not None:
             self._segmentation_actor.SetVisibility(int(visible))
+        # The Screw MPR cut volume always mirrors the main volume, so
+        # isolated mode (volume hidden) never shows a stray cut box.
+        cut_volume = self.__dict__.get("_screw_mpr_cut_volume")
+        if cut_volume is not None:
+            cut_volume.SetVisibility(int(visible))
         if self._volume_added:
             self._request_render()
 
@@ -1220,8 +1338,11 @@ class Viewer3D(QWidget):
             plane_data["actor"].SetVisibility(standard_visible)
             plane_data["outline_actor"].SetVisibility(standard_visible)
         oblique_visible = self._planes_visible and screw_mpr_active
-        for plane_data in state.get("_screw_mpr_actors", {}).values():
-            plane_data["actor"].SetVisibility(oblique_visible)
+        for name, plane_data in state.get("_screw_mpr_actors", {}).items():
+            # The cross-section's FILLED quad stays hidden once the textured
+            # slice actor covers the same plane, to avoid z-fighting between
+            # the two; its outline still frames the slice.
+            plane_data["actor"].SetVisibility(oblique_visible and name != "cross_section")
             plane_data["outline_actor"].SetVisibility(oblique_visible)
 
         toggle = getattr(self, "plane_visibility_toggle", None)
@@ -1703,6 +1824,14 @@ class Viewer3D(QWidget):
         self._segmentation_color = color
         self._segmentation_opacity = max(0.0, min(1.0, float(opacity)))
         self._segmentation_default_opacity = self._segmentation_opacity
+        # A new mask invalidates every cached label box, even one at the same
+        # Python id as a previous (now-freed) mask.
+        self._screw_mpr_label_box_cache = {}
+        # A live cut was built against the old mask's label geometry; drop it
+        # so the next show_screw_mpr (the following Position/rotation step)
+        # rebuilds it against the new mask instead of rendering a stale crop.
+        if self.__dict__.get("_screw_mpr_active", False):
+            self._remove_screw_mpr_cut()
         self._render_segmentation_actor()
 
     def set_segmentation_label(self, label_value: int) -> None:
@@ -1841,6 +1970,17 @@ class Viewer3D(QWidget):
         self.clear_vertebral_mesh()
         self._segmentation_mask_image = None
         self._segmentation_label_value = 0
+        self._screw_mpr_label_box_cache = {}
+        # No mask left to cut or shade the slice by: drop the local cut and
+        # let the slice fall back to full opacity, even if Screw MPR is
+        # still open.
+        if self.__dict__.get("_screw_mpr_active", False):
+            self._remove_screw_mpr_cut()
+            axes = self.__dict__.get("_screw_mpr_cross_section_axes")
+            if axes is not None:
+                self._update_screw_mpr_slice(
+                    axes, self.__dict__.get("_screw_mpr_window_level"), None
+                )
 
     # --- Vertebral Body Mesh ---
 
@@ -1890,10 +2030,16 @@ class Viewer3D(QWidget):
 
         self._renderer.AddActor(actor)
         self._vertebral_mesh_actor = actor
-        clip = self.__dict__.get("_screw_mpr_clip")
-        if clip is not None:
-            # A mesh rebuilt while Screw MPR is open must open at the same cut.
-            actor.GetMapper().AddClippingPlane(clip)
+        self._vertebral_mesh_poly = poly_data
+        self._vertebral_mesh_split_cache = {}
+        label = self.__dict__.get("_screw_mpr_cut_label")
+        if label is not None:
+            # A mesh rebuilt while Screw MPR is open must re-apply the same
+            # cut: the main actor's mapper input just got replaced above, so
+            # the previous split (main = 'rest') is gone until redone here.
+            # Only the mesh split is redone -- the volume crop/extract did
+            # not change and must not be rebuilt.
+            self._apply_screw_mpr_mesh_cut(label)
         self._request_render()
 
         logger.info(
@@ -1903,6 +2049,12 @@ class Viewer3D(QWidget):
 
     def clear_vertebral_mesh(self) -> None:
         """Remove vertebral mesh actor from the 3D scene."""
+        self._vertebral_mesh_poly = None
+        self._vertebral_mesh_split_cache = {}
+        if self.__dict__.get("_screw_mpr_cut_actor") is not None:
+            # No mesh left to have split out a piece of.
+            self._renderer.RemoveActor(self._screw_mpr_cut_actor)
+            self._screw_mpr_cut_actor = None
         if self._vertebral_mesh_actor is None:
             return
         self._renderer.RemoveActor(self._vertebral_mesh_actor)
@@ -1931,21 +2083,40 @@ class Viewer3D(QWidget):
         oblique_axial: vtk.vtkMatrix4x4,
         oblique_sagittal: vtk.vtkMatrix4x4,
         cross_section: vtk.vtkMatrix4x4,
+        *,
+        vertebra_label: Optional[int] = None,
+        window_level: Optional[Tuple[float, float]] = None,
     ) -> None:
-        """Show the screw-aligned planes and open the volume at the cross-section.
+        """Show the screw-aligned planes and a textured cut through one vertebra.
 
         Screw MPR used to change only the three MPR panes; the 3D view went on
         drawing the standard axial, sagittal and coronal planes, which no pane
-        showed any more, and the volume stayed closed, so there was nothing in
-        3D to relate the oblique slices to.
+        showed any more. It used to also clip the WHOLE volume and the WHOLE
+        vertebral mesh at one infinite plane, which for an oblique screw (e.g.
+        S1, craniocaudal -25 deg) removed everything cranial to the cut and,
+        at any level, stripped the posterior elements of every vertebra --
+        not just the screw's own.
 
-        Each argument is a reslice-axes matrix exactly as the MPR panes receive
-        it -- columns are screen-right, screen-up and the normal, and the last
-        column is the plane centre -- so the 3D indicators and the panes are
-        drawn from the same numbers.  The volume and the vertebra meshes are
-        clipped by the cross-section plane, keeping the tip side: looking in
-        from behind, the cut face is the slice in the cross-section pane, and
-        it follows **Position** from entry to tip.  Screws are not clipped.
+        Each matrix argument is a reslice-axes matrix exactly as the MPR panes
+        receive it -- columns are screen-right, screen-up and the normal, and
+        the last column is the plane centre -- so the 3D indicators and the
+        panes are drawn from the same numbers. ``cross_section`` additionally
+        drives a real textured CT slice (``_screw_mpr_slice_actor``) placed at
+        that matrix via ``SetUserMatrix``, so it follows **Position**,
+        rotation and offsets exactly like the cross-section pane.
+
+        ``vertebra_label`` (a TotalSegmentator label, e.g. 28 for L4) is the
+        ONLY thing that gets cut, and only when it resolves to real voxels in
+        the current segmentation mask: the main volume mapper is cropped to
+        exclude that vertebra's box (region outside the box stays), and a
+        separate cut volume + cut mesh actor render that box/that vertebra's
+        cells clipped at the cross-section plane. Every other level -- and
+        the screw actors themselves -- are left untouched. With no resolvable
+        label, the slice still shows but nothing is cut.
+
+        The optional raw 3D segmentation overlay actor (``_segmentation_actor``,
+        set_segmentation_mask) is never cut here -- only the vertebral mesh and
+        the volume are.
         """
         if self._renderer is None:
             return
@@ -1959,36 +2130,51 @@ class Viewer3D(QWidget):
         for plane_data in self._plane_actors.values():
             plane_data["actor"].SetVisibility(False)
             plane_data["outline_actor"].SetVisibility(False)
-        for plane_data in self._screw_mpr_actors.values():
-            plane_data["actor"].SetVisibility(self._planes_visible)
+        for name, plane_data in self._screw_mpr_actors.items():
+            # The cross-section's filled quad stays hidden -- the textured
+            # slice actor covers that plane instead, and drawing both would
+            # z-fight. Its outline stays, framing the slice.
+            plane_data["actor"].SetVisibility(
+                self._planes_visible and name != "cross_section"
+            )
             plane_data["outline_actor"].SetVisibility(self._planes_visible)
 
-        centre = [cross_section.GetElement(row, 3) for row in range(3)]
-        normal = [cross_section.GetElement(row, 2) for row in range(3)]
+        centre = tuple(cross_section.GetElement(row, 3) for row in range(3))
+        normal = tuple(cross_section.GetElement(row, 2) for row in range(3))
         if self._screw_mpr_clip is None:
             self._screw_mpr_clip = vtk.vtkPlane()
-            for mapper in self._clippable_mappers():
-                mapper.AddClippingPlane(self._screw_mpr_clip)
         self._screw_mpr_clip.SetOrigin(*centre)
         self._screw_mpr_clip.SetNormal(*normal)
         self._screw_mpr_clip.Modified()
+        self._screw_mpr_cross_section_axes = cross_section
+        self._screw_mpr_window_level = window_level
+
+        resolved_label = self._resolve_screw_mpr_label(vertebra_label)
+        self._update_screw_mpr_slice(cross_section, window_level, resolved_label)
+        self._apply_screw_mpr_cut(resolved_label)
+        button = self.__dict__.get("screw_mpr_view_button")
+        if button is not None:
+            button.setVisible(True)
         self._request_render()
 
     def clear_screw_mpr(self) -> None:
-        """Put the standard planes back and close the volume again."""
+        """Put the standard planes back, drop the slice, and undo the cut."""
         if not self._screw_mpr_active and self._screw_mpr_clip is None:
             return
         self._screw_mpr_active = False
-        if self._screw_mpr_clip is not None:
-            for mapper in self._clippable_mappers():
-                mapper.RemoveClippingPlane(self._screw_mpr_clip)
-            self._screw_mpr_clip = None
+        self._screw_mpr_clip = None
+        self._remove_screw_mpr_cut()
+        if self._screw_mpr_slice_actor is not None:
+            self._screw_mpr_slice_actor.SetVisibility(False)
         for plane_data in self._screw_mpr_actors.values():
             plane_data["actor"].SetVisibility(False)
             plane_data["outline_actor"].SetVisibility(False)
         for plane_data in self._plane_actors.values():
             plane_data["actor"].SetVisibility(self._planes_visible)
             plane_data["outline_actor"].SetVisibility(self._planes_visible)
+        button = self.__dict__.get("screw_mpr_view_button")
+        if button is not None:
+            button.setVisible(False)
         if self._renderer is not None:
             self._request_render()
 
@@ -1997,15 +2183,429 @@ class Viewer3D(QWidget):
         """Whether the 3D view is showing the screw-aligned planes."""
         return self._screw_mpr_active
 
-    def _clippable_mappers(self) -> List[vtk.vtkAbstractMapper]:
-        """The mappers the screw MPR cut applies to: the volume and the meshes."""
-        mappers: List[vtk.vtkAbstractMapper] = []
+    def _resolve_screw_mpr_label(self, vertebra_label: Optional[int]) -> Optional[int]:
+        """Only cut with a label that actually has voxels in the current mask.
+
+        A stale or mistaken label (no segmentation loaded, or a level not
+        present in it) must fall back to "slice only, no cut" rather than
+        cropping/clipping at a meaningless empty box.
+        """
+        mask = self.__dict__.get("_segmentation_mask_image")
+        if vertebra_label is None or mask is None:
+            return None
+        if self._cached_label_bounds(mask, int(vertebra_label)) is None:
+            return None
+        return int(vertebra_label)
+
+    def _cached_label_bounds(
+        self, mask: vtk.vtkImageData, label: int
+    ) -> Optional[Tuple[float, float, float, float, float, float]]:
+        """Unpadded world bounds of ``label``'s voxels, scanned at most once.
+
+        ``label_world_bounds`` runs scipy's ``find_objects`` over the whole
+        mask; show_screw_mpr is called on every Position/rotation/offset
+        step, so an uncached call would re-scan a large mask on every notch.
+        Keyed on the mask's Python id together with the label. A freed
+        mask's id can be reused by a later object, so the cache is only
+        safe because set_segmentation_mask and clear_segmentation_mask both
+        drop it outright whenever the mask changes.
+        """
+        # __dict__.setdefault, not a plain attribute read, because Viewer3D
+        # is built with __new__ in tests and this attribute may not exist yet.
+        cache = self.__dict__.setdefault("_screw_mpr_label_box_cache", {})
+        key = (id(mask), int(label))
+        if key not in cache:
+            cache[key] = label_world_bounds(mask, int(label))
+        return cache[key]
+
+    def _cached_padded_label_bounds(
+        self, mask: vtk.vtkImageData, label: int, margin_mm: float
+    ) -> Optional[Tuple[float, float, float, float, float, float]]:
+        """Padded box for the volume crop, derived from the cached unpadded box.
+
+        Adding the margin here (instead of caching one entry per margin
+        value) reuses the single scipy scan that ``_resolve_screw_mpr_label``
+        already performed for this label.
+        """
+        bounds = self._cached_label_bounds(mask, label)
+        if bounds is None:
+            return None
+        xmin, xmax, ymin, ymax, zmin, zmax = bounds
+        mask_bounds = mask.GetBounds()
+        return (
+            max(xmin - margin_mm, mask_bounds[0]),
+            min(xmax + margin_mm, mask_bounds[1]),
+            max(ymin - margin_mm, mask_bounds[2]),
+            min(ymax + margin_mm, mask_bounds[3]),
+            max(zmin - margin_mm, mask_bounds[4]),
+            min(zmax + margin_mm, mask_bounds[5]),
+        )
+
+    # --- Screw MPR: textured cross-section slice ---
+
+    def _update_screw_mpr_slice(
+        self,
+        cross_section: vtk.vtkMatrix4x4,
+        window_level: Optional[Tuple[float, float]],
+        resolved_label: Optional[int],
+    ) -> None:
+        """(Re)build the textured CT slice at the cross-section plane.
+
+        Always resliced from the volume manager's full-resolution CT -- even
+        in isolated mode, where the volume itself is hidden -- so the tissue
+        around the screw's own vertebra reads as real anatomy, not the
+        downsampled render volume or a vertebra-only crop.
+        """
+        volume_manager = self.__dict__.get("volume_manager")
+        ct_image = None
+        if volume_manager is not None:
+            try:
+                ct_image = volume_manager.get_vtk_image()
+            except Exception:
+                ct_image = None
+        if ct_image is None:
+            return
+
+        spacing = [abs(float(value)) for value in ct_image.GetSpacing()]
+        in_plane_spacing = max(min(spacing), 1e-3)
+        half = SCREW_MPR_SLICE_HALF_SIZE_MM
+        n = max(1, int(math.ceil((2.0 * half) / in_plane_spacing)))
+        extent = (0, n - 1, 0, n - 1, 0, 0)
+        origin = (-half, -half, 0.0)
+
+        reslice = self._screw_mpr_slice_reslice
+        if reslice is None:
+            reslice = vtk.vtkImageReslice()
+            reslice.SetOutputDimensionality(2)
+            reslice.SetInterpolationModeToLinear()
+            reslice.SetBackgroundLevel(-1000.0)
+            self._screw_mpr_slice_reslice = reslice
+        reslice.SetInputData(ct_image)
+        reslice.SetResliceAxes(cross_section)
+        reslice.SetOutputSpacing(in_plane_spacing, in_plane_spacing, in_plane_spacing)
+        reslice.SetOutputOrigin(*origin)
+        reslice.SetOutputExtent(*extent)
+
+        color_map = self._screw_mpr_slice_color_map
+        if color_map is None:
+            color_map = vtk.vtkImageMapToWindowLevelColors()
+            color_map.SetOutputFormatToRGB()
+            self._screw_mpr_slice_color_map = color_map
+        color_map.SetInputConnection(reslice.GetOutputPort())
+        window, level = (
+            window_level if window_level is not None else SCREW_MPR_DEFAULT_WINDOW_LEVEL
+        )
+        color_map.SetWindow(float(window))
+        color_map.SetLevel(float(level))
+        color_map.Update()
+
+        alpha_source = self._screw_mpr_slice_alpha_source(
+            cross_section, resolved_label, in_plane_spacing, extent, origin
+        )
+
+        appender = vtk.vtkImageAppendComponents()
+        appender.AddInputConnection(color_map.GetOutputPort())
+        if isinstance(alpha_source, vtk.vtkImageData):
+            appender.AddInputData(alpha_source)
+        else:
+            appender.AddInputConnection(alpha_source)
+        appender.Update()
+
+        slice_actor = self._screw_mpr_slice_actor
+        if slice_actor is None:
+            slice_actor = vtk.vtkImageActor()
+            slice_actor.PickableOff()
+            self._renderer.AddActor(slice_actor)
+            self._screw_mpr_slice_actor = slice_actor
+        slice_actor.SetInputData(appender.GetOutput())
+        slice_actor.SetUserMatrix(cross_section)
+        slice_actor.SetVisibility(True)
+
+    def _screw_mpr_slice_alpha_source(
+        self,
+        cross_section: vtk.vtkMatrix4x4,
+        resolved_label: Optional[int],
+        in_plane_spacing: float,
+        extent: Tuple[int, int, int, int, int, int],
+        origin: Tuple[float, float, float],
+    ):
+        """Build the slice's alpha channel: opaque over the cut vertebra.
+
+        Returns either a vtkImageData (constant full-opacity fallback) or an
+        output port (the resliced-mask threshold), so the caller can feed
+        either into vtkImageAppendComponents without branching twice.
+        """
+        mask = self.__dict__.get("_segmentation_mask_image")
+        if mask is None or resolved_label is None:
+            alpha_image = vtk.vtkImageData()
+            alpha_image.SetExtent(*extent)
+            alpha_image.SetSpacing(in_plane_spacing, in_plane_spacing, in_plane_spacing)
+            alpha_image.SetOrigin(*origin)
+            alpha_image.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 1)
+            alpha_image.GetPointData().GetScalars().Fill(255)
+            return alpha_image
+
+        mask_reslice = self._screw_mpr_slice_mask_reslice
+        if mask_reslice is None:
+            mask_reslice = vtk.vtkImageReslice()
+            mask_reslice.SetOutputDimensionality(2)
+            mask_reslice.SetInterpolationModeToNearestNeighbor()
+            mask_reslice.SetBackgroundLevel(0.0)
+            self._screw_mpr_slice_mask_reslice = mask_reslice
+        mask_reslice.SetInputData(mask)
+        mask_reslice.SetResliceAxes(cross_section)
+        mask_reslice.SetOutputSpacing(in_plane_spacing, in_plane_spacing, in_plane_spacing)
+        mask_reslice.SetOutputOrigin(*origin)
+        mask_reslice.SetOutputExtent(*extent)
+
+        context_alpha = round(SCREW_MPR_SLICE_CONTEXT_ALPHA * 255)
+        alpha_filter = self._screw_mpr_slice_alpha_filter
+        if alpha_filter is None:
+            alpha_filter = vtk.vtkImageThreshold()
+            self._screw_mpr_slice_alpha_filter = alpha_filter
+        alpha_filter.SetInputConnection(mask_reslice.GetOutputPort())
+        alpha_filter.ThresholdBetween(float(resolved_label), float(resolved_label))
+        alpha_filter.SetInValue(255)
+        alpha_filter.SetOutValue(context_alpha)
+        alpha_filter.SetOutputScalarTypeToUnsignedChar()
+        alpha_filter.Update()
+        return alpha_filter.GetOutputPort()
+
+    # --- Screw MPR: local vertebra cut (mesh + volume) ---
+
+    def _apply_screw_mpr_cut(self, resolved_label: Optional[int]) -> None:
+        """Cut only ``resolved_label``'s vertebra, restoring any earlier cut.
+
+        Called on every show_screw_mpr -- including Position/rotation-only
+        updates, so it must be cheap when the label has not changed: the mesh
+        split and the volume crop/extract are cached and only rebuilt when
+        the label (or the downsampled volume identity, for the cut volume)
+        actually changes.
+        """
+        if resolved_label != self._screw_mpr_cut_label:
+            self._remove_screw_mpr_cut()
+            self._screw_mpr_cut_label = resolved_label
+
+        if resolved_label is None:
+            return
+
+        self._apply_screw_mpr_mesh_cut(resolved_label)
+        self._apply_screw_mpr_volume_cut(resolved_label)
+
+    def _apply_screw_mpr_mesh_cut(self, label: int) -> None:
+        """Split the combined vertebral mesh so only ``label`` is clippable."""
+        full_poly = self._vertebral_mesh_poly
+        mesh_actor = self._vertebral_mesh_actor
+        if full_poly is None or mesh_actor is None or mesh_actor.GetMapper() is None:
+            return
+
+        split = self._vertebral_mesh_split_cache.get(label)
+        if split is None:
+            matching, rest = split_mesh_by_label(full_poly, label)
+            split = (matching, rest)
+            self._vertebral_mesh_split_cache[label] = split
+        matching, rest = split
+
+        mesh_actor.GetMapper().SetInputData(rest)
+
+        cut_actor = self._screw_mpr_cut_actor
+        if cut_actor is None:
+            cut_mapper = vtk.vtkPolyDataMapper()
+            cut_actor = vtk.vtkActor()
+            cut_actor.SetMapper(cut_mapper)
+            # Share the main actor's property so opacity/focus changes on the
+            # vertebral mesh apply to the cut piece too.
+            cut_actor.SetProperty(mesh_actor.GetProperty())
+            self._renderer.AddActor(cut_actor)
+            self._screw_mpr_cut_actor = cut_actor
+        cut_actor.GetMapper().SetInputData(matching)
+        cut_actor.GetMapper().SetScalarModeToUseCellData()
+        cut_actor.GetMapper().SelectColorArray("VertebraColors")
+        cut_actor.GetMapper().ScalarVisibilityOn()
+        # The cut actor's ONLY clipping plane -- the main mesh mapper never
+        # carries one any more.
+        clipping = cut_actor.GetMapper().GetClippingPlanes()
+        if clipping is None or clipping.GetNumberOfItems() == 0:
+            cut_actor.GetMapper().AddClippingPlane(self._screw_mpr_clip)
+
+    def _apply_screw_mpr_volume_cut(self, label: int) -> None:
+        """Crop the main volume to exclude ``label``'s box; render it separately."""
+        mask = self.__dict__.get("_segmentation_mask_image")
+        bounds = (
+            self._cached_padded_label_bounds(mask, label, SCREW_MPR_CUT_MARGIN_MM)
+            if mask is not None
+            else None
+        )
+        if bounds is None or self._volume_mapper is None:
+            return
+
+        downsampled = self.__dict__.get("_downsampled_image")
+        if downsampled is None:
+            # No cut volume can be built to fill the hole a crop would leave
+            # in the main volume, so leave the main volume uncropped rather
+            # than cutting a chunk out of it with nothing standing in.
+            return
+
+        if (
+            self._screw_mpr_cut_volume is None
+            or self._screw_mpr_cut_volume_source is not downsampled
+        ):
+            self._build_screw_mpr_cut_volume(downsampled, bounds)
+        else:
+            self._update_screw_mpr_cut_volume_box(downsampled, bounds)
+        self._sync_screw_mpr_cut_volume_quality()
+
+        # Only now that a cut volume exists to fill the hole: crop the main
+        # volume outside the box.
+        self._volume_mapper.SetCropping(True)
+        self._volume_mapper.SetCroppingRegionPlanes(*bounds)
+        self._volume_mapper.SetCroppingRegionFlags(VOLUME_CROP_OUTSIDE_BOX)
+
+        if self._screw_mpr_cut_volume is not None and self._volume is not None:
+            self._screw_mpr_cut_volume.SetVisibility(self._volume.GetVisibility())
+
+    def _voi_for_bounds(
+        self,
+        image: vtk.vtkImageData,
+        bounds: Tuple[float, float, float, float, float, float],
+    ) -> Tuple[int, int, int, int, int, int]:
+        """Convert a world-space box into an image's clamped index extent."""
+        origin = image.GetOrigin()
+        spacing = image.GetSpacing()
+        extent = image.GetExtent()
+        xmin, xmax, ymin, ymax, zmin, zmax = bounds
+        indices = []
+        for lo, hi, o, s, e_lo, e_hi in (
+            (xmin, xmax, origin[0], spacing[0], extent[0], extent[1]),
+            (ymin, ymax, origin[1], spacing[1], extent[2], extent[3]),
+            (zmin, zmax, origin[2], spacing[2], extent[4], extent[5]),
+        ):
+            if s == 0:
+                indices.extend([e_lo, e_hi])
+                continue
+            i0 = (lo - o) / s
+            i1 = (hi - o) / s
+            if i0 > i1:
+                i0, i1 = i1, i0
+            i0 = max(e_lo, min(e_hi, int(math.floor(i0))))
+            i1 = max(e_lo, min(e_hi, int(math.ceil(i1))))
+            indices.extend([i0, i1])
+        return tuple(indices)
+
+    def _build_screw_mpr_cut_volume(
+        self,
+        downsampled: vtk.vtkImageData,
+        bounds: Tuple[float, float, float, float, float, float],
+    ) -> None:
+        """Create the cut volume: the vertebra's box, clipped at the cross-section."""
+        if self._screw_mpr_cut_volume is not None:
+            self._renderer.RemoveVolume(self._screw_mpr_cut_volume)
+
+        extract = vtk.vtkExtractVOI()
+        extract.SetInputData(downsampled)
+        extract.SetVOI(*self._voi_for_bounds(downsampled, bounds))
+
+        mapper = create_volume_mapper(self._mapper_kind)
+        mapper.SetInputConnection(extract.GetOutputPort())
+        mapper.AddClippingPlane(self._screw_mpr_clip)
+
+        cut_volume = vtk.vtkVolume()
+        cut_volume.SetMapper(mapper)
+        if self._volume_property is not None:
+            cut_volume.SetProperty(self._volume_property)
+        if self._volume is not None:
+            cut_volume.SetVisibility(self._volume.GetVisibility())
+
+        self._renderer.AddVolume(cut_volume)
+        self._screw_mpr_cut_volume = cut_volume
+        self._screw_mpr_cut_volume_source = downsampled
+        self._screw_mpr_cut_volume_extract = extract
+        # Sample distance and blend mode set once here would drift from the
+        # main mapper's the moment interaction LOD, Phase 1/2, or a transfer
+        # function preset changes it; mirror them explicitly on every build.
+        self._sync_screw_mpr_cut_volume_quality()
+
+    def _sync_screw_mpr_cut_volume_quality(self) -> None:
+        """Mirror the main volume mapper's sample distance and blend mode.
+
+        The cut volume must always render at the same quality and in the
+        same mode as its surroundings, so it is re-synced everywhere the
+        main mapper's sample distance or blend mode changes (interaction
+        start/end, Phase 1/2 LOD, a transfer function preset) as well as
+        right after the cut volume is (re)built.
+        """
+        main_mapper = self.__dict__.get("_volume_mapper")
+        cut_volume = self.__dict__.get("_screw_mpr_cut_volume")
+        if main_mapper is None or cut_volume is None:
+            return
+        cut_mapper = cut_volume.GetMapper()
+        if cut_mapper is None:
+            return
+        if hasattr(main_mapper, "GetSampleDistance") and hasattr(cut_mapper, "SetSampleDistance"):
+            try:
+                cut_mapper.SetSampleDistance(main_mapper.GetSampleDistance())
+            except AttributeError:
+                pass
+        if hasattr(main_mapper, "GetBlendMode") and hasattr(cut_mapper, "SetBlendMode"):
+            try:
+                cut_mapper.SetBlendMode(main_mapper.GetBlendMode())
+            except AttributeError:
+                pass
+
+    def _update_screw_mpr_cut_volume_box(
+        self,
+        downsampled: vtk.vtkImageData,
+        bounds: Tuple[float, float, float, float, float, float],
+    ) -> None:
+        """Move the existing cut volume's box (same label's crop, e.g. Position moved)."""
+        extract = self.__dict__.get("_screw_mpr_cut_volume_extract")
+        if extract is None:
+            self._build_screw_mpr_cut_volume(downsampled, bounds)
+            return
+        extract.SetVOI(*self._voi_for_bounds(downsampled, bounds))
+
+    def _remove_screw_mpr_cut(self) -> None:
+        """Undo the local cut: restore the full mesh, drop the cut volume/actor."""
+        mesh_actor = self._vertebral_mesh_actor
+        if mesh_actor is not None and mesh_actor.GetMapper() is not None and self._vertebral_mesh_poly is not None:
+            mesh_actor.GetMapper().SetInputData(self._vertebral_mesh_poly)
+        if self._screw_mpr_cut_actor is not None:
+            self._renderer.RemoveActor(self._screw_mpr_cut_actor)
+            self._screw_mpr_cut_actor = None
         if self._volume_mapper is not None:
-            mappers.append(self._volume_mapper)
-        mesh = self._vertebral_mesh_actor
-        if mesh is not None and mesh.GetMapper() is not None:
-            mappers.append(mesh.GetMapper())
-        return mappers
+            self._volume_mapper.SetCropping(False)
+        if self._screw_mpr_cut_volume is not None:
+            self._renderer.RemoveVolume(self._screw_mpr_cut_volume)
+            self._screw_mpr_cut_volume = None
+        self._screw_mpr_cut_volume_source = None
+        self.__dict__.pop("_screw_mpr_cut_volume_extract", None)
+        self._screw_mpr_cut_label = None
+
+    def focus_screw_mpr_cut(self) -> None:
+        """Point the camera down the screw at the cross-section, from entry side.
+
+        Never called automatically -- only from the "Cut View" button -- so a
+        surgeon who has framed a shot manually is never yanked out of it.
+        """
+        clip = self._screw_mpr_clip
+        if clip is None or self._renderer is None:
+            return
+        centre = clip.GetOrigin()
+        normal = clip.GetNormal()
+        up = None
+        axes = self.__dict__.get("_screw_mpr_cross_section_axes")
+        if axes is not None:
+            up = tuple(axes.GetElement(row, 1) for row in range(3))
+        camera = self._renderer.GetActiveCamera()
+        position = tuple(
+            centre[i] - normal[i] * SCREW_MPR_CUT_VIEW_DISTANCE_MM for i in range(3)
+        )
+        camera.SetFocalPoint(*centre)
+        camera.SetPosition(*position)
+        if up is not None and any(up):
+            camera.SetViewUp(*up)
+        self._renderer.ResetCameraClippingRange()
+        self._request_render()
 
     def _place_screw_mpr_plane(self, name: str, axes: vtk.vtkMatrix4x4) -> None:
         """Create (once) and position one screw-aligned plane indicator."""

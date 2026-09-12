@@ -185,9 +185,21 @@ class DummyViewer3D(QWidget):
         # Screw MPR in 3D: the last planes shown, or None once cleared.
         self.screw_mpr_planes = None
         self.screw_mpr_clear_count = 0
+        self.screw_mpr_label = None
+        self.screw_mpr_window_level = None
 
-    def show_screw_mpr(self, oblique_axial, oblique_sagittal, cross_section):
+    def show_screw_mpr(
+        self,
+        oblique_axial,
+        oblique_sagittal,
+        cross_section,
+        *,
+        vertebra_label=None,
+        window_level=None,
+    ):
         self.screw_mpr_planes = (oblique_axial, oblique_sagittal, cross_section)
+        self.screw_mpr_label = vertebra_label
+        self.screw_mpr_window_level = window_level
 
     def clear_screw_mpr(self):
         self.screw_mpr_planes = None

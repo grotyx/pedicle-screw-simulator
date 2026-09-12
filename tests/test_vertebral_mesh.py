@@ -454,6 +454,147 @@ class TestMeshExtraction:
         assert radial_distance.std() < 0.18
 
 
+class TestVertebraLabelArray:
+    """Every mesh cell carries its own vertebral label (viewer_3d's local cut)."""
+
+    def test_mesh_cells_carry_their_vertebra_label(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_ARRAY, extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 30),
+            label_slabs=[
+                (27, 0, 10),   # L5
+                (28, 10, 20),  # L4
+                (29, 20, 30),  # L3
+            ],
+        )
+        result = extract_vertebral_mesh(mask)
+        assert result is not None
+
+        label_array = result.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY)
+        assert label_array is not None
+        assert label_array.GetNumberOfComponents() == 1
+        assert label_array.GetNumberOfTuples() == result.GetNumberOfCells()
+        present = {int(label_array.GetTuple1(i)) for i in range(label_array.GetNumberOfTuples())}
+        assert present == {27, 28, 29}
+
+        # "VertebraColors" must still be the array that drives rendering.
+        colors = result.GetCellData().GetScalars()
+        assert colors.GetName() == "VertebraColors"
+
+
+class TestSplitMeshByLabel:
+    """split_mesh_by_label carves one vertebra out for viewer_3d's local cut."""
+
+    @staticmethod
+    def _combined_mesh():
+        from src.core.vertebral_mesh import extract_vertebral_mesh
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 30),
+            label_slabs=[
+                (27, 0, 10),   # L5
+                (28, 10, 20),  # L4
+                (29, 20, 30),  # L3
+            ],
+        )
+        return extract_vertebral_mesh(mask)
+
+    def test_split_mesh_by_label_separates_one_vertebra(self):
+        from src.core.vertebral_mesh import VERTEBRA_LABEL_ARRAY, split_mesh_by_label
+
+        combined = self._combined_mesh()
+        matching, rest = split_mesh_by_label(combined, 28)
+
+        assert matching.GetNumberOfCells() > 0
+        assert rest.GetNumberOfCells() > 0
+        assert matching.GetNumberOfCells() + rest.GetNumberOfCells() == combined.GetNumberOfCells()
+
+        matching_labels = matching.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY)
+        assert matching_labels.GetRange() == (28, 28)
+
+        rest_labels = rest.GetCellData().GetArray(VERTEBRA_LABEL_ARRAY)
+        rest_values = {
+            int(rest_labels.GetTuple1(i)) for i in range(rest_labels.GetNumberOfTuples())
+        }
+        assert 28 not in rest_values
+        assert rest_values == {27, 29}
+
+        # Every cell array (not just VertebraColors) must survive the split.
+        assert matching.GetCellData().GetArray("VertebraColors") is not None
+        assert rest.GetCellData().GetArray("VertebraColors") is not None
+
+    def test_split_mesh_by_label_without_the_label_returns_everything_as_rest(self):
+        from src.core.vertebral_mesh import split_mesh_by_label
+
+        combined = self._combined_mesh()
+
+        matching, rest = split_mesh_by_label(combined, 99)
+
+        assert matching.GetNumberOfCells() == 0
+        assert rest.GetNumberOfCells() == combined.GetNumberOfCells()
+
+    def test_split_mesh_by_label_missing_array_returns_everything_as_rest(self):
+        import vtk
+
+        from src.core.vertebral_mesh import split_mesh_by_label
+
+        plain = vtk.vtkPolyData()
+        source = vtk.vtkSphereSource()
+        source.Update()
+        plain.DeepCopy(source.GetOutput())
+
+        matching, rest = split_mesh_by_label(plain, 28)
+
+        assert matching.GetNumberOfCells() == 0
+        assert rest.GetNumberOfCells() == plain.GetNumberOfCells()
+
+
+class TestLabelWorldBounds:
+    """label_world_bounds sizes viewer_3d's local mesh clip and volume crop."""
+
+    def test_label_world_bounds_matches_the_voxels_plus_margin(self):
+        from src.core.vertebral_mesh import label_world_bounds
+
+        mask = _create_labeled_mask(
+            dims=(20, 20, 30),
+            spacing=(1.0, 1.0, 1.0),
+            origin=(0.0, 0.0, 0.0),
+            label_slabs=[(28, 10, 20)],
+        )
+
+        bounds = label_world_bounds(mask, 28, margin_mm=2.0)
+
+        assert bounds == pytest.approx((0.0, 19.0, 0.0, 19.0, 8.0, 21.0))
+
+    def test_label_world_bounds_clamps_to_the_mask(self):
+        from src.core.vertebral_mesh import label_world_bounds
+
+        # The label fills the whole mask, so a margin must clamp rather than
+        # extend past the mask's own bounds.
+        mask = _create_labeled_mask(
+            dims=(10, 10, 10),
+            spacing=(1.0, 1.0, 1.0),
+            label_slabs=[(28, 0, 10)],
+        )
+
+        bounds = label_world_bounds(mask, 28, margin_mm=5.0)
+
+        assert bounds == pytest.approx((0.0, 9.0, 0.0, 9.0, 0.0, 9.0))
+
+    def test_label_world_bounds_absent_label_returns_none(self):
+        from src.core.vertebral_mesh import label_world_bounds
+
+        mask = _create_labeled_mask(dims=(10, 10, 10), label_slabs=[(28, 0, 10)])
+
+        assert label_world_bounds(mask, 30) is None
+
+    def test_label_world_bounds_none_mask_returns_none(self):
+        from src.core.vertebral_mesh import label_world_bounds
+
+        assert label_world_bounds(None, 28) is None
+
+
 class TestDerivedSmoothingDefault:
     """The Gaussian sigma follows the mask's own grid, not a fixed constant."""
 
