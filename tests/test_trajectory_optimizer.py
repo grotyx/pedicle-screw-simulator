@@ -14,7 +14,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
-from src.core.screw_geometry import endplate_angle_deg, endplate_slope_deg
+from src.core.screw_geometry import (
+    craniocaudal_angle_deg,
+    endplate_angle_deg,
+    endplate_slope_deg,
+)
 from src.core.screw_grading import ENTRY_ZONE_MM, BatchResult, ScrewGrader
 from src.core.trajectory_optimizer import (
     DEFAULT_WEIGHTS,
@@ -690,6 +694,40 @@ def test_flat_phantom_without_an_endplate_normal_is_unaffected():
     assert ranked
     assert all(c.components["endplate"] == pytest.approx(1.0) for c in ranked)
     assert not any(w.startswith(ENDPLATE_BAND_RELAXED_PREFIX) for w in ranked[0].warnings)
+
+
+def test_endplate_band_follows_the_reference_normal():
+    """A resolved 'neighbours' reference bands candidates against itself, not
+    the level's own (untrustworthy) fit.
+
+    ``_tilted_setup``'s own fit is about 10 degrees; the reference here is
+    fixed 15 degrees below it, well outside the default tolerance, so a
+    candidate list still banded against the *own* normal would fail this.
+    (The offset is taken downward, not upward: the pedicle axis in this
+    phantom is already close to the +20 degree recentring limit on the high
+    side, so a reference much *above* the own fit cannot be reached at all.)
+    """
+    ct, mask, analysis = _tilted_setup()
+    own_slope = endplate_slope_deg(analysis.upper_endplate_normal)
+    reference_slope = own_slope - 15.0
+    reference_normal = np.array(
+        [
+            0.0,
+            math.sin(math.radians(reference_slope)),
+            math.cos(math.radians(reference_slope)),
+        ]
+    )
+    analysis.endplate_reference = "neighbours"
+    analysis.reference_endplate_normal = reference_normal
+    analysis.endplate_reference_levels = ("T12", "L3")
+    config = PlannerConfig()
+
+    ranked = optimize_screw(ScrewGrader(mask, ct), analysis, "left", config, top_k=500)
+
+    assert ranked
+    for candidate in ranked:
+        cc = craniocaudal_angle_deg(candidate.entry, candidate.target)
+        assert abs(cc - reference_slope) <= config.endplate_tolerance_deg + 1e-6
 
 
 @pytest.mark.parametrize(

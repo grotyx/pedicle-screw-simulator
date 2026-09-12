@@ -451,12 +451,13 @@ def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
     rows = list(_csv.reader(path.open(encoding="utf-8")))
     header = rows[0]
     # Each wave appends its own columns and never reorders an earlier one, so
-    # these four (W7) sit before the endplate angle (W8) and the uncertainty
-    # flag, not at the end of the row.
-    assert header[-6:-2] == [
+    # these four (W7) sit before the endplate angle (W8), the uncertainty
+    # flag and the endplate reference, not at the end of the row.
+    assert header[-7:-3] == [
         "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
     ]
-    assert header[-2:] == ["endplate_angle_deg", "width_uncertain"]
+    assert header[-3:-1] == ["endplate_angle_deg", "width_uncertain"]
+    assert header[-1] == "endplate_reference"
     row = dict(zip(header, rows[1], strict=True))
     assert row["pedicle_width_mm"] == "4.500"
     assert row["narrow_pedicle"] == "true"
@@ -528,3 +529,52 @@ def test_csv_has_an_endplate_angle_column(tmp_path):
     assert "endplate_angle_deg" in header
     assert dict(zip(header, rows[1], strict=True))["endplate_angle_deg"] == "2.400"
     assert dict(zip(header, rows[2], strict=True))["endplate_angle_deg"] == ""
+
+
+def test_csv_appends_the_endplate_reference_column_last(tmp_path):
+    """New columns append; readers key on the header, not on position."""
+    screws = [
+        Screw(
+            entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 5.0),
+            diameter=6.0, vertebra_level="L1", side="left",
+            metrics={
+                "endplate_angle_deg": 0.5,
+                "endplate_reference": "neighbours",
+                "endplate_reference_levels": "T12, L3",
+            },
+        ),
+        Screw(
+            entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0),
+            diameter=6.0, vertebra_level="L4", side="left",
+        ),
+    ]
+    path = tmp_path / "plan.csv"
+
+    export_screws_csv(str(path), screws)
+
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    header = rows[0]
+    assert header[-1] == "endplate_reference"
+    row = dict(zip(header, rows[1], strict=True))
+    assert row["endplate_reference"] == "neighbours"
+    blank = dict(zip(header, rows[2], strict=True))
+    assert blank["endplate_reference"] == ""
+
+
+def test_endplate_reference_survives_a_plan_round_trip():
+    from src.utils.planning_io import deserialize_plan, serialize_plan
+
+    screw = Screw(
+        entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
+        metrics={
+            "endplate_angle_deg": 0.5,
+            "endplate_reference": "neighbours",
+            "endplate_reference_levels": "T12, L3",
+        },
+    )
+
+    parsed = deserialize_plan(serialize_plan("s", [screw], []))
+
+    metrics = parsed["screws"][0].metrics
+    assert metrics["endplate_reference"] == "neighbours"
+    assert metrics["endplate_reference_levels"] == "T12, L3"

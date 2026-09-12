@@ -619,6 +619,9 @@ def test_planning_thread_forwards_config_to_planner(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             pass
 
+        def get_available_vertebrae(self):
+            return []
+
         def analyze_all(self, labels=None):
             return []
 
@@ -714,6 +717,9 @@ def test_planning_thread_forwards_pedicle_mask_to_analyzer(monkeypatch):
     class _Analyzer:
         def __init__(self, _mask, _ct, pedicle_mask=None):
             captured["pedicle_mask"] = pedicle_mask
+
+        def get_available_vertebrae(self):
+            return []
 
         def analyze_all(self, labels=None):
             return []
@@ -862,6 +868,9 @@ def test_planning_thread_forwards_progress_and_cancel_to_the_planner(monkeypatch
         def __init__(self, *_args, **_kwargs):
             pass
 
+        def get_available_vertebrae(self):
+            return []
+
         def analyze_all(self, labels=None):
             return []
 
@@ -872,7 +881,7 @@ def test_planning_thread_forwards_progress_and_cancel_to_the_planner(monkeypatch
         def __init__(self, _ct, _mask, grader=None, config=None):
             pass
 
-        def plan_all(self, _analyses, sides="both", progress=None, cancel=None):
+        def plan_all(self, _analyses, sides="both", progress=None, cancel=None, **_kwargs):
             captured["progress"] = progress
             captured["cancel"] = cancel
             progress("Planning L4 left (1/2)…")
@@ -892,6 +901,71 @@ def test_planning_thread_forwards_progress_and_cancel_to_the_planner(monkeypatch
     assert "Planning L4 left (1/2)…" in emitted
     assert thread.skipped_sides == [("L2", "right", "no isthmus corner")]
     assert thread.cancelled is True
+
+
+def test_planning_thread_analyses_neighbour_levels_for_the_endplate_reference(
+    monkeypatch,
+):
+    """Detected neighbours within 2 levels are analysed as context only.
+
+    They must reach ``analyze_all`` (so their fit exists to donate), reach
+    ``plan_all`` as ``endplate_context`` (so a rough selected level can
+    borrow it), never appear among the planned ``analyses``, and still end up
+    in ``thread.analyses`` (so the screw tool can re-grade a screw dragged
+    into one of them).
+    """
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+
+    captured = {}
+
+    class _Vertebra:
+        def __init__(self, label):
+            self.label = label
+
+    class _Analysis:
+        def __init__(self, label):
+            self.vertebra = _Vertebra(label)
+            self.success = True
+
+    class _Analyzer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_available_vertebrae(self):
+            return [_Vertebra(label) for label in (28, 29, 30, 31, 32)]
+
+        def analyze_all(self, labels=None):
+            captured["analyze_all_labels"] = sorted(labels or [])
+            return [_Analysis(label) for label in (labels or [])]
+
+    class _Planner:
+        def __init__(self, _ct, _mask, grader=None, config=None):
+            pass
+
+        def plan_all(self, analyses, sides="both", endplate_context=(), **_kwargs):
+            captured["planned_labels"] = sorted(a.vertebra.label for a in analyses)
+            captured["context_labels"] = sorted(
+                a.vertebra.label for a in endplate_context
+            )
+            return []
+
+    monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
+    monkeypatch.setattr(module, "AutoScrewPlanner", _Planner)
+
+    thread = module._PlanningThread(
+        sitk.Image([2, 2, 2], sitk.sitkUInt8),
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [30],  # only L2 selected
+    )
+    thread.run()
+
+    # Neighbours within 2 levels of label 30, all detected: 28, 29, 31, 32.
+    assert captured["analyze_all_labels"] == [28, 29, 30, 31, 32]
+    assert captured["planned_labels"] == [30]
+    assert captured["context_labels"] == [28, 29, 31, 32]
+    assert sorted(a.vertebra.label for a in thread.analyses) == [28, 29, 30, 31, 32]
 
 
 def test_on_finished_closes_the_dialog_without_re_entering_cancel(

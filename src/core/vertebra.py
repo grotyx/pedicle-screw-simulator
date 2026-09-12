@@ -9,7 +9,7 @@ morphology analysis.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -123,6 +123,42 @@ class PedicleAnalysisResult:
     # instead of leaving the planner to trust it blindly.
     endplate_fit_rmse_mm: Optional[float] = None
 
+    # Which reference the planner should aim and measure this level's screws
+    # against: "own" (its own fit), "neighbours" (borrowed, see
+    # endplate_reference_levels) or "none" (no usable reference at all).  ""
+    # means unresolved -- :func:`~src.core.pedicle_analyzer.resolve_endplate_references`
+    # has not run over this analysis, so callers fall back to today's
+    # behaviour (see :func:`aiming_endplate_normal`).
+    endplate_reference: str = ""
+
+    # The normal a screw is actually aimed and measured against once resolved:
+    # a copy of upper_endplate_normal when endplate_reference == "own", an
+    # inverse-distance-weighted blend of trusted neighbours when
+    # "neighbours", and None when "none".  Left None while unresolved.
+    reference_endplate_normal: Optional[np.ndarray] = None
+
+    # Donor level names (cranial to caudal) behind reference_endplate_normal
+    # when endplate_reference == "neighbours"; empty otherwise.
+    endplate_reference_levels: Tuple[str, ...] = ()
+
     # Overall analysis status
     success: bool = False
     warnings: List[str] = field(default_factory=list)
+
+
+def aiming_endplate_normal(analysis: Any) -> Optional[np.ndarray]:
+    """The endplate normal a screw should be aimed and measured against.
+
+    Duck-typed with ``getattr`` so the optimiser's unit tests and
+    :class:`~src.tools.screw_tool.ScrewTool`'s hand-built registry stand-ins
+    (which model only ``upper_endplate_normal``) keep behaving exactly as
+    before: when ``endplate_reference`` is empty (unresolved --
+    :func:`~src.core.pedicle_analyzer.resolve_endplate_references` never ran,
+    or the stand-in does not model the field at all), this returns the level's
+    own ``upper_endplate_normal``.  Once resolved, it returns
+    ``reference_endplate_normal`` instead -- the level's own fit, a
+    neighbour-borrowed blend, or ``None``, per ``endplate_reference``.
+    """
+    if not getattr(analysis, "endplate_reference", ""):
+        return getattr(analysis, "upper_endplate_normal", None)
+    return getattr(analysis, "reference_endplate_normal", None)

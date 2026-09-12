@@ -31,8 +31,14 @@ from .cbt_planner import plan_cbt_screws
 from .construct_alignment import stamp_alignment
 from .pedicle_analyzer import (
     ENDPLATE_FIT_RMSE_WARNING_MM,
+    ENDPLATE_REFERENCE_NEIGHBOURS,
+    ENDPLATE_REFERENCE_NONE,
+    ENDPLATE_REFERENCE_OWN,
     VERTEBRA_LABELS,
     endplate_fit_warning,
+    endplate_neighbour_reference_warning,
+    endplate_no_reference_warning,
+    resolve_endplate_references,
 )
 from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg, endplate_angle_deg
@@ -43,7 +49,7 @@ from .trajectory_optimizer import (
     optimize_construct,
     optimize_screw,
 )
-from .vertebra import PedicleAnalysisResult, Vertebra
+from .vertebra import PedicleAnalysisResult, Vertebra, aiming_endplate_normal
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +86,48 @@ def narrow_pedicle_warning(pedicle_width_mm: float, diameter_mm: float) -> str:
         f"screw is {fill:.0f} % of the width — verify the measurement or accept a "
         "lateral (in-out-in) breach"
     )
+
+
+def _endplate_warnings(analysis: PedicleAnalysisResult, endplate_parallel: bool) -> List[str]:
+    """The endplate-fit warnings for one analysis, shared by both planning modes.
+
+    With ``endplate_parallel`` off the trajectory is deliberately horizontal,
+    so only today's rough-fit warning on the *own* measurement still applies
+    -- the reference resolution decided nothing this screw is aimed by, and
+    saying otherwise would misdescribe a setting the surgeon chose.  With it
+    on, the wording follows ``analysis.endplate_reference``:
+
+    * ``own`` -- :func:`~src.core.pedicle_analyzer.endplate_fit_warning` when
+      the RMSE exceeds :data:`ENDPLATE_FIT_RMSE_WARNING_MM`, as before.
+    * ``neighbours`` -- :func:`endplate_neighbour_reference_warning`.
+    * ``none`` with no own normal at all -- today's exact wording for a
+      missing endplate.
+    * ``none`` with a rough own normal -- :func:`endplate_no_reference_warning`.
+    """
+    rmse = analysis.endplate_fit_rmse_mm
+    if not endplate_parallel:
+        if rmse is not None and rmse > ENDPLATE_FIT_RMSE_WARNING_MM:
+            return [endplate_fit_warning(rmse)]
+        return []
+
+    reference = analysis.endplate_reference
+    if reference == ENDPLATE_REFERENCE_OWN or reference == "":
+        # "" is the unresolved case: behave exactly as before resolution
+        # existed, since some callers (a lone analysis not yet passed through
+        # resolve_endplate_references) may still reach here that way.
+        if rmse is not None and rmse > ENDPLATE_FIT_RMSE_WARNING_MM:
+            return [endplate_fit_warning(rmse)]
+        return []
+    if reference == ENDPLATE_REFERENCE_NEIGHBOURS:
+        return [
+            endplate_neighbour_reference_warning(
+                rmse, analysis.endplate_reference_levels
+            )
+        ]
+    assert reference == ENDPLATE_REFERENCE_NONE  # only remaining possibility
+    if analysis.upper_endplate_normal is None:
+        return ["Upper endplate unavailable; used horizontal sagittal trajectory"]
+    return [endplate_no_reference_warning(rmse)]
 
 
 def construct_summary(screws: Sequence[PlannedScrew]) -> str:
@@ -290,6 +338,13 @@ class AutoScrewPlanner:
             logger.info("Skipping %s: pedicle analysis unsuccessful", vertebra.name)
             return None, "pedicle analysis unsuccessful"
 
+        # A caller that hands _plan_screw a single analysis directly (rather
+        # than through plan_all, which resolves the whole batch up front)
+        # still needs a reference before it can aim or warn -- resolved alone,
+        # it can only ever land on its own fit or none, never neighbours.
+        if analysis.endplate_reference == "":
+            resolve_endplate_references([analysis])
+
         # Retrieve side-specific pedicle data.
         pedicle_center, pedicle_axis, pedicle_width = self._get_side_data(analysis, side)
         if pedicle_center is None or pedicle_axis is None:
@@ -303,22 +358,15 @@ class AutoScrewPlanner:
 
         warnings: List[str] = []
         # ``endplate_normal`` is what the trajectory is *aimed* along -- None
-        # when the user switched the endplate-parallel option off, which is a
-        # deliberate horizontal trajectory and therefore not worth a warning.
-        # ``analysis.upper_endplate_normal`` stays the thing the screw is
-        # *measured* against below.
+        # when the user switched the endplate-parallel option off (a
+        # deliberate horizontal trajectory) or when neither this level's own
+        # fit nor a neighbour's is trustworthy.  ``aiming_endplate_normal``
+        # resolves against the reference resolve_endplate_references chose,
+        # which is also what the screw is *measured* against below.
         endplate_normal = (
-            analysis.upper_endplate_normal if self.config.endplate_parallel else None
+            aiming_endplate_normal(analysis) if self.config.endplate_parallel else None
         )
-        if self.config.endplate_parallel and analysis.upper_endplate_normal is None:
-            warnings.append(
-                "Upper endplate unavailable; used horizontal sagittal trajectory"
-            )
-        if (
-            analysis.endplate_fit_rmse_mm is not None
-            and analysis.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
-        ):
-            warnings.append(endplate_fit_warning(analysis.endplate_fit_rmse_mm))
+        warnings.extend(_endplate_warnings(analysis, self.config.endplate_parallel))
 
         # 1. Determine optimal screw diameter.  A width is never a reason to
         #    drop the side: a narrow pedicle takes the smallest implant.
@@ -474,9 +522,11 @@ class AutoScrewPlanner:
             body_center,
             warnings,
             pedicle_width,
-            upper_endplate_normal=analysis.upper_endplate_normal,
+            upper_endplate_normal=aiming_endplate_normal(analysis),
             narrow=narrow,
             width_uncertain=uncertain,
+            endplate_reference=analysis.endplate_reference,
+            endplate_reference_levels=analysis.endplate_reference_levels,
         )
         return planned, None
 
@@ -716,6 +766,8 @@ class AutoScrewPlanner:
         upper_endplate_normal: Optional[np.ndarray] = None,
         narrow: bool = False,
         width_uncertain: bool = False,
+        endplate_reference: str = "",
+        endplate_reference_levels: Sequence[str] = (),
     ) -> PlannedScrew:
         """Grade an accepted trajectory and wrap it in a :class:`PlannedScrew`.
 
@@ -725,15 +777,25 @@ class AutoScrewPlanner:
         ``extra_warnings`` are the messages the caller accumulated while
         constructing the trajectory; they are copied, never mutated.
 
-        ``upper_endplate_normal`` is the analysis's plane normal.  It is passed
-        even when ``config.endplate_parallel`` is off: the endplate angle is a
-        measurement of the trajectory that was chosen, not a record of the
-        setting that chose it, so the inspector shows it either way.
+        ``upper_endplate_normal`` is the normal the trajectory was actually
+        aimed and should be measured against -- the caller resolves that via
+        :func:`~src.core.vertebra.aiming_endplate_normal` before calling this.
+        It is passed even when ``config.endplate_parallel`` is off: the
+        endplate angle is a measurement of the trajectory that was chosen, not
+        a record of the setting that chose it, so the inspector shows it
+        either way.  It is ``None`` exactly when ``endplate_reference`` is
+        ``"none"`` (or empty/unresolved with no own fit), in which case
+        ``endplate_angle_deg`` is deliberately absent from the metrics below.
 
         ``narrow`` and ``width_uncertain`` both mean "this side was planned
         under the narrow policy", and both mark it for review, but only
         ``narrow`` licenses quoting the width as a finding about the patient
         (see :meth:`_is_width_uncertain`).
+
+        ``endplate_reference`` and ``endplate_reference_levels`` are recorded
+        on the metrics verbatim so the plan table, CSV and JSON round-trip
+        agree with the sagittal view about what the screw was measured
+        against.
         """
         warnings: List[str] = list(extra_warnings or [])
         length = float(np.linalg.norm(target - entry))
@@ -808,6 +870,10 @@ class AutoScrewPlanner:
             # Absent, not 0.0, when the endplate could not be fitted: a missing
             # measurement must never read as a perfectly parallel screw.
             metrics["endplate_angle_deg"] = float(endplate_angle)
+        if endplate_reference:
+            metrics["endplate_reference"] = endplate_reference
+        if endplate_reference == ENDPLATE_REFERENCE_NEIGHBOURS:
+            metrics["endplate_reference_levels"] = ", ".join(endplate_reference_levels)
         if width_uncertain:
             # First in the list, for the same reason the narrow note is: it
             # explains why this screw looks the way it does.  It replaces the
@@ -874,6 +940,7 @@ class AutoScrewPlanner:
         sides: str = "both",
         progress: Optional[Callable[[str], None]] = None,
         cancel: Optional[Callable[[], bool]] = None,
+        endplate_context: Sequence[PedicleAnalysisResult] = (),
     ) -> List[PlannedScrew]:
         """Plan screws for all analyzed vertebrae.
 
@@ -892,6 +959,12 @@ class AutoScrewPlanner:
             ``True`` the run stops there and returns the screws planned so far,
             with :attr:`last_run_cancelled` set.  Never interrupts a pedicle
             part-way: a half-graded trajectory is not a screw.
+        endplate_context:
+            Analyses of levels the surgeon did not select for planning, but
+            close enough to donate a trusted endplate normal to a rough
+            selected level (see
+            :func:`~src.core.pedicle_analyzer.endplate_context_labels`).
+            Resolved alongside ``analyses`` and never planned themselves.
 
         ``config.trajectory == "cbt"`` replaces the trajectory family for both
         back-ends: a cortical bone trajectory has its own entry landmark, angle
@@ -904,6 +977,12 @@ class AutoScrewPlanner:
         """
         if sides not in ("both", "left", "right"):
             raise ValueError(f"sides must be 'both', 'left', or 'right', got {sides!r}")
+
+        # Resolved before anything else sees these analyses, so the legacy
+        # planner, the optimiser and the CBT branch all aim and measure
+        # against the same reference -- the context levels never get a screw,
+        # but they do get to donate their fit to a selected rough neighbour.
+        resolve_endplate_references(list(analyses) + list(endplate_context))
 
         side_list = ["left", "right"] if sides == "both" else [sides]
         self.last_run_cancelled = False
@@ -1083,16 +1162,9 @@ class AutoScrewPlanner:
         if pedicle_center is None or body_center is None:
             return self._legacy_fallback(analysis, side)
 
-        warnings: List[str] = []
-        if self.config.endplate_parallel and analysis.upper_endplate_normal is None:
-            warnings.append(
-                "Upper endplate unavailable; used horizontal sagittal trajectory"
-            )
-        if (
-            analysis.endplate_fit_rmse_mm is not None
-            and analysis.endplate_fit_rmse_mm > ENDPLATE_FIT_RMSE_WARNING_MM
-        ):
-            warnings.append(endplate_fit_warning(analysis.endplate_fit_rmse_mm))
+        warnings: List[str] = list(
+            _endplate_warnings(analysis, self.config.endplate_parallel)
+        )
         uncertain = self._is_width_uncertain(analysis, side)
         if uncertain:
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
@@ -1116,9 +1188,11 @@ class AutoScrewPlanner:
             body_center,
             warnings,
             pedicle_width,
-            upper_endplate_normal=analysis.upper_endplate_normal,
+            upper_endplate_normal=aiming_endplate_normal(analysis),
             narrow=narrow,
             width_uncertain=uncertain,
+            endplate_reference=analysis.endplate_reference,
+            endplate_reference_levels=analysis.endplate_reference_levels,
         )
         for message in candidate.warnings:
             # The optimiser explains how a trajectory was chosen; the planner

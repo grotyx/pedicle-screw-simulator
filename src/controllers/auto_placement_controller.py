@@ -19,7 +19,7 @@ from src.core.auto_screw_planner import (
     PlannedScrew,
     construct_summary,
 )
-from src.core.pedicle_analyzer import PedicleAnalyzer
+from src.core.pedicle_analyzer import PedicleAnalyzer, endplate_context_labels
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
 
@@ -82,8 +82,21 @@ class _PlanningThread(QThread):
             analyzer = PedicleAnalyzer(
                 self._mask, self._ct, pedicle_mask=self._pedicle_mask
             )
-            analyses = analyzer.analyze_all(labels=self._labels)
-            self.analyses = list(analyses)
+            # Levels within reach of a selected one but not themselves
+            # selected are analysed too, purely so a rough selected fit has a
+            # trusted neighbour to borrow from -- they are never planned.
+            available_labels = [v.label for v in analyzer.get_available_vertebrae()]
+            context_labels = endplate_context_labels(self._labels, available_labels)
+            all_analyses = analyzer.analyze_all(labels=self._labels + context_labels)
+            selected_set = set(self._labels)
+            analyses = [a for a in all_analyses if a.vertebra.label in selected_set]
+            endplate_context = [
+                a for a in all_analyses if a.vertebra.label not in selected_set
+            ]
+            # Every analysed level, selected or context: the screw tool
+            # re-grades a screw dragged into a context level too, and needs
+            # that level's analysis to measure it against.
+            self.analyses = list(all_analyses)
 
             successful = [a for a in analyses if a.success]
             self.progress.emit(
@@ -97,6 +110,7 @@ class _PlanningThread(QThread):
                 sides="both",
                 progress=self.progress.emit,
                 cancel=self._cancel.is_set,
+                endplate_context=endplate_context,
             )
             self.skipped_sides = list(getattr(planner, "skipped_sides", ()) or ())
             self.cancelled = bool(getattr(planner, "last_run_cancelled", False))
