@@ -11,7 +11,7 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 > 검증을 뜻하지 않습니다. 자동 분할, 스크류 제안, 길이·직경, breach grade와
 > 경고는 반드시 자격을 갖춘 의료진이 독립적으로 확인해야 합니다.
 
-## [Unreleased]
+## [0.2.3] - 2026-09-13
 
 ### 추가
 
@@ -355,6 +355,7 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
+[0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.1.0...v0.2.0
