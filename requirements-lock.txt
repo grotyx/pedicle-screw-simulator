@@ -1,5 +1,5 @@
 # Exact environment validated on macOS arm64 with Python 3.12 on 2026-07-12.
-# Includes runtime and test tooling for reproducible v0.1.0 verification.
+# Includes runtime and test tooling for reproducible v0.2.3 verification.
 # Desktop AI dependencies are pinned separately in requirements-desktop.txt.
 
 ast_serialize==0.6.0

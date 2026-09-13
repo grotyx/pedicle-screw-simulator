@@ -22,6 +22,8 @@ jobs:
             artifact: PedicleScrewSimulator-Windows-x64
           - os: macos-15
             artifact: PedicleScrewSimulator-macOS-arm64
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Check out source
@@ -58,7 +60,9 @@ jobs:
           python -m pip install -r requirements-desktop.txt
 
       - name: Run automated tests
-        run: python -m pytest tests -q
+        run: |
+          python -m ruff check src tests scripts main.py
+          python -m pytest tests -q
 
       - name: Build native desktop package
         run: python scripts/build_desktop.py
