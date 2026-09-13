@@ -195,3 +195,97 @@ def test_load_error_from_a_raised_exception_is_logged_not_printed(
     messages = [record.getMessage() for record in caplog.records]
     assert any("DICOM load failed" in message and "boom" in message for message in messages)
     assert any("Traceback" in message for message in messages)
+
+
+def test_cancel_before_pixel_read_reports_cancelled(qapp):
+    """A cancel set before load_series runs must surface as a cancel, not a load."""
+    thread = DicomLoadThread(directory="any", series_id="SERIES")
+    thread.request_cancel()
+    errors = []
+    finished = []
+    thread.error.connect(errors.append)
+    thread.finished.connect(lambda *a: finished.append(a))
+    thread.run()
+    assert errors == ["DICOM load cancelled"]
+    assert finished == []
+
+
+def test_cancelled_result_is_discarded_without_touching_viewers(qapp):
+    """A late finished() after cancel must not set a volume or info text."""
+    from src.ui.job_dialog import JobDialog
+
+    calls = {"volume": 0}
+
+    class _VM:
+        def set_volume(self, _image):
+            calls["volume"] += 1
+
+    class _Label:
+        def __init__(self):
+            self.text = ""
+
+        def setText(self, value):
+            self.text = value
+
+    class _Window:
+        def __init__(self):
+            self.statusbar = _StatusBar()
+            self.info_label = _Label()
+            self._current_series_id = None
+
+        def reset_workspace(self):
+            return None
+
+    window = _Window()
+    controller = DicomController(_VM(), window)
+    thread = DicomLoadThread(directory="any", series_id="SERIES")
+    thread.request_cancel()
+    controller._load_thread = thread
+    progress = JobDialog("Loading DICOM...", None)
+    controller._on_loaded(object(), {"series_id": "SERIES"}, progress)
+
+    assert calls["volume"] == 0
+    assert window.info_label.text == ""
+    assert "cancelled" in window.statusbar.message.lower()
+    progress.deleteLater()
+
+
+def test_job_dialog_close_does_not_reenter_cancel(qapp):
+    """Closing the shared dialog must not fire the cancel callback."""
+    from src.ui.job_dialog import JobDialog
+
+    fired = []
+    dialog = JobDialog("job", None, on_cancel=lambda: fired.append(True))
+    dialog.close_cleanly()
+    assert fired == []
+    dialog.deleteLater()
+
+
+def test_job_dialog_reports_progress_and_log(qapp):
+    """Determinate percentages and the log tail must reach the widgets."""
+    from src.ui.job_dialog import JobDialog
+
+    dialog = JobDialog("job", None)
+    dialog.set_progress(3, 10)
+    assert (dialog.minimum(), dialog.maximum(), dialog.value()) == (0, 10, 3)
+    assert dialog._log_label.text() == ""
+    dialog.set_log("L4 left (3/10)")
+    assert dialog._log_label.text() == "L4 left (3/10)"
+    dialog.set_progress(0, 0)
+    assert (dialog.minimum(), dialog.maximum()) == (0, 0)
+    dialog.mark_cancelling("Cancelling…")
+    assert dialog.is_cancelling is True
+    assert dialog.labelText() == "Cancelling…"
+    dialog.close_cleanly()
+    dialog.deleteLater()
+
+
+def test_job_dialog_frozen_build_has_no_cancel_button(qapp):
+    """The packaged segmentation build degrades to a log-only dialog."""
+    from src.ui.job_dialog import JobDialog
+
+    dialog = JobDialog("job", None, cancellable=False)
+    assert dialog.findChild(object) is not None  # log tail still present
+    assert dialog._log_label.text() == ""
+    dialog.close_cleanly()
+    dialog.deleteLater()

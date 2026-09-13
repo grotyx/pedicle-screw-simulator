@@ -9,12 +9,11 @@ import logging
 import time
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMessageBox,
-    QProgressDialog,
 )
 
 from src.core.dicom_loader import DicomLoader
@@ -33,6 +32,15 @@ class DicomLoadThread(QThread):
         super().__init__()
         self.directory = directory
         self.series_id = series_id
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """Ask the load to stop at the next cooperative checkpoint (GUI safe)."""
+        self._cancel_requested = True
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested
 
     def run(self):
         try:
@@ -59,8 +67,14 @@ class DicomLoadThread(QThread):
 
             short_id = target_series[:16] + "..." if len(target_series) > 19 else target_series
             self.progress.emit(f"Loading series: {short_id}")
+            if self._cancel_requested:
+                self.error.emit("DICOM load cancelled")
+                return
             image = loader.load_series(self.directory, series_id=target_series)
 
+            if self._cancel_requested:
+                self.error.emit("DICOM load cancelled")
+                return
             metadata = loader.get_metadata()
             metadata["series_id"] = target_series
             self.progress.emit("Complete")
@@ -141,14 +155,26 @@ class DicomController:
                 self._window.statusbar.showMessage("Load canceled")
                 return
 
-        # Show progress dialog
-        progress = QProgressDialog("Loading DICOM...", None, 0, 0, self._window)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        # Show progress dialog. Cancellable now: the load thread checks a
+        # cooperative flag between scan and read, so cancelling before the
+        # pixel read starts avoids the volume ever reaching the viewers.
+        # A cancel that lands mid-read still finishes the read (SimpleITK
+        # offers no interrupt) and its result is then discarded.
+        # Local import: src.ui.__init__ imports MainWindow, which imports
+        # the controllers -- a module-level import here would loop.
+        from src.ui.job_dialog import JobDialog
+
+        self._load_thread = DicomLoadThread(folder, series_id=selected_series_id)
+        progress = JobDialog(
+            "Loading DICOM...",
+            self._window,
+            on_cancel=self._on_load_cancel_requested,
+        )
+        progress.set_log(folder)
+        self._load_progress = progress
         progress.show()
 
         # Load in thread
-        self._load_thread = DicomLoadThread(folder, series_id=selected_series_id)
         self._load_thread.finished.connect(
             lambda img, meta: self._on_loaded(img, meta, progress)
         )
@@ -157,6 +183,22 @@ class DicomController:
         )
         self._load_thread.progress.connect(progress.setLabelText)
         self._load_thread.start()
+
+    def _on_load_cancel_requested(self) -> None:
+        """Ask the load thread to stop; its late result is discarded."""
+        thread = self._load_thread
+        dialog = getattr(self, "_load_progress", None)
+        if thread is None:
+            if dialog is not None:
+                dialog.close_cleanly()
+                self._load_progress = None
+            return
+        request = getattr(thread, "request_cancel", None)
+        if callable(request):
+            request()
+        if dialog is not None:
+            dialog.mark_cancelling("Cancelling load…")
+        self._window.statusbar.showMessage("Cancelling DICOM load…")
 
     def _select_series_id(self, series_ids, summaries=None):
         """Show a picker dialog for multi-series DICOM folders."""
@@ -201,7 +243,18 @@ class DicomController:
 
     def _on_loaded(self, image, metadata, progress):
         """Handle successful DICOM loading."""
-        progress.close()
+        close = getattr(progress, "close_cleanly", None)
+        if callable(close):
+            close()
+        else:  # pragma: no cover - legacy stub dialogs in tests
+            progress.close()
+        self._load_progress = None
+
+        if getattr(self._load_thread, "cancel_requested", False):
+            logger.info("Discarding DICOM result after user cancel")
+            self._window.statusbar.showMessage("DICOM load cancelled")
+            self._release_load_thread()
+            return
 
         try:
             # Set volume in manager
@@ -215,13 +268,15 @@ class DicomController:
             self._window.reset_workspace()
             logger.info("_on_loaded: state cleared, updating UI...")
 
-            # Update info label
+            # Update info label: geometry only, never patient identifiers.
+            # DicomLoader._extract_metadata strips PHI (name, ID, birth/study
+            # dates, accession, institution), so metadata.get('patient_name')
+            # is always 'Unknown' -- requesting it here would show a row that
+            # can never hold a value.
             series_id = metadata.get("series_id", "Unknown")
             if isinstance(series_id, str) and len(series_id) > 36:
                 series_id = series_id[:33] + "..."
             info_text = (
-                f"Patient: {metadata.get('patient_name', 'Unknown')}\n"
-                f"Study Date: {metadata.get('study_date', 'Unknown')}\n"
                 f"Modality: {metadata.get('modality', 'Unknown')}\n"
                 f"Series: {series_id}\n"
                 f"Size: {metadata.get('size', 'Unknown')}\n"
@@ -258,7 +313,16 @@ class DicomController:
 
     def _on_error(self, error, progress):
         """Handle DICOM loading error."""
-        progress.close()
+        close = getattr(progress, "close_cleanly", None)
+        if callable(close):
+            close()
+        else:  # pragma: no cover - legacy stub dialogs in tests
+            progress.close()
+        self._load_progress = None
+        if str(error) == "DICOM load cancelled":
+            self._window.statusbar.showMessage("DICOM load cancelled")
+            self._release_load_thread()
+            return
         QMessageBox.critical(
             self._window, "Error", f"Failed to load DICOM: {error}"
         )

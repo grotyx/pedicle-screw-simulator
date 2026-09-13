@@ -366,6 +366,19 @@ class ScrewMPRController:
             self._selected_index -= 1
             self._set_review_filter(self._selected_index)
 
+    def on_screws_removed(self, rows) -> None:
+        """Batch removal: exit when the active screw is gone, else reindex."""
+        if not self._active or self._selected_index is None:
+            return
+        removed = sorted({int(row) for row in rows})
+        if self._selected_index in removed:
+            self.exit()
+            return
+        shift = sum(1 for row in removed if row < self._selected_index)
+        if shift:
+            self._selected_index -= shift
+            self._set_review_filter(self._selected_index)
+
     def on_screw_updated(self, row: int) -> None:
         """Refresh inspector and active MPR axes after screw geometry changes."""
         screw = self._screw_at(row)

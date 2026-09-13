@@ -14,7 +14,7 @@ from typing import Dict, Optional
 
 import numpy as np
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from src.core.subregion_segmentation import (
     find_subregion_model,
@@ -109,7 +109,7 @@ class SegmentationController:
         self._window = main_window
         self.workspace = SegmentationWorkspace()
         self._segmentation_thread: Optional[AutoSegmentationThread] = None
-        self._segmentation_progress: Optional[QProgressDialog] = None
+        self._segmentation_progress = None
         self._active_work_dir: Optional[str] = None
         # Keeps the workspace lock fresh for as long as this instance owns a
         # run directory, so another instance's startup purge leaves it alone.
@@ -200,26 +200,21 @@ class SegmentationController:
             task = ui_task
             roi_subset = None
 
-        self._segmentation_progress = QProgressDialog(
+        # Local import: src.ui.__init__ imports MainWindow, which imports
+        # the controllers -- a module-level import here would loop.
+        from src.ui.job_dialog import JobDialog
+
+        self._segmentation_progress = JobDialog(
             "Preparing auto segmentation...",
-            "Cancel",
-            0,
-            0,
             self._window,
+            cancellable=not getattr(sys, "frozen", False),
+            on_cancel=self._on_cancel_requested,
+            window_modal=True,
         )
-        self._segmentation_progress.setWindowModality(
-            Qt.WindowModality.WindowModal
-        )
-        self._segmentation_progress.setMinimumDuration(0)
         if getattr(sys, "frozen", False):
             # The packaged build runs nnU-Net in-process and cannot interrupt it.
-            self._segmentation_progress.setCancelButton(None)
             self._window.seg_status_label.setToolTip(
                 "Cancellation is not available in the packaged build"
-            )
-        else:
-            self._segmentation_progress.canceled.connect(
-                self._on_cancel_requested
             )
         self._segmentation_progress.show()
 
@@ -316,16 +311,16 @@ class SegmentationController:
             self._heartbeat_timer.stop()
 
     def _close_progress_dialog(self):
-        """Close the progress dialog without re-entering the cancel path.
-
-        ``QProgressDialog.close()`` emits ``canceled()``, so the connection has
-        to be dropped first or every normal completion would look like a user
-        cancellation and terminate the (already finished) run.
-        """
+        """Close the progress dialog without re-entering the cancel path."""
         dialog = self._segmentation_progress
         if dialog is None:
             return
         self._segmentation_progress = None
+        close = getattr(dialog, "close_cleanly", None)
+        if callable(close):
+            close()
+            return
+        # Legacy stub dialogs in tests: keep the old disconnect dance.
         try:
             dialog.canceled.disconnect(self._on_cancel_requested)
         except TypeError:
@@ -355,7 +350,11 @@ class SegmentationController:
     def _on_progress(self, message: str):
         """Update UI while segmentation is running."""
         if self._segmentation_progress is not None:
-            self._segmentation_progress.setLabelText(message)
+            set_log = getattr(self._segmentation_progress, "set_log", None)
+            if callable(set_log):
+                set_log(message)
+            else:  # pragma: no cover - legacy stub dialogs in tests
+                self._segmentation_progress.setLabelText(message)
         self._window.statusbar.showMessage(message)
 
     def _on_finished(self, result):

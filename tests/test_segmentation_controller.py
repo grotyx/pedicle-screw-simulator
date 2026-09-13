@@ -1,10 +1,7 @@
 """Focused SegmentationController tests for the final fix-wave batch C findings.
 
-Builds its own minimal ``ui_main_window``/``isolated_qsettings`` fixtures
-(mirroring the ones in ``tests/test_ui_integration.py``) rather than
-importing them: pytest fixtures re-exported via a plain import shadow their
-own name in every consuming test function, which ruff's pyflakes-derived
-F811/F401 checks (correctly, if unhelpfully) flag as redefinitions.
+``isolated_qsettings``/``ui_main_window`` here are thin shims over
+``tests.conftest`` (kept so old imports keep working).
 """
 
 import logging
@@ -18,42 +15,23 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("SimpleITK")
 
 import SimpleITK as sitk
-from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 
 import src.controllers.segmentation_controller as seg_controller_module
-import src.ui.main_window as main_window_module
 from src.core.totalseg_integration import SegmentationRunResult
-from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
+from tests.conftest import make_isolated_qsettings, make_ui_main_window
 
 
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
-    """Redirect MainWindow's QSettings into temp INI files."""
-    directory = tmp_path / "qsettings"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    def factory(organization="Default", application="App", *_args, **_kwargs):
-        path = directory / f"{organization}-{application}.ini"
-        return QSettings(str(path), QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_module, "QSettings", factory)
-    # app_settings() only checks the legacy scope once per process; reset
-    # that guard so each test's migration behavior is independent.
-    monkeypatch.setattr(main_window_module, "_migrated", False)
-    return factory
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_isolated_qsettings(tmp_path, monkeypatch)
 
 
 @pytest.fixture
 def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
-    """Build MainWindow with lightweight viewer stubs."""
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "soft_light")
-
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
-    return window
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_ui_main_window(monkeypatch, qtbot, isolated_qsettings)
 
 
 def _create_test_image():

@@ -1,9 +1,7 @@
 """PlanController tests for the code-review fix wave (F8).
 
-Builds its own ``ui_main_window``/``isolated_qsettings`` fixtures (mirroring
-those in ``tests/test_ui_integration.py``) rather than importing them: a pytest
-fixture re-exported through a plain import shadows its own name in every
-consuming test function, which ruff's pyflakes checks flag as a redefinition.
+``isolated_qsettings``/``ui_main_window`` here are thin shims over
+``tests.conftest`` (kept so old imports keep working).
 """
 
 import json
@@ -17,40 +15,22 @@ pytest.importorskip("pytestqt")
 pytest.importorskip("SimpleITK")
 
 import SimpleITK as sitk
-from PyQt6.QtCore import QSettings
-from PyQt6.QtWidgets import QApplication
 
 import src.controllers.plan_controller as plan_controller_module
-import src.ui.main_window as main_window_module
 from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
-from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
+from tests.conftest import make_isolated_qsettings, make_ui_main_window
 
 
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
-    """Redirect MainWindow's QSettings into temp INI files."""
-    directory = tmp_path / "qsettings"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    def factory(organization="Default", application="App", *_args, **_kwargs):
-        path = directory / f"{organization}-{application}.ini"
-        return QSettings(str(path), QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_module, "QSettings", factory)
-    monkeypatch.setattr(main_window_module, "_migrated", False)
-    return factory
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_isolated_qsettings(tmp_path, monkeypatch)
 
 
 @pytest.fixture
 def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
-    """Build MainWindow with lightweight viewer stubs."""
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "soft_light")
-
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
-    return window
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_ui_main_window(monkeypatch, qtbot, isolated_qsettings)
 
 
 class _ProgressStub:

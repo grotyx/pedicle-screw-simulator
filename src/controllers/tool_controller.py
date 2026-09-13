@@ -662,20 +662,106 @@ class ToolController:
         )
 
     def remove_selected_screw(self):
-        """Remove selected screw from list, tool state, 3D, and 2D views."""
-        row = self._window.screw_list_widget.currentRow()
-        if row < 0:
+        """Remove selected screw(s) from list, tool state, 3D, and 2D views.
+
+        Multi-select aware: every selected row is removed in one undoable
+        batch (see :meth:`remove_screws_at_rows`). A single selection keeps
+        the old behaviour exactly, including the status text.
+        """
+        rows = self._selected_screw_rows()
+        if not rows:
             self._window.statusbar.showMessage("Select a screw to remove")
             return
+        removed = self.remove_screws_at_rows(rows)
+        if removed == 1:
+            self._window.statusbar.showMessage("Selected screw removed")
+        else:
+            self._window.statusbar.showMessage(f"{removed} screws removed")
 
+    def _selected_screw_rows(self) -> list:
+        """Selected screw rows, current row included, in ascending order."""
+        table = self._window.screw_list_widget
+        rows = set()
+        try:
+            for index in table.selectedIndexes():
+                rows.add(int(index.row()))
+        except Exception:  # pragma: no cover - stub tables in tests
+            pass
+        current = table.currentRow()
+        if current is not None and int(current) >= 0:
+            rows.add(int(current))
+        count = len(self.screw_tool.get_screws())
+        rows = sorted(row for row in rows if 0 <= row < count)
+        if not rows and current is not None and int(current) >= 0:
+            # A stale selection (row kept, screws gone): let the caller
+            # report "select a screw" rather than silently doing nothing.
+            return []
+        return rows
+
+    def remove_screws_at_rows(self, rows) -> int:
+        """Remove screws at ``rows`` as one undoable batch; return the count."""
+        rows = sorted({int(row) for row in rows})
+        screws = self.screw_tool.get_screws()
+        rows = [row for row in rows if 0 <= row < len(screws)]
+        if not rows:
+            return 0
+        removed = [screws[row] for row in rows]
         edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
         if edit_controller is not None:
-            edit_controller.on_screw_removed(row)
-        self._window._screw_mpr_ctrl.on_screw_removed(row)
+            for row in rows:
+                edit_controller.on_screw_removed(row)
+        self._window._screw_mpr_ctrl.on_screws_removed(rows)
 
-        self.screw_tool.remove_screw(row)
+        for row in sorted(rows, reverse=True):
+            self.screw_tool.remove_screw(row)
 
-        # Rebuild every index-linked view so later viewport picks remain correct.
+        self._rebuild_screw_views(keep_row=min(rows))
+        if edit_controller is not None:
+            edit_controller.refresh_controls()
+
+        self._push_screw_undo(removed, rows)
+        return len(rows)
+
+    def _push_screw_undo(self, removed, rows) -> None:
+        """Remember one removal batch for :meth:`undo_remove_screws`."""
+        stack = getattr(self, "_screw_undo_stack", None)
+        if stack is None:
+            stack = self._screw_undo_stack = []
+        stack.append((list(removed), list(rows)))
+        del stack[:-20]
+
+    def undo_remove_screws(self) -> bool:
+        """Restore the last removed batch; ``False`` when the stack is empty."""
+        stack = getattr(self, "_screw_undo_stack", None)
+        if not stack:
+            self._window.statusbar.showMessage("Nothing to undo")
+            return False
+        removed, rows = stack.pop()
+        for screw, row in sorted(
+            zip(removed, rows, strict=True), key=lambda pair: pair[1]
+        ):
+            self._insert_screw_at(screw, row)
+        self._rebuild_screw_views(keep_row=min(rows) if rows else 0)
+        edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+        if edit_controller is not None:
+            edit_controller.refresh_controls()
+        self._window.statusbar.showMessage(
+            "Restored 1 screw" if len(removed) == 1 else f"Restored {len(removed)} screws"
+        )
+        return True
+
+    def _insert_screw_at(self, screw, row: int) -> None:
+        """Insert one screw at ``row`` in the model (views rebuilt by caller)."""
+        insert = getattr(self.screw_tool, "insert_screw", None)
+        if callable(insert):
+            insert(int(row), screw)
+        else:  # pragma: no cover - older ScrewTool surface
+            screws = self.screw_tool.get_screws()
+            screws.insert(max(0, min(int(row), len(screws))), screw)
+            self.screw_tool.set_screws(screws)
+
+    def _rebuild_screw_views(self, keep_row: int = 0) -> None:
+        """Rebuild every index-linked screw view so viewport picks stay correct."""
         screws = self.screw_tool.get_screws()
         self._window.viewer_3d.clear_screws()
         self._screw_actors.clear()
@@ -693,13 +779,8 @@ class ToolController:
             self._add_screw_to_list(screw)
         if screws:
             self._window.screw_list_widget.setCurrentRow(
-                min(row, len(screws) - 1)
+                min(max(int(keep_row), 0), len(screws) - 1)
             )
-
-        if edit_controller is not None:
-            edit_controller.refresh_controls()
-
-        self._window.statusbar.showMessage("Selected screw removed")
 
     def _format_measurement_result(self, measurement) -> str:
         """Format measurement result text for status bar."""

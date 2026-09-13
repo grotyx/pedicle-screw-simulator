@@ -162,6 +162,7 @@ class _DummyScrewTool:
         self._analysis_by_level = {}
         self._wall_clearance_mm = None
         self._narrow_pedicle_mm = None
+        self._width_bound_disagreement_mm = None
 
     def add_screw(self, screw):
         self._screws.append(screw)
@@ -174,6 +175,9 @@ class _DummyScrewTool:
 
     def set_narrow_pedicle_mm(self, value):
         self._narrow_pedicle_mm = float(value)
+
+    def set_width_bound_disagreement_mm(self, value):
+        self._width_bound_disagreement_mm = float(value)
 
     def get_screws(self):
         return list(self._screws)
@@ -1089,7 +1093,30 @@ def test_run_planning_shows_a_cancellable_progress_dialog(monkeypatch, tmp_path)
     assert (dialog.minimum(), dialog.maximum()) == (0, 0)   # indeterminate
     dialog.canceled.emit()
     assert ctrl._thread.cancel_requested is True
+    assert "finishing current side" in dialog.labelText().lower()
     ctrl._close_progress_dialog()
+
+
+def test_cancelling_names_the_side_being_finished(controller_with_window):
+    """The cancel note must say the run stops between sides, not mid-screw."""
+    from src.ui.job_dialog import JobDialog
+
+    ctrl, _window = controller_with_window
+    dialog = JobDialog(
+        "Planning screw trajectories...",
+        None,
+        on_cancel=ctrl._on_cancel_requested,
+    )
+    thread = _FinishedThread(generation=ctrl._run_generation)
+    ctrl._thread = thread
+    ctrl._progress_dialog = dialog
+
+    ctrl._on_cancel_requested()
+
+    assert "finishing current side" in dialog.labelText().lower()
+    dialog.close_cleanly()
+    ctrl._progress_dialog = None
+    ctrl._thread = None
 
 
 # ---------------------------------------------------------------------------
@@ -1603,6 +1630,45 @@ def test_a_finished_run_hands_its_thresholds_to_the_screw_tool(
     tool = window._tool_ctrl.screw_tool
     assert tool._wall_clearance_mm == pytest.approx(1.0)
     assert tool._narrow_pedicle_mm == pytest.approx(6.5)
+
+
+def test_a_finished_run_hands_its_bound_threshold_to_the_screw_tool(
+    controller_with_window,
+):
+    """The narrow verdict's disagreement rule must follow the plan too."""
+    from src.core.planner_config import PlannerConfig
+
+    ctrl, window = controller_with_window
+    window.planner_config_value = PlannerConfig(width_bound_disagreement_mm=2.5)
+
+    ctrl._on_finished(_current_thread(ctrl), [_planned()])
+
+    assert window._tool_ctrl.screw_tool._width_bound_disagreement_mm == pytest.approx(
+        2.5
+    )
+
+
+def test_planning_thread_reports_a_non_axis_aligned_mask_instead_of_crashing():
+    """W1's identity-direction guard surfaces as an error signal, not a crash."""
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+
+    mask = sitk.Image([2, 2, 2], sitk.sitkUInt8)
+    mask.SetDirection((0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0))
+    thread = module._PlanningThread(
+        mask,
+        sitk.Image([2, 2, 2], sitk.sitkInt16),
+        [28],
+    )
+    errors = []
+    thread.error.connect(errors.append)
+
+    thread.run()
+
+    assert errors
+    assert "not axis-aligned" in errors[0]
+    assert "LPS identity" in errors[0]
 
 
 def test_reset_state_restores_the_panel_thresholds(controller_with_window):

@@ -11,8 +11,8 @@ import threading
 from functools import partial
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtWidgets import QMessageBox
 
 from src.core.auto_screw_planner import (
     AutoScrewPlanner,
@@ -79,15 +79,35 @@ class _PlanningThread(QThread):
     def run(self):
         try:
             self.progress.emit("Analyzing vertebral pedicles...")
-            analyzer = PedicleAnalyzer(
-                self._mask, self._ct, pedicle_mask=self._pedicle_mask
-            )
+            try:
+                analyzer = PedicleAnalyzer(
+                    self._mask, self._ct, pedicle_mask=self._pedicle_mask
+                )
+            except ValueError as exc:
+                # W1's identity-direction guard: a mask off the LPS grid
+                # cannot be analysed without reorienting it, and silently
+                # reorienting would move the geometry every screw is measured
+                # against.  Say what to do instead and stop.
+                self.error.emit(
+                    "Segmentation mask is not axis-aligned "
+                    "(LPS identity required); re-run segmentation"
+                    f": {exc}"
+                )
+                return
             # Levels within reach of a selected one but not themselves
             # selected are analysed too, purely so a rough selected fit has a
             # trusted neighbour to borrow from -- they are never planned.
             available_labels = [v.label for v in analyzer.get_available_vertebrae()]
             context_labels = endplate_context_labels(self._labels, available_labels)
-            all_analyses = analyzer.analyze_all(labels=self._labels + context_labels)
+            try:
+                all_analyses = analyzer.analyze_all(labels=self._labels + context_labels)
+            except ValueError as exc:
+                self.error.emit(
+                    "Segmentation mask is not axis-aligned "
+                    "(LPS identity required); re-run segmentation"
+                    f": {exc}"
+                )
+                return
             selected_set = set(self._labels)
             analyses = [a for a in all_analyses if a.vertebra.label in selected_set]
             endplate_context = [
@@ -133,7 +153,7 @@ class AutoPlacementController:
         self._window = main_window
         self._thread: Optional[_PlanningThread] = None
         self._last_planned: List[PlannedScrew] = []
-        self._progress_dialog: Optional[QProgressDialog] = None
+        self._progress_dialog = None
         #: Bumped by :meth:`run_planning` and :meth:`reset_state`.  A thread
         #: carries the generation it was started for, so a result that arrives
         #: after the study changed — or after a newer run replaced it — can be
@@ -240,18 +260,20 @@ class AutoPlacementController:
 
         # Modeless: planning is a background job, and the surgeon may want to
         # keep reading the study while it runs.  Indeterminate because the cost
-        # of a pedicle varies too much for a percentage to mean anything.
-        self._progress_dialog = QProgressDialog(
+        # of a pedicle varies too much for a percentage to mean anything; the
+        # thread's per-(level, side) messages move the log tail instead.
+        # Local import: src.ui.__init__ imports MainWindow, which imports
+        # the controllers -- a module-level import here would loop.
+        from src.ui.job_dialog import JobDialog
+
+        self._progress_dialog = JobDialog(
             "Planning screw trajectories...",
-            "Cancel",
-            0,
-            0,
             self._window,
+            on_cancel=self._on_cancel_requested,
         )
-        self._progress_dialog.setWindowModality(Qt.WindowModality.NonModal)
-        self._progress_dialog.setMinimumDuration(0)
-        self._progress_dialog.setRange(0, 0)
-        self._progress_dialog.canceled.connect(self._on_cancel_requested)
+        self._progress_dialog.set_log(
+            f"{len(selected_labels)} level(s) selected"
+        )
         self._progress_dialog.show()
 
         # Every run gets its own token: `finished` is emitted (queued) before
@@ -336,18 +358,21 @@ class AutoPlacementController:
         config = config_of() if callable(config_of) else PlannerConfig()
         screw_tool.set_wall_clearance_mm(config.wall_clearance_mm)
         screw_tool.set_narrow_pedicle_mm(config.narrow_pedicle_mm)
+        set_bound = getattr(screw_tool, "set_width_bound_disagreement_mm", None)
+        if callable(set_bound):
+            set_bound(config.width_bound_disagreement_mm)
 
     def _close_progress_dialog(self):
-        """Close the planning dialog without re-entering the cancel path.
-
-        ``QProgressDialog.close()`` emits ``canceled()``, so the connection has
-        to be dropped first or every normal completion would look like a user
-        cancellation.  Mirrors ``SegmentationController._close_progress_dialog``.
-        """
+        """Close the planning dialog without re-entering the cancel path."""
         dialog = self._progress_dialog
         if dialog is None:
             return
         self._progress_dialog = None
+        close = getattr(dialog, "close_cleanly", None)
+        if callable(close):
+            close()
+            return
+        # Legacy stub dialogs in tests: keep the old disconnect dance.
         try:
             dialog.canceled.disconnect(self._on_cancel_requested)
         except TypeError:   # pragma: no cover - never connected
@@ -359,6 +384,12 @@ class AutoPlacementController:
         if self._thread is None or self._progress_dialog is None:
             return
         self._cancel_requested = True
+        dialog = self._progress_dialog
+        mark = getattr(dialog, "mark_cancelling", None)
+        if callable(mark):
+            # Names the pedicle the worker is still finishing: the run stops
+            # between sides, never mid-trajectory.
+            mark("Cancelling planning (finishing current side)…")
         self._window.auto_screw_status.setText("Cancelling planning...")
         self._thread.request_cancel()
 
@@ -373,6 +404,13 @@ class AutoPlacementController:
         # bar still tracks the run winding down.
         if not self._cancel_requested:
             self._window.auto_screw_status.setText(message)
+        dialog = self._progress_dialog
+        if dialog is not None and not getattr(dialog, "is_cancelling", False):
+            set_log = getattr(dialog, "set_log", None)
+            if callable(set_log):
+                set_log(message)
+            else:  # pragma: no cover - legacy stub dialogs in tests
+                dialog.setLabelText(message)
         self._window.statusbar.showMessage(message)
 
     def _is_stale(self, thread) -> bool:

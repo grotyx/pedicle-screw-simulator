@@ -155,6 +155,8 @@ class PlanController:
 
     def export_stl_dialog(self):
         """Export bone surface as STL file."""
+        from src.ui.job_dialog import JobDialog
+
         vtk_image = self._vm.get_vtk_image()
         if vtk_image is None:
             QMessageBox.warning(
@@ -173,6 +175,13 @@ class PlanController:
         if not path:
             return
 
+        dialog = JobDialog(
+            "Exporting STL...",
+            self._window,
+            cancellable=False,
+        )
+        dialog.set_log(path)
+        dialog.show()
         try:
             self._window.statusbar.showMessage("Exporting STL...")
             QApplication.processEvents()
@@ -182,6 +191,8 @@ class PlanController:
             QMessageBox.critical(
                 self._window, "Export Error", f"Failed to export STL: {e}"
             )
+        finally:
+            dialog.close_cleanly()
 
     def _apply_loaded_plan(self, screws, measurements, planes):
         """Replace current tool data with loaded plan contents."""
