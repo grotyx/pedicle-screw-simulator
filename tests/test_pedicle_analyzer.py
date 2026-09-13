@@ -1773,6 +1773,13 @@ class TestEndplateReferences:
         available = list(range(26, 34))
         assert endplate_context_labels(selected, available) == [28, 29, 32, 33]
 
+    def test_endplate_context_labels_never_offers_s1_or_sacrum(self):
+        """26 (S1) is within two levels of 27 (L5) and would pass the gap
+        rule alone -- this pins the sacrum/S1 exclusion, not just the gap."""
+        selected = [27]
+        available = list(range(25, 34))
+        assert endplate_context_labels(selected, available) == [28, 29]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -72,3 +72,31 @@ def test_header_toggle_is_disabled_until_available(qtbot, monkeypatch):
     viewer.set_isolation_state(False, True)
     assert viewer.show_vertebrae_btn.isEnabled() is True
     assert viewer.show_full_ct_btn.isEnabled() is True
+
+
+def test_full_ct_click_emits_a_single_restore_request(qtbot, monkeypatch):
+    viewer = _build_viewer(qtbot, monkeypatch)
+    viewer.set_isolation_state(True, True)
+
+    emitted = []
+    viewer.isolation_requested.connect(emitted.append)
+
+    qtbot.mouseClick(viewer.show_full_ct_btn, Qt.MouseButton.LeftButton)
+
+    assert emitted == [False]
+    assert viewer.show_full_ct_btn.isChecked() is True
+    assert viewer.show_vertebrae_btn.isChecked() is False
+
+
+def test_toggle_sequence_emits_one_request_per_click(qtbot, monkeypatch):
+    viewer = _build_viewer(qtbot, monkeypatch)
+    viewer.set_isolation_state(False, True)
+
+    emitted = []
+    viewer.isolation_requested.connect(emitted.append)
+
+    qtbot.mouseClick(viewer.show_vertebrae_btn, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(viewer.show_full_ct_btn, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(viewer.show_vertebrae_btn, Qt.MouseButton.LeftButton)
+
+    assert emitted == [True, False, True]

@@ -1902,11 +1902,18 @@ class Viewer3D(QWidget):
         # A new mask invalidates every cached label box, even one at the same
         # Python id as a previous (now-freed) mask.
         self._screw_mpr_label_box_cache = {}
-        # A live cut was built against the old mask's label geometry; drop it
-        # so the next show_screw_mpr (the following Position/rotation step)
-        # rebuilds it against the new mask instead of rendering a stale crop.
+        # A live cut was built against the old mask's label geometry: drop it
+        # and let the slice fall back to full opacity (its alpha was resliced
+        # from the old mask) until the next show_screw_mpr rebuilds both
+        # against the new mask. Normal re-runs do get that show_screw_mpr;
+        # an armed one-click edit, or a re-run that raises in between, do not.
         if self.__dict__.get("_screw_mpr_active", False):
             self._remove_screw_mpr_cut()
+            axes = self.__dict__.get("_screw_mpr_cross_section_axes")
+            if axes is not None:
+                self._update_screw_mpr_slice(
+                    axes, self.__dict__.get("_screw_mpr_window_level"), None
+                )
         self._render_segmentation_actor()
 
     def set_segmentation_label(self, label_value: int) -> None:

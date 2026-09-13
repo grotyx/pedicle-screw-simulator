@@ -518,6 +518,25 @@ def test_screw_mpr_controls_show_only_while_active(ui_main_window, qtbot):
     assert window.screw_axis_mpr_btn.isVisible() is True
 
 
+@pytest.mark.parametrize(
+    "row, count, expected",
+    [
+        (-1, 0, "No screws"),
+        (-1, 1, "1 screw"),
+        (-1, 3, "3 screws"),
+        (0, 3, "Screw 1 of 3"),
+        (2, 3, "Screw 3 of 3"),
+    ],
+)
+def test_format_screw_counter_reports_the_count_when_nothing_is_selected(
+    row, count, expected
+):
+    """Rows can exist with no selection (a loaded plan before it selects one,
+    a cleared selection) -- the header must show the count, not claim there
+    are no screws while the table and workflow bar disagree."""
+    assert main_window_module.MainWindow._format_screw_counter(row, count) == expected
+
+
 def test_edit_menu_starts_the_edit_modes(monkeypatch, qtbot, isolated_qsettings):
     """The Edit menu's actions call ScrewEditController.start/cancel.
 

@@ -247,6 +247,11 @@ class PlanController:
         # trustworthy, and it was being displayed as current.
         tool_ctrl.regrade_all()
 
+        # Match automatic planning: land on the first screw so the Review
+        # header, inspector and 3D highlight show it instead of "No screws".
+        if screws:
+            self._window.screw_list_widget.setCurrentRow(0)
+
     @staticmethod
     def _build_measurement_planes(entries, count: int) -> List[Optional[str]]:
         """Build per-measurement plane list aligned to measurement order."""

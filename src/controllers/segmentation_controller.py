@@ -140,11 +140,15 @@ class SegmentationController:
 
         A threshold fallback has no labels -- isolating on it would show the
         surgeon nothing but the (mostly bone) threshold blob, indistinguishable
-        from a bug -- so it is never treated as available.
+        from a bug -- so it is never treated as available. A TotalSegmentator
+        run that returned a mask with no vertebra label at all is treated the
+        same way: masking on it blanks every MPR view to air and hides the 3D
+        volume, even though the run itself reported success.
         """
         return (
             self._last_segmentation_mask_path is not None
             and self._last_segmentation_method == "totalsegmentator"
+            and bool(self._detected_vertebra_labels)
         )
 
     @property
@@ -658,6 +662,20 @@ class SegmentationController:
                 self._window.statusbar.showMessage(
                     "Cannot isolate vertebrae: run segmentation first"
                 )
+            self._sync_isolation_controls()
+            return False
+
+        if not self._detected_vertebra_labels:
+            # A TotalSegmentator run that returned a mask with no vertebra
+            # label: masking on it would blank every view to -1000 HU under
+            # a status claiming success. The button is disabled for this
+            # case, but the 3D header toggle and the auto-placement flow
+            # call this directly, so the guard has to live here too. Status
+            # bar only, whatever ``show_errors`` says: there is nothing the
+            # surgeon can fix by dismissing a dialog.
+            self._window.statusbar.showMessage(
+                "No vertebrae detected in this segmentation"
+            )
             self._sync_isolation_controls()
             return False
 

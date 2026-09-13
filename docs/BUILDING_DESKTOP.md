@@ -42,7 +42,7 @@ The **Build desktop packages** workflow builds:
 - Windows x64 on `windows-2025`
 - macOS Apple Silicon on `macos-15`
 
-Run it manually from the Actions tab or push a version tag such as `v0.2.2`. Download the resulting artifacts from the completed workflow run.
+Run it manually from the Actions tab or push a version tag such as `v0.2.3`. Download the resulting artifacts from the completed workflow run.
 
 ## Standalone feature scope
 

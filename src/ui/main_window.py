@@ -615,10 +615,16 @@ class MainWindow(QMainWindow):
 
         Used both when a screw is selected and when the table's row count
         changes out from under the current selection, so the two paths
-        cannot disagree on the wording.
+        cannot disagree on the wording. Rows can exist with no selection --
+        a loaded plan before it selects one, a cleared selection -- and that
+        case shows the count rather than claiming there are no screws while
+        the table and workflow bar (see :meth:`_refresh_workflow_bar`) say
+        otherwise.
         """
-        if count <= 0 or current_row < 0:
+        if count <= 0:
             return "No screws"
+        if current_row < 0:
+            return f"{count} screw" if count == 1 else f"{count} screws"
         return f"Screw {current_row + 1} of {count}"
 
     def _refresh_screw_counter(self) -> None:
@@ -1846,7 +1852,8 @@ class MainWindow(QMainWindow):
         """Highlight the list-selected screw in the 3D scene.
 
         A screw becoming selected covers a finished plan run, a pick in an
-        MPR/3D view, prev/next, and a loaded plan -- all of them mean the
+        MPR/3D view, prev/next, and a loaded plan (``_apply_loaded_plan``
+        selects the first screw, like a plan run) -- all of them mean the
         surgeon is now looking at one screw, so the Review step is what
         should be on screen.
         """

@@ -8,7 +8,17 @@ from src.controllers.screw_mpr_controller import (
     SCREW_MPR_CONTROLS_HELP,
     ScrewMPRController,
 )
+from src.core.mpr_geometry import build_screw_mpr_axes
 from src.models.screw import Screw
+
+
+def _elements(matrix):
+    """Flatten a vtkMatrix4x4 into a 16-tuple for element-wise comparison."""
+    return tuple(
+        matrix.GetElement(row, column)
+        for row in range(4)
+        for column in range(4)
+    )
 
 
 class _Viewer:
@@ -165,6 +175,9 @@ class _Viewer3DRecorder:
     def show_screw_mpr(self, oblique_axial, oblique_sagittal, cross_section, **kwargs):
         self.calls.append(
             {
+                "oblique_axial": oblique_axial,
+                "oblique_sagittal": oblique_sagittal,
+                "cross_section": cross_section,
                 "vertebra_label": kwargs.get("vertebra_label"),
                 "window_level": kwargs.get("window_level"),
             }
@@ -715,6 +728,60 @@ def test_exit_clears_the_label_cache_so_a_new_grader_is_resampled():
     assert viewer_3d.calls[-1]["vertebra_label"] == 29
 
 
+@pytest.mark.parametrize(
+    "level, old_grader",
+    [
+        ("", None),
+        ("L5", _Grader(label=27)),
+    ],
+)
+def test_a_replaced_grader_is_resampled_without_leaving_screw_mpr(
+    level, old_grader,
+):
+    """A re-run segmentation replaces the grader without exiting Screw MPR.
+
+    A segmentation re-run swaps the grader via ``screw_tool.set_grader(...)``,
+    then ``ToolController.regrade_all -> refresh_screw -> on_screw_updated``
+    reapplies the active screw without calling ``exit()`` -- the cached label
+    from the old grader (or the old level-name fallback) must not survive
+    that swap.
+    """
+    viewer_3d = _Viewer3DRecorder()
+    controller, window = _make_controller(
+        [_screw(vertebra_level=level)], viewer_3d=viewer_3d, grader=old_grader,
+    )
+    controller.enter()
+    expected_old_label = None if old_grader is None else 27
+    assert viewer_3d.calls[-1]["vertebra_label"] == expected_old_label
+
+    new_grader = _Grader(label=28)
+    window._tool_ctrl.screw_tool.grader = new_grader
+    window._tool_ctrl.screw_tool.screws[0] = _screw(vertebra_level="L4")
+
+    controller.on_screw_updated(0)
+
+    assert controller.is_active is True
+    assert new_grader.calls == [((0.0, 0.0, 0.0), (0.0, 0.0, 40.0))]
+    assert viewer_3d.calls[-1]["vertebra_label"] == 28
+
+
+def test_a_detached_grader_drops_the_cached_label():
+    """SegmentationController.reset_state calls screw_tool.set_grader(None)
+    while Screw MPR stays active."""
+    viewer_3d = _Viewer3DRecorder()
+    grader = _Grader(label=28)
+    controller, window = _make_controller(
+        [_screw(vertebra_level="")], viewer_3d=viewer_3d, grader=grader,
+    )
+    controller.enter()
+    assert viewer_3d.calls[-1]["vertebra_label"] == 28
+
+    window._tool_ctrl.screw_tool.grader = None
+    controller.on_screw_updated(0)
+
+    assert viewer_3d.calls[-1]["vertebra_label"] is None
+
+
 def test_window_level_comes_from_the_panel_sliders():
     viewer_3d = _Viewer3DRecorder()
     controller, _window = _make_controller(
@@ -764,3 +831,38 @@ def test_exit_clears_the_3d_screw_mpr_view():
     controller.exit()
 
     assert viewer_3d.clear_count == 1
+
+
+def test_3d_view_receives_the_same_three_planes_as_the_2d_viewers():
+    """show_screw_mpr's three matrices must match the 2D viewers exactly.
+
+    Guards against swapping the oblique_axial/oblique_sagittal arguments (or
+    passing a different matrix than the 2D viewers got) in _apply_screw's 3D
+    call.
+    """
+    viewer_3d = _Viewer3DRecorder()
+    controller, window = _make_controller([_screw()], viewer_3d=viewer_3d)
+    controller.enter()
+    controller.set_rotation(15.0)
+    controller.nudge_plane("oblique_axial", 2)
+    controller.set_position(75)
+
+    expected = build_screw_mpr_axes(
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 40.0),
+        0.75,
+        rotation_deg=15.0,
+        long_axis_offset_mm=(2.0, 0.0),
+        cross_section_offset_mm=(0.0, 0.0),
+    )
+    call = viewer_3d.calls[-1]
+
+    for name in ("oblique_axial", "oblique_sagittal", "cross_section"):
+        assert _elements(call[name]) == pytest.approx(
+            _elements(getattr(expected, name))
+        )
+    assert call["oblique_axial"] is window.axial_viewer.axes
+    assert call["oblique_sagittal"] is window.sagittal_viewer.axes
+    assert call["cross_section"] is window.coronal_viewer.axes
+    # Not vacuous: the two long-axis planes must actually differ.
+    assert _elements(call["oblique_axial"]) != _elements(call["oblique_sagittal"])

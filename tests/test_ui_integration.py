@@ -761,7 +761,8 @@ def test_segmentation_result_hides_method_and_mask_details(
     assert status.startswith("Segmentation ready")
     assert "Method:" not in status
     assert "Mask:" not in status
-    assert window.vertebra_isolate_btn.isEnabled() is True
+    # _write_mask carries no vertebra label, so there is nothing to isolate.
+    assert window.vertebra_isolate_btn.isEnabled() is False
 
 
 def test_threshold_fallback_disables_auto_planning(
@@ -841,6 +842,39 @@ def test_selected_screw_enters_and_exits_screw_axis_mpr(ui_main_window):
         viewer.review_screw_id is None
         for viewer in window._get_mpr_viewers()
     )
+
+
+def test_entering_screw_mpr_through_the_button_opens_review(ui_main_window):
+    """Entering Screw MPR through the real button (not by poking ``_active``
+    directly) must land the step panel on Review, the way selecting a screw
+    already does."""
+    window = ui_main_window
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-MPR-REVIEW", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw(
+        entry_point=(2.0, 3.0, 4.0),
+        target_point=(8.0, 9.0, 24.0),
+        diameter=6.0,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    window.show_step("Plan")
+    assert window.step_panel.current_step == "Plan"
+
+    window.screw_axis_mpr_btn.click()
+
+    assert window._screw_mpr_ctrl.is_active is True
+    assert window.step_panel.current_step == "Review"
+
+    window.standard_mpr_btn.click()
+
+    assert window._screw_mpr_ctrl.is_active is False
 
 
 def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
@@ -1011,6 +1045,23 @@ def test_loaded_plan_rebuilds_screw_overlays_in_all_mpr_views(ui_main_window):
     for viewer in window._get_mpr_viewers():
         assert viewer.screw_overlays[0]["entry"] == screw.entry_point
         assert viewer.screw_overlays[0]["target"] == screw.target_point
+
+
+def test_loaded_plan_selects_the_first_screw_and_opens_review(ui_main_window):
+    """Loading a plan must match automatic planning: land on the first screw
+    so the Review header, inspector and 3D highlight show it instead of
+    "No screws" and "No screw selected"."""
+    window = ui_main_window
+    window.show_step("Plan")
+    first = Screw(entry_point=(2.0, 3.0, 4.0), target_point=(8.0, 9.0, 24.0), diameter=6.0)
+    second = Screw(entry_point=(12.0, 13.0, 14.0), target_point=(18.0, 19.0, 34.0), diameter=6.0)
+
+    window._plan_ctrl._apply_loaded_plan([first, second], [], [])
+
+    assert window.screw_list_widget.currentRow() == 0
+    assert window.selected_screw_counter.text() == "Screw 1 of 2"
+    assert window.selected_screw_title.text() == "Screw #1"
+    assert window.step_panel.current_step == "Review"
 
 
 def test_loaded_plan_is_regraded_when_a_grader_is_attached(ui_main_window):
@@ -2727,6 +2778,23 @@ def test_screw_counter_refreshes_when_rows_are_added_and_removed(ui_main_window)
         window._tool_ctrl.remove_selected_screw()
 
     assert window.selected_screw_counter.text() == "No screws"
+
+
+def test_screw_counter_shows_the_count_when_rows_exist_but_none_is_selected(
+    ui_main_window,
+):
+    """Rows added without a selection (as a loaded plan used to leave them)
+    must not read "No screws" -- the count is right there in the table."""
+    window = ui_main_window
+    first = Screw((0.0, 0.0, 0.0), (0.0, 0.0, 30.0))
+    second = Screw((5.0, 5.0, 5.0), (5.0, 5.0, 35.0))
+    window._tool_ctrl.screw_tool.add_screw(first)
+    window._tool_ctrl._add_screw_to_list(first)
+    window._tool_ctrl.screw_tool.add_screw(second)
+    window._tool_ctrl._add_screw_to_list(second)
+
+    assert window.screw_list_widget.currentRow() == -1
+    assert window.selected_screw_counter.text() == "2 screws"
 
 
 def test_segmentation_advanced_options_toggle_shows_and_hides_panel(

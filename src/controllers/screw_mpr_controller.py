@@ -57,7 +57,14 @@ class ScrewMPRController:
         # (row, entry, target) -> resolved vertebra label, so wheel steps
         # (Position/rotation/offset only, entry/target unchanged) do not
         # re-sample the grader or re-walk VERTEBRA_LABELS on every notch.
+        # Keyed against the grader identity below, since a re-run
+        # segmentation can replace the grader without the key changing.
         self._label_cache: dict = {}
+        # The grader object _label_cache was resolved against. A re-run
+        # segmentation (set_grader) or reset_state (set_grader(None)) can
+        # replace the grader without leaving Screw MPR, so identity -- not
+        # exit() -- decides whether the cache is still valid.
+        self._label_cache_grader = None
 
     @property
     def is_active(self) -> bool:
@@ -148,11 +155,11 @@ class ScrewMPRController:
         self._selected_index = None
         self._reset_view_state()
         self._sync_rotation_control()
-        # A re-run or replaced segmentation between sessions must not leave a
-        # stale label (from the old grader, or a stale level-name fallback)
-        # cached against unchanged screw geometry; each Screw MPR session
-        # re-resolves from the grader current at enter() time.
+        # The grader-identity check in _vertebra_label_for covers a grader
+        # swap mid-session (a re-run segmentation without leaving Screw MPR);
+        # this clear only frees the entries built during this session.
         self._label_cache.clear()
+        self._label_cache_grader = None
         if was_active:
             for viewer in self._window._get_mpr_viewers():
                 viewer.clear_custom_reslice_axes()
@@ -475,16 +482,20 @@ class ScrewMPRController:
         """
         entry = tuple(float(value) for value in screw.entry_point)
         target = tuple(float(value) for value in screw.target_point)
-        key = (self._selected_index, entry, target)
-        if key in self._label_cache:
-            return self._label_cache[key]
-
-        label: Optional[int] = None
         grader = getattr(
             getattr(getattr(self._window, "_tool_ctrl", None), "screw_tool", None),
             "grader",
             None,
         )
+        if grader is not self._label_cache_grader:
+            self._label_cache.clear()
+            self._label_cache_grader = grader
+
+        key = (self._selected_index, entry, target)
+        if key in self._label_cache:
+            return self._label_cache[key]
+
+        label: Optional[int] = None
         if grader is not None:
             try:
                 label = grader.detect_label(entry, target)
