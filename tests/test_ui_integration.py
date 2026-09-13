@@ -761,7 +761,8 @@ def test_segmentation_result_hides_method_and_mask_details(
     assert status.startswith("Segmentation ready")
     assert "Method:" not in status
     assert "Mask:" not in status
-    assert window.vertebra_isolate_btn.isEnabled() is True
+    # _write_mask carries no vertebra label, so there is nothing to isolate.
+    assert window.vertebra_isolate_btn.isEnabled() is False
 
 
 def test_threshold_fallback_disables_auto_planning(

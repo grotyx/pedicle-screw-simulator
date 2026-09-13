@@ -896,7 +896,10 @@ def test_isolate_keeps_the_checked_level_subset_on_the_mesh(
     isolate_vertebrae used to rebuild the mesh from every detected label
     (including a level the surgeon had just unchecked), which both threw away
     that selection and re-ran marching cubes over the whole mask a second
-    time right after `_on_finished` had already built the same mesh.
+    time right after `_on_finished` had already built the same mesh. The mask
+    carries two levels (27, 28) so unchecking one and re-isolating is
+    observable: a one-label mask could not fail this way even if
+    isolate_vertebrae called show_all_vertebrae.
     """
     window = ui_main_window
     monkeypatch.setattr(
@@ -909,7 +912,7 @@ def test_isolate_keeps_the_checked_level_subset_on_the_mesh(
         progress=_ProgressStub(),
     )
     mask_path = tmp_path / "ts_mask_subset.nii.gz"
-    _write_vertebra_mask(image, mask_path, label=28)
+    _write_two_level_mask(image, mask_path)
     window._on_segmentation_finished(
         SegmentationRunResult(
             success=True,
@@ -919,13 +922,89 @@ def test_isolate_keeps_the_checked_level_subset_on_the_mesh(
         )
     )
     ctrl = window._seg_ctrl
-    # Restore to Full CT, then select a level subset by hand -- as the
-    # checkboxes would -- before toggling back to Vertebrae.
+    assert window.viewer_3d.vertebral_mesh_labels == [27, 28]
+    assert ctrl._vertebrae_isolated is True
+
+    # Restore to Full CT, then uncheck L5 (27) through the checkbox path --
+    # as the surgeon would -- before toggling back to Vertebrae.
     ctrl.restore_full_volume()
-    ctrl.show_vertebrae_by_labels([28])
+    window._vertebra_level_checks[27].setChecked(False)
     assert window.viewer_3d.vertebral_mesh_labels == [28]
 
-    ctrl.isolate_vertebrae()
+    assert ctrl.isolate_vertebrae() is True
 
     assert window.viewer_3d.vertebral_mesh_labels == [28]
     assert window.viewer_3d.volume_visible is False
+
+
+def _write_two_level_mask(image, path):
+    """A mask carrying two real vertebra labels: L5 (27) and L4 (28).
+
+    Splits the volume along z so both labels have their own voxels --
+    ``_write_vertebra_mask`` above only ever writes one label, which cannot
+    tell "isolate keeps my subset" apart from "isolate re-shows everything
+    detected", since both would leave a single label on the mesh.
+    """
+    mask = sitk.Cast(image > 0, sitk.sitkUInt8) * 28
+    arr = sitk.GetArrayFromImage(mask)  # (z, y, x)
+    arr[:4] = 27
+    mask = sitk.GetImageFromArray(arr)
+    mask.CopyInformation(image)
+    sitk.WriteImage(mask, str(path))
+
+
+def test_totalsegmentator_mask_without_vertebrae_cannot_be_isolated(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """A TotalSegmentator run whose mask has no vertebra label is still a
+    success (exit code 0, output file present), but masking on it blanks
+    every MPR view to air -- so it must not be offered as isolatable."""
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-5", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "ts_mask_no_levels.nii.gz"
+    _write_mask(image, mask_path)
+
+    _finish_run(window, ctrl, mask_path, "totalsegmentator", monkeypatch)
+
+    assert ctrl._detected_vertebra_labels == []
+    assert ctrl.isolation_available is False
+    assert window.vertebra_isolate_btn.isEnabled() is False
+    assert window.viewer_3d.isolation_state == (False, False)
+
+
+def test_isolate_refuses_a_mask_without_vertebrae_from_every_caller(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """The disabled button is not the only guard: the 3D header toggle and
+    the auto-placement flow call isolate_vertebrae directly."""
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-ISO-6", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    mask_path = tmp_path / "ts_mask_no_levels_2.nii.gz"
+    _write_mask(image, mask_path)
+    _finish_run(window, ctrl, mask_path, "totalsegmentator", monkeypatch)
+
+    for call in (
+        ctrl.isolate_vertebrae,
+        lambda: ctrl.set_vertebrae_isolated(True),
+        ctrl.ensure_mpr_vertebrae_isolated,
+    ):
+        assert call() is False
+        assert ctrl._vertebrae_isolated is False
+        assert window.viewer_3d.volume_visible is True
+        assert (
+            window.statusbar.currentMessage()
+            == "No vertebrae detected in this segmentation"
+        )
+        assert window.viewer_3d.isolation_state == (False, False)
