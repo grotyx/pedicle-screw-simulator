@@ -10,6 +10,7 @@ trajectory it now has.
 """
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -683,6 +684,10 @@ def test_the_tool_thresholds_default_to_the_planner_config_defaults():
 
     assert screw_tool_module.DEFAULT_WALL_CLEARANCE_MM == config.wall_clearance_mm
     assert screw_tool_module.DEFAULT_NARROW_PEDICLE_MM == config.narrow_pedicle_mm
+    assert (
+        screw_tool_module.DEFAULT_WIDTH_BOUND_DISAGREEMENT_MM
+        == config.width_bound_disagreement_mm
+    )
 
 
 def test_a_zero_clearance_adds_no_cortical_note_on_the_first_drag():
@@ -728,13 +733,25 @@ def test_lowering_the_clearance_retracts_the_note_it_authored():
 
 
 class _WidthAnalysis:
-    """Duck-typed stand-in carrying the two width fields the tool re-reads."""
+    """Duck-typed stand-in carrying the width fields the tool re-reads."""
 
-    def __init__(self, left, right, flags=None, normal=None):
+    def __init__(self, left, right, flags=None, normal=None,
+                 left_bound=None, right_bound=None, volume_mm3=None):
         self.left_pedicle_width = left
         self.right_pedicle_width = right
         self.width_flags = dict(flags or {})
         self.upper_endplate_normal = normal
+        # A missing bound attribute is "no second opinion" (headline
+        # behaviour); an explicit value models the analyser's conservative
+        # floor.  Default the stand-in to bound == width (axial-fallback
+        # shape) unless the test models a cross-checked measurement.
+        if left_bound is not None or right_bound is not None:
+            if left_bound is not None:
+                self.left_width_lower_bound_mm = left_bound
+            if right_bound is not None:
+                self.right_width_lower_bound_mm = right_bound
+        if volume_mm3 is not None:
+            self.vertebra = SimpleNamespace(volume_mm3=volume_mm3)
 
 
 def _two_level_tool():
@@ -990,6 +1007,236 @@ def test_an_ungradable_frame_does_not_erase_the_pedicle_width():
     assert screw.grade == "N/A"
     assert screw.metrics["narrow_pedicle"] is True
     assert screw.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+
+
+# --------------------------------------------------------------------------
+# The narrow verdict reads the analyser's lower bound, like the planner
+# --------------------------------------------------------------------------
+
+
+def test_a_disagreeing_bound_marks_the_side_narrow():
+    """Width 7.0 / bound 3.1 disagrees past the 1.0 mm threshold: narrow."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(7.0, 7.0, left_bound=3.1, right_bound=3.1)}
+    )
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    # The reported width stays the headline measurement...
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(7.0)
+    # ...while the verdict reads the same effective width the planner sizes
+    # from (AutoScrewPlanner._is_narrow_side for the same inputs is True).
+    assert screw.metrics["narrow_pedicle"] is True
+
+
+def test_an_agreeing_bound_leaves_the_side_wide():
+    """Width 7.0 / bound 6.5 agrees within the threshold: not narrow."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(7.0, 7.0, left_bound=6.5, right_bound=6.5)}
+    )
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(7.0)
+    assert screw.metrics["narrow_pedicle"] is False
+
+
+def test_a_missing_bound_falls_back_to_the_headline_width():
+    """A stand-in without the bound attribute behaves headline-only."""
+    tool = _two_level_tool()
+
+    class _NoBound:
+        left_pedicle_width = 7.0
+        right_pedicle_width = 7.0
+        width_flags = {}
+
+    tool.set_analysis_by_level({28: _NoBound()})
+    screw = _narrow_l2_screw(25.0)
+
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert screw.metrics["pedicle_width_mm"] == pytest.approx(7.0)
+    assert screw.metrics["narrow_pedicle"] is False
+
+
+def test_the_tool_verdict_matches_the_planner_verdict_for_bound_cases():
+    """ScrewTool._pedicle_width agrees with AutoScrewPlanner._is_narrow_side."""
+    import SimpleITK as sitk
+
+    from src.core.auto_screw_planner import AutoScrewPlanner
+
+    ct = sitk.Image([4, 4, 4], sitk.sitkInt16)
+    mask = sitk.Image([4, 4, 4], sitk.sitkUInt8)
+    planner = AutoScrewPlanner(ct, mask)
+    tool = _two_level_tool()
+    for width, bound, expected in ((7.0, 3.1, True), (7.0, 6.5, False)):
+        analysis = _WidthAnalysis(width, width, left_bound=bound)
+        analysis.left_pedicle_center = (30.0, 30.0, 25.0)
+        analysis.left_pedicle_axis = (0.0, 1.0, 0.0)
+        analysis.success = True
+        screw = _narrow_l2_screw(25.0)
+        # Bind the analysis through the registry: _pedicle_width reads the
+        # screw's side (left) and the label's analysis.
+        tool.set_analysis_by_level({28: analysis})
+        got_width, got_narrow, _uncertain = tool._pedicle_width(screw, 28)
+        assert got_width == pytest.approx(width)
+        assert got_narrow is expected
+        assert planner._is_narrow_side(analysis, "left") is expected
+
+
+def test_the_disagreement_threshold_follows_the_configured_one():
+    """Pushing a wide threshold stops a disagreeing bound from marking narrow."""
+    tool = _two_level_tool()
+    tool.set_analysis_by_level(
+        {28: _WidthAnalysis(7.0, 7.0, left_bound=3.1, right_bound=3.1)}
+    )
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert screw.metrics["narrow_pedicle"] is True
+
+    tool.set_width_bound_disagreement_mm(5.0)
+    tool.regrade_all()
+
+    assert screw.metrics["narrow_pedicle"] is False
+
+
+# --------------------------------------------------------------------------
+# The regrade forwards the level volume for a level-adaptive body ROI
+# --------------------------------------------------------------------------
+
+
+def test_regrade_forwards_the_level_volume_to_assess_bone_quality(monkeypatch):
+    """The app path gets a level-adaptive ROI; the tool reads no PlannerConfig."""
+    import src.core.bone_quality as bone_quality_module
+    import src.tools.screw_tool as screw_tool_module
+
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(9.2, 9.2, volume_mm3=8000.0)})
+    seen = {}
+    real = bone_quality_module.assess_bone_quality
+
+    def _spy(grader, entry, target, diameter, label, **kwargs):
+        seen.update(kwargs)
+        monkeypatch.undo()
+        try:
+            return real(grader, entry, target, diameter, label, **kwargs)
+        finally:
+            monkeypatch.setattr(
+                bone_quality_module, "assess_bone_quality", _spy
+            )
+
+    monkeypatch.setattr(bone_quality_module, "assess_bone_quality", _spy)
+    # _compute_metrics imports assess_bone_quality from src.core.bone_quality
+    # at call time, so patching the source module suffices.
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert seen.get("volume_mm3") == pytest.approx(8000.0)
+    assert "radii_mm" not in seen
+
+    source = open(screw_tool_module.__file__, encoding="utf-8").read()
+    top_imports = "\n".join(
+        line for line in source.splitlines()
+        if line.startswith("import ") or line.startswith("from ")
+    )
+    assert "PlannerConfig" not in top_imports
+
+
+def test_regrade_without_a_volume_keeps_the_legacy_fixed_roi(monkeypatch):
+    import src.core.bone_quality as bone_quality_module
+
+    tool = _two_level_tool()
+    tool.set_analysis_by_level({28: _WidthAnalysis(9.2, 9.2)})
+    seen = {}
+    real = bone_quality_module.assess_bone_quality
+
+    def _spy(grader, entry, target, diameter, label, **kwargs):
+        seen.update(kwargs)
+        monkeypatch.undo()
+        try:
+            return real(grader, entry, target, diameter, label, **kwargs)
+        finally:
+            monkeypatch.setattr(
+                bone_quality_module, "assess_bone_quality", _spy
+            )
+
+    monkeypatch.setattr(bone_quality_module, "assess_bone_quality", _spy)
+    screw = _narrow_l2_screw(25.0)
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    assert seen.get("volume_mm3") is None
+
+
+# --------------------------------------------------------------------------
+# The secondary Heary direction is recorded without breaking the primary
+# --------------------------------------------------------------------------
+
+
+def _breach_result(primary_offset, secondary_offset, side="left"):
+    """A GradeResult-like whose breach offset spans two axes."""
+    from types import SimpleNamespace
+
+    centre = (30.0, 30.0, 30.0)
+    point = (
+        centre[0] + primary_offset[0] + secondary_offset[0],
+        centre[1] + primary_offset[1] + secondary_offset[1],
+        centre[2] + primary_offset[2] + secondary_offset[2],
+    )
+    return SimpleNamespace(breach_point_lps=point, breach_centre_lps=centre)
+
+
+def test_heary_secondary_is_recorded_when_it_differs():
+    tool = _two_level_tool()
+    # 3 mm medial (-X on left) + 1 mm superior: primary medial, secondary
+    # superior -- the superomedial case heary_direction alone would flatten.
+    result = _breach_result((-3.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    assert tool._heary_label("left", result) == "medial"
+    assert tool._heary_secondary("left", result) == "superior"
+
+
+def test_heary_secondary_is_none_for_a_single_axis_breach():
+    tool = _two_level_tool()
+    result = _breach_result((-3.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert tool._heary_label("left", result) == "medial"
+    assert tool._heary_secondary("left", result) is None
+
+
+def test_heary_secondary_degrades_mediolateral_without_a_side():
+    tool = _two_level_tool()
+    result = _breach_result((-3.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    # Primary degrades medial -> mediolateral on an unknown side...
+    assert tool._heary_label("", result) == "mediolateral"
+    # ...and a lateral secondary would too; superior passes through.
+    assert tool._heary_secondary("", result) == "superior"
+
+
+def test_heary_secondary_reaches_the_metric_bundle_on_regrade():
+    """A breaching screw's metrics carry both directions after regrade."""
+    tool = _two_level_tool()
+    screw = Screw(
+        entry_point=(22.0, 38.0, 25.0),
+        target_point=(22.0, 24.0, 25.0),
+        diameter=6.5,
+        side="left",
+    )
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert screw.breach_distance > 0
+    assert screw.metrics["heary_direction"] in (
+        "medial", "lateral", "mediolateral",
+        "anterior", "posterior", "superior", "inferior", "none",
+    )
+    assert "heary_secondary" in screw.metrics
 
 
 # --------------------------------------------------------------------------

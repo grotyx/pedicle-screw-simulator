@@ -36,6 +36,15 @@ nearest-neighbour call the controller uses, so a mask that is not already on
 that grid still lines up correctly. Any nonzero voxel in the resampled mask
 counts as pedicle.
 
+The planner runs with the shipped :class:`~src.core.planner_config.PlannerConfig`
+defaults, except for ``--accept-grade-b``: the legacy diameter step-down
+requires grade A (zero breach) by default and skips a normal-width side that
+only grades B, matching the optimiser and CBT. Passing the flag sets
+``accept_grade_b=True``, so the legacy loop also accepts grade B (< 2 mm
+breach) and the accepted screw carries a persistent "Grade B accepted"
+warning. The narrow-pedicle path is untouched either way: it is already on
+the smallest implant and slides laterally instead of stepping down.
+
 This is an acceptance aid for a human running the sample study, not a test:
 ``tests/`` never reads ``data/sample``, and this needs a real volume.  Run it
 from the repo root; it is Qt-free.
@@ -45,6 +54,8 @@ Usage::
     python scripts/check_narrow_policy.py --ct data/sample/ct --mask data/sample/mask.nii.gz
     python scripts/check_narrow_policy.py --ct data/sample/ct --mask data/sample/mask.nii.gz \\
         --pedicle-mask data/sample/pedicle_mask.nii.gz
+    python scripts/check_narrow_policy.py --ct data/sample/ct --mask data/sample/mask.nii.gz \\
+        --accept-grade-b
 """
 
 from __future__ import annotations
@@ -114,11 +125,20 @@ def main(argv: list[str] | None = None) -> int:
             "voxel is treated as pedicle."
         ),
     )
+    parser.add_argument(
+        "--accept-grade-b",
+        action="store_true",
+        help=(
+            "Set PlannerConfig.accept_grade_b: the legacy diameter step-down "
+            "also accepts grade B (< 2 mm breach) instead of requiring "
+            "grade A. Off by default; narrow pedicles are unaffected."
+        ),
+    )
     args = parser.parse_args(argv)
 
     ct = _read_volume(args.ct)
     mask = _read_volume(args.mask)
-    config = PlannerConfig()
+    config = PlannerConfig(accept_grade_b=args.accept_grade_b)
 
     pedicle_mask = (
         _load_pedicle_mask(args.pedicle_mask, mask)

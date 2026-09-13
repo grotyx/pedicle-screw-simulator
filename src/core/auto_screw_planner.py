@@ -64,6 +64,21 @@ OPTIMIZER_FALLBACK_WARNING = (
 #: Warning attached to a screw planned from a width the analyser flagged.
 WIDTH_UNCERTAIN_SCREW_WARNING = "Pedicle width uncertain – verify diameter"
 
+#: Warning attached to a legacy screw placed at grade B with the
+#: :attr:`~src.core.planner_config.PlannerConfig.accept_grade_b` opt-in.
+#: Planner-owned: it describes how the screw was *chosen*, so like the narrow
+#: note it is deliberately absent from
+#: :data:`src.tools.screw_tool._DERIVED_WARNING_PREFIXES` and survives a
+#: re-grade verbatim.
+GRADE_B_ACCEPTED_WARNING = "Grade B accepted (< 2 mm breach) — verify on CT"
+
+#: Grade ladder the legacy no-worse guard ranks by.  The medial-breach key's
+#: (medial, total) millimetres cannot see a grade change inside the same
+#: numbers -- but with accept_grade_b on, "B, 1.5 mm then A, 1.8 mm" is a
+#: worse screw at a bigger breach the key alone would bless.  The guard
+#: compares grades first and only consults the key within the same grade.
+_GRADE_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
+
 #: Prefix of the note a narrow pedicle carries.  Planner-owned: it describes how
 #: the screw was *chosen*, not how it grades, so it is deliberately absent from
 #: :data:`src.tools.screw_tool._DERIVED_WARNING_PREFIXES` and survives a
@@ -379,7 +394,9 @@ class AutoScrewPlanner:
         diameter = (
             self.MIN_SCREW_DIAMETER
             if narrow
-            else self._compute_diameter(pedicle_width, vertebra.name)
+            else self._compute_diameter(
+                self._effective_width(analysis, side), vertebra.name
+            )
         )
 
         # 2. Orient pedicle axis so it points posteriorly (+Y in LPS).
@@ -469,7 +486,8 @@ class AutoScrewPlanner:
         # A narrow side has nothing to step down to -- it is already on the
         # smallest implant -- and stepping down would only shrink the screw
         # without buying containment, so it is graded and placed as it stands.
-        while not narrow and grade not in {"A", "B"}:
+        accepted = {"A", "B"} if self.config.accept_grade_b else {"A"}
+        while not narrow and grade not in accepted:
             smaller = self._next_smaller_diameter(diameter)
             if smaller is None:
                 logger.info(
@@ -502,6 +520,13 @@ class AutoScrewPlanner:
                 f"Diameter reduced from {initial_diameter:.1f} to "
                 f"{diameter:.1f} mm for cortical containment"
             )
+        if not narrow and grade == "B" and self.config.accept_grade_b:
+            # The opt-in above is a choice, not a measurement: the grade
+            # itself is recorded by _finalise_screw, but the choice to stop
+            # stepping down at B has to travel with the screw so a re-grade
+            # keeps it -- and so the record never reads as a silently placed
+            # grade-A screw.
+            warnings.append(GRADE_B_ACCEPTED_WARNING)
 
         # 6. Head on the dorsal cortex, tip at the anterior margin -- the same
         #    rule the optimiser applies, so a fallback screw is not the short,
@@ -594,10 +619,12 @@ class AutoScrewPlanner:
         the approach behind it is clear of the vertebra), then the original
         head -- each with its tip extended to :meth:`_longest_length_from`'s
         longest fitting catalogue length, and the first one graded no worse
-        than the baseline (lexicographic ``(medial_breach_mm, breach_mm)``,
-        no tolerance) is returned.  If neither is as safe as the baseline, the
-        validated screw is returned unchanged: a legacy screw is never made
-        less safe in order to make it longer or move its head.
+        than the baseline (``grade`` first -- a B-for-A swap is a worse
+        screw even at a smaller breach -- then lexicographic
+        ``(medial_breach_mm, breach_mm)``, no tolerance) is returned.  If
+        neither is as safe as the baseline, the validated screw is returned
+        unchanged: a legacy screw is never made less safe in order to make it
+        longer or move its head.
         """
         from .trajectory_optimizer import dorsal_approach_clear, seat_on_cortex
 
@@ -610,6 +637,9 @@ class AutoScrewPlanner:
         direction = axis / norm
         label = int(vertebra_label)
 
+        base_grade, _ = self._evaluate_gertzbein_grade(
+            entry, target, diameter, label
+        )
         base_key = self._medial_breach_key(entry, target, diameter, label, side)
 
         heads, _travel = seat_on_cortex(
@@ -629,6 +659,11 @@ class AutoScrewPlanner:
             if length is None:
                 continue
             tip = head + direction * length
+            tip_grade, _ = self._evaluate_gertzbein_grade(
+                head, tip, diameter, label
+            )
+            if _GRADE_ORDER.get(tip_grade, 99) > _GRADE_ORDER.get(base_grade, 99):
+                continue
             if self._medial_breach_key(head, tip, diameter, label, side) <= base_key:
                 return head, tip
 
@@ -835,16 +870,30 @@ class AutoScrewPlanner:
             body_center_lps=body_center,
             isthmus_center_lps=pedicle_center,
             trajectory_threshold=self.config.trajectory_hu_threshold,
+            volume_mm3=float(vertebra.volume_mm3)
+            if vertebra.volume_mm3 > 0.0
+            else None,
         )
         facet_grade, facet_text = facet_violation_grade(
             self._grader, entry, target, diameter, vertebra.label
         )
         if result is not None and result.breach_point_lps is not None:
+            from .breach_classification import heary_directions
+
             heary = heary_direction(
                 result.breach_point_lps, result.breach_centre_lps, side
             )
+            secondary = heary_directions(
+                result.breach_point_lps, result.breach_centre_lps, side
+            )
+            heary_secondary = (
+                secondary[1]
+                if len(secondary) > 1 and secondary[1] != heary
+                else None
+            )
         else:
             heary = "none"
+            heary_secondary = None
         metrics: Dict[str, Any] = {
             "trajectory_mean_hu": quality.trajectory_mean_hu,
             "trajectory_min_hu": quality.trajectory_min_hu,
@@ -860,6 +909,7 @@ class AutoScrewPlanner:
             "narrow_pedicle": bool(narrow),
             "width_uncertain": bool(width_uncertain),
             "heary_direction": heary,
+            "heary_secondary": heary_secondary,
             "facet_grade": facet_grade,
             "facet_text": facet_text,
             # Overwritten by :mod:`.cbt_planner`, which shares this tail.
@@ -1169,7 +1219,9 @@ class AutoScrewPlanner:
         if uncertain:
             warnings.append(WIDTH_UNCERTAIN_SCREW_WARNING)
         narrow = self._is_narrow_side(analysis, side)
-        recommended = self._compute_diameter(pedicle_width, vertebra.name)
+        recommended = self._compute_diameter(
+            self._effective_width(analysis, side), vertebra.name
+        )
         # A narrow side is planned at MIN_SCREW_DIAMETER by policy, not stepped
         # down for containment, so it must not claim it was.
         if not narrow and candidate.diameter < recommended - 1e-9:
@@ -1649,6 +1701,38 @@ class AutoScrewPlanner:
             )
 
     @staticmethod
+    def _side_width_lower_bound(analysis: PedicleAnalysisResult, side: str) -> float:
+        """The analyser's conservative second opinion for this side's width.
+
+        ``0.0`` means the path never produced one -- hand-built analyses in
+        tests, or a stand-in without the attribute -- so the caller falls back
+        to the headline width rather than sizing from "no measurement".
+        """
+        bound = float(getattr(analysis, f"{side}_width_lower_bound_mm", 0.0) or 0.0)
+        return bound if bound > 0.0 else 0.0
+
+    def _effective_width(
+        self,
+        analysis: PedicleAnalysisResult,
+        side: str,
+    ) -> float:
+        """The width the planner sizes this side from.
+
+        The headline width is the larger of the analyser's two estimates
+        (bounding-box extent vs. inscribed diameter); when they disagree by
+        more than :attr:`PlannerConfig.width_bound_disagreement_mm` the
+        measurement is cross-section dependent and the conservative bound is
+        the honest input to the fill-ratio rule.  A zero bound is "no second
+        opinion", not a 0 mm pedicle.
+        """
+        _center, _axis, width = self._get_side_data(analysis, side)
+        width = float(width)
+        bound = self._side_width_lower_bound(analysis, side)
+        if bound > 0.0 and width - bound > self.config.width_bound_disagreement_mm:
+            return bound
+        return width
+
+    @staticmethod
     def _is_width_uncertain(
         analysis: PedicleAnalysisResult,
         side: str,
@@ -1677,10 +1761,17 @@ class AutoScrewPlanner:
         screw and the medial-wall guard are the safe assumption, not the level's
         diameter preset.  :meth:`_is_width_uncertain` separates the second case
         for everything the surgeon reads.
+
+        "The measurement" is the conservative one: a side whose headline width
+        clears the threshold but whose lower bound disagrees with it by more
+        than :attr:`PlannerConfig.width_bound_disagreement_mm` is narrow, the
+        same disagreement that makes :meth:`_effective_width` size from the
+        bound.
         """
         _center, _axis, width = self._get_side_data(analysis, side)
         return (
             float(width) < self.config.narrow_pedicle_mm
+            or self._effective_width(analysis, side) < self.config.narrow_pedicle_mm
             or self._is_width_uncertain(analysis, side)
         )
 

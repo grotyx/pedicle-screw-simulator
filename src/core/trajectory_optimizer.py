@@ -17,12 +17,14 @@ from __future__ import annotations
 import logging
 import math
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
 
+from ..utils.constants import VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD
+from .bone_quality import vertebral_body_hu
 from .planner_config import PlannerConfig
 from .screw_geometry import endplate_slope_deg
 from .screw_grading import ENTRY_ZONE_MM, BatchResult, ScrewGrader
@@ -175,6 +177,149 @@ class OptimizerWeights:
 
 #: Shared immutable default, used as the ``optimize_screw`` weights default.
 DEFAULT_WEIGHTS = OptimizerWeights()
+
+#: Body-mean HU below which the optimiser treats the level as osteoporotic and
+#: re-weights density (see :func:`adaptive_weights_for_bone`).  The threshold
+#: is the literature screen in :mod:`src.utils.constants`, re-exported here so
+#: :func:`optimize_screw` can consume it without importing the whole constants
+#: module at every call site.
+OSTEOPOROSIS_BODY_HU = VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD
+
+#: Density-weight multiplier applied in osteoporotic bone.
+OSTEOPOROSIS_DENSITY_BOOST = 1.5
+
+#: Cap on the boosted density weight: the density objective may grow past
+#: safety in soft bone, but it must stay on the same clipping scale so a safe
+#: corridor still outranks a dense breach.
+OSTEOPOROSIS_DENSITY_CAP = 1.0
+
+#: Extra clearance two screws in one construct must keep between each other
+#: (mm), on top of the sum of their radii.  A construct whose shafts touch can
+#: still read as two contained screws, so the pairing is rejected even though
+#: each screw alone is feasible.
+INTER_SCREW_CLEARANCE_MM = 1.0
+
+
+def adaptive_weights_for_bone(
+    body_mean_hu: Optional[float],
+    weights: OptimizerWeights = DEFAULT_WEIGHTS,
+) -> OptimizerWeights:
+    """Boost the density objective when the vertebral body is osteoporotic.
+
+    ``body_mean_hu`` is the trabecular ROI mean at the level's body centre
+    (:func:`~src.core.bone_quality.vertebral_body_hu`); a value below
+    :data:`OSTEOPOROSIS_BODY_HU` scales ``weights.density`` by
+    :data:`OSTEOPOROSIS_DENSITY_BOOST`, capped at
+    :data:`OSTEOPOROSIS_DENSITY_CAP`.  Missing (``None``/``NaN``) or
+    at/above-threshold values return ``weights`` unchanged, so normodense bone
+    keeps today's ranking exactly.
+    """
+    if body_mean_hu is None:
+        return weights
+    body = float(body_mean_hu)
+    if not np.isfinite(body) or body >= OSTEOPOROSIS_BODY_HU:
+        return weights
+    return replace(
+        weights, density=min(weights.density * OSTEOPOROSIS_DENSITY_BOOST,
+                             OSTEOPOROSIS_DENSITY_CAP)
+    )
+
+
+def body_mean_hu_for_analysis(
+    grader: ScrewGrader,
+    analysis: PedicleAnalysisResult,
+) -> Optional[float]:
+    """Trabecular body-centre mean HU for one analysed vertebra, or ``None``.
+
+    Reuses the grader's cached arrays (no per-call volume copies) and the
+    level's own volume for ROI sizing; returns ``None`` exactly when there is
+    no CT, no body centre, or too few ROI voxels to report.
+    """
+    body_center = getattr(analysis, "vertebral_body_center", None)
+    if body_center is None or grader.ct_image() is None:
+        return None
+    volume = getattr(getattr(analysis, "vertebra", None), "volume_mm3", None)
+    return vertebral_body_hu(
+        None,
+        None,
+        int(analysis.vertebra.label),
+        body_center,
+        volume_mm3=float(volume) if volume else None,
+        ct_array=grader._ct_array,
+        mask_array=grader._mask_array,
+        origin_lps=grader._origin,
+        spacing_mm=grader._spacing,
+    )
+
+
+def _segment_segment_distance(
+    p1: np.ndarray, q1: np.ndarray, p2: np.ndarray, q2: np.ndarray
+) -> float:
+    """Closest distance (mm) between segments ``p1q1`` and ``p2q2`` (LPS).
+
+    Standard parameterisation over the two unit-interval parameters; parallel
+    and degenerate (zero-length) segments fall back to point-to-segment form
+    rather than dividing by a vanishing denominator.
+    """
+    p1 = np.asarray(p1, dtype=np.float64).reshape(3)
+    q1 = np.asarray(q1, dtype=np.float64).reshape(3)
+    p2 = np.asarray(p2, dtype=np.float64).reshape(3)
+    q2 = np.asarray(q2, dtype=np.float64).reshape(3)
+    d1 = q1 - p1
+    d2 = q2 - p2
+    r = p1 - p2
+    a = float(d1 @ d1)
+    e = float(d2 @ d2)
+
+    def point_segment(p: np.ndarray, a0: np.ndarray, b0: np.ndarray) -> float:
+        ab = b0 - a0
+        denom = float(ab @ ab)
+        t = float((p - a0) @ ab / denom) if denom > 1e-12 else 0.0
+        return float(np.linalg.norm(p - (a0 + np.clip(t, 0.0, 1.0) * ab)))
+
+    if a <= 1e-12:
+        return point_segment(p1, p2, q2)
+    if e <= 1e-12:
+        return point_segment(p2, p1, q1)
+    f = float(d2 @ r)
+    c = float(d1 @ r)
+    b = float(d1 @ d2)
+    denom = a * e - b * b
+    s = 0.0 if denom <= 1e-12 else min(max((b * f - c * e) / denom, 0.0), 1.0)
+    t = (b * s + f) / e if e > 1e-12 else 0.0
+    if t < 0.0:
+        t, s = 0.0, min(max(-c / a, 0.0), 1.0) if a > 1e-12 else 0.0
+    elif t > 1.0:
+        t, s = 1.0, min(max((b - c) / a, 0.0), 1.0) if a > 1e-12 else 0.0
+    return float(np.linalg.norm(d1 * s - d2 * t + r))
+
+
+def screws_collide(a: Candidate, b: Candidate,
+                   clearance_mm: float = INTER_SCREW_CLEARANCE_MM) -> bool:
+    """Whether two construct screws violate each other's corridor.
+
+    True when tip-to-tip *or* shaft-to-shaft (segment-segment over the
+    ``(entry, target)`` pairs) distance falls below the sum of the screws'
+    radii plus ``clearance_mm``.
+    """
+    entry_a = np.asarray(a.entry, dtype=np.float64)
+    target_a = np.asarray(a.target, dtype=np.float64)
+    entry_b = np.asarray(b.entry, dtype=np.float64)
+    target_b = np.asarray(b.target, dtype=np.float64)
+    limit = float(a.diameter + b.diameter) / 2.0 + float(clearance_mm)
+    if float(np.linalg.norm(target_a - target_b)) < limit:
+        return True
+    return _segment_segment_distance(entry_a, target_a, entry_b, target_b) < limit
+
+
+def _adjacent_levels(level_a: Optional[int], level_b: Optional[int]) -> bool:
+    """Whether two TotalSegmentator labels are the same level or neighbours."""
+    if level_a is None or level_b is None:
+        return True
+    try:
+        return abs(int(level_a) - int(level_b)) <= 1
+    except (TypeError, ValueError):
+        return True
 
 
 @dataclass
@@ -706,14 +851,51 @@ def generate_candidates(
     shortfall = np.zeros(len(entries), dtype=np.float64)
 
     entry_count = len(entries)
-    per_entry = lengths_catalogue.size
-    entries = np.repeat(np.asarray(entries, dtype=np.float64), per_entry, axis=0)
-    entry_directions = np.repeat(
-        np.asarray(entry_directions, dtype=np.float64), per_entry, axis=0
+    lengths_catalogue = np.sort(np.asarray(lengths_catalogue, dtype=np.float64))
+    shortfall_arr = np.asarray(shortfall, dtype=np.float64)
+    climb_arr = np.asarray(climb, dtype=np.float64)
+    entry_arr = np.asarray(entries, dtype=np.float64)
+    dir_arr = np.asarray(entry_directions, dtype=np.float64)
+
+    # Cheap prunes, cheapest first: ``distances_at_points`` is one map lookup
+    # per point, so reject by reach (one centreline ray-cast per direction)
+    # and by endpoint before any batch grading.  Reach is measured once per
+    # direction along the screw's own centreline; a catalogue length fits
+    # that direction only if its tip still lands inside the label.  (The
+    # anterior margin is *not* part of this test: it is measured from the
+    # tip along the axis by ``anterior_margin_clear`` and by the tip batch,
+    # and folding it in here emptied corridors the scorer still solves --
+    # including the narrow policy's only survivors.)  This expands fitting
+    # lengths per direction instead of tiling all 7 over every trajectory,
+    # so short corridors grade far fewer candidates while a corridor that
+    # holds the longest screw keeps today's exact candidate set.
+    reach_cap = float(lengths_catalogue.max())
+    probe_steps = np.arange(_ANCHOR_STEP_MM, reach_cap + 1e-9, _ANCHOR_STEP_MM)
+    probe = entry_arr[:, None, :] + dir_arr[:, None, :] * probe_steps[None, :, None]
+    probe_out, _ = grader.distances_at_points(probe.reshape(-1, 3), label)
+    inside = (probe_out.reshape(entry_arr.shape[0], probe_steps.size) <= 0.0)
+    exit_idx = np.argmax(~inside, axis=1)
+    all_inside = inside.all(axis=1)
+    reach_mm = np.where(
+        all_inside, reach_cap, np.maximum(probe_steps[exit_idx] - _ANCHOR_STEP_MM, 0.0)
     )
-    shortfall = np.repeat(np.asarray(shortfall, dtype=np.float64), per_entry)
-    climb = np.repeat(np.asarray(climb, dtype=np.float64), per_entry)
-    lengths = np.tile(lengths_catalogue, entry_count)
+    fits = lengths_catalogue[None, :] <= reach_mm[:, None] + 1e-9
+    # A corridor that holds the longest screw keeps every length, so the
+    # default phantom's candidate set is unchanged.
+    fits[reach_mm >= reach_cap - 1e-9] = True
+    if not bool(fits.any()):
+        if diagnostics is not None:
+            diagnostics["surface_shortfall_mm"] = np.zeros(0)
+            diagnostics["cortical_climb_mm"] = np.zeros(0)
+            diagnostics["occluded_entries"] = int((~reachable).sum())
+        return empty
+    sel_entry = np.repeat(np.arange(entry_count), lengths_catalogue.size)[fits.ravel()]
+    sel_len = np.tile(np.arange(lengths_catalogue.size), entry_count)[fits.ravel()]
+    entries = entry_arr[sel_entry]
+    entry_directions = dir_arr[sel_entry]
+    shortfall = shortfall_arr[np.repeat(np.arange(entry_count), lengths_catalogue.size)][fits.ravel()]
+    climb = climb_arr[np.repeat(np.arange(entry_count), lengths_catalogue.size)][fits.ravel()]
+    lengths = lengths_catalogue[sel_len]
     targets = entries + entry_directions * lengths[:, None]
 
     # Cheap prune: neither end outside the vertebra can ever be feasible.
@@ -1000,6 +1182,11 @@ def optimize_screw(
     sensible answer and the extra passes only cost runtime.  Returns ``[]`` when
     no diameter in that window admits a reachable, contained screw.
 
+    ``weights`` are adapted to the level's bone before scoring (see
+    :func:`adaptive_weights_for_bone`): an osteoporotic body centre boosts the
+    density objective so the ranking prefers denser purchase over extra
+    length, while normodense levels keep today's ranking exactly.
+
     ``planner`` reuses a caller's :class:`AutoScrewPlanner` instead of building
     one per pedicle, which copies the whole CT and mask each time.  Only its
     entry-point search and diameter rules are used, so a substitute is
@@ -1023,8 +1210,12 @@ def optimize_screw(
         return []
 
     planner = planner if planner is not None else make_planner(grader, config)
-    recommended = planner._compute_diameter(width, analysis.vertebra.name)
+    recommended = planner._compute_diameter(
+        planner._effective_width(analysis, side), analysis.vertebra.name
+    )
     label = int(analysis.vertebra.label)
+    weights = adaptive_weights_for_bone(body_mean_hu_for_analysis(grader, analysis),
+                                        weights)
 
     if narrow:
         catalogue = [float(planner.MIN_SCREW_DIAMETER)]
@@ -1050,8 +1241,10 @@ def optimize_screw(
         if entries.shape[0] == 0:
             continue
         # Graded from the cortex the head sits on, not from the head: see
-        # ENTRY_ZONE_MM.  The tip test below grades a segment that starts deep
-        # inside the body, so it takes no entry zone.
+        # ENTRY_ZONE_MM.  The tip test grades the survivors only: a candidate
+        # the shaft already rejected cannot come back, so re-grading the whole
+        # sweep only doubles the second batch's cost.  The tip segment starts
+        # deep inside the body, so it takes no entry zone.
         batch = grader.evaluate_batch(
             entries, targets, diameter, label, side=side,
             entry_zone_mm=ENTRY_ZONE_MM,
@@ -1060,9 +1253,44 @@ def optimize_screw(
         norms = np.linalg.norm(directions, axis=1)
         norms[norms <= 1e-12] = 1.0
         directions /= norms[:, None]
-        tip_batch = grader.evaluate_batch(
-            targets - directions * TIP_SEGMENT_MM, targets, diameter, label
+        shaft_feasible = (
+            (batch.medial_breach_mm <= 0.0)
+            & (batch.craniocaudal_breach_mm <= 0.0)
+            & (batch.lateral_breach_mm <= config.narrow_lateral_breach_mm + 1e-9)
+            if narrow
+            else (batch.breach_mm <= 0.0)
+            & (batch.min_wall_mm >= config.wall_clearance_mm)
         )
+        shaft_feasible &= (np.isfinite(batch.mean_hu)) | (grader.ct_image() is None)
+        tip_rows = np.flatnonzero(shaft_feasible)
+        if tip_rows.size == entries.shape[0]:
+            # No cut: the old code graded every row, so keep one full call
+            # and byte-identical numbers instead of scattering them.
+            tip_batch = grader.evaluate_batch(
+                targets - directions * TIP_SEGMENT_MM, targets, diameter, label
+            )
+        elif tip_rows.size:
+            tip_full = np.full(entries.shape[0], np.inf, dtype=np.float64)
+            tip_wall = np.full(entries.shape[0], -np.inf, dtype=np.float64)
+            tip_batch = grader.evaluate_batch(
+                targets[tip_rows] - directions[tip_rows] * TIP_SEGMENT_MM,
+                targets[tip_rows], diameter, label,
+            )
+            tip_full[tip_rows] = tip_batch.breach_mm
+            tip_wall[tip_rows] = tip_batch.min_wall_mm
+            tip_batch = BatchResult(
+                breach_mm=tip_full,
+                min_wall_mm=tip_wall,
+                mean_hu=np.full(entries.shape[0], np.nan),
+                min_hu=np.full(entries.shape[0], np.nan),
+            )
+        else:
+            tip_batch = BatchResult(
+                breach_mm=np.full(entries.shape[0], np.inf),
+                min_wall_mm=np.full(entries.shape[0], -np.inf),
+                mean_hu=np.full(entries.shape[0], np.nan),
+                min_hu=np.full(entries.shape[0], np.nan),
+            )
         ranked = score_candidates(
             batch, entries, targets, lengths, diameter, analysis, side, config, weights,
             tip_batch=tip_batch,
@@ -1231,6 +1459,15 @@ def optimize_construct(
     neither alignment term can ever buy a materially worse screw.  Levels are
     only ever compared against the same side's screws; the other side's terms
     are constant for that screw and cannot change the choice.
+
+    Two screws on adjacent levels (same level or neighbours by their
+    TotalSegmentator labels, every pair when the labels are unknown) must also
+    keep clear of each other: any pairing whose tip-to-tip *or* shaft-to-shaft
+    distance (segment-segment over the ``(entry, target)`` pairs) falls below
+    the sum of the screws' radii plus :data:`INTER_SCREW_CLEARANCE_MM` is
+    rejected, even when each screw alone is feasible.  The descent only ever
+    moves to a collision-free candidate, starting from the per-screw bests, so
+    a screw with no clean alternative keeps its best rather than vanishing.
     """
     chosen: Dict[Tuple[str, str], Candidate] = {}
     eligible: Dict[Tuple[str, str], List[Candidate]] = {}
@@ -1259,13 +1496,41 @@ def optimize_construct(
             rod / ROD_TOLERANCE_MM + spread / CONVERGENCE_TOLERANCE_DEG
         )
 
+    def collides(key: Tuple[str, str], candidate: Candidate) -> bool:
+        for other, current in chosen.items():
+            if other == key:
+                continue
+            level_a = None if levels is None else levels.get(key)
+            level_b = None if levels is None else levels.get(other)
+            if not _adjacent_levels(level_a, level_b):
+                continue
+            if screws_collide(candidate, current):
+                return True
+        return False
+
     for _ in range(_CONSTRUCT_MAX_PASSES):
         changed = False
         for key in list(chosen):
             side = key[1]
             best_candidate = chosen[key]
+            if collides(key, best_candidate):
+                # A colliding start is infeasible, not a cost to beat: take
+                # the best clean alternative even if it scores lower.
+                alts = [c for c in eligible[key] if not collides(key, c)]
+                if alts:
+                    best_candidate = min(
+                        alts,
+                        key=lambda c: (
+                            -c.score + alignment_cost(side, key, c), -c.score,
+                        ),
+                    )
+                    chosen[key] = best_candidate
+                    changed = True
+                continue
             best_cost = -best_candidate.score + alignment_cost(side, key, best_candidate)
             for candidate in eligible[key]:
+                if collides(key, candidate):
+                    continue
                 cost = -candidate.score + alignment_cost(side, key, candidate)
                 if cost < best_cost - 1e-12:
                     best_cost, best_candidate = cost, candidate

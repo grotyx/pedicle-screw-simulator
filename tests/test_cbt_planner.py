@@ -416,3 +416,25 @@ def test_plan_all_traditional_trajectory_is_labelled_traditional():
     assert screws
     for screw in screws:
         assert screw.metrics["trajectory_type"] == "traditional"
+
+
+def test_cbt_grades_the_whole_shaft_without_an_entry_zone():
+    """CBT buys purchase from the pars, so no entry length is excused."""
+    from src.core import cbt_planner
+
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    seen = []
+    real = grader.evaluate_batch
+    grader.evaluate_batch = (                                   # type: ignore[method-assign]
+        lambda e, t, d, label, **kwargs: (
+            seen.append(kwargs.get("entry_zone_mm", 0.0)),
+            real(e, t, d, label, **kwargs),
+        )[1]
+    )
+
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, PlannerConfig(trajectory="cbt"))
+
+    assert screw is not None
+    assert seen and all(zone == 0.0 for zone in seen)
+    assert "entry_zone" in cbt_planner.plan_cbt_screw.__doc__

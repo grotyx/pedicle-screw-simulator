@@ -147,14 +147,32 @@ def test_buried_entry_on_arch_phantom_is_rejected():
     that pocket -- a drill would have to go through the lamina and cross the
     pocket to get there.  :func:`dorsal_approach_clear` discards those heads;
     this used to be caught only by proxy, through the burial bound.
+
+    Bound-based sizing starts a step smaller than the headline width once
+    did (9.0 mm measures with a 7.2 mm lower bound, so the recommendation is
+    5.5 mm, not 6.5 mm), and a 5.0 mm screw fits where nothing at 6.0 mm
+    did -- so this phantom now plans.  Whatever comes back must still be
+    reachable: no head under the lamina, no breach anywhere.
     """
+    from src.core.trajectory_optimizer import dorsal_approach_clear
+
     ct, mask, analysis = _setup(with_arch=True)
     grader = ScrewGrader(mask, ct)
     diagnostics = {}
     generate_candidates(grader, analysis, "left", PlannerConfig(), diagnostics=diagnostics)
 
     assert diagnostics["occluded_entries"] > 0
-    assert optimize_screw(grader, analysis, "left", PlannerConfig()) == []
+    ranked = optimize_screw(grader, analysis, "left", PlannerConfig())
+    assert ranked
+    for candidate in ranked:
+        direction = (candidate.target - candidate.entry) / candidate.length
+        assert bool(
+            dorsal_approach_clear(
+                grader, candidate.entry[None, :], direction[None, :], LABEL
+            )[0]
+        )
+        assert candidate.breach_mm == 0.0
+        assert candidate.medial_breach_mm == 0.0
 
 
 def test_best_candidate_reaches_the_posterior_cortex():
@@ -196,7 +214,7 @@ def test_optimizer_bounds_runtime_and_caps_diameter_step_down():
     # runtime is ~3.2 s locally and a shared CI runner is slower still.
     assert elapsed <= 10.0, f"optimize_screw took {elapsed:.2f} s"
     assert len(set(tried)) == MAX_DIAMETER_STEPS + 1
-    assert sorted(set(tried), reverse=True) == [6.5, 6.0, 5.5]
+    assert sorted(set(tried), reverse=True) == [5.5, 5.0, 4.5]
 
 
 def test_tip_margin_rejects_trajectories_without_anterior_clearance():
@@ -302,11 +320,41 @@ def test_diameter_steps_down_when_recommendation_does_not_fit():
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
     planner = make_planner(grader, PlannerConfig())
-    recommended = planner._compute_diameter(analysis.left_pedicle_width, analysis.vertebra.name)
-    assert recommended == 6.5
+    recommended = planner._compute_diameter(
+        planner._effective_width(analysis, "left"), analysis.vertebra.name
+    )
+    assert recommended == 5.5
     best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
-    assert best.diameter == 6.0
-    assert "Diameter reduced from 6.5 to 6.0 mm for cortical containment" in best.warnings
+    assert best.diameter == 5.5
+    assert best.breach_mm == 0.0
+
+
+def test_optimizer_sizes_from_the_lower_bound(monkeypatch):
+    """A disagreeing bound shrinks the recommendation the optimiser starts from."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig()
+    planner = make_planner(grader, config)
+    analysis.left_pedicle_width = 7.0
+    analysis.left_width_lower_bound_mm = 3.1
+
+    assert planner._effective_width(analysis, "left") == pytest.approx(3.1)
+    recommended = planner._compute_diameter(3.1, analysis.vertebra.name)
+    assert recommended == pytest.approx(4.0)
+
+    seen = []
+    real_compute = planner._compute_diameter
+    monkeypatch.setattr(
+        planner,
+        "_compute_diameter",
+        lambda width, name: (seen.append(float(width)), real_compute(width, name))[1],
+    )
+    ranked = optimize_screw(grader, analysis, "left", config, planner=planner)
+
+    assert seen
+    assert all(w == pytest.approx(3.1) for w in seen)
+    assert ranked
+    assert ranked[0].diameter <= 4.0 + 1e-9
 
 
 def test_right_side_convergence_is_mirrored():
@@ -1189,3 +1237,243 @@ def test_keep_longest_per_trajectory_drops_the_shorter_siblings():
     assert sorted(c.length for c in kept) == [35.0, 45.0]
     # Best first, among what survived.
     assert [c.score for c in kept] == sorted((c.score for c in kept), reverse=True)
+
+
+# ------------------------------------------------- cost-cut shape guards
+def test_overlong_catalogue_lengths_are_prefiltered():
+    """Short corridors expand only fitting lengths, not the whole catalogue."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig()
+
+    entries, targets, lengths = generate_candidates(grader, analysis, "left", config)
+
+    assert lengths.size > 0
+    assert set(np.unique(lengths)) < set(config.implant_lengths_mm)
+    solo = generate_candidates(
+        grader, analysis, "left", PlannerConfig(implant_lengths_mm=(35.0,))
+    )[2]
+    assert solo.size > 0 and set(np.unique(solo)) == {35.0}
+    assert lengths.size < solo.size * len(config.implant_lengths_mm)
+    # The endpoint prune is exact: every kept screw starts and ends in bone.
+    entry_out, _ = grader.distances_at_points(entries, LABEL)
+    tip_out, _ = grader.distances_at_points(targets, LABEL)
+    assert bool(((entry_out <= 0.0) & (tip_out <= 0.0)).all())
+
+
+def test_tip_batch_grades_only_shaft_survivors():
+    """The tip re-grade must not cost a second full sweep."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    calls = []
+    real = grader.evaluate_batch
+
+    def counting(entries, targets, diameter, label, side=None, **kwargs):
+        calls.append((len(entries), side))
+        return real(entries, targets, diameter, label, side=side, **kwargs)
+
+    grader.evaluate_batch = counting  # type: ignore[method-assign]
+    ranked = optimize_screw(grader, analysis, "left", PlannerConfig())
+
+    assert ranked
+    shaft = [n for n, side in calls if side is not None]
+    tip = [n for n, side in calls if side is None]
+    assert shaft and tip
+    assert max(tip) < max(shaft)
+
+
+def test_tip_subset_matches_direct_tip_grading():
+    """Survivors' tips still meet the anterior rule when graded directly."""
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig()
+
+    ranked = optimize_screw(grader, analysis, "left", config, top_k=3)
+
+    assert ranked
+    margin = config.wall_clearance_mm  # anterior_clear path: tip needs wall only
+    for candidate in ranked:
+        direction = (candidate.target - candidate.entry) / candidate.length
+        tip = grader.evaluate_batch(
+            (candidate.target - direction * TIP_SEGMENT_MM)[None, :],
+            candidate.target[None, :],
+            candidate.diameter,
+            LABEL,
+        )
+        assert tip.breach_mm[0] <= 0.0
+        assert tip.min_wall_mm[0] >= margin - 1e-6
+        clear = anterior_margin_clear(
+            grader, candidate.target[None, :], direction[None, :],
+            LABEL, config.anterior_margin_mm,
+        )
+        assert bool(clear[0])
+
+
+# ------------------------------------------------- osteoporosis adaptation
+def test_osteoporotic_body_boosts_density_weight():
+    from src.core.trajectory_optimizer import adaptive_weights_for_bone
+    from src.utils import constants as c
+
+    base = OptimizerWeights()
+    assert adaptive_weights_for_bone(None, base) is base
+    assert adaptive_weights_for_bone(float("nan"), base) is base
+    assert (
+        adaptive_weights_for_bone(c.VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD, base)
+        is base
+    )
+    assert (
+        adaptive_weights_for_bone(
+            c.VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD + 1.0, base
+        )
+        is base
+    )
+    boosted = adaptive_weights_for_bone(
+        c.VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD - 1.0, base
+    )
+    assert boosted.density == pytest.approx(base.density * 1.5)
+    assert boosted.safety == base.safety
+    assert boosted.length == base.length
+    capped = adaptive_weights_for_bone(50.0, OptimizerWeights(density=0.9))
+    assert capped.density == pytest.approx(1.0)
+
+
+def test_osteoporotic_weights_prefer_denser_trajectory():
+    """At equal safety the boost flips long/sparse to short/dense."""
+    from src.core.trajectory_optimizer import adaptive_weights_for_bone
+
+    _ct, _mask, analysis = _setup()
+    entries = np.array([[60.0, 58.0, 32.0], [60.0, 58.0, 32.0]])
+    targets = np.array([[60.0, 28.0, 32.0], [60.0, 33.0, 32.0]])
+    lengths = np.array([30.0, 25.0])                    # long/sparse, then short/dense
+    batch = BatchResult(
+        breach_mm=np.zeros(2),
+        min_wall_mm=np.array([2.0, 2.0]),
+        mean_hu=np.array([200.0, 215.0]),
+        min_hu=np.array([200.0, 215.0]),
+    )
+    args = (batch, entries, targets, lengths, 6.0, analysis, "left", PlannerConfig())
+    plain = score_candidates(*args, OptimizerWeights())
+    boosted = score_candidates(
+        *args, adaptive_weights_for_bone(100.0, OptimizerWeights())
+    )
+    assert [c.length for c in plain] == [30.0, 25.0]
+    assert [c.length for c in boosted] == [25.0, 30.0]
+
+
+def _soft_bone_setup():
+    """Phantom with an osteoporotic body and a dense pedicle corridor."""
+    from tests.test_pedicle_analyzer import _make_anatomical_phantom
+
+    mask = _make_anatomical_phantom(with_arch=False)
+    arr = sitk.GetArrayFromImage(mask)
+    zz, yy, xx = np.mgrid[0:arr.shape[0], 0:arr.shape[1], 0:arr.shape[2]]
+    hu = np.where(arr > 0, 100, -50).astype(np.int16)
+    dense = (arr > 0) & (xx >= 56) & (xx <= 64) & (yy >= 44) & (yy < 62)
+    hu[dense] = 400
+    ct = sitk.GetImageFromArray(hu)
+    ct.CopyInformation(mask)
+    analyzer = PedicleAnalyzer(mask)
+    analysis = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+    return ct, mask, analysis
+
+
+def test_soft_bone_phantom_prefers_denser_trajectory():
+    from src.core.bone_quality import vertebral_body_hu
+    from src.utils import constants as c
+
+    ct, mask, analysis = _soft_bone_setup()
+    grader = ScrewGrader(mask, ct)
+    body = vertebral_body_hu(
+        ct, mask, LABEL, np.asarray(analysis.vertebral_body_center)
+    )
+    assert body is not None and body < c.VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD
+
+    dense = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    sparse = optimize_screw(
+        grader, analysis, "left", PlannerConfig(), OptimizerWeights(density=0.0)
+    )[0]
+
+    assert dense.mean_hu >= sparse.mean_hu
+
+
+# ------------------------------------------------- inter-screw collision
+def _colliding_pair_setup():
+    """Two adjacent-level screws whose bests share one shaft line."""
+    from src.core.trajectory_optimizer import Candidate
+
+    def cand(x, score):
+        entry = np.array([x, 30.0, 60.0])
+        return Candidate(
+            entry=entry, target=entry + np.array([0.0, -40.0, 0.0]),
+            length=40.0, diameter=6.0, breach_mm=0.0, min_wall_mm=2.0,
+            mean_hu=300.0, convergence_deg=10.0, craniocaudal_deg=0.0,
+            score=score, components={},
+        )
+
+    per = {
+        ("L3", "left"): [cand(0.0, 1.00), cand(20.0, 0.99)],
+        ("L4", "left"): [cand(0.0, 1.00), cand(20.0, 0.99)],
+    }
+    return per, {("L3", "left"): 29, ("L4", "left"): 28}
+
+
+def test_colliding_construct_pair_is_reranked():
+    from src.core.trajectory_optimizer import (
+        OptimizerWeights,
+        optimize_construct,
+        screws_collide,
+    )
+
+    per, levels = _colliding_pair_setup()
+    chosen = optimize_construct(per, OptimizerWeights(rod=0.0), levels=levels)
+
+    entries = [chosen[k].entry[0] for k in sorted(chosen)]
+    assert not (entries[0] == pytest.approx(0.0) and entries[1] == pytest.approx(0.0))
+    assert not screws_collide(chosen[("L3", "left")], chosen[("L4", "left")])
+    for key, candidate in chosen.items():
+        best = max(c.score for c in per[key])
+        assert candidate.score >= best - 0.10 * abs(best) - 1e-12
+
+
+def test_distant_construct_pair_is_unaffected():
+    from src.core.trajectory_optimizer import (
+        Candidate,
+        OptimizerWeights,
+        optimize_construct,
+    )
+
+    def cand(x, score):
+        entry = np.array([x, 30.0, 60.0])
+        return Candidate(
+            entry=entry, target=entry + np.array([0.0, -40.0, 0.0]),
+            length=40.0, diameter=6.0, breach_mm=0.0, min_wall_mm=2.0,
+            mean_hu=300.0, convergence_deg=10.0, craniocaudal_deg=0.0,
+            score=score, components={},
+        )
+
+    per = {
+        ("L3", "left"): [cand(0.0, 1.00), cand(20.0, 0.95)],
+        ("L4", "left"): [cand(20.0, 1.00), cand(0.0, 0.95)],
+    }
+    levels = {("L3", "left"): 29, ("L4", "left"): 28}
+
+    chosen = optimize_construct(per, OptimizerWeights(rod=0.0), levels=levels)
+
+    assert chosen[("L3", "left")].entry[0] == pytest.approx(0.0)
+    assert chosen[("L4", "left")].entry[0] == pytest.approx(20.0)
+
+
+def test_segment_segment_distance_cases():
+    from src.core.trajectory_optimizer import _segment_segment_distance
+
+    p1 = np.array([0.0, 0.0, 0.0])
+    q1 = np.array([0.0, -40.0, 0.0])
+    assert _segment_segment_distance(
+        p1, q1, np.array([5.0, 0.0, 0.0]), np.array([5.0, -40.0, 0.0])
+    ) == pytest.approx(5.0)
+    assert _segment_segment_distance(
+        p1, q1, np.array([-10.0, -20.0, 0.0]), np.array([10.0, -20.0, 0.0])
+    ) == pytest.approx(0.0)
+    assert _segment_segment_distance(
+        p1, p1, np.array([3.0, 0.0, 0.0]), np.array([3.0, -40.0, 0.0])
+    ) == pytest.approx(3.0)

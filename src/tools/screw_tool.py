@@ -101,6 +101,7 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "trajectory_body_ratio",
     "min_wall_mm",
     "heary_direction",
+    "heary_secondary",
     "facet_grade",
     "facet_text",
     "medial_breach_mm",
@@ -118,14 +119,16 @@ _HIGH_CONVERGENCE_ANGLE_DEG = 30.0
 #: :class:`~src.core.planner_config.PlannerConfig`'s own defaults rather than
 #: importing it: constructing a ``PlannerConfig`` pulls in the optimiser (for
 #: its default weights), which this module has no other reason to load.
-#: ``tests/test_screw_tool.py`` asserts the two stay equal.  Whoever owns the
+#: ``tests/test_screw_tool.py`` asserts the three stay equal.  Whoever owns the
 #: active config -- the planning controller after a run, the main window
 #: whenever the Planning-parameters panel changes -- pushes the real values in
-#: through :meth:`ScrewTool.set_wall_clearance_mm` and
-#: :meth:`ScrewTool.set_narrow_pedicle_mm`, so a manual edit and an auto screw
-#: are never judged against different numbers.
+#: through :meth:`ScrewTool.set_wall_clearance_mm`,
+#: :meth:`ScrewTool.set_narrow_pedicle_mm` and
+#: :meth:`ScrewTool.set_width_bound_disagreement_mm`, so a manual edit and an
+#: auto screw are never judged against different numbers.
 DEFAULT_WALL_CLEARANCE_MM = 0.0
 DEFAULT_NARROW_PEDICLE_MM = 5.0
+DEFAULT_WIDTH_BOUND_DISAGREEMENT_MM = 1.0
 
 if TYPE_CHECKING:
     from ..core.screw_grading import GradeResult, ScrewGrader
@@ -182,6 +185,12 @@ class ScrewTool:
         # have changed the screw.
         self._wall_clearance_mm = float(DEFAULT_WALL_CLEARANCE_MM)
         self._narrow_pedicle_mm = float(DEFAULT_NARROW_PEDICLE_MM)
+        # Conservative bound-vs-headline disagreement (mm) mirroring
+        # PlannerConfig.width_bound_disagreement_mm.  Pushed in by whoever
+        # owns the active config; see set_width_bound_disagreement_mm.
+        self._width_bound_disagreement_mm = float(
+            DEFAULT_WIDTH_BOUND_DISAGREEMENT_MM
+        )
 
         # Callbacks
         self._on_screw_placed: Optional[Callable[[Screw], None]] = None
@@ -239,6 +248,16 @@ class ScrewTool:
         """
         self._narrow_pedicle_mm = float(value)
 
+    def set_width_bound_disagreement_mm(self, value: float) -> None:
+        """Adopt the active plan's bound-disagreement threshold.
+
+        Same mirroring reason as :meth:`set_narrow_pedicle_mm`: the narrow
+        verdict reads the conservative lower bound whenever it disagrees with
+        the headline width by more than this, exactly like
+        :meth:`AutoScrewPlanner._is_narrow_side`.
+        """
+        self._width_bound_disagreement_mm = max(0.0, float(value))
+
     def _analysis_for(self, label: int) -> Optional[Any]:
         """The analysis for one mask label, from this registry or the grader's."""
         analysis = self._analysis_by_level.get(int(label))
@@ -279,8 +298,12 @@ class ScrewTool:
 
         The verdict mirrors
         :meth:`src.core.auto_screw_planner.AutoScrewPlanner._is_narrow_side`
-        exactly, threshold included, or an edited screw and a planned one would
-        disagree about the same pedicle.  So do the *preconditions*: the
+        exactly -- headline width, conservative lower bound and the
+        disagreement rule between them, threshold included -- or an edited
+        screw and a planned one would disagree about the same pedicle.
+        The *reported* ``pedicle_width_mm`` stays the headline measurement
+        (what the planner stamps), while the verdict reads the same effective
+        width the planner sizes from.  So do the *preconditions*: the
         planner only ever reaches that verdict for a side it actually detected,
         and ``PedicleAnalysisResult`` defaults an undetected side's width to
         ``0.0``.  Reading that default back was the bug -- a manual screw on
@@ -294,7 +317,9 @@ class ScrewTool:
         model it at all -- absent means "this stand-in has nothing to say about
         detection", while a present ``None`` (which the real
         :class:`~src.core.vertebra.PedicleAnalysisResult` always has for an
-        undetected side) means "not found".
+        undetected side) means "not found".  A missing lower-bound attribute
+        likewise means "no second opinion" (headline behaviour), never a 0 mm
+        pedicle.
         """
         side = self._screw_side(screw)
         analysis = self._analysis_for(label)
@@ -315,7 +340,36 @@ class ScrewTool:
         uncertain = bool(
             isinstance(flags, Mapping) and flags.get(side) == "implausible"
         )
-        return width, bool(width < self._narrow_pedicle_mm or uncertain), uncertain
+        narrow = (
+            width < self._narrow_pedicle_mm
+            or self._effective_width_for(analysis, side, width)
+            < self._narrow_pedicle_mm
+            or uncertain
+        )
+        return width, bool(narrow), uncertain
+
+    def _effective_width_for(
+        self, analysis: Any, side: str, width: float
+    ) -> float:
+        """Conservative width the narrow verdict sizes this side from.
+
+        Mirrors :meth:`AutoScrewPlanner._effective_width`: the analyser's
+        ``{side}_width_lower_bound_mm`` second opinion wins when it disagrees
+        with the headline width by more than the active
+        ``width_bound_disagreement_mm``.  A missing/zero bound is "no second
+        opinion", not a 0 mm pedicle.  Reads the disagreement threshold from
+        :meth:`set_width_bound_disagreement_mm`, defaulting to the shipped
+        ``PlannerConfig`` value -- without importing it at module scope (see
+        :data:`DEFAULT_WIDTH_BOUND_DISAGREEMENT_MM`).
+        """
+        bound = getattr(analysis, f"{side}_width_lower_bound_mm", 0.0)
+        try:
+            bound = float(bound)
+        except (TypeError, ValueError):
+            return float(width)
+        if bound > 0.0 and float(width) - bound > self._width_bound_disagreement_mm:
+            return bound
+        return float(width)
 
     def set_screw_parameters(
         self,
@@ -631,6 +685,15 @@ class ScrewTool:
         clinical notes a reviewer reads next to a grade have to describe the
         same trajectory the grade does.
 
+        The body-HU ROI is level-adaptive when the registry knows the level's
+        volume: ``analysis.vertebra.volume_mm3`` is forwarded as ``volume_mm3``
+        (``radii_mm`` stays ``None``), so small levels shrink their trabecular
+        ROI exactly like the planner's own call.  Hand-built stand-ins without
+        a vertebra simply keep the legacy fixed ROI.  This module never imports
+        ``PlannerConfig`` at module scope (see :data:`DEFAULT_WALL_CLEARANCE_MM`):
+        only ``assess_bone_quality``'s ``volume_mm3``/``radii_mm`` parameters
+        are used here, no config value is read.
+
         The medial/lateral/craniocaudal split needs to know which side of the
         spine the screw is on.  A screw with no side leaves all four ``None`` —
         "not measured", which is what :meth:`_merge_metrics` writes through, so
@@ -647,12 +710,19 @@ class ScrewTool:
         from ..core.bone_quality import assess_bone_quality
         from ..core.breach_classification import facet_violation_grade, medial_breach_warning
 
+        analysis_for_body = self._analysis_for(result.label)
+        volume_mm3 = getattr(
+            getattr(analysis_for_body, "vertebra", None), "volume_mm3", None
+        )
+        if not isinstance(volume_mm3, (int, float)) or isinstance(volume_mm3, bool):
+            volume_mm3 = None
         quality = assess_bone_quality(
             self._grader,
             screw.entry_point,
             screw.target_point,
             screw.diameter,
             result.label,
+            volume_mm3=volume_mm3,
         )
         facet_grade, facet_text = facet_violation_grade(
             self._grader, screw.entry_point, screw.target_point, screw.diameter, result.label
@@ -698,6 +768,7 @@ class ScrewTool:
             "width_uncertain": width_uncertain,
             **directional,
             "heary_direction": self._heary_label(screw.side, result),
+            "heary_secondary": self._heary_secondary(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
         }
@@ -804,6 +875,37 @@ class ScrewTool:
             result.breach_point_lps, result.breach_centre_lps, "left"
         )
         return "mediolateral" if label in ("medial", "lateral") else label
+
+    @staticmethod
+    def _heary_secondary(side: str, result: "GradeResult") -> Optional[str]:
+        """Secondary breach direction, or ``None`` when absent/unknowable.
+
+        Keeps ``heary_direction`` (and its ``"mediolateral"`` degradation) as
+        the CSV-compatible primary, while recording the next-largest axis from
+        :func:`heary_directions` when it exists and differs -- so a
+        superomedial breach no longer loses its medial component.  The
+        mediolateral degradation path is unchanged: an unknown side degrades
+        a medial/lateral secondary to ``"mediolateral"`` the same way.
+        """
+        from ..core.breach_classification import heary_directions
+
+        if result.breach_point_lps is None:
+            return None
+        known_side = str(side).lower()
+        probe = known_side if known_side in ("left", "right") else "left"
+        directions = heary_directions(
+            result.breach_point_lps, result.breach_centre_lps, probe
+        )
+        if len(directions) < 2:
+            return None
+        secondary = directions[1]
+        if known_side not in ("left", "right") and secondary in (
+            "medial",
+            "lateral",
+        ):
+            secondary = "mediolateral"
+        primary = ScrewTool._heary_label(side, result)
+        return secondary if secondary != primary else None
 
     @staticmethod
     def _screw_side(screw: Screw) -> Optional[str]:
@@ -953,6 +1055,15 @@ class ScrewTool:
             # One fewer head on that rod: the line the others are measured
             # against has moved.
             self._restamp_construct_alignment()
+
+    def insert_screw(self, index: int, screw: Screw) -> None:
+        """Insert a screw at ``index`` (undo path for batch removal).
+
+        Appends when the index is out of range rather than raising: the
+        model the undo restores into may have changed since the removal.
+        """
+        self._screws.insert(max(0, min(int(index), len(self._screws))), screw)
+        self._restamp_construct_alignment()
 
     def clear_screws(self):
         """Remove all screws."""

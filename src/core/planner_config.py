@@ -66,6 +66,22 @@ class PlannerConfig:
     #: Half-width of the hard band the optimiser holds the endplate angle inside
     #: while :attr:`endplate_parallel` is on (degrees).
     endplate_tolerance_deg: float = 10.0
+    #: Containment bar the legacy planner enforces in its diameter step-down.
+    #: The default (``False``) requires grade A (zero breach), matching the
+    #: optimiser's ``breach_mm <= 0`` rule and CBT's shaft-feasibility rule, so
+    #: the same anatomy is held to the same bar on every path.  When ``True``
+    #: the legacy loop also accepts grade B (< 2 mm breach); the accepted
+    #: screw then carries a persistent "Grade B accepted" warning so a
+    #: re-grade keeps the acceptance on the record.  The narrow policy is
+    #: untouched: it is already on the smallest implant and slides laterally
+    #: instead of stepping down, whatever this flag says.
+    accept_grade_b: bool = False
+    #: Conservative floor for pedicle sizing.  The analyser reports both the
+    #: width and the smaller ``width_lower_bound_mm`` second opinion (extent
+    #: vs. inscribed diameter); when the two disagree by more than this the
+    #: measurement is cross-section dependent and the planner sizes from the
+    #: bound, not the headline width.
+    width_bound_disagreement_mm: float = 1.0
     #: Objective weights consumed by the optimiser (ignored in legacy mode).
     weights: "OptimizerWeights" = field(default_factory=_default_weights)
 
@@ -86,6 +102,12 @@ class PlannerConfig:
             raise ValueError("narrow_lateral_breach_mm must be within [0, 6]")
         if not self.implant_lengths_mm or not self.implant_diameters_mm:
             raise ValueError("implant catalogues must not be empty")
+        for key in ("implant_lengths_mm", "implant_diameters_mm"):
+            values = [float(v) for v in getattr(self, key)]
+            if any(b < a - 1e-9 for a, b in zip(values, values[1:], strict=False)):
+                raise ValueError(f"{key} must be sorted in ascending order")
+        if not 0.0 <= self.width_bound_disagreement_mm <= 5.0:
+            raise ValueError("width_bound_disagreement_mm must be within [0, 5]")
         if self.mode not in PLANNER_MODES:
             raise ValueError(f"mode must be one of {PLANNER_MODES}, got {self.mode!r}")
         if self.trajectory not in TRAJECTORY_KINDS:
@@ -99,7 +121,7 @@ class PlannerConfig:
         kwargs = {k: v for k, v in data.items() if k in names}
         for key in ("implant_lengths_mm", "implant_diameters_mm"):
             if key in kwargs:
-                kwargs[key] = tuple(float(v) for v in kwargs[key])
+                kwargs[key] = tuple(sorted(float(v) for v in kwargs[key]))
         for key in ("mode", "trajectory"):
             if key in kwargs:
                 kwargs[key] = str(kwargs[key])
@@ -113,6 +135,19 @@ class PlannerConfig:
             )
         if "endplate_tolerance_deg" in kwargs:
             kwargs["endplate_tolerance_deg"] = float(kwargs["endplate_tolerance_deg"])
+        if "accept_grade_b" in kwargs:
+            raw = kwargs["accept_grade_b"]
+            # QSettings hands bools back as "true"/"false" strings, as with
+            # endplate_parallel above.
+            kwargs["accept_grade_b"] = (
+                raw.strip().lower() in ("true", "1", "yes")
+                if isinstance(raw, str)
+                else bool(raw)
+            )
+        if "width_bound_disagreement_mm" in kwargs:
+            kwargs["width_bound_disagreement_mm"] = float(
+                kwargs["width_bound_disagreement_mm"]
+            )
         if isinstance(kwargs.get("weights"), Mapping):
             from .trajectory_optimizer import OptimizerWeights
 

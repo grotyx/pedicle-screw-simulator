@@ -77,3 +77,52 @@ class TestEndplateOption:
         restored = PlannerConfig.from_mapping(config.to_mapping())
         assert restored.endplate_parallel is False
         assert restored.endplate_tolerance_deg == pytest.approx(7.5)
+
+
+class TestContainmentBar:
+    def test_grade_b_opt_in_defaults_off(self):
+        assert PlannerConfig().accept_grade_b is False
+
+    def test_from_mapping_reads_qsettings_style_booleans(self):
+        assert PlannerConfig.from_mapping({"accept_grade_b": "true"}).accept_grade_b is True
+        assert PlannerConfig.from_mapping({"accept_grade_b": "false"}).accept_grade_b is False
+        assert PlannerConfig.from_mapping({"accept_grade_b": True}).accept_grade_b is True
+
+    def test_new_fields_round_trip(self):
+        config = PlannerConfig(accept_grade_b=True, width_bound_disagreement_mm=2.0)
+        restored = PlannerConfig.from_mapping(config.to_mapping())
+        assert restored.accept_grade_b is True
+        assert restored.width_bound_disagreement_mm == pytest.approx(2.0)
+
+    def test_bound_disagreement_is_validated(self):
+        PlannerConfig(width_bound_disagreement_mm=0.0).validate()
+        PlannerConfig(width_bound_disagreement_mm=5.0).validate()
+        with pytest.raises(ValueError, match="width_bound_disagreement_mm"):
+            PlannerConfig(width_bound_disagreement_mm=5.5).validate()
+        with pytest.raises(ValueError, match="width_bound_disagreement_mm"):
+            PlannerConfig(width_bound_disagreement_mm=-0.1).validate()
+
+
+class TestCatalogueHygiene:
+    def test_from_mapping_sorts_unsorted_catalogues(self):
+        cfg = PlannerConfig.from_mapping(
+            {
+                "implant_diameters_mm": [6.5, 4.0, 5.5, 4.5],
+                "implant_lengths_mm": [45.0, 25.0, 35.0],
+            }
+        )
+        assert list(cfg.implant_diameters_mm) == [4.0, 4.5, 5.5, 6.5]
+        assert list(cfg.implant_lengths_mm) == [25.0, 35.0, 45.0]
+        cfg.validate()
+
+    @pytest.mark.parametrize(
+        "field",
+        ["implant_diameters_mm", "implant_lengths_mm"],
+    )
+    def test_direct_unsorted_construction_raises(self, field):
+        with pytest.raises(ValueError, match="ascending"):
+            PlannerConfig(**{field: (6.5, 4.0, 5.5)}).validate()
+
+    def test_empty_catalogue_still_rejected(self):
+        with pytest.raises(ValueError, match="must not be empty"):
+            PlannerConfig(implant_diameters_mm=()).validate()

@@ -241,6 +241,8 @@ def _make_analysis(
     right_axis: np.ndarray = None,
     left_width: float = 8.0,
     right_width: float = 8.0,
+    left_lower_bound: float = None,
+    right_lower_bound: float = None,
     body_center: np.ndarray = None,
     upper_endplate_normal: np.ndarray = None,
     success: bool = True,
@@ -262,6 +264,12 @@ def _make_analysis(
         right_axis = axis / np.linalg.norm(axis)
     if body_center is None:
         body_center = np.array([30.0, 18.0, 20.0])
+    # The axial-fallback path sets bound == width; mirror that unless the
+    # caller models a cross-checked measurement with a real second opinion.
+    if left_lower_bound is None:
+        left_lower_bound = float(left_width)
+    if right_lower_bound is None:
+        right_lower_bound = float(right_width)
 
     return PedicleAnalysisResult(
         vertebra=vertebra,
@@ -271,6 +279,8 @@ def _make_analysis(
         right_pedicle_axis=right_axis,
         left_pedicle_width=left_width,
         right_pedicle_width=right_width,
+        left_width_lower_bound_mm=left_lower_bound,
+        right_width_lower_bound_mm=right_lower_bound,
         vertebral_body_center=body_center,
         upper_endplate_normal=upper_endplate_normal,
         success=success,
@@ -875,7 +885,9 @@ class TestPlanScrew:
     def test_screw_diameter_respects_pedicle_width(self):
         """Diameter follows the fill ratio once the clearance default is 0 mm."""
         ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", accept_grade_b=True)
+        )
         analysis = _make_analysis(left_width=6.0)
 
         result = planner.plan_screw(analysis, "left")
@@ -887,7 +899,9 @@ class TestPlanScrew:
         monkeypatch,
     ):
         ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", accept_grade_b=True)
+        )
         monkeypatch.setattr(
             planner,
             "_evaluate_gertzbein_grade",
@@ -902,6 +916,99 @@ class TestPlanScrew:
         assert result.gertzbein_grade in {"A", "B"}
         assert result.diameter_mm == pytest.approx(6.5)
         assert any("Diameter reduced" in warning for warning in result.warnings)
+
+    def test_legacy_requires_grade_a_by_default(
+        self,
+        monkeypatch,
+    ):
+        """Default bar matches the optimiser: B keeps stepping down, C skips."""
+        from src.core.auto_screw_planner import GRADE_B_ACCEPTED_WARNING
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        assert planner.config.accept_grade_b is False
+        monkeypatch.setattr(
+            planner,
+            "_evaluate_gertzbein_grade",
+            lambda _entry, _target, diameter, _label: (
+                ("B", 1.5) if diameter > 4.0 else ("A", 0.0)
+            ),
+        )
+
+        result = planner.plan_screw(_make_analysis(left_width=9.5), "left")
+
+        assert result is not None
+        assert result.gertzbein_grade == "A"
+        assert result.diameter_mm == pytest.approx(4.0)
+        assert not any(
+            GRADE_B_ACCEPTED_WARNING in warning for warning in result.warnings
+        )
+
+    def test_legacy_reports_no_screw_when_only_grade_b_fits(
+        self,
+        monkeypatch,
+    ):
+        """A default-config side that only grades B is skipped, never fabricated."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        monkeypatch.setattr(
+            planner,
+            "_evaluate_gertzbein_grade",
+            lambda _entry, _target, _diameter, _label: ("B", 1.5),
+        )
+
+        planned, reason = planner._plan_screw(_make_analysis(left_width=9.5), "left")
+
+        assert planned is None
+        assert reason == "no contained left screw diameter in the catalogue"
+
+    def test_legacy_grade_b_opt_in_stops_at_b_and_warns(
+        self,
+        monkeypatch,
+    ):
+        """accept_grade_b keeps the B screw and marks the choice persistently."""
+        from src.core.auto_screw_planner import GRADE_B_ACCEPTED_WARNING
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", accept_grade_b=True)
+        )
+        monkeypatch.setattr(
+            planner,
+            "_evaluate_gertzbein_grade",
+            lambda _entry, _target, _diameter, _label: ("B", 1.5),
+        )
+
+        result = planner.plan_screw(_make_analysis(left_width=9.5), "left")
+
+        assert result is not None
+        assert result.gertzbein_grade == "B"
+        assert GRADE_B_ACCEPTED_WARNING in result.warnings
+
+    def test_narrow_policy_ignores_the_grade_b_flag(
+        self,
+        monkeypatch,
+    ):
+        """A narrow side is graded and placed as it stands, flag on or off."""
+        from src.core.auto_screw_planner import GRADE_B_ACCEPTED_WARNING
+
+        for accept in (False, True):
+            ct, mask = _make_bone_cylinder()
+            planner = AutoScrewPlanner(
+                ct, mask,
+                config=PlannerConfig(mode="legacy", accept_grade_b=accept),
+            )
+            monkeypatch.setattr(
+                planner,
+                "_evaluate_gertzbein_grade",
+                lambda _entry, _target, _diameter, _label: ("C", 2.5),
+            )
+
+            result = planner.plan_screw(_make_analysis(left_width=4.5), "left")
+
+            assert result is not None
+            assert result.diameter_mm == pytest.approx(4.0)
+            assert GRADE_B_ACCEPTED_WARNING not in result.warnings
 
     def test_no_body_center_returns_none(self):
         """Missing vertebral body centre should return None."""
@@ -1374,6 +1481,75 @@ class TestDiameterRule:
         assert planner._compute_diameter(5.5, "L4") == pytest.approx(4.0)
 
 
+class TestWidthLowerBound:
+    """Sizing reads the analyser's second opinion when the two disagree."""
+
+    def test_effective_width_uses_the_bound_past_the_threshold(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        uncertain = _make_analysis(left_width=7.0, left_lower_bound=3.1)
+        assert planner._effective_width(uncertain, "left") == pytest.approx(3.1)
+
+    def test_effective_width_keeps_the_headline_inside_the_threshold(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+
+        agree = _make_analysis(left_width=7.0, left_lower_bound=6.5)
+        assert planner._effective_width(agree, "left") == pytest.approx(7.0)
+
+    def test_effective_width_ignores_a_missing_bound(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask)
+        analysis = _make_analysis(left_width=7.0)
+        analysis.left_width_lower_bound_mm = 0.0
+
+        assert planner._effective_width(analysis, "left") == pytest.approx(7.0)
+
+    def test_a_disagreeing_bound_triggers_the_narrow_policy(self):
+        """Width 7.0 / bound 3.1 plans the smallest screw, not a full-size one."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        analysis = _make_analysis(left_width=7.0, left_lower_bound=3.1)
+
+        assert planner._is_narrow_side(analysis, "left") is True
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.diameter_mm == pytest.approx(4.0)
+        assert screw.metrics["narrow_pedicle"] is True
+
+    def test_an_agreeing_width_plans_a_full_size_screw(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", accept_grade_b=True)
+        )
+        analysis = _make_analysis(left_width=7.0, left_lower_bound=6.5)
+
+        assert planner._is_narrow_side(analysis, "left") is False
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.diameter_mm == pytest.approx(5.5)
+        assert screw.metrics["narrow_pedicle"] is False
+
+    def test_the_disagreement_threshold_is_configurable(self):
+        ct, mask = _make_bone_cylinder()
+        strict = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(width_bound_disagreement_mm=0.25)
+        )
+        relaxed = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(width_bound_disagreement_mm=5.0)
+        )
+        analysis = _make_analysis(left_width=7.0, left_lower_bound=6.5)
+
+        assert strict._is_narrow_side(analysis, "left") is False
+        assert strict._effective_width(analysis, "left") == pytest.approx(6.5)
+        assert relaxed._effective_width(analysis, "left") == pytest.approx(7.0)
+
+
 class TestPlannerConfig:
     def test_config_changes_sizing(self):
         from src.core.planner_config import PlannerConfig
@@ -1447,6 +1623,7 @@ class TestScrewMetrics:
         keys = {
             "trajectory_mean_hu", "trajectory_min_hu", "pedicle_mean_hu", "body_mean_hu",
             "trajectory_body_ratio", "min_wall_mm", "heary_direction",
+            "heary_secondary",
             "facet_grade", "facet_text",
         }
         assert keys <= set(screws[0].metrics)
@@ -1458,8 +1635,13 @@ class TestScrewMetrics:
         if screws[0].breach_mm > 0:
             assert heary in {"medial", "lateral", "anterior", "posterior",
                              "superior", "inferior"}
+            assert screws[0].metrics["heary_secondary"] in {
+                None, "medial", "lateral", "anterior", "posterior",
+                "superior", "inferior",
+            }
         else:
             assert heary == "none"
+            assert screws[0].metrics["heary_secondary"] is None
 
 
 class TestOptimizerMode:
@@ -2297,6 +2479,43 @@ class TestHeadOnTheCortex:
         before = planner._medial_breach_key(entry, target, 6.0, 27, "left")
         after = planner._medial_breach_key(head, tip, 6.0, 27, "left")
         assert after[0] <= before[0] + 1e-9
+
+    def test_re_seating_never_trades_a_for_b(self, monkeypatch):
+        """Under the default bar the no-worse guard ranks grade before millimetres."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        entry = np.array([40.0, 40.0, 20.0])
+        target = np.array([36.0, 15.0, 20.0])
+        grades = iter(["A", "B", "A"])
+        monkeypatch.setattr(
+            planner,
+            "_evaluate_gertzbein_grade",
+            lambda _e, _t, _d, _l: (next(grades), 0.0),
+        )
+        # The (medial, total) key alone would bless this: same medial breach,
+        # smaller total one on a worse grade.  The grade ladder refuses first.
+        keys = iter([(0.0, 0.5), (0.0, 0.2)])
+        monkeypatch.setattr(
+            planner,
+            "_medial_breach_key",
+            lambda _e, _t, _d, _l, _s: next(keys),
+        )
+        monkeypatch.setattr(
+            planner, "_longest_length_from", lambda _h, _d, _l: 30.0
+        )
+
+        head, tip = planner._seat_head_and_extend(entry, target, 6.0, 27, "left")
+
+        # The re-seated head grades B for an A baseline, so it is refused even
+        # though its (medial, total) key is better; the original head wins at
+        # its own longest fitting tip.
+        assert np.allclose(head, entry, atol=1e-6)
+        assert np.allclose(
+            tip, entry + (target - entry) / np.linalg.norm(target - entry) * 30.0
+        )
 
     @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
     def test_the_screw_tool_re_grades_a_planned_screw_to_the_same_grade(self, mode):

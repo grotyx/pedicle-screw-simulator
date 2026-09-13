@@ -216,6 +216,16 @@ def plan_cbt_screw(
 ) -> Optional["PlannedScrew"]:
     """Plan one cortical bone trajectory screw, or ``None`` if none is feasible.
 
+    Entry-zone behaviour differs from the traditional optimiser path on
+    purpose: a CBT head sits inferomedial on the pars/lamina, not on the
+    pedicle's dorsal cortex, so the whole shaft -- head included -- is bone
+    the screw must purchase, and its batch is graded with no ``entry_zone``
+    at all.  That makes short catalogue lengths safe here rather than
+    entry-artefact risks: the distal :data:`TIP_SEGMENT_MM` still has to keep
+    the same anterior rule as a traditional tip (see :func:`plan_cbt_screw`
+    callers), and the shaft's zero-breach rule covers the first millimetres
+    the traditional path excuses.
+
     Every combination of swept direction (:func:`cbt_directions`) and CBT
     catalogue diameter and length is graded in one
     :meth:`ScrewGrader.evaluate_batch` pass per diameter.  A candidate is
