@@ -167,8 +167,11 @@ class ScrewPlanTable(QTableWidget):
         self.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
+        # Multi-select for batch delete: the current row still drives the
+        # three currentRowChanged listeners, so single-click behaviour is
+        # unchanged and only Delete/Ctrl+Z see the whole selection.
         self.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
@@ -247,6 +250,16 @@ class ScrewPlanTable(QTableWidget):
             (self.item(row, column).text() if self.item(row, column) else "")
             for column in range(self.columnCount())
         )
+
+    def set_row_visible(self, row: int, visible: bool) -> None:
+        """Show or hide one row for the Review-page text filter."""
+        self.setRowHidden(int(row), not bool(visible))
+
+    def visible_rows(self) -> list:
+        """Row indices currently shown (unhidden) in display order."""
+        return [
+            row for row in range(self.rowCount()) if not self.isRowHidden(row)
+        ]
 
     def gradeColor(self, grade) -> str:
         """Return the palette colour this table paints for one grade."""

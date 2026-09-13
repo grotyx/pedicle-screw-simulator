@@ -19,6 +19,9 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidg
 #: Circled digits for the step numbers; a plain "1." read as a list, not a path.
 _STEP_NUMBERS = ("①", "②", "③", "④", "⑤")
 
+#: Spinner glyph marking the step a background job is running on.
+RUNNING_MARK = "◌"
+
 #: Shown before a finished step's label.
 DONE_MARK = "✓"
 
@@ -32,13 +35,15 @@ class StepState:
 
     ``done`` marks a step already completed for this study; ``current`` is the
     next thing to do, drawn as the primary action.  ``hint`` is the tooltip.
-    Every step is ``enabled`` now that the bar only navigates: every page is
-    always reachable.
+    ``running`` marks the step a background job is on; the bar draws a
+    spinner glyph instead of the number. Every step is ``enabled`` now that
+    the bar only navigates: every page is always reachable.
     """
 
     enabled: bool
     done: bool = False
     current: bool = False
+    running: bool = False
     hint: str = ""
 
 
@@ -72,7 +77,7 @@ class WorkflowBar(QWidget):
                 chevron.setObjectName("workflowChevron")
                 chevron.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 layout.addWidget(chevron)
-            button = QPushButton(self._text(index, step.label, done=False))
+            button = QPushButton(self._text(index, step.label))
             button.setObjectName("workflowStep")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(step.action)
@@ -89,7 +94,14 @@ class WorkflowBar(QWidget):
         """Redraw every step from its state.  Extra or missing states are ignored."""
         for index, (button, state) in enumerate(zip(self._buttons, states, strict=False)):
             button.setEnabled(bool(state.enabled))
-            button.setText(self._text(index, self._steps[index].label, done=state.done))
+            button.setText(
+                self._text(
+                    index,
+                    self._steps[index].label,
+                    done=state.done,
+                    running=state.running,
+                )
+            )
             button.setToolTip(state.hint)
             # The existing role styles carry the theme: the next step is the
             # primary action, a finished one is quiet, the rest are plain.
@@ -110,33 +122,50 @@ class WorkflowBar(QWidget):
                 button.style().polish(button)
 
     @staticmethod
-    def _text(index: int, label: str, *, done: bool) -> str:
+    def _text(index: int, label: str, *, done: bool = False, running: bool = False) -> str:
         number = _STEP_NUMBERS[index] if index < len(_STEP_NUMBERS) else f"{index + 1}."
+        if running:
+            return f"{RUNNING_MARK} {label}"
         return f"{DONE_MARK} {label}" if done else f"{number}  {label}"
 
 
 def workflow_states(
     *,
     has_volume: bool,
-    segment_available: bool,
     has_mask: bool,
-    plan_available: bool,
     has_plan: bool,
     has_screws: bool = False,
+    is_running: bool = False,
+    running_step: int | None = None,
+    selected_levels: bool = False,
+    segment_available: bool = True,
+    plan_available: bool = True,
 ) -> List[StepState]:
     """The four steps' states from what the session has done so far.
 
     Kept free of Qt so the rule can be tested directly. Every step is always
     ``enabled``: the bar only navigates, and every page is reachable whatever
     the study's state. ``current`` is the first step not yet done, so once a
-    plan exists the Review step is the one highlighted.
+    plan exists Review is the highlighted step. ``is_running`` marks
+    ``running_step`` with a spinner glyph instead of its number; the bar
+    never disables the running step.
+
+    ``segment_available``/``plan_available`` stay as accepted no-op keywords
+    for callers still passing inferred button state; the rule derives from
+    session state only. Review stays open (never ``done``) so the first-open
+    rule keeps pointing at it while earlier steps finish; its hint still
+    reflects whether screws exist.
     """
+    del segment_available, plan_available
     done = [
         has_volume,
         has_volume and has_mask,
         has_volume and has_mask and has_plan,
         False,
     ]
+    running_index = int(running_step) if is_running and running_step is not None else None
+    if running_index is not None and not 0 <= running_index < 4:
+        running_index = None
     hints = [
         (
             "Study loaded — open another one here"
@@ -150,7 +179,7 @@ def workflow_states(
         ),
         (
             "Plan screws for the selected vertebral levels"
-            if has_mask and plan_available
+            if has_mask and selected_levels
             else "Select vertebral levels in the Plan step"
             if has_mask
             else "Run segmentation first"
@@ -161,12 +190,19 @@ def workflow_states(
             else "Plan or place screws first"
         ),
     ]
+    if running_index is not None:
+        running_hint = {
+            1: "Segmentation is running…",
+            2: "Planning is running…",
+        }.get(running_index, "Working…")
+        hints[running_index] = running_hint
     first_open = next((i for i, finished in enumerate(done) if not finished), None)
     return [
         StepState(
             enabled=True,
             done=done[i],
             current=(i == first_open),
+            running=(i == running_index),
             hint=hints[i],
         )
         for i in range(4)

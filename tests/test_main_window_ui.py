@@ -1,4 +1,8 @@
-"""Offscreen UI-polish tests for the W6 workstream."""
+"""Offscreen UI-polish tests for the W6 workstream.
+
+``isolated_qsettings``/``ui_main_window`` here are thin shims over
+``tests.conftest`` (kept so old imports keep working).
+"""
 
 import os
 
@@ -8,41 +12,28 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("pytestqt")
 
-from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QApplication, QWidgetAction
 
 import src.ui.main_window as main_window_module
 from src.ui.styles import THEMES
 from src.ui.tool_icons import TOOL_ICON_KINDS, create_tool_icon
+from tests.conftest import make_isolated_qsettings, make_ui_main_window
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
 
 
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
-    """Redirect MainWindow's QSettings into temp INI files."""
-    directory = tmp_path / "qsettings"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    def factory(organization="Default", application="App", *_args, **_kwargs):
-        path = directory / f"{organization}-{application}.ini"
-        return QSettings(str(path), QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_module, "QSettings", factory)
-    monkeypatch.setattr(main_window_module, "_migrated", False)
-    return factory
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_isolated_qsettings(tmp_path, monkeypatch)
 
 
 @pytest.fixture
 def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
-    """Build MainWindow with lightweight viewer stubs."""
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "graphite_blue")
-
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
-    return window
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_ui_main_window(
+        monkeypatch, qtbot, isolated_qsettings, theme_name="graphite_blue"
+    )
 
 
 class RenderRecordingMPRViewer(DummyMPRViewer):
@@ -469,6 +460,26 @@ def test_details_is_collapsed_and_holds_the_metric_rows(ui_main_window):
         assert window.details_group.isAncestorOf(widget)
 
 
+def test_details_heary_row_names_the_secondary_direction(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, -40.0, 0.0),
+        diameter=6.0,
+        vertebra_level="L1",
+        side="left",
+        grade="B",
+        metrics={"heary_direction": "medial", "heary_secondary": "superior"},
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_heary.text() == "medial + superior"
+
+
 def test_details_endplate_row_names_the_neighbour_reference(ui_main_window):
     from src.models.screw import Screw
 
@@ -540,12 +551,12 @@ def test_format_screw_counter_reports_the_count_when_nothing_is_selected(
 def test_edit_menu_starts_the_edit_modes(monkeypatch, qtbot, isolated_qsettings):
     """The Edit menu's actions call ScrewEditController.start/cancel.
 
-    The controller is created inside MainWindow.__init__ and its signals are
-    connected there too, so the class methods must be patched *before*
-    construction -- patching the instance afterwards would miss a direct
-    (non-lambda) ``.connect(self._screw_edit_ctrl.cancel)`` binding, which
-    captures that exact bound-method object rather than looking it up again
-    at call time.
+    The controller is created inside MainWindow.__init__ and the menu
+    actions route through small window wrappers (which also refresh the
+    mode chip), so the class methods must be patched *before*
+    construction -- patching the instance afterwards would miss the
+    binding, which captures the wrapper rather than looking the
+    controller up again at call time.
     """
     from src.controllers.screw_edit_controller import ScrewEditController
 
@@ -649,6 +660,84 @@ def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
     table.clear()
     assert table.count() == 0
     assert rows[-1] == -1
+
+
+def test_screw_table_supports_multi_select_filter_and_undo(ui_main_window):
+    """ExtendedSelection + text filter + Ctrl+Z undo on the Review list."""
+    from PyQt6.QtWidgets import QAbstractItemView
+
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    table = window.screw_list_widget
+
+    assert table.selectionMode() == (
+        QAbstractItemView.SelectionMode.ExtendedSelection
+    )
+
+    for level, side, grade in (
+        ("L4", "left", "A"),
+        ("L4", "right", "B"),
+        ("L5", "left", "A"),
+    ):
+        screw = Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -40.0, 0.0),
+            diameter=6.0,
+            vertebra_level=level,
+            side=side,
+            grade=grade,
+        )
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+    assert table.count() == 3
+
+    window.screw_filter_edit.setText("L4")
+    assert table.visible_rows() == [0, 1]
+    window.screw_filter_edit.setText("L4 B")
+    assert table.visible_rows() == [1]
+    window.screw_filter_edit.setText("")
+    assert table.visible_rows() == [0, 1, 2]
+
+    table.selectRow(0)
+    window._tool_ctrl.remove_selected_screw()
+    assert table.count() == 2
+
+    assert window._tool_ctrl.undo_remove_screws() is True
+    assert table.count() == 3
+    assert "L4" in table.rowText(0)
+
+
+def test_review_shortcuts_delete_undo_and_step_screws(ui_main_window):
+    """Delete / Ctrl+Z / [ / ] act on the Review list without a click."""
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    table = window.screw_list_widget
+
+    for level in ("L4", "L5"):
+        screw = Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -40.0, 0.0),
+            diameter=6.0,
+            vertebra_level=level,
+            side="left",
+            grade="A",
+        )
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+    table.setCurrentRow(0)
+
+    window._delete_screw_action.trigger()
+    assert table.count() == 1
+
+    window._undo_remove_screw_action.trigger()
+    assert table.count() == 2
+
+    window._screw_next_action.trigger()
+    assert table.currentRow() == 1
+    window._screw_prev_action.trigger()
+    assert table.currentRow() == 0
 
 
 def test_screw_plan_table_paints_grade_chips_from_the_theme(ui_main_window):
@@ -871,12 +960,13 @@ def test_set_view_layout_rejects_an_unknown_maximize_target(ui_main_window):
         ui_main_window.set_view_layout("maximize:nope")
 
 
-def test_status_bar_mode_label_tracks_the_tool_and_screw_mpr(ui_main_window):
+def test_mode_chip_tracks_tool_edit_screw_mpr_and_isolation(ui_main_window):
     from src.models.screw import Screw
 
     window = ui_main_window
 
     assert window._mode_label.text() == "Select"
+    assert window.mode_chip_text() == "Select"
 
     window._tool_ctrl.set_tool("screw")
     assert window._mode_label.text() == "Add Screw"
@@ -884,7 +974,21 @@ def test_status_bar_mode_label_tracks_the_tool_and_screw_mpr(ui_main_window):
     window._tool_ctrl.set_tool("distance")
     assert window._mode_label.text() == "Distance"
 
+    # Path follows the DISTANCE/ANGLE pattern: the measure combo drives the
+    # controller, and the toolbar's Distance entry stays checked for it.
+    window._tool_ctrl.on_measure_mode_changed()
+    window._tool_ctrl.set_tool("path")
+    assert window._mode_label.text() == "Path"
+    assert window._distance_tool_action.isChecked() is True
+
     window._tool_ctrl.set_tool("navigate")
+    from tests.test_ui_integration import _create_test_image, _ProgressStub
+
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": "SERIES-MODE-CHIP", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
     window._tool_ctrl.screw_tool.add_screw(
         Screw(
             entry_point=(0.0, 0.0, 0.0),
@@ -897,12 +1001,124 @@ def test_status_bar_mode_label_tracks_the_tool_and_screw_mpr(ui_main_window):
     window._tool_ctrl._add_screw_to_list(window._tool_ctrl.screw_tool.get_screws()[0])
     window.screw_list_widget.setCurrentRow(0)
 
+    window._start_screw_edit("entry")
+    assert window._mode_label.text() == "Select · Edit Entry"
+    window._cancel_screw_edit()
+
     monkey = window._screw_mpr_ctrl
     monkey._active = True
     window.refresh_mode_indicators()
 
     assert window._mode_label.text() == "Screw MPR · #1 L4 left"
     assert window._screw_mpr_action.isChecked() is True
+
+    window._seg_ctrl._vertebrae_isolated = True
+    window.refresh_mode_indicators()
+
+    assert window._mode_label.text() == "Screw MPR · #1 L4 left · Isolated"
+
+
+def test_builders_import_and_cover_every_existing_control(qtbot):
+    from src.ui.step_panel import (
+        build_plan_page,
+        build_review_page,
+        build_segment_page,
+        build_study_page,
+    )
+
+    study_page, study_refs = build_study_page()
+    segment_page, segment_refs = build_segment_page()
+    plan_page, plan_refs = build_plan_page(
+        segment_refs["vertebra_level_container"]
+    )
+    review_page, review_refs = build_review_page("soft_light")
+    for page in (study_page, segment_page, plan_page, review_page):
+        qtbot.addWidget(page)
+
+    assert set(study_refs) >= {
+        "open_dicom_btn",
+        "info_label",
+        "window_slider",
+        "level_slider",
+        "_btn_bone",
+        "_btn_soft",
+        "tf_preset_combo",
+        "opacity_slider",
+    }
+    assert set(segment_refs) >= {
+        "seg_run_btn",
+        "seg_refine_check",
+        "seg_status_label",
+        "vertebra_isolate_btn",
+        "isolation_hint_label",
+        "seg_advanced_panel",
+        "seg_task_combo",
+        "vertebra_restore_btn",
+        "vertebra_display_list",
+        "seg_advanced_toggle",
+    }
+    assert set(plan_refs) >= {
+        "vertebra_select_all_btn",
+        "vertebra_clear_all_btn",
+        "workspace_mode_combo",
+        "auto_screw_review_notice",
+        "auto_screw_plan_btn",
+        "auto_screw_status",
+        "_btn_clear_screws",
+        "plan_mode_combo",
+        "plan_trajectory_combo",
+        "plan_fill_ratio_spin",
+        "plan_wall_clearance_spin",
+        "plan_anterior_margin_spin",
+        "plan_max_convergence_spin",
+        "plan_hu_threshold_spin",
+        "plan_narrow_pedicle_spin",
+        "plan_narrow_lateral_spin",
+        "plan_weight_safety",
+        "plan_weight_density",
+        "plan_weight_rod",
+        "plan_endplate_parallel_check",
+        "plan_endplate_tolerance_spin",
+        "plan_reset_defaults_btn",
+        "length_spin",
+        "diameter_spin",
+    }
+    assert set(review_refs) >= {
+        "review_title_label",
+        "selected_screw_counter",
+        "selected_screw_title",
+        "selected_screw_grade",
+        "selected_screw_diameter",
+        "selected_screw_length",
+        "screw_warnings_toggle",
+        "selected_screw_warning",
+        "screw_list_widget",
+        "screw_previous_btn",
+        "screw_next_btn",
+        "screw_axis_mpr_btn",
+        "standard_mpr_btn",
+        "screw_edit_btn",
+        "remove_screw_btn",
+        "screw_edit_entry_btn",
+        "screw_edit_tip_btn",
+        "screw_edit_move_btn",
+        "screw_edit_cancel_btn",
+        "screw_axis_position_label",
+        "screw_axis_position_slider",
+        "screw_axis_rotation_spin",
+        "screw_mpr_reset_btn",
+        "screw_mpr_controls",
+        "selected_screw_metrics",
+        "screw_narrow_legend",
+        "screw_drag_hint",
+        "measure_mode_combo",
+        "measure_finish_btn",
+        "measure_clear_btn",
+        "measurement_list_widget",
+        "show_measurement_btn",
+        "edit_measurement_btn",
+        "remove_measurement_btn",
+    }
 
 
 def test_viewer_header_label_reports_double_clicks(qtbot):

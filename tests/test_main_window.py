@@ -1,10 +1,7 @@
 """Focused MainWindow tests for the final fix-wave batch C findings.
 
-Builds its own minimal ``ui_main_window``/``isolated_qsettings`` fixtures
-(mirroring the ones in ``tests/test_ui_integration.py``) rather than
-importing them: pytest fixtures re-exported via a plain import shadow their
-own name in every consuming test function, which ruff's pyflakes-derived
-F811/F401 checks (correctly, if unhelpfully) flag as redefinitions.
+``isolated_qsettings``/``ui_main_window`` here are thin shims over
+``tests.conftest`` (kept so old imports keep working).
 """
 
 import os
@@ -15,49 +12,26 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("pytestqt")
 
-from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 
 import src.ui.main_window as main_window_module
 from src.controllers.screw_mpr_controller import SCREW_MPR_CONTROLS_HELP
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
+from tests.conftest import make_isolated_qsettings, make_ui_main_window
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
 
 
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
-    """Redirect MainWindow's QSettings into temp INI files.
-
-    Mirrors ``tests.test_ui_integration.isolated_qsettings``.
-    """
-    directory = tmp_path / "qsettings"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    def factory(organization="Default", application="App", *_args, **_kwargs):
-        path = directory / f"{organization}-{application}.ini"
-        return QSettings(str(path), QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_module, "QSettings", factory)
-    # app_settings() only checks the legacy scope once per process; reset
-    # that guard so each test's migration behavior is independent.
-    monkeypatch.setattr(main_window_module, "_migrated", False)
-    return factory
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_isolated_qsettings(tmp_path, monkeypatch)
 
 
 @pytest.fixture
 def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
-    """Build MainWindow with lightweight viewer stubs.
-
-    Mirrors ``tests.test_ui_integration.ui_main_window``.
-    """
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "soft_light")
-
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
-    return window
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    return make_ui_main_window(monkeypatch, qtbot, isolated_qsettings)
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +610,9 @@ def test_the_panel_parameters_reach_the_screw_tool(ui_main_window):
 
     assert tool._wall_clearance_mm == pytest.approx(1.5)
     assert tool._narrow_pedicle_mm == pytest.approx(6.5)
+    assert tool._width_bound_disagreement_mm == pytest.approx(
+        window.planner_config().width_bound_disagreement_mm
+    )
 
 
 def test_resetting_the_planner_defaults_resets_the_screw_tool(ui_main_window):

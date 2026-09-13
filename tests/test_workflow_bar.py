@@ -32,10 +32,9 @@ from src.ui.workflow_bar import (
 def _states(**overrides):
     defaults = dict(
         has_volume=False,
-        segment_available=True,
         has_mask=False,
-        plan_available=False,
         has_plan=False,
+        selected_levels=False,
     )
     defaults.update(overrides)
     return workflow_states(**defaults)
@@ -64,20 +63,16 @@ def test_fresh_session_points_at_study():
 
 
 def test_every_step_stays_clickable():
-    for combo in itertools.product([False, True], repeat=6):
+    for combo in itertools.product([False, True], repeat=4):
         (
             has_volume,
-            segment_available,
             has_mask,
-            plan_available,
             has_plan,
             has_screws,
         ) = combo
         states = workflow_states(
             has_volume=has_volume,
-            segment_available=segment_available,
             has_mask=has_mask,
-            plan_available=plan_available,
             has_plan=has_plan,
             has_screws=has_screws,
         )
@@ -95,7 +90,7 @@ def test_loaded_volume_finishes_step_one_and_points_at_segment():
 
 
 def test_mask_without_levels_points_at_plan():
-    states = _states(has_volume=True, has_mask=True, plan_available=False)
+    states = _states(has_volume=True, has_mask=True, selected_levels=False)
 
     assert [state.done for state in states] == [True, True, False, False]
     assert states[2].current is True
@@ -103,18 +98,60 @@ def test_mask_without_levels_points_at_plan():
 
 
 def test_mask_with_levels_names_the_plan_hint():
-    states = _states(has_volume=True, has_mask=True, plan_available=True)
+    states = _states(has_volume=True, has_mask=True, selected_levels=True)
 
     assert states[2].hint == "Plan screws for the selected vertebral levels"
 
 
+def test_legacy_button_kwargs_are_accepted_but_ignored():
+    """Old callers pass inferred button state; session state still rules."""
+    planned = workflow_states(
+        has_volume=True,
+        has_mask=True,
+        selected_levels=True,
+        has_plan=False,
+        plan_available=True,
+        segment_available=False,
+    )
+    assert planned[2].hint == "Plan screws for the selected vertebral levels"
+
+    unplanned = workflow_states(
+        has_volume=True,
+        has_mask=True,
+        selected_levels=False,
+        has_plan=False,
+        plan_available=True,
+        segment_available=True,
+    )
+    assert unplanned[2].hint == "Select vertebral levels in the Plan step"
+
+
 def test_review_becomes_current_once_a_plan_exists():
     states = _states(
-        has_volume=True, has_mask=True, plan_available=True, has_plan=True
+        has_volume=True, has_mask=True, selected_levels=True, has_plan=True
     )
 
     assert [state.done for state in states] == [True, True, True, False]
     assert [state.current for state in states] == [False, False, False, True]
+
+
+def test_running_job_marks_its_step_with_a_spinner(qtbot):
+    from src.ui.workflow_bar import RUNNING_MARK
+
+    bar, _calls = _build_bar(qtbot)
+    bar.set_states(
+        workflow_states(
+            has_volume=True,
+            has_mask=False,
+            has_plan=False,
+            is_running=True,
+            running_step=1,
+        )
+    )
+
+    assert bar.buttons[1].text() == f"{RUNNING_MARK} Segment"
+    assert bar.buttons[1].toolTip() == "Segmentation is running…"
+    assert bar.buttons[1].isEnabled() is True
 
 
 def test_review_hint_reflects_whether_screws_exist():
@@ -135,22 +172,18 @@ def test_a_previous_studys_mask_or_plan_finishes_nothing_without_a_volume():
 
 
 @pytest.mark.parametrize(
-    "combo", list(itertools.product([False, True], repeat=6))
+    "combo", list(itertools.product([False, True], repeat=4))
 )
 def test_states_are_consistent_for_every_input(combo):
     (
         has_volume,
-        segment_available,
         has_mask,
-        plan_available,
         has_plan,
         has_screws,
     ) = combo
     states = workflow_states(
         has_volume=has_volume,
-        segment_available=segment_available,
         has_mask=has_mask,
-        plan_available=plan_available,
         has_plan=has_plan,
         has_screws=has_screws,
     )

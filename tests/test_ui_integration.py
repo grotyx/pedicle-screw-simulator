@@ -1325,8 +1325,6 @@ def test_ui_workflow_load_segmentation_toggle_and_save_plan(
         image=image,
         metadata={
             "series_id": "SERIES-TEST-001",
-            "patient_name": "UnitTest",
-            "study_date": "20260207",
             "modality": "CT",
             "size": str(image.GetSize()),
             "spacing": str(image.GetSpacing()),
@@ -1337,7 +1335,12 @@ def test_ui_workflow_load_segmentation_toggle_and_save_plan(
 
     assert progress.closed is True
     assert window.volume_manager.get_vtk_image() is not None
-    assert "UnitTest" in window.info_label.text()
+    # Geometry only: the info panel never shows patient identifiers.
+    info_text = window.info_label.text()
+    assert "Modality: CT" in info_text
+    assert "Slices:" in info_text
+    assert "Patient" not in info_text
+    assert "UnitTest" not in info_text
 
     mask_path = tmp_path / "mask.nii.gz"
     _write_mask(image, mask_path)
@@ -2534,6 +2537,42 @@ def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
 
     assert b[1].text() == "②  Segment"
     assert b[1].property("role") == "primary"
+
+
+def test_workflow_bar_shows_a_spinner_while_segmentation_or_planning_runs(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """Session state, not button state, drives the bar -- including runs."""
+    from src.ui.workflow_bar import RUNNING_MARK
+
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-RUNNING")
+    _finish_segmentation(window, tmp_path, monkeypatch)
+    window.update_vertebra_level_checks([28, 29, 30])
+    b = window.workflow_bar.buttons
+
+    class _Running:
+        isRunning = lambda self: True  # noqa: E731
+
+    window._seg_ctrl._segmentation_thread = _Running()
+    window._refresh_workflow_bar()
+
+    assert b[1].text() == f"{RUNNING_MARK} Segment"
+    assert b[1].toolTip() == "Segmentation is running…"
+
+    window._seg_ctrl._segmentation_thread = None
+    window._auto_placement_ctrl._thread = _Running()
+    window._refresh_workflow_bar()
+
+    assert b[1].text() == "✓ Segment"
+    assert b[2].text() == f"{RUNNING_MARK} Plan"
+    assert b[2].toolTip() == "Planning is running…"
+
+    window._auto_placement_ctrl._thread = None
+    window._refresh_workflow_bar()
+
+    assert b[2].text() == "③  Plan"
+    assert b[2].toolTip() == "Plan screws for the selected vertebral levels"
 
 
 def test_workflow_bar_steps_navigate_to_their_pages(ui_main_window, tmp_path, monkeypatch):
