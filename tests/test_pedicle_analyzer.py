@@ -1781,5 +1781,244 @@ class TestEndplateReferences:
         assert endplate_context_labels(selected, available) == [28, 29]
 
 
+def _make_yawed_vertebra_phantom(
+    yaw_deg: float = 15.0, label: int = 28
+) -> sitk.Image:
+    """The anatomical phantom rotated ``yaw_deg`` about the z axis.
+
+    The body ellipse, both pedicle corridors and the laminar arch are drawn
+    in a yaw-rotated frame, so the level's own left-right axis no longer
+    coincides with the volume's x axis -- the deformity case the local
+    vertebral frame exists for.  Pedicle geometry is unchanged (8 mm wide,
+    13 mm tall corridors); only the orientation moves.
+    """
+    Z, Y, X = 60, 90, 90
+    zz, yy, xx = np.mgrid[0:Z, 0:Y, 0:X]
+    theta = math.radians(yaw_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    dx = xx - 45.0
+    dy = yy - 35.0
+    local_x = dx * cos_t + dy * sin_t
+    local_y = -dx * sin_t + dy * cos_t
+    body = (
+        ((local_x / 20.0) ** 2 + ((local_y) / 15.0) ** 2 <= 1)
+        & (zz >= 15)
+        & (zz < 45)
+    )
+    ped = np.zeros_like(body)
+    for cx in (-15.0, 15.0):
+        ped |= (
+            (((local_x - cx) / 4.0) ** 2 + ((zz - 32) / 6.0) ** 2 <= 1)
+            & (local_y >= 9)
+            & (local_y < 27)
+        )
+    arch = (
+        (((local_x / 22.0) ** 2 + (((local_y - 31)) / 10.0) ** 2 <= 1)
+         & ~(((local_x / 14.0) ** 2 + (((local_y - 29)) / 6.0) ** 2 <= 1))
+         & (local_y >= 25) & (zz >= 26) & (zz < 40))
+    )
+    arr = np.zeros((Z, Y, X), dtype=np.uint8)
+    arr[body | ped | arch] = label
+    return sitk.GetImageFromArray(arr)
+
+
+class TestDirectionGuard:
+    """PedicleAnalyzer assumes LPS identity; oblique grid must fail fast."""
+
+    def test_non_identity_direction_is_rejected(self):
+        img = _make_h_vertebra_mask()
+        img.SetDirection((-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
+        with pytest.raises(ValueError, match="identity"):
+            PedicleAnalyzer(img)
+
+    def test_oblique_direction_is_rejected(self):
+        img = _make_h_vertebra_mask()
+        c, s = math.cos(math.radians(30.0)), math.sin(math.radians(30.0))
+        img.SetDirection((c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0))
+        with pytest.raises(ValueError, match="identity"):
+            PedicleAnalyzer(img)
+
+    def test_identity_direction_is_accepted(self):
+        img = _make_h_vertebra_mask()
+        analyzer = PedicleAnalyzer(img)
+        assert len(analyzer.get_available_vertebrae()) == 1
+
+
+class TestAnisotropicWidth:
+    """_measure_pedicle_width must use sx,sy separately, not sqrt(area)."""
+
+    @staticmethod
+    def _rect_voxels(y_vox=10, x_vox=5):
+        ys, xs = np.mgrid[0:y_vox, 0:x_vox]
+        return np.column_stack(
+            [
+                np.zeros(ys.size, dtype=int),
+                ys.ravel(),
+                xs.ravel(),
+            ]
+        )
+
+    def test_anisotropic_spacing_measures_true_transverse_width(self):
+        voxels = self._rect_voxels(10, 5)  # 8.0 mm tall (sy=0.8), 2.0 mm wide (sx=0.4)
+        width = PedicleAnalyzer._measure_pedicle_width(voxels, 0.4, 0.8)
+        assert width == pytest.approx(2.0)
+
+    def test_isotropic_spacing_unchanged(self):
+        voxels = self._rect_voxels(10, 5)
+        width = PedicleAnalyzer._measure_pedicle_width(voxels, 1.0, 1.0)
+        assert width == pytest.approx(5.0)
+
+
+class TestVectorizedAgreement:
+    """Vectorized hot loops must agree with the historical per-voxel scans."""
+
+    def test_available_vertebrae_match_per_label_argwhere(self):
+        """Single unique(inverse) pass finds the same voxels as one argwhere."""
+        img = _make_mask(shape=(30, 30, 30))
+        img = _paint_label(img, label=27, slices=(slice(0, 15), slice(5, 25), slice(5, 25)))
+        img = _paint_label(img, label=28, slices=(slice(15, 30), slice(5, 25), slice(5, 25)))
+        img = _paint_label(img, label=1, slices=(slice(0, 5), slice(0, 5), slice(0, 5)))
+
+        analyzer = PedicleAnalyzer(img)
+        vertebrae = {v.label: v for v in analyzer.get_available_vertebrae()}
+        array = sitk.GetArrayFromImage(img)
+
+        assert sorted(vertebrae) == [27, 28]
+        for label_id, vertebra in vertebrae.items():
+            expected_zyx = np.argwhere(array == label_id)
+            # mask_indices stores (x, y, z); flip back to (z, y, x) to compare.
+            got_zyx = vertebra.mask_indices[:, ::-1]
+            assert got_zyx.shape == expected_zyx.shape
+            np.testing.assert_array_equal(np.sort(got_zyx, axis=0), np.sort(expected_zyx, axis=0))
+            sx, sy, sz = img.GetSpacing()
+            assert vertebra.volume_mm3 == pytest.approx(
+                float(expected_zyx.shape[0]) * sx * sy * sz
+            )
+
+    def test_indices_to_lps_matches_per_voxel_transform(self):
+        """The batch index transform equals one SITK call per voxel."""
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())
+        array = sitk.GetArrayFromImage(analyzer._mask_image)
+        indices = np.argwhere(array == 28)
+        sample = indices[::37]  # spread over the whole vertebra
+
+        vectorised = analyzer._indices_to_lps(sample)
+        historical = np.array(
+            [
+                analyzer._ijk_to_lps(int(row[2]), int(row[1]), int(row[0]))
+                for row in sample
+            ]
+        )
+
+        np.testing.assert_allclose(vectorised, historical, rtol=0, atol=0)
+        corner = analyzer._inferior_medial_corner_lps(
+            np.array([15, 15]), np.array([56, 60]), 44, "left"
+        )
+        np.testing.assert_allclose(
+            corner, analyzer._ijk_to_lps(56, 44, 15), rtol=0, atol=0
+        )
+
+    def test_axial_crop_matches_whole_slice_labelling(self):
+        """Cropping to the vertebra bbox keeps every axial split identical."""
+        for make, label in [
+            (_make_h_vertebra_mask, 27),
+            (_make_anatomical_phantom, 28),
+            (_make_one_sided_coronal_phantom, 28),
+            (_make_diagonal_axial_sliver_phantom, 28),
+            (_make_sliver_corridor_phantom, 28),
+        ]:
+            image = make(label) if "label" in make.__code__.co_varnames else make()
+            array = (sitk.GetArrayFromImage(image) == label).astype(np.uint8)
+            indices = np.argwhere(array)
+            z_min, z_max = int(indices[:, 0].min()), int(indices[:, 0].max())
+            y_lo, y_hi = int(indices[:, 1].min()), int(indices[:, 1].max())
+            x_lo, x_hi = int(indices[:, 2].min()), int(indices[:, 2].max())
+            crop = array[z_min:z_max + 1, y_lo:y_hi + 1, x_lo:x_hi + 1]
+
+            for z in range(z_min, z_max + 1):
+                whole = array[z]
+                if whole.sum() == 0:
+                    assert crop[z - z_min].sum() == 0
+                    continue
+                from scipy import ndimage as ndi
+
+                whole_labels, whole_n = ndi.label(whole)
+                crop_labels, crop_n = ndi.label(crop[z - z_min])
+                assert crop_n == whole_n
+                whole_sizes = sorted(
+                    ndi.sum(whole, whole_labels, index=range(1, whole_n + 1))
+                )
+                crop_sizes = sorted(
+                    ndi.sum(crop[z - z_min], crop_labels, index=range(1, crop_n + 1))
+                )
+                assert whole_sizes == crop_sizes
+
+
+class TestLocalVertebralFrame:
+    """Per-vertebra yaw from body PCA, with fallback to the world frame."""
+
+    def test_axis_aligned_phantom_keeps_the_world_frame(self):
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())
+        indices = np.argwhere(
+            sitk.GetArrayFromImage(analyzer._mask_image) == 28
+        )
+
+        cos_yaw, sin_yaw, reliable = analyzer._estimate_local_frame(indices)
+
+        assert reliable is True
+        assert cos_yaw == pytest.approx(1.0, abs=1e-9)
+        assert sin_yaw == pytest.approx(0.0, abs=1e-9)
+
+    def test_yawed_phantom_recovers_its_rotation(self):
+        analyzer = PedicleAnalyzer(_make_yawed_vertebra_phantom(15.0))
+        indices = np.argwhere(
+            sitk.GetArrayFromImage(analyzer._mask_image) == 28
+        )
+
+        cos_yaw, sin_yaw, reliable = analyzer._estimate_local_frame(indices)
+
+        assert reliable is True
+        assert math.degrees(math.atan2(sin_yaw, cos_yaw)) == pytest.approx(
+            15.0, abs=1.5
+        )
+
+    def test_small_or_circular_masks_fall_back_to_world(self):
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())
+        tiny = np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        assert analyzer._estimate_local_frame(tiny) == (1.0, 0.0, False)
+
+        zz, yy, xx = np.mgrid[0:7, 0:21, 0:21]
+        circular = np.argwhere((yy - 10) ** 2 + (xx - 10) ** 2 <= 100)
+        assert analyzer._estimate_local_frame(circular)[2] is False
+
+    def test_yawed_phantom_assigns_both_sides(self):
+        """A 15-degree yaw keeps both pedicles on their own side.
+
+        The coaxial world-frame band lets the posterior body wall leak into
+        the walk on a rotated level, so this pins the end-to-end behaviour:
+        both sides measured, left still left of right, plausible widths.
+        """
+        analyzer = PedicleAnalyzer(_make_yawed_vertebra_phantom(15.0))
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.left_pedicle_center is not None
+        assert result.right_pedicle_center is not None
+        assert result.left_pedicle_center[0] > result.right_pedicle_center[0]
+        assert 7.0 <= result.left_pedicle_width <= 10.0
+        assert 7.0 <= result.right_pedicle_width <= 10.0
+
+    def test_axis_aligned_phantom_is_unchanged(self):
+        analyzer = PedicleAnalyzer(_make_anatomical_phantom())
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.success and result.method == "coronal_isthmus"
+        assert np.linalg.norm(
+            result.left_pedicle_center - np.array([60.0, 55.0, 32.0])
+        ) <= 2.0
+        assert np.linalg.norm(
+            result.right_pedicle_center - np.array([30.0, 55.0, 32.0])
+        ) <= 2.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

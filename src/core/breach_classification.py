@@ -17,7 +17,8 @@ convention every geometry module in this app uses.
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
+from weakref import WeakKeyDictionary
 
 import numpy as np
 
@@ -47,6 +48,95 @@ def medial_breach_warning(medial_breach_mm: float) -> str:
 
 _NO_CEPHALAD = (0, "no cephalad vertebra segmented")
 
+_CENTROID_CACHE: "WeakKeyDictionary[ScrewGrader, Dict[int, Optional[float]]]" = WeakKeyDictionary()
+
+
+def _label_centroid_z_lps(grader: ScrewGrader, label: int) -> Optional[float]:
+    """LPS Z of ``label``'s voxel centroid, or ``None`` when absent.
+
+    Centroids are cached per grader (weak keys, so a discarded grader drops
+    its cache): ``facet_violation_grade`` asks for every segmented level's
+    centroid on every call, and each ask is a full-volume comparison.
+    """
+    cache = _CENTROID_CACHE.get(grader)
+    if cache is None:
+        cache = {}
+        _CENTROID_CACHE[grader] = cache
+    key = int(label)
+    if key not in cache:
+        arr = grader.label_array()  # (z, y, x), read-only view
+        z_idx = np.where(arr == key)[0]
+        if z_idx.size == 0:
+            cache[key] = None
+        else:
+            origin_z = float(grader.mask_image().GetOrigin()[2])
+            spacing_z = float(grader.mask_image().GetSpacing()[2])
+            cache[key] = origin_z + spacing_z * float(z_idx.mean())
+    return cache[key]
+
+
+def _find_cephalad_label(grader: ScrewGrader, label: int) -> Optional[int]:
+    """Nearest segmented vertebra superior to ``label`` by centroid LPS Z.
+
+    Numeric ``label + 1`` breaks when a level is missing (L3 absent between
+    L4/L2) or transitional, so geometry decides: every segmented
+    ``VERTEBRA_LABELS`` level whose centroid sits strictly above the current
+    level's centroid is a candidate, and the smallest positive gap wins.
+    """
+    from .pedicle_analyzer import VERTEBRA_LABELS  # local import: avoids a cycle
+
+    current = _label_centroid_z_lps(grader, int(label))
+    if current is None:
+        return None
+    best: Optional[int] = None
+    best_gap = float("inf")
+    for raw in VERTEBRA_LABELS:
+        candidate = int(raw)
+        if candidate == int(label) or not grader.has_label(candidate):
+            continue
+        z = _label_centroid_z_lps(grader, candidate)
+        if z is None:
+            continue
+        gap = z - current
+        if gap > 1e-9 and gap < best_gap:
+            best, best_gap = candidate, gap
+    return best
+
+
+def _heary_axis_label(axis: int, offset: float, side: str) -> str:
+    """Anatomical label for one LPS offset component."""
+    if axis == 0:
+        medial = offset < 0 if str(side).lower() == "left" else offset > 0
+        return "medial" if medial else "lateral"
+    if axis == 1:
+        return "anterior" if offset < 0 else "posterior"
+    return "superior" if offset > 0 else "inferior"
+
+
+def _heary_axis_order(d: np.ndarray) -> Tuple[int, ...]:
+    """Axis indices sorted by descending |offset| (x, y, z tie order)."""
+    return tuple(int(i) for i in np.argsort(-np.abs(d), kind="stable"))
+
+
+def heary_directions(
+    breach_point_lps: Point3, centreline_point_lps: Point3, side: str
+) -> Tuple[str, ...]:
+    """Anatomical directions of a breach, primary first then secondary.
+
+    :func:`heary_direction` keeps only the dominant axis, so a superomedial
+    breach behind a larger lateral offset reads as purely lateral and the
+    worse medial component vanishes. This returns the dominant direction
+    followed by the next-largest non-negligible axis (``> 1e-9`` mm), a
+    single ``("none",)`` for coincident points. ``[0]`` always equals
+    :func:`heary_direction`.
+    """
+    d = np.asarray(breach_point_lps, dtype=np.float64) - np.asarray(centreline_point_lps, dtype=np.float64)
+    if not np.any(np.abs(d) > 1e-9):
+        return ("none",)
+    significant = [axis for axis in _heary_axis_order(d) if abs(float(d[axis])) > 1e-9]
+    labels = [_heary_axis_label(axis, float(d[axis]), side) for axis in significant]
+    return (labels[0], labels[1]) if len(labels) > 1 else (labels[0],)
+
 
 def heary_direction(breach_point_lps: Point3, centreline_point_lps: Point3, side: str) -> str:
     """Anatomical direction of a breach, as ``breach_point`` seen from the centreline.
@@ -56,6 +146,7 @@ def heary_direction(breach_point_lps: Point3, centreline_point_lps: Point3, side
     dominant axis of the offset decides; on the x axis the sign is read with
     ``side`` (``"left"`` or ``"right"``), since LPS +X points to the patient's
     left and medial is therefore -X on the left and +X on the right.
+    See :func:`heary_directions` when the secondary axis matters too.
     """
     d = np.asarray(breach_point_lps, dtype=np.float64) - np.asarray(centreline_point_lps, dtype=np.float64)
     if not np.any(np.abs(d) > 1e-9):
@@ -78,8 +169,9 @@ def facet_violation_grade(
 ) -> Tuple[int, str]:
     """Babu-style facet violation grade (0-3) with its description.
 
-    The cephalad vertebra is ``label + 1`` in TotalSegmentator's ``total``
-    numbering (L4 = 28 -> L3 = 29). Only the proximal 30 % of the screw is
+    The cephalad vertebra is the nearest segmented level whose centroid sits
+    superior (higher LPS Z) to the instrumented level -- L3 above L4 in a
+    contiguous stack, L2 above L4 when L3 was never segmented. Only the
     considered: the shaft and tip lie inside the vertebral body and cannot
     reach the joint. The grades are
 
@@ -91,10 +183,8 @@ def facet_violation_grade(
     Grade 0 is also reported when the cephalad vertebra is missing (the top of
     the labelled range, or simply not segmented), with a distinguishing text.
     """
-    from .pedicle_analyzer import VERTEBRA_LABELS  # local import: avoids a cycle
-
-    cephalad = int(label) + 1
-    if cephalad not in VERTEBRA_LABELS or not grader.has_label(cephalad):
+    cephalad = _find_cephalad_label(grader, int(label))
+    if cephalad is None:
         return _NO_CEPHALAD
 
     entry_arr = np.asarray(entry, dtype=np.float64)

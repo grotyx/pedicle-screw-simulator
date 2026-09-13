@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-from src.core.breach_classification import facet_violation_grade, heary_direction
+from src.core.breach_classification import facet_violation_grade, heary_direction, heary_directions
 from src.core.screw_grading import ScrewGrader
 
 
@@ -27,6 +27,66 @@ def test_heary_direction_is_none_for_a_coincident_point():
     c = np.array([10.0, 10.0, 10.0])
     assert heary_direction(c, c, "left") == "none"
     assert heary_direction(c + np.array([1e-12, 0.0, 0.0]), c, "left") == "none"
+
+
+def test_heary_directions_reports_primary_and_secondary():
+    c = np.array([10.0, 10.0, 10.0])
+    # superomedial: 3 mm medial (-X on left), 1 mm superior
+    assert heary_directions(c + np.array([-3.0, 0.0, 1.0]), c, "left") == ("medial", "superior")
+    # inferolateral: 3 mm inferior, 2 mm lateral (+X on left)
+    assert heary_directions(c + np.array([2.0, 0.0, -3.0]), c, "left") == ("inferior", "lateral")
+
+
+def test_heary_directions_is_none_for_a_coincident_point():
+    c = np.array([10.0, 10.0, 10.0])
+    assert heary_directions(c, c, "left") == ("none",)
+    assert heary_directions(c + np.array([1e-12, 0.0, 0.0]), c, "left") == ("none",)
+
+
+def test_heary_directions_primary_matches_heary_direction():
+    c = np.array([10.0, 10.0, 10.0])
+    breach = c + np.array([-3.0, 0.0, 1.0])
+    assert heary_directions(breach, c, "left")[0] == heary_direction(breach, c, "left")
+
+
+def _three_level_missing_middle():
+    """L4 (28) below L2 (30) with L3 (29) absent.
+
+    L4 covers z 10..23, L2 covers z 40..59. Both span y 10..49, x 15..44.
+    """
+    arr = np.zeros((80, 60, 60), np.uint8)
+    arr[10:24, 10:50, 15:45] = 28
+    arr[40:60, 10:50, 15:45] = 30
+    return sitk.GetImageFromArray(arr)
+
+
+def _three_level_contiguous():
+    """L4 (28) below L3 (29) below L2 (30), no gaps."""
+    arr = np.zeros((80, 60, 60), np.uint8)
+    arr[10:24, 10:50, 15:45] = 28
+    arr[24:40, 10:50, 15:45] = 29
+    arr[40:60, 10:50, 15:45] = 30
+    return sitk.GetImageFromArray(arr)
+
+
+def test_facet_grade_uses_immediate_superior_when_contiguous():
+    # Head inside L3 (29): nearest superior to L4 (28) is L3, grade 3.
+    grader = ScrewGrader(_three_level_contiguous())
+    grade, _ = facet_violation_grade(grader, (30.0, 48.0, 30.0), (30.0, 12.0, 30.0), 6.0, 28)
+    assert grade == 3
+
+
+def test_facet_grade_skips_missing_level_to_true_superior():
+    # L3 (29) absent: head inside L2 (30) must still grade 3 for L4 (28).
+    grader = ScrewGrader(_three_level_missing_middle())
+    grade, text = facet_violation_grade(grader, (30.0, 48.0, 45.0), (30.0, 12.0, 45.0), 6.0, 28)
+    assert grade == 3 and "penetrates" in text
+
+
+def test_facet_grade_0_for_topmost_of_stack_with_inferior_present():
+    # L2 (30) is topmost here: inferior L4 (28) must not count as cephalad.
+    grader = ScrewGrader(_three_level_missing_middle())
+    assert facet_violation_grade(grader, (30.0, 48.0, 45.0), (30.0, 12.0, 45.0), 6.0, 30) == (0, "no cephalad vertebra segmented")
 
 
 def _two_level(spacing=(1.0, 1.0, 1.0), gap=2):

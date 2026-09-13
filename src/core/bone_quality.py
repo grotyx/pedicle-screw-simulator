@@ -35,8 +35,16 @@ Point3 = Sequence[float]
 PEDICLE_ROI_RADIUS_MM = 10.0
 #: Semi-axes (x, y, z in mm) of the default trabecular ROI at the body centre.
 BODY_ROI_RADII_MM = (8.0, 8.0, 6.0)
+#: Reference vertebral volume (mm3) the default ROI was sized for. Smaller
+#: levels scale the ROI down by the cube root of the volume ratio so the
+#: ellipsoid stays inside small bodies instead of spilling into cortex.
+BODY_ROI_REFERENCE_VOLUME_MM3 = 30000.0
+#: Clamp on the volume-derived linear scale: never enlarge past the default
+#: (which would overflow) and never shrink below half (which would starve).
+BODY_ROI_MIN_SCALE = 0.5
+BODY_ROI_MAX_SCALE = 1.0
 #: Fewer voxels than this and the ROI mean is too noisy to report.
-MIN_ROI_VOXELS = 20
+MIN_ROI_VOXELS = 100
 
 
 @dataclass
@@ -51,33 +59,87 @@ class BoneQualityMetrics:
     warnings: List[str] = field(default_factory=list)
 
 
+def body_roi_radii_mm(
+    volume_mm3: Optional[float] = None,
+) -> Tuple[float, float, float]:
+    """Trabecular ROI semi-axes scaled to the level's size.
+
+    Linear scale is the cube root of ``volume_mm3`` over
+    :data:`BODY_ROI_REFERENCE_VOLUME_MM3`, clamped to
+    ``[BODY_ROI_MIN_SCALE, BODY_ROI_MAX_SCALE]``. ``None`` (or a
+    non-positive volume) reproduces :data:`BODY_ROI_RADII_MM` exactly, so
+    callers without a volume keep the old behavior.
+    """
+    if volume_mm3 is None or not np.isfinite(volume_mm3) or volume_mm3 <= 0.0:
+        return BODY_ROI_RADII_MM
+    scale = (float(volume_mm3) / BODY_ROI_REFERENCE_VOLUME_MM3) ** (1.0 / 3.0)
+    scale = min(BODY_ROI_MAX_SCALE, max(BODY_ROI_MIN_SCALE, scale))
+    return tuple(float(r) * scale for r in BODY_ROI_RADII_MM)
+
+
 def vertebral_body_hu(
-    ct: sitk.Image,
-    mask: sitk.Image,
+    ct: Optional[sitk.Image],
+    mask: Optional[sitk.Image],
     label: int,
     body_center_lps: Point3,
-    radii_mm: Tuple[float, float, float] = BODY_ROI_RADII_MM,
+    radii_mm: Optional[Tuple[float, float, float]] = None,
+    volume_mm3: Optional[float] = None,
+    ct_array: Optional[np.ndarray] = None,
+    mask_array: Optional[np.ndarray] = None,
+    origin_lps: Optional[Point3] = None,
+    spacing_mm: Optional[Point3] = None,
+    min_voxels: int = MIN_ROI_VOXELS,
 ) -> Optional[float]:
     """Mean HU of an ellipsoidal trabecular ROI at ``body_center_lps``.
 
     The ROI is intersected with ``label`` so cortex-adjacent background, discs
     and neighbouring vertebrae cannot skew the mean. Returns ``None`` when
-    fewer than :data:`MIN_ROI_VOXELS` voxels survive.
+    fewer than ``min_voxels`` voxels survive.
 
-    ``ct`` and ``mask`` must share a grid with an identity direction, which is
-    what :class:`~src.core.screw_grading.ScrewGrader` already enforces.
+    ``radii_mm`` overrides the ROI semi-axes; when omitted they come from
+    :func:`body_roi_radii_mm`, which shrinks the default for small
+    ``volume_mm3`` and reproduces it when the volume is unknown.
+
+    ``ct``/``mask`` keep the old SimpleITK signature, but callers that already
+    hold the arrays (e.g. :class:`~src.core.screw_grading.ScrewGrader`) may
+    pass ``ct_array``/``mask_array`` plus ``origin_lps``/``spacing_mm`` to skip
+    the per-call ``GetArrayFromImage`` copies. Either pair suffices: arrays win
+    when both are given. ``ct`` and ``mask`` must share a grid with an identity
+    direction, which is what the grader already enforces.
     """
-    ct_arr = sitk.GetArrayFromImage(ct)
-    mask_arr = sitk.GetArrayFromImage(mask)
-    origin = np.asarray(mask.GetOrigin(), dtype=np.float64)
-    spacing = np.asarray(mask.GetSpacing(), dtype=np.float64)
+    if radii_mm is None:
+        radii_mm = body_roi_radii_mm(volume_mm3)
+    if ct_array is None:
+        if ct is None:
+            return None
+        ct_array = sitk.GetArrayFromImage(ct)
+    if mask_array is None:
+        if mask is None:
+            return None
+        mask_array = sitk.GetArrayFromImage(mask)
+    if origin_lps is None:
+        if mask is None:
+            return None
+        origin = np.asarray(mask.GetOrigin(), dtype=np.float64)
+    else:
+        origin = np.asarray(origin_lps, dtype=np.float64)
+    if spacing_mm is None:
+        if mask is None:
+            return None
+        spacing = np.asarray(mask.GetSpacing(), dtype=np.float64)
+    else:
+        spacing = np.asarray(spacing_mm, dtype=np.float64)
+    if np.any(spacing <= 0.0):
+        return None
     centre_idx = (np.asarray(body_center_lps, dtype=np.float64) - origin) / spacing  # x, y, z
     radii_idx = np.asarray(radii_mm, dtype=np.float64) / spacing                     # x, y, z
+    if np.any(~np.isfinite(radii_idx)) or np.any(radii_idx <= 0.0):
+        return None
 
     # Work inside the ellipsoid's index-space bounding box: no voxel outside it
     # can satisfy the inequality, and a whole-volume grid would cost gigabytes
     # on a full-resolution CT.
-    extent = np.asarray(mask_arr.shape[::-1], dtype=np.int64)                        # x, y, z
+    extent = np.asarray(mask_array.shape[::-1], dtype=np.int64)                      # x, y, z
     lo = np.clip(np.floor(centre_idx - radii_idx).astype(np.int64), 0, extent)
     hi = np.clip(np.ceil(centre_idx + radii_idx).astype(np.int64) + 1, 0, extent)
     if np.any(hi <= lo):
@@ -90,10 +152,10 @@ def vertebral_body_hu(
     ) <= 1.0                                                                          # (z, y, x)
 
     box = (slice(lo[2], hi[2]), slice(lo[1], hi[1]), slice(lo[0], hi[0]))
-    roi = ellipsoid & (mask_arr[box] == label)
-    if int(roi.sum()) < MIN_ROI_VOXELS:
+    roi = ellipsoid & (mask_array[box] == label)
+    if int(roi.sum()) < min_voxels:
         return None
-    return float(ct_arr[box][roi].mean())
+    return float(ct_array[box][roi].mean())
 
 
 def assess_bone_quality(
@@ -105,12 +167,19 @@ def assess_bone_quality(
     body_center_lps: Optional[Point3] = None,
     isthmus_center_lps: Optional[Point3] = None,
     trajectory_threshold: float = TRAJECTORY_HU_LOOSENING_THRESHOLD,
+    volume_mm3: Optional[float] = None,
+    radii_mm: Optional[Tuple[float, float, float]] = None,
 ) -> BoneQualityMetrics:
     """Measure trajectory, pedicle and vertebral-body HU and flag weak bone.
 
     ``body_center_lps`` and ``isthmus_center_lps`` come from the pedicle
     analyser; each metric that depends on one is simply omitted when it is not
     supplied, and every metric is omitted when the grader has no CT.
+    ``volume_mm3``/``radii_mm`` forward to :func:`vertebral_body_hu`; both
+    default to the legacy fixed ROI so existing callers are unchanged.
+
+    The body ROI reuses the grader's cached arrays instead of copying the
+    whole CT and mask again per screw.
     """
     points = grader.cylinder_points(entry, target, diameter_mm)
     hu = grader.hu_at_points(points)
@@ -131,7 +200,16 @@ def assess_bone_quality(
     body_mean = None
     if body_center_lps is not None and grader.ct_image() is not None:
         body_mean = vertebral_body_hu(
-            grader.ct_image(), grader.mask_image(), label, body_center_lps
+            None,
+            None,
+            label,
+            body_center_lps,
+            radii_mm=radii_mm,
+            volume_mm3=volume_mm3,
+            ct_array=grader._ct_array,
+            mask_array=grader._mask_array,
+            origin_lps=grader._origin,
+            spacing_mm=grader._spacing,
         )
 
     ratio = None

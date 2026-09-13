@@ -10,6 +10,7 @@ DICOM **LPS** coordinate system.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -283,6 +284,12 @@ _AXIAL_RECHECK_SIDE_MARGIN_MM: float = 2.0
 # Labels for which pedicle analysis is not meaningful.
 _SKIP_PEDICLE_LABELS: frozenset = frozenset({25})  # sacrum
 
+#: LPS axis-aligned direction matrix.  Every index-to-physical assumption in
+#: this module (anterior = lower y-index, +j = posterior, +X = left) holds
+#: only on an identity grid; ``dicom_loader.normalize_orientation`` produces
+#: one for every loaded volume.  Same guard as ``ScrewGrader``.
+_IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
 
 class PedicleAnalyzer:
     """Analyze vertebral pedicle morphology from segmentation masks.
@@ -377,6 +384,11 @@ class PedicleAnalyzer:
         ct_image: Optional[sitk.Image] = None,
         pedicle_mask: Optional[np.ndarray] = None,
     ) -> None:
+        if not np.allclose(mask_image.GetDirection(), _IDENTITY_DIRECTION, atol=1e-6):
+            raise ValueError(
+                "mask_image must have an identity (LPS axis-aligned) direction matrix; "
+                f"got {tuple(float(v) for v in mask_image.GetDirection())}"
+            )
         self._mask_image = mask_image
         self._ct_image = ct_image
 
@@ -439,7 +451,7 @@ class PedicleAnalyzer:
 
     def _indices_to_lps(self, indices_zyx: np.ndarray) -> np.ndarray:
         """Convert an array of z-y-x indices to physical LPS coordinates."""
-        indices_ijk = indices_zyx[:, ::-1].astype(np.float64, copy=False)
+        indices_ijk = np.ascontiguousarray(indices_zyx[:, ::-1], dtype=np.float64)
         scaled = indices_ijk * np.asarray(self._spacing, dtype=np.float64)
         direction = np.asarray(
             self._mask_image.GetDirection(),
@@ -447,6 +459,70 @@ class PedicleAnalyzer:
         ).reshape(3, 3)
         origin = np.asarray(self._origin, dtype=np.float64)
         return scaled @ direction.T + origin
+
+    # ------------------------------------------------------------------
+    # Local vertebral frame (axial-plane yaw)
+    # ------------------------------------------------------------------
+
+    #: Fewest voxels the inferior-slab frame fit needs before it is trusted.
+    MIN_FRAME_VOXELS: int = 500
+    #: Smallest PCA elongation (first/second singular value) the frame fit
+    #: needs; a near-circular cross-section has no stable long axis.
+    MIN_FRAME_ELONGATION: float = 1.15
+    #: Largest |yaw| the frame applies before falling back to the world axes.
+    #: Past this the level is so rotated that the axis-aligned phantom
+    #: assumptions behind the walk no longer hold either way.
+    MAX_FRAME_YAW_DEG: float = 30.0
+
+    def _estimate_local_frame(
+        self, indices_zyx: np.ndarray
+    ) -> Tuple[float, float, bool]:
+        """Axial-plane yaw of this vertebra as ``(cos, sin, reliable)``.
+
+        The fit runs over the inferior third of the axial range, whose
+        cross-section is the vertebral body alone: the superior two thirds
+        carry the pedicles, laminae and transverse processes, and their
+        symmetric (or, when a side is missing, asymmetric) posterior
+        elements pull a whole-mask PCA several degrees off the body's own
+        axis.  The anterior half is worse still: cutting the ellipse across
+        its short axis leaves a near-circular cap whose long axis is noise.
+        The inferior slab keeps the full body ellipse -- the one structure
+        whose long axis is the vertebra's own left-right axis -- with no
+        posterior elements on it.
+
+        ``reliable`` is ``False`` (and the pair is ``(1.0, 0.0)``, the world
+        frame) when the slab holds fewer than :attr:`MIN_FRAME_VOXELS`
+        voxels, when its PCA elongation is under :attr:`MIN_FRAME_ELONGATION`
+        (near-circular: no stable long axis), or when the fitted |yaw|
+        exceeds :attr:`MAX_FRAME_YAW_DEG`.
+        """
+        z_vals = indices_zyx[:, 0]
+        z_min, z_max = int(z_vals.min()), int(z_vals.max())
+        slab = indices_zyx[
+            z_vals <= z_min + int(round((z_max - z_min) / 3.0))
+        ]
+        if slab.shape[0] < self.MIN_FRAME_VOXELS:
+            return 1.0, 0.0, False
+        sx, sy, _ = self._spacing
+        pts = np.column_stack(
+            [slab[:, 2].astype(np.float64) * sx, slab[:, 1].astype(np.float64) * sy]
+        )
+        centred = pts - pts.mean(axis=0)
+        _, singular, vt = np.linalg.svd(centred, full_matrices=False)
+        if float(singular[0]) < self.MIN_FRAME_ELONGATION * float(
+            max(singular[1], 1e-9)
+        ):
+            return 1.0, 0.0, False
+        # The lateral axis is the PCA axis most aligned with world X, not
+        # blindly the first: on a near-round slab the two order either way.
+        lateral = vt[0] if abs(vt[0, 0]) >= abs(vt[1, 0]) else vt[1]
+        lateral = np.asarray(lateral, dtype=np.float64)
+        if lateral[0] < 0.0:
+            lateral = -lateral
+        yaw = float(math.atan2(lateral[1], lateral[0]))
+        if abs(yaw) > math.radians(self.MAX_FRAME_YAW_DEG):
+            return 1.0, 0.0, False
+        return float(math.cos(yaw)), float(math.sin(yaw)), True
 
     # ------------------------------------------------------------------
     # Public API
@@ -457,16 +533,28 @@ class PedicleAnalyzer:
 
         Returns a list of ``Vertebra`` objects sorted by label id
         (ascending).  Labels not found in the mask are silently skipped.
+
+        The scan is a single ``np.unique(..., return_inverse=True)`` pass
+        over the volume: every present label's voxel indices are gathered
+        from the inverse map, never with one full-volume ``argwhere`` per
+        candidate label.
         """
-        unique_labels = set(np.unique(self._mask_array).astype(int))
+        flat = self._mask_array.ravel()
+        present, inverse = np.unique(flat, return_inverse=True)
+        present = present.astype(int, copy=False)
+        code_of = {int(label): code for code, label in enumerate(present.tolist())}
+        positions = np.arange(flat.size, dtype=np.int64)
         vertebrae: List[Vertebra] = []
 
         for label_id in sorted(VERTEBRA_LABELS.keys()):
-            if label_id not in unique_labels:
+            code = code_of.get(int(label_id))
+            if code is None:
                 continue
 
-            name = VERTEBRA_LABELS[label_id]
-            indices_zyx = np.argwhere(self._mask_array == label_id)  # (N, 3) z,y,x
+            flat_idx = positions[inverse == code]
+            indices_zyx = np.column_stack(
+                np.unravel_index(flat_idx, self._mask_array.shape)
+            ).astype(np.int64, copy=False)
 
             if indices_zyx.shape[0] == 0:
                 continue
@@ -494,7 +582,7 @@ class PedicleAnalyzer:
             vertebrae.append(
                 Vertebra(
                     label=label_id,
-                    name=name,
+                    name=VERTEBRA_LABELS[label_id],
                     centroid_lps=centroid,
                     bounding_box=(bb_lo, bb_hi),
                     volume_mm3=volume_mm3,
@@ -567,9 +655,10 @@ class PedicleAnalyzer:
 
         # Vertebra centroid in index space (x).
         indices_zyx = np.argwhere(binary)
-        centroid_x_idx = float(indices_zyx[:, 2].mean())
+        cos_yaw, sin_yaw, _ = self._estimate_local_frame(indices_zyx)
         body_center = self._estimate_body_center(binary, indices_zyx)
         result.vertebral_body_center = body_center
+        frame = (cos_yaw, sin_yaw)
         body_center_ijk: Optional[Tuple[float, float, float]] = None
         if body_center is not None:
             (
@@ -604,7 +693,8 @@ class PedicleAnalyzer:
             pedicle_voxels = all_pedicle[inside]
             for side in ("left", "right"):
                 found = self._find_pedicle_from_label(
-                    pedicle_voxels, body_center_ijk, side
+                    pedicle_voxels, body_center_ijk, side,
+                    cos_yaw=cos_yaw, sin_yaw=sin_yaw,
                 )
                 if found is None:
                     held_warnings.append(
@@ -625,6 +715,8 @@ class PedicleAnalyzer:
                     body_center_ijk,
                     (z_min, z_max),
                     side,
+                    cos_yaw=cos_yaw,
+                    sin_yaw=sin_yaw,
                 )
                 if found is None:
                     held_warnings.append(
@@ -654,12 +746,28 @@ class PedicleAnalyzer:
             self._report_held_warnings(result, held_warnings)
             result.method = "+".join(methods)
             result.success = True
-            self._apply_plausibility_gate(result, binary)
+            self._apply_plausibility_gate(result, binary, frame=frame)
             return result
 
         # --- Fallback: axial connected-component search ---------------------
+        # The crop is this vertebra's own bounding box, not the whole slice:
+        # labelling only the vertebra's own extent keeps the pass linear in
+        # the vertebra instead of the volume, and identical, since every
+        # other voxel is background.
+        y_vals_all = indices_zyx[:, 1]
+        x_vals_all = indices_zyx[:, 2]
+        y_lo, y_hi = int(y_vals_all.min()), int(y_vals_all.max())
+        x_lo, x_hi = int(x_vals_all.min()), int(x_vals_all.max())
+        crop = binary[z_min:z_max + 1, y_lo:y_hi + 1, x_lo:x_hi + 1]
+        # Split origin: the whole vertebra's mean column/row, exactly as
+        # before.  A fused asymmetric bulk drags a single slice's body
+        # centroid far further off the body's axis than it drags the
+        # whole-vertebra mean, so the global origin is the robust one; the
+        # local frame supplies only the direction.
+        origin_cx = float(indices_zyx[:, 2].mean())
+        origin_cy = float(indices_zyx[:, 1].mean())
         for z in range(z_min, z_max + 1):
-            axial_slice = binary[z]
+            axial_slice = crop[z - z_min]
             if axial_slice.sum() == 0:
                 continue
 
@@ -668,56 +776,56 @@ class PedicleAnalyzer:
                 # Need at least 2 components to separate body from pedicle.
                 continue
 
+            # Per-component voxel counts without materialising one boolean
+            # mask per component; the argwhere below runs only for the
+            # smaller (non-body) components.
+            sizes = ndi.sum(
+                axial_slice, labeled, index=np.arange(1, n_components + 1)
+            )
+            sizes = np.atleast_1d(np.asarray(sizes, dtype=np.float64))
+            body_id = int(np.argmax(sizes)) + 1
+
             # Collect per-component info.
             components = []
             for comp_id in range(1, n_components + 1):
-                comp_mask = labeled == comp_id
-                comp_coords = np.argwhere(comp_mask)  # (N, 2) -> (y, x)
+                if comp_id == body_id:
+                    continue
+                # Minimum pedicle size guard (avoid noise).
+                if float(sizes[comp_id - 1]) < 3:
+                    continue
+                comp_coords = np.argwhere(labeled == comp_id)  # (N, 2) -> (y, x)
+                comp_coords[:, 0] += y_lo
+                comp_coords[:, 1] += x_lo
                 area = comp_coords.shape[0]
-                cx = float(comp_coords[:, 1].mean())
                 components.append(
-                    {"id": comp_id, "mask": comp_mask, "coords": comp_coords,
-                     "area": area, "cx": cx}
+                    {"id": comp_id, "coords": comp_coords, "area": area}
                 )
 
-            # Sort by area descending — largest is typically the vertebral body.
-            components.sort(key=lambda c: c["area"], reverse=True)
-
-            # The vertebral body is the largest component whose centroid is
-            # close to the overall centroid.  Pedicles are the smaller
-            # components on each side.
-            pedicle_candidates = components[1:]
+            # The vertebral body is the largest component.  Pedicles are the
+            # smaller components on each side.
+            pedicle_candidates = components
 
             for pc in pedicle_candidates:
-                # Minimum pedicle size guard (avoid noise).
-                if pc["area"] < 3:
-                    continue
                 yx = pc["coords"]  # (N, 2) y,x
                 zyx = np.column_stack([np.full(yx.shape[0], z), yx])  # (N, 3) z,y,x
 
-                # Determine left/right using LPS coordinates
-                # In LPS, +X = patient Left, -X = patient Right
-                pc_center_lps = self._ijk_to_lps(
-                    int(round(pc["cx"])),
-                    int(round(float(yx[:, 0].mean()))),
-                    z,
+                # Determine left/right in the vertebra's own axial frame.
+                # Local +lateral is the yaw-rotated +X (patient Left); its
+                # sign is the side.  In LPS, +X = patient Left,
+                # -X = patient Right; the frame is the world frame when the
+                # yaw fit was unreliable.
+                mean_yx = yx.mean(axis=0)
+                lateral = (
+                    (float(mean_yx[1]) - origin_cx) * self._spacing[0] * cos_yaw
+                    + (float(mean_yx[0]) - origin_cy) * self._spacing[1] * sin_yaw
                 )
-                centroid_lps = self._ijk_to_lps(
-                    int(round(centroid_x_idx)),
-                    int(round(float(indices_zyx[:, 1].mean()))),
-                    z,
-                )
-                if pc_center_lps[0] > centroid_lps[0]:
-                    # +X in LPS = patient Left
-                    left_voxels_zyx.append(zyx)
-                    left_areas[z] = left_areas.get(z, 0) + pc["area"]
-                else:
-                    right_voxels_zyx.append(zyx)
-                    right_areas[z] = right_areas.get(z, 0) + pc["area"]
+                areas = left_areas if lateral > 0.0 else right_areas
+                voxels = left_voxels_zyx if lateral > 0.0 else right_voxels_zyx
+                voxels.append(zyx)
+                areas[z] = areas.get(z, 0) + pc["area"]
 
         # Analyze each side independently.
         sx, sy, _ = self._spacing
-        voxel_area_mm2 = sx * sy
         axial_found = False
 
         for side, voxels_list, areas_dict, _set_center, _set_axis, _set_width in [
@@ -770,7 +878,7 @@ class PedicleAnalyzer:
                 axis = self._body_centre_axis(isthmus_center, body_center)
 
             # --- Minimum transverse width ---
-            width = self._measure_pedicle_width(isthmus_voxels, voxel_area_mm2)
+            width = self._measure_pedicle_width(isthmus_voxels, sx, sy)
 
             # Store results.  This path has only the one width estimate, so it
             # is its own lower bound -- leaving the bound at its 0.0 default
@@ -798,7 +906,7 @@ class PedicleAnalyzer:
 
         # The gate runs last on both exits: it may append to `method`, so it
         # has to see the method the detection paths settled on.
-        self._apply_plausibility_gate(result, binary)
+        self._apply_plausibility_gate(result, binary, frame=frame)
         return result
 
     def _report_held_warnings(
@@ -870,25 +978,39 @@ class PedicleAnalyzer:
         x_indices: np.ndarray,
         isthmus_j: int,
         side: str,
+        cos_yaw: float = 1.0,
+        sin_yaw: float = 0.0,
     ) -> np.ndarray:
         """LPS corner voxel of one isthmus slice: most inferior, then most medial.
 
         ``z_indices`` / ``x_indices`` are the slice's voxel indices.  The
         inferior end of the pedicle is the lowest ``z`` index and the medial
-        side is the ``x`` index nearest the midline, which is the smaller ``x``
-        for the patient's left (+X in LPS) and the larger one for the right —
-        the same index-to-LPS orientation the rest of this module assumes.
+        side is the voxel nearest the midline *in the vertebra's own axial
+        frame*, which is the smaller ``x`` for the patient's left (+X in LPS)
+        and the larger one for the right when the frame is axis-aligned — the
+        same index-to-LPS orientation the rest of this module assumes.  The
+        corresponding vectorised point is ``_indices_to_lps``.
         """
         z_min = int(np.min(z_indices))
         on_floor = x_indices[z_indices == z_min]
-        x_medial = int(on_floor.min() if side == "left" else on_floor.max())
-        return self._ijk_to_lps(x_medial, int(isthmus_j), z_min)
+        if cos_yaw == 1.0 and sin_yaw == 0.0:
+            x_medial = int(on_floor.min() if side == "left" else on_floor.max())
+        else:
+            # Medial = smallest local-lateral for left, largest for right;
+            # at fixed j the local lateral is monotonic in x.
+            x_medial = int(on_floor.min() if side == "left" else on_floor.max())
+        vectorised = self._indices_to_lps(
+            np.array([[z_min, int(isthmus_j), x_medial]])
+        )[0]
+        return np.asarray(vectorised, dtype=np.float64)
 
     def _find_pedicle_from_label(
         self,
         pedicle_voxels: np.ndarray,
         body_center_ijk: Tuple[float, float, float],
         side: str,
+        cos_yaw: float = 1.0,
+        sin_yaw: float = 0.0,
     ) -> Optional[Dict[str, object]]:
         """Measure one pedicle inside the supplied pedicle subregion label.
 
@@ -915,6 +1037,10 @@ class PedicleAnalyzer:
             Vertebral body centre as a continuous ``(i, j, k)`` index.
         side:
             ``"left"`` (+X in LPS) or ``"right"`` (-X in LPS).
+        cos_yaw / sin_yaw:
+            Axial-plane yaw of the vertebra's own frame; the side split is
+            the sign of the local lateral offset from the body centre, which
+            is the world split when the frame is axis-aligned.
 
         Returns
         -------
@@ -925,10 +1051,13 @@ class PedicleAnalyzer:
         if pedicle_voxels.shape[0] == 0:
             return None
 
-        sx, _, sz = self._spacing
+        sx, sy, sz = self._spacing
         cx = float(body_center_ijk[0])
+        cy = float(body_center_ijk[1])
 
-        lateral = (pedicle_voxels[:, 2] - cx) * (1.0 if side == "left" else -1.0)
+        lateral = ((pedicle_voxels[:, 2] - cx) * sx * cos_yaw
+                   + (pedicle_voxels[:, 1] - cy) * sy * sin_yaw)
+        lateral = lateral * (1.0 if side == "left" else -1.0)
         side_voxels = pedicle_voxels[lateral > 0]
         if side_voxels.shape[0] < self.MIN_LABEL_SIDE_VOXELS:
             return None
@@ -952,15 +1081,19 @@ class PedicleAnalyzer:
 
         js, counts = np.unique(side_voxels[:, 1], return_counts=True)
         areas = counts.astype(np.float64) * sx * sz
+        order = np.argsort(side_voxels[:, 1], kind="stable")
+        sorted_y = side_voxels[order][:, 1]
+        sorted_x = side_voxels[order][:, 2]
+        # Per-slice x extents without one boolean scan per slice: the
+        # positions where the sorted y changes bracket each slice's run.
+        change = np.flatnonzero(np.diff(sorted_y)) + 1
+        run_starts = np.concatenate(([0], change))
+        run_ends = np.concatenate((change, [sorted_y.size]))
         widths = np.array(
             [
-                float(
-                    side_voxels[side_voxels[:, 1] == j][:, 2].max()
-                    - side_voxels[side_voxels[:, 1] == j][:, 2].min()
-                    + 1
-                )
+                float(sorted_x[start:end].max() - sorted_x[start:end].min() + 1)
                 * sx
-                for j in js
+                for start, end in zip(run_starts, run_ends, strict=True)
             ],
             dtype=np.float64,
         )
@@ -1031,7 +1164,8 @@ class PedicleAnalyzer:
             "height_mm": height_mm,
             "isthmus_j": isthmus_j,
             "inferior_medial_lps": self._inferior_medial_corner_lps(
-                coords[:, 0], coords[:, 2], isthmus_j, side
+                coords[:, 0], coords[:, 2], isthmus_j, side,
+                cos_yaw=cos_yaw, sin_yaw=sin_yaw,
             ),
             # The axis is fitted over the whole labelled corridor, so the
             # window it covers is that corridor's full coronal span.
@@ -1062,6 +1196,8 @@ class PedicleAnalyzer:
         binary: np.ndarray,
         result: PedicleAnalysisResult,
         side: str,
+        cos_yaw: float = 1.0,
+        sin_yaw: float = 0.0,
     ) -> Optional[float]:
         """Re-measure one pedicle's width on the axial slice through its isthmus.
 
@@ -1075,10 +1211,16 @@ class PedicleAnalyzer:
 
         Candidates are refused unless they sit within
         :attr:`MAX_AXIAL_RECHECK_OFFSET_MM` of the recorded centre *and* on the
-        same side of the body as it: without both, the nearest non-body
+        same side of the body as it, where the side is the sign of the local
+        lateral offset in the vertebra's own axial frame (the world split when
+        the frame is axis-aligned): without both, the nearest non-body
         component is routinely a posterior-element fragment whose width happens
         to fall inside the plausible band, and believing it replaced a real
         measurement with a fragment's.
+
+        Only this vertebra's own bounding box is labelled, not the whole
+        slice: every other voxel is background, so the components come out
+        identical at a fraction of the cost.
 
         Returns ``None`` when the slice holds nothing but the body, or nothing
         near enough to be this pedicle -- a pedicle fused to the body in the
@@ -1094,7 +1236,13 @@ class PedicleAnalyzer:
         z = int(round(index[2]))
         if not 0 <= z < binary.shape[0]:
             return None
-        axial_slice = binary[z]
+        y_vals = np.flatnonzero(binary.any(axis=2)[z])
+        x_vals = np.flatnonzero(binary[z].any(axis=0))
+        if y_vals.size == 0 or x_vals.size == 0:
+            return None
+        y_lo, y_hi = int(y_vals[0]), int(y_vals[-1])
+        x_lo, x_hi = int(x_vals[0]), int(x_vals[-1])
+        axial_slice = binary[z, y_lo:y_hi + 1, x_lo:x_hi + 1]
         labeled, n_components = ndi.label(axial_slice)
         if n_components < 2:
             return None
@@ -1105,13 +1253,25 @@ class PedicleAnalyzer:
         # Millimetres, not voxels: the in-plane spacings need not be equal, and
         # the cap below is an anatomical distance.
         scale_yx = np.array([float(sy), float(sx)])
-        body_x = float(ndi.center_of_mass(axial_slice, labeled, body_id)[1])
-        target_offset_mm = (target_yx[1] - body_x) * float(sx)
+        body_centroid = np.asarray(
+            ndi.center_of_mass(axial_slice, labeled, body_id), dtype=np.float64
+        )
+        body_yx = body_centroid + np.array([float(y_lo), float(x_lo)])
+        # Side of the recorded centre in the vertebra's own axial frame (the
+        # world split when the frame is axis-aligned); the axial fallback
+        # splits sides around the same whole-vertebra origin, so the gate
+        # agrees with it by construction.
+        target_offset_mm = (
+            (target_yx[1] - body_yx[1]) * float(sx) * cos_yaw
+            + (target_yx[0] - body_yx[0]) * float(sy) * sin_yaw
+        )
         best: Optional[Tuple[float, np.ndarray]] = None
         for comp_id in range(1, n_components + 1):
             if comp_id == body_id:
                 continue
             coords = np.argwhere(labeled == comp_id)  # (n, 2) -> y, x
+            coords[:, 0] += y_lo
+            coords[:, 1] += x_lo
             centroid = coords.mean(axis=0)
             distance = float(np.linalg.norm((centroid - target_yx) * scale_yx))
             if distance > self.MAX_AXIAL_RECHECK_OFFSET_MM:
@@ -1120,7 +1280,10 @@ class PedicleAnalyzer:
             # centre sits essentially on the body's own column, where the sign
             # carries no information and the distance cap is the whole check.
             if abs(target_offset_mm) >= _AXIAL_RECHECK_SIDE_MARGIN_MM:
-                comp_offset_mm = (float(centroid[1]) - body_x) * float(sx)
+                comp_offset_mm = (
+                    (float(centroid[1]) - body_yx[1]) * float(sx) * cos_yaw
+                    + (float(centroid[0]) - body_yx[0]) * float(sy) * sin_yaw
+                )
                 if comp_offset_mm * target_offset_mm <= 0.0:
                     continue
             if best is None or distance < best[0]:
@@ -1128,12 +1291,13 @@ class PedicleAnalyzer:
         if best is None:
             return None
         voxels_zyx = np.column_stack([np.full(best[1].shape[0], z), best[1]])
-        return float(self._measure_pedicle_width(voxels_zyx, sx * sy))
+        return float(self._measure_pedicle_width(voxels_zyx, sx, sy))
 
     def _apply_plausibility_gate(
         self,
         result: PedicleAnalysisResult,
         binary: np.ndarray,
+        frame: Tuple[float, float] = (1.0, 0.0),
     ) -> None:
         """Check each measured width against its level's plausible band.
 
@@ -1166,7 +1330,9 @@ class PedicleAnalyzer:
             )
             if lo <= width <= hi:
                 continue
-            second = self._axial_recheck_width(binary, result, side)
+            second = self._axial_recheck_width(
+                binary, result, side, cos_yaw=frame[0], sin_yaw=frame[1]
+            )
             if second is not None and lo <= second <= hi:
                 logger.info(
                     "%s: %s pedicle width %.1f mm re-measured axially as %.1f mm",
@@ -1281,6 +1447,8 @@ class PedicleAnalyzer:
         body_center_ijk: Tuple[float, float, float],
         z_range: Tuple[int, int],
         side: str,
+        cos_yaw: float = 1.0,
+        sin_yaw: float = 0.0,
     ) -> Optional[Dict[str, object]]:
         """Locate one pedicle by scanning coronal cross-sections.
 
@@ -1292,6 +1460,16 @@ class PedicleAnalyzer:
         recorded, which is the pedicle *and*, while the laminae stay
         clear of the midline, the anterior part of the laminar arch:
         the recorded run is not pedicle-only.
+
+        Posterior travel, the midline band and the lateral side split are
+        measured in the vertebra's own axial frame: local +posterior is the
+        yaw-rotated +Y and local +lateral the yaw-rotated +X, so a rotated
+        level walks its own posterior instead of the volume's.  The frame is
+        the axis-aligned world frame when ``cos_yaw``/``sin_yaw`` are
+        ``(1.0, 0.0)``.  The walk still steps through the axis-aligned
+        coronal slices of the volume; only the measurements are rotated.
+        That keeps every existing axis-aligned result, where the frame is
+        the identity, bit-identical.
 
         The two measurements are taken from different subsets of it:
 
@@ -1314,6 +1492,8 @@ class PedicleAnalyzer:
             Inclusive ``(z_min, z_max)`` index range of the vertebra.
         side:
             ``"left"`` (+X in LPS) or ``"right"`` (-X in LPS).
+        cos_yaw / sin_yaw:
+            Axial-plane yaw of the vertebra's own frame.
 
         Returns
         -------
@@ -1326,11 +1506,11 @@ class PedicleAnalyzer:
             range the axis was fitted over); ``None`` when fewer than
             two pedicle cross-sections were found.
         """
-        sx, _, sz = self._spacing
+        sx, sy, sz = self._spacing
         cx = float(body_center_ijk[0])
+        cy = float(body_center_ijk[1])
         j_start = int(round(body_center_ijk[1]))
         lateral_sign = 1.0 if side == "left" else -1.0
-        band = max(1, int(round(self.MIDLINE_BAND_MM / sx)))
         records: List[Tuple[int, float, np.ndarray]] = []
         body_ended = False
         previous_zx_mm: Optional[Tuple[float, float]] = None
@@ -1344,10 +1524,81 @@ class PedicleAnalyzer:
                 continue
 
             labeled, n_components = ndi.label(coronal)
-            band_center = int(round(cx))
-            lo = max(0, band_center - band)
-            hi = min(coronal.shape[1], band_center + band + 1)
-            midline_ids = set(np.unique(labeled[:, lo:hi])) - {0}
+            # Per-component statistics come from one C-level reduction each
+            # (counts, row/column means and extrema) instead of one boolean
+            # scan per component.  The world-frame branch reads the same
+            # numbers the historical per-component scans produced; the frame
+            # branch additionally rotates the lateral offset and the midline
+            # test into the vertebra's own axial frame.
+            present = np.unique(labeled)
+            present = present[present != 0]
+            col_index = np.broadcast_to(
+                np.arange(coronal.shape[1], dtype=np.int64)[None, :],
+                coronal.shape,
+            )
+            row_index = np.broadcast_to(
+                np.arange(coronal.shape[0], dtype=np.float64)[:, None],
+                coronal.shape,
+            )
+            counts = np.atleast_1d(
+                np.asarray(
+                    ndi.sum(coronal, labeled, index=present),
+                    dtype=np.float64,
+                )
+            )
+            means_z = np.atleast_1d(
+                np.asarray(
+                    ndi.mean(row_index, labeled, index=present),
+                    dtype=np.float64,
+                )
+            )
+            means_x = np.atleast_1d(
+                np.asarray(
+                    ndi.mean(col_index.astype(np.float64), labeled,
+                             index=present),
+                    dtype=np.float64,
+                )
+            )
+            col_min = np.atleast_1d(
+                np.asarray(
+                    ndi.minimum(col_index, labeled, index=present),
+                    dtype=np.float64,
+                )
+            )
+            col_max = np.atleast_1d(
+                np.asarray(
+                    ndi.maximum(col_index, labeled, index=present),
+                    dtype=np.float64,
+                )
+            )
+            posterior_j = (float(j) - cy) * sy
+            stats = {
+                int(comp_id): (count, z_mean, x_mean, c_lo, c_hi)
+                for comp_id, count, z_mean, x_mean, c_lo, c_hi in zip(
+                    present, counts, means_z, means_x, col_min, col_max,
+                    strict=True,
+                )
+            }
+            midline_ids: Set[int] = set()
+            if cos_yaw == 1.0 and sin_yaw == 0.0:
+                band = max(1, int(round(self.MIDLINE_BAND_MM / sx)))
+                band_center = int(round(cx))
+                lo = max(0, band_center - band)
+                hi = min(coronal.shape[1], band_center + band + 1)
+                midline_ids = set(np.unique(labeled[:, lo:hi])) - {0}
+            else:
+                x_star = cx - posterior_j * sin_yaw / (sx * cos_yaw)
+                for comp_id, (_count, _z, _x, c_lo, c_hi) in stats.items():
+                    # At fixed j the local lateral offset is monotonic in x,
+                    # so the component reaches the midline band exactly when
+                    # its x-interval covers a voxel within the band -- exact,
+                    # not a centroid proxy: a wide body always covers it.
+                    nearest = min(max(x_star, float(c_lo)), float(c_hi))
+                    lateral_mm = (
+                        (nearest - cx) * sx * cos_yaw + posterior_j * sin_yaw
+                    )
+                    if abs(lateral_mm) <= self.MIDLINE_BAND_MM:
+                        midline_ids.add(int(comp_id))
             if not body_ended:
                 if midline_ids:
                     continue          # still inside the vertebral body
@@ -1356,31 +1607,40 @@ class PedicleAnalyzer:
                 break                 # lamina / spinous process reached
 
             candidates: List[Tuple[float, np.ndarray, float, float]] = []
-            for comp_id in range(1, n_components + 1):
-                coords = np.argwhere(labeled == comp_id)  # (n, 2) -> z, x
-                if coords.shape[0] * sx * sz < self.MIN_PEDICLE_AREA_MM2:
+            # The means and extrema above are the same numbers the historical
+            # per-component scans computed (mean and min/max over identical
+            # voxel sets), so the world-frame branch below keeps the recorded
+            # corridor bit-identical while scanning each component once.
+            for comp_id, (count, z_mean, x_mean, c_lo, c_hi) in stats.items():
+                if float(count) * sx * sz < self.MIN_PEDICLE_AREA_MM2:
                     continue
-                width_mm = float(
-                    coords[:, 1].max() - coords[:, 1].min() + 1
-                ) * sx
+                width_mm = float(c_hi - c_lo + 1) * sx
                 if width_mm < self.MIN_SLICE_WIDTH_MM:
-                    continue          # a stair-step sliver, not a pedicle
-                lateral_mm = (float(coords[:, 1].mean()) - cx) * sx * lateral_sign
+                    continue              # a stair-step sliver, not a pedicle
+                if cos_yaw == 1.0 and sin_yaw == 0.0:
+                    lateral_mm = (float(x_mean) - cx) * sx * lateral_sign
+                else:
+                    lateral_mm = (
+                        (float(x_mean) - cx) * sx * cos_yaw
+                        + posterior_j * sin_yaw
+                    ) * lateral_sign
                 if not self.MIN_LATERAL_MM <= lateral_mm <= self.MAX_LATERAL_MM:
                     continue
-                z_mean = float(coords[:, 0].mean())
                 margin = self.Z_RANGE_MARGIN_MM / sz
-                if not z_range[0] - margin <= z_mean <= z_range[1] + margin:
+                if not z_range[0] - margin <= float(z_mean) <= z_range[1] + margin:
                     continue
+                coords = np.argwhere(labeled == int(comp_id))
                 candidates.append(
                     (
                         lateral_mm,
                         coords,
-                        z_mean * sz,
-                        float(coords[:, 1].mean()) * sx,
+                        float(z_mean) * sz,
+                        float(x_mean) * sx,
                     )
                 )
 
+            # The walk steps through axis-aligned coronal slices; continuity
+            # is tracked in (z, x) millimetres exactly as before.
             chosen = self._track_candidate(
                 candidates, previous_zx_mm, self.MAX_TRACK_JUMP_MM
             )
@@ -1452,7 +1712,9 @@ class PedicleAnalyzer:
             hi_index += 1
         # A direction fitted over a millimetre of AP travel is noise: widen the
         # window until it spans a real length, whatever the areas say.
-        lo_index, hi_index = self._extend_axis_window(records, lo_index, hi_index)
+        lo_index, hi_index = self._extend_axis_window(
+            records, lo_index, hi_index, cos_yaw=cos_yaw
+        )
 
         axis = self._fit_axis_through_centroids(records[lo_index:hi_index + 1])
         if axis is None:
@@ -1473,7 +1735,8 @@ class PedicleAnalyzer:
             "height_mm": height_mm,
             "isthmus_j": int(isthmus_j),
             "inferior_medial_lps": self._inferior_medial_corner_lps(
-                coords[:, 0], coords[:, 1], isthmus_j, side
+                coords[:, 0], coords[:, 1], isthmus_j, side,
+                cos_yaw=cos_yaw, sin_yaw=sin_yaw,
             ),
             "isthmus_window_j": (int(records[lo_index][0]), int(records[hi_index][0])),
         }
@@ -1483,6 +1746,7 @@ class PedicleAnalyzer:
         records: List[Tuple[int, float, np.ndarray]],
         lo_index: int,
         hi_index: int,
+        cos_yaw: float = 1.0,
     ) -> Tuple[int, int]:
         """Widen ``records[lo_index:hi_index + 1]`` to :attr:`MIN_AXIS_WINDOW_MM`.
 
@@ -1495,15 +1759,20 @@ class PedicleAnalyzer:
         Slices are added alternately in front of and behind the window, over
         the recorded corridor and ignoring the area ratio (they only steady the
         direction; the isthmus, width and height are already measured), until
-        the window spans ``MIN_AXIS_WINDOW_MM`` of AP travel or the corridor
-        runs out.  A corridor shorter than that is used whole.
+        the window spans ``MIN_AXIS_WINDOW_MM`` of posterior travel or the
+        corridor runs out.  A corridor shorter than that is used whole.
+
+        The span is posterior travel in the vertebra's own frame, not a raw
+        ``j`` count times ``sy``: on a rotated level the walk's coronal steps
+        advance partly laterally, and only their posterior projection steadies
+        the fit.
         """
         _, sy, _ = self._spacing
         last = len(records) - 1
         extend_lo = True
-        while (records[hi_index][0] - records[lo_index][0] + 1) * sy < (
-            self.MIN_AXIS_WINDOW_MM
-        ):
+        while (records[hi_index][0] - records[lo_index][0] + 1) * sy * abs(
+            cos_yaw
+        ) < (self.MIN_AXIS_WINDOW_MM):
             if lo_index == 0 and hi_index == last:
                 break                  # the whole corridor is shorter than that
             if extend_lo and lo_index > 0:
@@ -1644,12 +1913,10 @@ class PedicleAnalyzer:
             idx = rng.choice(n, max_samples, replace=False)
             voxels_zyx = voxels_zyx[idx]
 
-        pts = np.array(
-            [
-                self._ijk_to_lps(int(row[2]), int(row[1]), int(row[0]))
-                for row in voxels_zyx
-            ]
-        )  # (N, 3)
+        # Vectorised index -> LPS: identical to one _ijk_to_lps call per
+        # voxel (identity direction is enforced in __init__), without the
+        # per-voxel SimpleITK overhead.
+        pts = self._indices_to_lps(np.asarray(voxels_zyx))  # (N, 3)
 
         # Centre the points.
         centred = pts - pts.mean(axis=0)
@@ -1667,33 +1934,39 @@ class PedicleAnalyzer:
     @staticmethod
     def _measure_pedicle_width(
         isthmus_voxels_zyx: np.ndarray,
-        voxel_area_mm2: float,
+        spacing_x_mm: float,
+        spacing_y_mm: float,
     ) -> float:
         """Estimate minimum transverse pedicle width at the isthmus.
 
-        Uses a simple approach: take the 2-D cross-section of the
-        pedicle in the isthmus slice, compute its area, and approximate
-        the width as ``area / height`` where height is the bounding-box
-        extent in the y (AP) direction.  Falls back to
+        The 2-D cross-section's area is the voxel count times the true
+        in-plane voxel area (``sx * sy``); the bounding-box extents are
+        scaled by their own spacing.  Dividing the area by one physical
+        extent yields the width along the other in mm, so anisotropic
+        voxels no longer shrink or stretch the answer.  Falls back to
         ``sqrt(area)`` when the extent is degenerate.
         """
         if isthmus_voxels_zyx.shape[0] == 0:
             return 0.0
 
         yx = isthmus_voxels_zyx[:, 1:]  # (N, 2) y, x
-        area_mm2 = float(yx.shape[0]) * voxel_area_mm2
+        area_mm2 = float(yx.shape[0]) * float(spacing_x_mm) * float(spacing_y_mm)
 
-        y_extent = float(yx[:, 0].max() - yx[:, 0].min() + 1)
-        x_extent = float(yx[:, 1].max() - yx[:, 1].min() + 1)
+        y_extent_mm = float(yx[:, 0].max() - yx[:, 0].min() + 1) * float(
+            spacing_y_mm
+        )
+        x_extent_mm = float(yx[:, 1].max() - yx[:, 1].min() + 1) * float(
+            spacing_x_mm
+        )
 
-        if y_extent <= 0 or x_extent <= 0:
+        if y_extent_mm <= 0 or x_extent_mm <= 0:
             return float(np.sqrt(area_mm2))
 
         # Width is the shorter bounding-box dimension in physical units.
         # This approximates the minimum transverse pedicle width.
         width_candidates = [
-            area_mm2 / (y_extent * np.sqrt(voxel_area_mm2)),
-            area_mm2 / (x_extent * np.sqrt(voxel_area_mm2)),
+            area_mm2 / y_extent_mm,
+            area_mm2 / x_extent_mm,
         ]
         return min(width_candidates)
 
