@@ -161,18 +161,11 @@ def get_vertebra_colors() -> Dict[int, Tuple[float, float, float]]:
     return {label: generate_vertebra_color(label) for label in VERTEBRA_LABELS}
 
 
-def _label_has_voxels(mask_image: vtk.vtkImageData, label: int) -> bool:
-    """Check whether a specific label value exists in the mask.
+def _label_has_voxels_slow(mask_image: vtk.vtkImageData, label: int) -> bool:
+    """Last-resort per-voxel presence check without numpy.
 
-    Scans the scalar array for at least one voxel matching `label`.
-    Uses VTK scalar range first as a fast rejection test.
-
-    Args:
-        mask_image: Multilabel segmentation mask.
-        label: Label value to check.
-
-    Returns:
-        True if at least one voxel has this label value.
+    Only reached when ``vtk_to_numpy`` cannot be imported. Deliberately
+    slow on full scans; never called on the normal path.
     """
     scalar_range = mask_image.GetScalarRange()
     if label < scalar_range[0] or label > scalar_range[1]:
@@ -192,7 +185,7 @@ def _label_has_voxels(mask_image: vtk.vtkImageData, label: int) -> bool:
 def _label_has_voxels_numpy(mask_image: vtk.vtkImageData, label: int) -> bool:
     """Fast numpy-based check for voxel presence.
 
-    Falls back to VTK iteration if numpy import fails.
+    Falls back to the slow VTK loop only if numpy import fails.
 
     Args:
         mask_image: Multilabel segmentation mask.
@@ -213,7 +206,27 @@ def _label_has_voxels_numpy(mask_image: vtk.vtkImageData, label: int) -> bool:
         arr = vtk_to_numpy(scalars)
         return bool((arr == label).any())
     except ImportError:
-        return _label_has_voxels(mask_image, label)
+        return _label_has_voxels_slow(mask_image, label)
+
+
+def _label_has_voxels(mask_image: vtk.vtkImageData, label: int) -> bool:
+    """Check whether a specific label value exists in the mask.
+
+    Alias of :func:`_label_has_voxels_numpy`. The historical per-voxel
+    scalar loop lived here and was catastrophic on full scans
+    (tens of millions of Python-level VTK calls); it now survives only
+    as :func:`_label_has_voxels_slow` for the no-numpy fallback. The
+    name stays for backward compatibility with callers importing it
+    directly.
+
+    Args:
+        mask_image: Multilabel segmentation mask.
+        label: Label value to check.
+
+    Returns:
+        True if at least one voxel has this label value.
+    """
+    return _label_has_voxels_numpy(mask_image, label)
 
 
 def create_vertebral_only_volume(

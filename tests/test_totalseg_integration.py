@@ -144,7 +144,7 @@ class TestTotalSegIntegration:
             device="cpu",
         )
 
-        assert result.success is True
+        assert result.success is False
         assert result.method == "threshold_fallback"
         assert os.path.exists(result.mask_path)
         assert "not installed" in result.message.lower()
@@ -165,7 +165,7 @@ class TestTotalSegIntegration:
             device="cpu",
         )
 
-        assert result.success is True
+        assert result.success is False
         assert result.method == "threshold_fallback"
         assert os.path.exists(result.mask_path)
         assert "fallback mask" in result.message.lower()
@@ -192,6 +192,26 @@ class TestTotalSegIntegration:
         image = _create_test_image(300)
         mask = sitk.Cast(image > 0, sitk.sitkUInt8)
         mask.CopyInformation(image)
+
+        warnings = totalseg.check_segmentation_geometry(
+            reference_image=image,
+            mask_image=mask,
+        )
+
+        assert warnings == []
+
+    def test_check_segmentation_geometry_ignores_float32_origin_drift(self):
+        import numpy as np
+
+        from src.core.screw_grading import ScrewGrader
+
+        image = _create_test_image(300)
+        image.SetOrigin((0.0, 0.0, -2300.00012))
+        mask = sitk.Cast(image > 0, sitk.sitkUInt8)
+        mask.CopyInformation(image)
+        mask.SetOrigin((0.0, 0.0, float(np.float32(-2300.00012))))
+        assert abs(image.GetOrigin()[2] - mask.GetOrigin()[2]) > 1e-4
+        assert ScrewGrader.grids_match(image, mask)
 
         warnings = totalseg.check_segmentation_geometry(
             reference_image=image,

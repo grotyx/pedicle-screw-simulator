@@ -236,7 +236,13 @@ class DicomLoader:
         return self._image
 
     def _extract_metadata(self, reader: sitk.ImageSeriesReader) -> None:
-        """Extract relevant metadata from DICOM headers."""
+        """Extract de-identified geometry metadata from DICOM headers.
+
+        Patient identifiers (name, ID, birth date, study date, accession
+        number, institution, ...) must never enter ``_metadata``: it flows
+        into plan files, logs, and UI labels. Only acquisition geometry
+        and non-identifying descriptors are kept.
+        """
         if not self._file_names:
             return
 
@@ -245,9 +251,6 @@ class DicomLoader:
             ds = pydicom.dcmread(self._file_names[0], stop_before_pixels=True)
 
             self._metadata = {
-                "patient_id": getattr(ds, "PatientID", "Unknown"),
-                "patient_name": str(getattr(ds, "PatientName", "Unknown")),
-                "study_date": getattr(ds, "StudyDate", "Unknown"),
                 "modality": getattr(ds, "Modality", "Unknown"),
                 "manufacturer": getattr(ds, "Manufacturer", "Unknown"),
                 "slice_thickness": float(getattr(ds, "SliceThickness", 0)),

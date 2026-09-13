@@ -200,6 +200,21 @@ class TestLabelDetection:
         assert _label_has_voxels(mask, 32) is True
         assert _label_has_voxels(mask, 33) is False
 
+    def test_label_presence_alias_delegates_to_numpy(self):
+        """_label_has_voxels must not run its own per-voxel GetTuple1 loop."""
+        import inspect
+
+        from src.core import vertebral_mesh
+        from src.core.vertebral_mesh import _label_has_voxels
+
+        mask = _create_labeled_mask(label_slabs=[(32, 2, 5)])
+        assert _label_has_voxels(mask, 32) is True
+        assert _label_has_voxels(mask, 33) is False
+        source = inspect.getsource(_label_has_voxels)
+        assert "GetTuple1" not in source
+        assert "_label_has_voxels_numpy" in source
+        assert hasattr(vertebral_mesh, "_label_has_voxels_slow")
+
     def test_detect_vertebral_labels_returns_sorted(self):
         """detect_vertebral_labels should return sorted list of present labels."""
         from src.core.vertebral_mesh import detect_vertebral_labels

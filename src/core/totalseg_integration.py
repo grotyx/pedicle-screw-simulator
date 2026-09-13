@@ -518,6 +518,21 @@ def _geometry_close(a: float, b: float, tolerance: float = 1e-4) -> bool:
     return abs(float(a) - float(b)) <= tolerance
 
 
+def _grid_tolerances():
+    """Grid-equality tolerances shared with the screw grader.
+
+    Imported lazily so ``totalseg_integration`` stays importable without
+    pulling the scipy-backed grading module at module scope.
+    """
+    from src.core.screw_grading import (
+        GRID_DIRECTION_ATOL,
+        GRID_ORIGIN_VOXEL_FRACTION,
+        GRID_SPACING_RTOL,
+    )
+
+    return GRID_SPACING_RTOL, GRID_ORIGIN_VOXEL_FRACTION, GRID_DIRECTION_ATOL
+
+
 def check_segmentation_geometry(
     reference_image: sitk.Image,
     mask_image: sitk.Image,
@@ -525,6 +540,14 @@ def check_segmentation_geometry(
 ) -> List[str]:
     """
     Compare geometry metadata between reference image and segmentation mask.
+
+    ``tolerance`` keeps its legacy absolute-millimetre meaning only as a
+    caller-provided override: passing an explicit non-default value compares
+    every component against it, as before. The default path reuses the
+    ``grids_match`` tolerances from ``screw_grading`` -- relative spacing,
+    origin within a fraction of a voxel, absolute direction -- so a NIfTI
+    float32 origin round-trip (documented drift ~1.2e-4 mm) does not trip a
+    spurious warning while a real misalignment still does.
 
     Returns list of warning messages when mismatch is detected.
     """
@@ -535,21 +558,50 @@ def check_segmentation_geometry(
     if ref_size != mask_size:
         warnings.append(f"size mismatch: ref={ref_size}, mask={mask_size}")
 
-    ref_spacing = tuple(float(v) for v in reference_image.GetSpacing())
-    mask_spacing = tuple(float(v) for v in mask_image.GetSpacing())
-    for axis, (ref_v, mask_v) in enumerate(zip(ref_spacing, mask_spacing, strict=False)):
-        if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
+    legacy_absolute = tolerance != 1e-4
+    import numpy as np
+
+    if legacy_absolute:
+        spacing_rtol, origin_fraction, direction_atol = 0.0, None, tolerance
+    else:
+        spacing_rtol, origin_fraction, direction_atol = _grid_tolerances()
+
+    ref_spacing = np.asarray(reference_image.GetSpacing(), dtype=np.float64)
+    mask_spacing = np.asarray(mask_image.GetSpacing(), dtype=np.float64)
+    for axis in range(min(len(ref_spacing), len(mask_spacing))):
+        ref_v, mask_v = float(ref_spacing[axis]), float(mask_spacing[axis])
+        if legacy_absolute:
+            close = _geometry_close(ref_v, mask_v, tolerance=tolerance)
+        else:
+            close = bool(
+                np.isclose(ref_v, mask_v, rtol=spacing_rtol, atol=0.0)
+            )
+        if not close:
             warnings.append(
                 f"spacing mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
             )
 
     ref_origin = tuple(float(v) for v in reference_image.GetOrigin())
     mask_origin = tuple(float(v) for v in mask_image.GetOrigin())
-    for axis, (ref_v, mask_v) in enumerate(zip(ref_origin, mask_origin, strict=False)):
-        if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
-            warnings.append(
-                f"origin mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
-            )
+    if legacy_absolute:
+        for axis, (ref_v, mask_v) in enumerate(
+            zip(ref_origin, mask_origin, strict=False)
+        ):
+            if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
+                warnings.append(
+                    f"origin mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
+                )
+    else:
+        spacings = np.concatenate([ref_spacing, mask_spacing])
+        voxel = float(spacings.min()) if spacings.size else 0.0
+        origin_atol = origin_fraction * voxel
+        for axis, (ref_v, mask_v) in enumerate(
+            zip(ref_origin, mask_origin, strict=False)
+        ):
+            if not bool(np.isclose(ref_v, mask_v, rtol=0.0, atol=origin_atol)):
+                warnings.append(
+                    f"origin mismatch at axis {axis}: ref={ref_v}, mask={mask_v}"
+                )
 
     ref_direction = tuple(float(v) for v in reference_image.GetDirection())
     mask_direction = tuple(float(v) for v in mask_image.GetDirection())
@@ -559,8 +611,10 @@ def check_segmentation_geometry(
             f"mask={len(mask_direction)}"
         )
     else:
-        for index, (ref_v, mask_v) in enumerate(zip(ref_direction, mask_direction, strict=True)):
-            if not _geometry_close(ref_v, mask_v, tolerance=tolerance):
+        for index, (ref_v, mask_v) in enumerate(
+            zip(ref_direction, mask_direction, strict=True)
+        ):
+            if not _geometry_close(ref_v, mask_v, tolerance=direction_atol):
                 warnings.append(
                     f"direction mismatch at index {index}: ref={ref_v}, mask={mask_v}"
                 )
@@ -633,6 +687,7 @@ def _build_result(
     subregion_message: str = "",
     raw_mask_path: Optional[str] = None,
     refinement_notes: Optional[List[str]] = None,
+    success: bool = True,
 ) -> SegmentationRunResult:
     geometry_warnings = validate_segmentation_output(image, mask_path)
     if geometry_warnings:
@@ -642,7 +697,7 @@ def _build_result(
         message = f"{message} Geometry check warning: {summary}"
 
     return SegmentationRunResult(
-        success=True,
+        success=success,
         method=method,
         mask_path=mask_path,
         message=message,
@@ -733,6 +788,7 @@ def run_segmentation_with_fallback(
                 "TotalSegmentator is not installed. "
                 "Threshold fallback mask was generated instead."
             ),
+            success=False,
         )
 
     attempt_devices = [device]
@@ -824,4 +880,5 @@ def run_segmentation_with_fallback(
             "TotalSegmentator failed; fallback mask was generated. "
             f"Reason: {'; '.join(errors)}"
         ),
+        success=False,
     )

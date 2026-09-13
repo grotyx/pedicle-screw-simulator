@@ -1,7 +1,12 @@
-import numpy as np
-import SimpleITK as sitk
+from unittest.mock import patch
 
-from src.core.dicom_loader import normalize_orientation
+import numpy as np
+import pydicom
+import SimpleITK as sitk
+from pydicom.dataset import Dataset
+from pydicom.uid import ExplicitVRLittleEndian, generate_uid
+
+from src.core.dicom_loader import DicomLoader, normalize_orientation
 
 
 def _ramp_image(direction):
@@ -123,3 +128,62 @@ def test_transform_direction_left_multiplies_only():
     out = np.array(CoordinateSystem.transform_direction(d)).reshape(3, 3)
     expected = np.diag([-1, -1, 1]) @ np.array(d).reshape(3, 3)
     assert np.allclose(out, expected)
+
+
+def _phi_dataset():
+    ds = Dataset()
+    ds.PatientID = "PATIENT-123"
+    ds.PatientName = "Family^Given"
+    ds.PatientBirthDate = "19700101"
+    ds.StudyDate = "20260207"
+    ds.AccessionNumber = "ACC-1"
+    ds.InstitutionName = "Test Hospital"
+    ds.Modality = "CT"
+    ds.Manufacturer = "TestMaker"
+    ds.SliceThickness = 1.0
+    ds.KVP = 120.0
+    ds.BodyPartExamined = "SPINE"
+    ds.file_meta = Dataset()
+    ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    ds.SOPClassUID = generate_uid()
+    ds.SOPInstanceUID = generate_uid()
+    return ds
+
+
+def test_metadata_contains_no_patient_identifiers():
+    loader = DicomLoader()
+    loader._file_names = ["dummy.dcm"]
+    with patch.object(pydicom, "dcmread", return_value=_phi_dataset()):
+        loader._extract_metadata(reader=None)
+    metadata = loader.get_metadata()
+    text = repr(metadata).lower()
+    for token in (
+        "patient-123",
+        "family",
+        "19700101",
+        "20260207",
+        "acc-1",
+        "test hospital",
+    ):
+        assert token not in text
+    for key in (
+        "patient_id",
+        "patient_name",
+        "patient_birth_date",
+        "study_date",
+        "accession_number",
+        "institution_name",
+    ):
+        assert key not in metadata
+    assert metadata["modality"] == "CT"
+    assert metadata["num_slices"] == 1
+
+
+def test_get_metadata_returns_a_copy():
+    loader = DicomLoader()
+    loader._file_names = ["dummy.dcm"]
+    with patch.object(pydicom, "dcmread", return_value=_phi_dataset()):
+        loader._extract_metadata(reader=None)
+    metadata = loader.get_metadata()
+    metadata["modality"] = "MUTATED"
+    assert loader.get_metadata()["modality"] == "CT"
