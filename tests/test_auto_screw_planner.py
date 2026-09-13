@@ -2134,6 +2134,107 @@ class TestEndplateOptionAndMetric:
         assert left.metrics["endplate_reference"] == "neighbours"
         assert left.metrics["endplate_reference_levels"] == "L4"
 
+    def test_optimizer_plan_all_aims_along_the_endplate_context(self):
+        """The optimizer path must resolve and apply neighbour references too --
+        _plan_all_optimized / _screw_from_candidate are a separate code path
+        from the legacy one exercised above, with their own metric wiring."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer"))
+        rough_normal = np.array(
+            [0.0, math.sin(math.radians(-12.0)), math.cos(math.radians(-12.0))]
+        )
+        analysis = _make_analysis(label=27, name="L5", upper_endplate_normal=rough_normal)
+        analysis.endplate_fit_rmse_mm = 5.2
+        # Label 28 (L4) is one level above L5 -- close enough to donate.
+        context = _make_analysis(
+            label=28, name="L4", upper_endplate_normal=self._NORMAL_10_DEG
+        )
+        context.endplate_fit_rmse_mm = 0.5
+
+        results = planner.plan_all([analysis], endplate_context=[context])
+
+        assert len(results) == 2
+        # Measured on this phantom today: left cc +9.05 / ep -0.95,
+        # right cc +9.66 / ep -0.34.
+        for screw in results:
+            assert "score" in screw.metrics  # proves the optimizer path built it
+            assert screw.metrics["endplate_reference"] == "neighbours"
+            assert screw.metrics["endplate_reference_levels"] == "L4"
+            assert screw.craniocaudal_angle > 3.0
+            assert screw.metrics["endplate_angle_deg"] == pytest.approx(0.0, abs=2.0)
+            assert any(
+                w.startswith(ENDPLATE_REFERENCE_WARNING_PREFIX) for w in screw.warnings
+            )
+
+    def test_endplate_parallel_off_ignores_a_neighbour_reference(self):
+        """With aiming disabled the trajectory is deliberately horizontal, so
+        the reference resolution -- recorded but not acted on -- must not
+        leak neighbour wording onto a screw nothing actually aimed."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+        rough_normal = np.array(
+            [0.0, math.sin(math.radians(-12.0)), math.cos(math.radians(-12.0))]
+        )
+        analysis = _make_analysis(upper_endplate_normal=rough_normal)
+        analysis.endplate_fit_rmse_mm = 5.2
+        analysis.endplate_reference = ENDPLATE_REFERENCE_NEIGHBOURS
+        analysis.reference_endplate_normal = self._NORMAL_10_DEG
+        analysis.endplate_reference_levels = ("T12", "L3")
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert endplate_fit_warning(5.2) in result.warnings
+        assert not any(
+            w.startswith(ENDPLATE_REFERENCE_WARNING_PREFIX) for w in result.warnings
+        )
+        assert result.target_lps[2] == pytest.approx(result.entry_lps[2])
+        assert result.metrics["endplate_reference"] == "neighbours"
+
+    def test_endplate_parallel_off_with_no_reference_keeps_the_rough_fit_wording(self):
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+        analysis = _make_analysis(upper_endplate_normal=self._NORMAL_10_DEG)
+        analysis.endplate_fit_rmse_mm = 5.2
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert analysis.endplate_reference == "none"
+        assert endplate_fit_warning(5.2) in result.warnings
+        assert endplate_no_reference_warning(5.2) not in result.warnings
+        assert result.craniocaudal_angle == pytest.approx(0.0, abs=0.1)
+
+    def test_endplate_parallel_off_with_a_neighbour_reference_and_no_own_fit_says_nothing(
+        self,
+    ):
+        """With aiming off, ``_endplate_warnings`` only ever keeps the
+        own-fit rough warning; there is no own fit or RMSE here, so that
+        warning is silent. The resolved neighbour reference decided nothing
+        about the aim, so it stays silent too, even though it is a trusted
+        donor -- with aiming on this same setup would warn "Endplate
+        reference: no upper-endplate fit; aimed along T12 and L3 ..."."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(mode="legacy", endplate_parallel=False)
+        )
+        analysis = _make_analysis()
+        analysis.endplate_reference = ENDPLATE_REFERENCE_NEIGHBOURS
+        analysis.reference_endplate_normal = self._NORMAL_10_DEG
+        analysis.endplate_reference_levels = ("T12", "L3")
+
+        result = planner.plan_screw(analysis, "left")
+
+        assert result is not None
+        assert not any("Upper endplate" in w for w in result.warnings)
+        assert not any(
+            w.startswith(ENDPLATE_REFERENCE_WARNING_PREFIX) for w in result.warnings
+        )
+
 
 class TestHeadOnTheCortex:
     """Both back-ends put the head on the dorsal cortex and the tip at the margin."""
