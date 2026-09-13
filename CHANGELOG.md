@@ -11,6 +11,65 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
+## [Unreleased]
+
+### Added
+
+- The Heary breach direction now travels with its secondary axis:
+  `heary_secondary` in JSON `metrics`, a new `heary_secondary` CSV column
+  next to `heary_direction`, and a "primary + secondary" Heary row on the
+  Review page, so a superomedial breach keeps its medial component.
+- The Review screw list supports multi-select batch delete with
+  Ctrl+Z undo, a level/side/grade text filter, and Delete / [ / ]
+  shortcuts.
+- One shared cancellable job dialog serves DICOM loading (now
+  cancellable), segmentation, planning, and STL export, with a one-line
+  log tail; the planning cancel note names the side being finished.
+
+### Changed
+
+- The legacy planner requires grade A (zero breach) on a normal-width
+  pedicle, like the optimizer and CBT: a side that only grades B is
+  skipped rather than placed. The narrow-pedicle path is unchanged.
+- The planner and the screw tool size from the analyser's conservative
+  lower bound whenever it disagrees with the headline width by more than
+  1.0 mm, and an edited screw is judged by the same rule.
+- The vertebral-body HU region scales with the level's segmented volume
+  (down to half the default for small levels); an ROI under 100 voxels
+  reports unmeasured instead of a noisy mean.
+- The facet check reads the nearest segmented level above by centroid
+  height instead of `label + 1`, so a missing middle level no longer
+  skips the true superior neighbour.
+- The Study info section shows acquisition geometry only; patient
+  identifiers from the DICOM headers are never read into the application.
+- The optimizer rejects colliding screws between adjacent levels
+  (tip/shaft clearance under radii sum + 1 mm) and boosts the density
+  weight in osteoporotic bone (body HU below 132).
+- The right-hand panel is built by per-step builders; the workflow bar
+  derives from session state with a running spinner; the status bar
+  carries a mode chip (tool, armed edit, Screw MPR identity, isolation).
+- Screw drags coalesce to 30 Hz with release replay; viewers share one
+  render path and reuse one cell picker each.
+
+### Fixed
+
+- The pedicle analyser rejects a mask whose direction is not LPS
+  identity instead of silently mirroring left/right and anterior/posterior;
+  planning reports the misalignment and asks for a re-run of segmentation.
+- Pedicle width measurement uses the physical x/y spacing separately, so
+  anisotropic grids no longer mis-scale the width.
+- A threshold fallback reports `success=False` (still `method=
+  "threshold_fallback"` for the UI), so an empty plan is not misread as
+  success.
+- Segmentation geometry warnings share the grader's tolerances (relative
+  spacing, origin within a fraction of a voxel), so a NIfTI float32
+  origin round-trip no longer warns spuriously.
+- Implant catalogues from stored settings are sorted and validated
+  ascending, so a custom order cannot silently mis-size screws.
+- The per-voxel scalar presence check in mesh building delegates to the
+  numpy path; the slow Python VTK loop survives only as a no-numpy
+  fallback.
+
 ## [0.2.3] - 2026-09-13
 
 ### Added

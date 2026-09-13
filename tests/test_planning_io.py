@@ -238,12 +238,13 @@ def test_csv_has_metric_columns(tmp_path):
         rows = list(_csv.reader(handle))
     header = rows[0]
     for column in ("trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
-                   "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type"):
+                   "min_wall_mm", "heary_direction", "heary_secondary", "facet_grade", "trajectory_type"):
         assert column in header
     row = dict(zip(header, rows[1], strict=True))
     assert row["trajectory_mean_hu"] == "180.500"
     assert row["hu_ratio"] == "1.203"
     assert row["heary_direction"] == "medial"
+    assert row["heary_secondary"] == ""
     assert row["facet_grade"] == "2"
     assert row["trajectory_type"] == "traditional"
     # A screw with no metrics leaves the columns empty rather than shifting them.

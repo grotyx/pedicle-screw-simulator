@@ -290,7 +290,7 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
             "convergence_angle_deg", "craniocaudal_angle_deg",
             "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
-            "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
+            "min_wall_mm", "heary_direction", "heary_secondary", "facet_grade", "trajectory_type",
             "warnings",
             # Appended, per the plan-file contract: readers key on the header.
             "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
@@ -337,6 +337,9 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "trajectory_body_ratio"),
                 _metric_number(metrics, "min_wall_mm"),
                 "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
+                # Appended next to heary_direction, per the plan-file contract:
+                # readers key on the header, so old columns never shift.
+                "" if metrics.get("heary_secondary") is None else str(metrics["heary_secondary"]),
                 _metric_number(metrics, "facet_grade", "d"),
                 # CBT and traditional screws are graded on the same scale but
                 # are not clinically interchangeable, so the export names the
