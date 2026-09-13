@@ -1794,6 +1794,152 @@ class TestScrewMprIn3D:
         assert camera.GetPosition() == pytest.approx(expected_position)
         assert camera.GetViewUp() == pytest.approx((0.0, 0.0, 1.0))
 
+    def test_cut_view_follows_a_flipped_screw_direction(self):
+        """The same helper with the screw pointing the other way (+Y)."""
+        from src.core.mpr_geometry import build_screw_mpr_axes
+        from src.ui.viewer_3d import SCREW_MPR_CUT_VIEW_DISTANCE_MM
+
+        viewer = self._viewer()
+        axes = build_screw_mpr_axes((0.0, 0.0, 0.0), (0.0, 40.0, 0.0), 0.25)
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        viewer.focus_screw_mpr_cut()
+
+        camera = viewer._renderer.GetActiveCamera()
+        assert camera.GetFocalPoint() == pytest.approx((0.0, 10.0, 0.0))
+        expected_position = (0.0, 10.0 - SCREW_MPR_CUT_VIEW_DISTANCE_MM, 0.0)
+        assert camera.GetPosition() == pytest.approx(expected_position)
+        assert camera.GetViewUp() == pytest.approx((0.0, 0.0, 1.0))
+
+    def test_a_new_mask_drops_the_stale_slice_alpha_until_the_next_show(self):
+        """set_segmentation_mask must refresh the slice, not just drop the cut.
+
+        Fix 2 regression: after a new mask arrives mid-Screw-MPR,
+        _remove_screw_mpr_cut() ran but the textured slice's mask reslice
+        still had the OLD mask as its input, so the slice kept showing the
+        old opaque-over-vertebra alpha until the next show_screw_mpr.
+        """
+        import numpy as np
+        import vtk
+        from vtk.util.numpy_support import numpy_to_vtk
+
+        viewer = self._viewer()
+        axes = self._axes()
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+
+        slice_actor = viewer._screw_mpr_slice_actor
+        image = slice_actor.GetInput()
+        # Sanity: same pixels as test_the_cross_section_slice_is_textured_...
+        assert image.GetScalarComponentAsDouble(40, 70, 0, 3) == pytest.approx(
+            round(0.35 * 255)
+        )
+
+        dims = (40, 60, 40)
+        spacing = (1.0, 1.0, 1.0)
+        shape_zyx = (dims[2], dims[1], dims[0])
+        swapped_mask = vtk.vtkImageData()
+        swapped_mask.SetDimensions(*dims)
+        swapped_mask.SetSpacing(*spacing)
+        swapped_mask.SetOrigin(0.0, 0.0, 0.0)
+        swapped_array = np.empty(shape_zyx, dtype=np.int16)
+        swapped_array[:20, :, :] = self.LABEL_UPPER
+        swapped_array[20:, :, :] = self.LABEL_LOWER
+        swapped_scalars = numpy_to_vtk(swapped_array.ravel(), deep=True)
+        swapped_scalars.SetName("ImageScalars")
+        swapped_mask.GetPointData().SetScalars(swapped_scalars)
+
+        viewer.set_segmentation_mask(swapped_mask)
+
+        assert viewer._screw_mpr_cut_actor is None
+        assert viewer._volume_mapper.GetCropping() == 0
+        assert viewer._screw_mpr_slice_actor.GetVisibility() == 1
+        refreshed_image = viewer._screw_mpr_slice_actor.GetInput()
+        assert refreshed_image.GetScalarComponentAsDouble(40, 50, 0, 3) == pytest.approx(
+            255
+        )
+        assert refreshed_image.GetScalarComponentAsDouble(40, 70, 0, 3) == pytest.approx(
+            255
+        )
+
+        # The following Position/rotation step's show_screw_mpr rebuilds the
+        # slice against the new mask, so the alpha follows the swapped labels.
+        viewer.show_screw_mpr(
+            axes.oblique_axial, axes.oblique_sagittal, axes.cross_section,
+            vertebra_label=self.LABEL_LOWER,
+        )
+        rebuilt_image = viewer._screw_mpr_slice_actor.GetInput()
+        assert rebuilt_image.GetScalarComponentAsDouble(40, 50, 0, 3) == pytest.approx(
+            round(0.35 * 255)
+        )
+        assert rebuilt_image.GetScalarComponentAsDouble(40, 70, 0, 3) == pytest.approx(
+            255
+        )
+
+    @staticmethod
+    def _real_viewer(qtbot, monkeypatch):
+        """A real (Qt-built) Viewer3D, for tests that need the actual button."""
+        from PyQt6.QtWidgets import QWidget
+
+        from src.ui import viewer_3d
+
+        monkeypatch.setattr(
+            viewer_3d,
+            "create_vtk_widget",
+            lambda parent: QWidget(parent),
+        )
+        monkeypatch.setattr(
+            viewer_3d.Viewer3D,
+            "_setup_vtk_pipeline",
+            lambda self: None,
+        )
+        volume_manager = SimpleNamespace(add_observer=lambda *_args: None)
+
+        viewer = viewer_3d.Viewer3D(volume_manager)
+        qtbot.addWidget(viewer)
+        import vtk
+
+        viewer._renderer = vtk.vtkRenderer()
+        viewer.vtk_widget = SimpleNamespace(safe_render=lambda: None)
+        return viewer
+
+    def test_the_cut_view_button_shows_with_screw_mpr_and_hides_with_it(
+        self, qtbot, monkeypatch
+    ):
+        viewer = self._real_viewer(qtbot, monkeypatch)
+        axes = self._axes()
+
+        assert viewer.screw_mpr_view_button.isHidden() is True
+
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        assert viewer.screw_mpr_view_button.isHidden() is False
+        assert viewer.screw_mpr_view_button.isVisibleTo(viewer.top_left_controls) is True
+
+        viewer.clear_screw_mpr()
+
+        assert viewer.screw_mpr_view_button.isHidden() is True
+
+    def test_clicking_cut_view_focuses_the_cut(self, qtbot, monkeypatch):
+        from src.ui.viewer_3d import SCREW_MPR_CUT_VIEW_DISTANCE_MM
+
+        viewer = self._real_viewer(qtbot, monkeypatch)
+        axes = self._axes()
+        viewer.show_screw_mpr(axes.oblique_axial, axes.oblique_sagittal, axes.cross_section)
+
+        viewer.screw_mpr_view_button.click()
+
+        camera = viewer._renderer.GetActiveCamera()
+        assert camera.GetFocalPoint() == pytest.approx((0.0, 30.0, 0.0))
+        expected_position = (0.0, 30.0 + SCREW_MPR_CUT_VIEW_DISTANCE_MM, 0.0)
+        assert camera.GetPosition() == pytest.approx(expected_position)
+        assert camera.GetViewUp() == pytest.approx((0.0, 0.0, 1.0))
+
 
 class TestVolumeVisibilityLeavesTheOverlayAlone:
     """Showing or hiding the CT volume must not decide the segmentation overlay.
