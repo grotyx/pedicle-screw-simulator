@@ -346,3 +346,61 @@ def volume_index_to_world(
     """
     from ..core.coordinate_system import CoordinateSystem
     return CoordinateSystem.image_to_world(index, origin, spacing, direction)
+
+
+def request_render(vtk_widget) -> None:
+    """Ask a VTK widget for one render, through its dirty-flag path when present.
+
+    Both viewers duplicated this ``safe_render`` fallback inline; the single
+    copy lives here so ``MPRViewer._request_render`` and
+    ``Viewer3D._request_render`` stay one-liners that cannot drift apart.
+    """
+    render = getattr(vtk_widget, "safe_render", None)
+    if callable(render):
+        render()
+    else:  # pragma: no cover - plain-vtk stand-ins in tests
+        vtk_widget.GetRenderWindow().Render()
+
+
+def label_threshold_filter(lower: int, upper: int):
+    """A label membership filter, whichever threshold class VTK provides.
+
+    ``vtkImageBinaryThreshold`` (VTK >= 9.7) replaces the deprecated
+    ``vtkImageThreshold.ThresholdBetween()``; the same fallback was copied
+    in ``MPRViewer._build_segmentation_overlay``,
+    ``Viewer3D._build_segmentation_actor`` and
+    ``extract_vertebral_mesh``. Callers set input/output connections
+    themselves; this only builds the equivalently configured filter.
+    """
+    if vtk is None:
+        raise ImportError("VTK is required to build threshold filters")
+    if hasattr(vtk, "vtkImageBinaryThreshold"):
+        threshold = vtk.vtkImageBinaryThreshold()
+        threshold.SetLowerThreshold(int(lower))
+        threshold.SetUpperThreshold(int(upper))
+        threshold.SetInValue(1)
+        threshold.SetOutValue(0)
+        threshold.SetReplaceIn(True)
+        threshold.SetReplaceOut(True)
+        threshold.SetOutputScalarTypeToUnsignedChar()
+        return threshold
+    legacy = vtk.vtkImageThreshold()
+    legacy.ThresholdBetween(int(lower), int(upper))
+    legacy.SetInValue(1)
+    legacy.SetOutValue(0)
+    legacy.SetOutputScalarTypeToUnsignedChar()
+    return legacy
+
+
+def shared_cell_picker(tolerance: float = 0.01):
+    """One reusable ``vtkCellPicker``; callers keep it instead of rebuilding it.
+
+    Hover and click paths allocated a fresh picker per event. A picker holds
+    no per-pick state worth keeping, so a single instance per viewer is
+    enough and skips repeated VTK object construction on the pointer path.
+    """
+    if vtk is None:
+        raise ImportError("VTK is required for cell picking")
+    picker = vtk.vtkCellPicker()
+    picker.SetTolerance(float(tolerance))
+    return picker

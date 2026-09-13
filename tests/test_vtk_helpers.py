@@ -326,5 +326,77 @@ class TestShrinkFactors:
             shrink_factors("small", "quantum")
 
 
+class TestRequestRender:
+    """The shared dirty-flag path both viewers call."""
+
+    def test_prefers_safe_render_when_present(self):
+        from src.utils.vtk_helpers import request_render
+
+        calls = []
+
+        class _Widget:
+            def safe_render(self):
+                calls.append("safe")
+
+        request_render(_Widget())
+        assert calls == ["safe"]
+
+    def test_falls_back_to_the_render_window(self):
+        from src.utils.vtk_helpers import request_render
+
+        calls = []
+
+        class _Window:
+            def Render(self):
+                calls.append("render")
+
+        class _Widget:
+            def GetRenderWindow(self):
+                return _Window()
+
+        request_render(_Widget())
+        assert calls == ["render"]
+
+
+class TestLabelThresholdFilter:
+    """One label-membership filter for MPR, 3D, and mesh code."""
+
+    def test_configures_the_running_vtk_threshold_class(self):
+        from src.utils.vtk_helpers import label_threshold_filter
+
+        filt = label_threshold_filter(28, 28)
+        filt.Update()
+        if hasattr(vtk, "vtkImageBinaryThreshold"):
+            assert isinstance(filt, vtk.vtkImageBinaryThreshold)
+            assert filt.GetLowerThreshold() == 28
+            assert filt.GetUpperThreshold() == 28
+        else:  # pragma: no cover - old VTK only
+            assert isinstance(filt, vtk.vtkImageThreshold)
+
+
+class TestSharedCellPicker:
+    """Viewers reuse one picker instead of allocating per pointer event."""
+
+    def test_returns_a_configured_picker(self):
+        from src.utils.vtk_helpers import shared_cell_picker
+
+        picker = shared_cell_picker(0.02)
+        assert isinstance(picker, vtk.vtkCellPicker)
+        assert picker.GetTolerance() == pytest.approx(0.02)
+
+    def test_viewers_reuse_one_picker_each(self):
+        import inspect
+
+        from src.ui import mpr_viewer as mpr_module
+        from src.ui import viewer_3d as viewer_module
+
+        mpr_source = inspect.getsource(mpr_module.MPRViewer.__init__)
+        assert "self._cell_picker" in mpr_source
+        assert "vtk.vtkCellPicker()" not in mpr_source
+        init_source = inspect.getsource(viewer_module.Viewer3D.__init__)
+        assert "self._focus_picker" in init_source
+        assert "self._screw_picker" in init_source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -297,3 +297,40 @@ def test_ending_mpr_drag_realigns_review_to_final_screw_geometry():
     controller.end_drag()
 
     assert window._screw_mpr_ctrl.updated == [0]
+
+
+def test_rapid_drag_samples_coalesce_to_one_rebuild():
+    """Pointer bursts must not rebuild the 3D actor per event."""
+    controller, window = _make_controller()
+
+    assert controller.begin_drag(0, "entry", (0.0, 0.0, 0.0)) is True
+    assert controller.update_drag((1.0, 0.0, 0.0), source="Axial MPR") is True
+    assert controller.update_drag((2.0, 0.0, 0.0), source="Axial MPR") is True
+    assert controller.update_drag((3.0, 0.0, 0.0), source="Axial MPR") is True
+
+    # Only the first sample rebuilds; the rest stage the pending geometry.
+    assert len(window._tool_ctrl.refreshed) == 1
+
+    controller.end_drag()
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == (3.0, 0.0, 0.0)
+    assert screw.target_point == (0.0, 0.0, 40.0)
+    assert len(window._tool_ctrl.refreshed) == 2
+    assert window._screw_mpr_ctrl.updated == [0]
+
+
+def test_release_replays_a_rejected_sample_as_a_boundary_note():
+    """Staging never validates: an out-of-volume burst still warns on release."""
+    controller, window = _make_controller()
+
+    assert controller.begin_drag(0, "entry", (0.0, 0.0, 0.0)) is True
+    assert controller.update_drag((1.0, 0.0, 0.0), source="Axial MPR") is True
+    assert controller.update_drag((150.0, 0.0, 0.0), source="Axial MPR") is True
+
+    controller.end_drag()
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == (1.0, 0.0, 0.0)
+    assert "inside the CT volume" in window.statusbar.message
+    assert window._screw_mpr_ctrl.updated == [0]

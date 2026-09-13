@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional, Tuple
 
 Point3D = Tuple[float, float, float]
+
+#: Fastest rate a drag sample rebuilds every linked view. Pointer events
+#: arrive faster than a 3D actor remove/add cycle; samples inside the
+#: window only move the pending geometry, and the next accepted sample
+#: (or the release) replays the latest position. The dragging screw still
+#: tracks the pointer; only the full rebuild is throttled.
+DRAG_MIN_INTERVAL_S = 1.0 / 30.0
 
 
 class ScrewEditController:
@@ -23,6 +31,8 @@ class ScrewEditController:
         self._drag_entry: Optional[Point3D] = None
         self._drag_target: Optional[Point3D] = None
         self._active_source: Optional[str] = None
+        self._last_drag_apply_s: float = 0.0
+        self._pending_drag: Optional[Tuple[Point3D, Point3D, str]] = None
 
     @property
     def mode(self) -> str:
@@ -76,6 +86,8 @@ class ScrewEditController:
         self._drag_entry = None
         self._drag_target = None
         self._active_source = None
+        self._pending_drag = None
+        self._last_drag_apply_s = 0.0
         self.refresh_controls()
         if was_active and show_message:
             self._window.statusbar.showMessage("Screw edit cancelled")
@@ -110,7 +122,14 @@ class ScrewEditController:
         return True
 
     def update_drag(self, world_point: Point3D, source: str = "view") -> bool:
-        """Apply one continuous drag sample and refresh every linked view."""
+        """Apply one continuous drag sample and refresh every linked view.
+
+        Samples arriving within :data:`DRAG_MIN_INTERVAL_S` of the last
+        rebuild only stage the pending geometry; the next accepted sample
+        (or the release in :meth:`end_drag`) replays the latest position.
+        Staging never validates, so an out-of-volume pointer move still
+        reports the boundary note on the replay, not silently.
+        """
         if (
             not self.is_active
             or self._selected_index is None
@@ -137,6 +156,12 @@ class ScrewEditController:
                 self._drag_target[axis] + delta[axis] for axis in range(3)
             )
 
+        now = time.monotonic()
+        if now - self._last_drag_apply_s < DRAG_MIN_INTERVAL_S:
+            self._pending_drag = (entry_point, target_point, str(source))
+            return True
+        self._last_drag_apply_s = now
+        self._pending_drag = None
         if not self._apply_points(entry_point, target_point):
             return False
         updated = self._screw_at(self._selected_index)
@@ -164,7 +189,19 @@ class ScrewEditController:
         )
 
     def end_drag(self) -> None:
-        """Finish direct manipulation while preserving the last valid state."""
+        """Finish direct manipulation while preserving the last valid state.
+
+        Replays one staged sample first, so a release inside the throttle
+        window still lands the screw where the pointer is.
+        """
+        pending, self._pending_drag = self._pending_drag, None
+        if pending is not None and self.is_active and self._selected_index is not None:
+            entry_point, target_point, source = pending
+            if self._apply_points(entry_point, target_point):
+                updated = self._screw_at(self._selected_index)
+                if str(source).strip().lower() == "3d" and updated is not None:
+                    self._focus_mpr_on_3d_edit(updated)
+        self._last_drag_apply_s = 0.0
         selected_index = self._selected_index
         was_active = self.is_active
         self.cancel(show_message=False)

@@ -40,6 +40,11 @@ from ..utils.constants import (
     DEFAULT_WINDOW_CENTER,
     DEFAULT_WINDOW_WIDTH,
 )
+from ..utils.vtk_helpers import (
+    label_threshold_filter,
+    request_render,
+    shared_cell_picker,
+)
 from .click_detector import DoubleClickDetector
 from .styles import DEFAULT_THEME, get_theme, theme_rgb_float
 from .tool_icons import create_tool_icon
@@ -159,6 +164,11 @@ class MPRViewer(QWidget):
         self._rotate_drag_active = False
         self._rotate_drag_last_display: Optional[Tuple[int, int]] = None
         self._orientation_actors: Dict[str, vtk.vtkTextActor] = {}
+        # One picker per viewer, reused on every hover/click: allocating a
+        # fresh vtkCellPicker per pointer event showed up on the drag path.
+        self._cell_picker = shared_cell_picker(0.01)
+        self._slice_picker = shared_cell_picker(0.01)
+        self._slice_picker.PickFromListOn()
 
         self._setup_ui()
         self._setup_vtk_pipeline()
@@ -320,11 +330,8 @@ class MPRViewer(QWidget):
             obj.SetAbortRender(1)
 
     def _request_render(self):
-        """Request a VTK render."""
-        if hasattr(self.vtk_widget, 'safe_render'):
-            self.vtk_widget.safe_render()
-        else:
-            self.vtk_widget.GetRenderWindow().Render()
+        """Request a VTK render (shared dirty-flag path; see vtk_helpers)."""
+        request_render(self.vtk_widget)
 
     def fit_to_view(self, render: bool = True) -> None:
         """Fit the active CT slice tightly inside the current MPR viewport."""
@@ -560,10 +567,7 @@ class MPRViewer(QWidget):
         self._render_guard_active = False
         self.vtk_widget.setUpdatesEnabled(True)
         t0 = time.perf_counter()
-        if hasattr(self.vtk_widget, 'safe_render'):
-            self.vtk_widget.safe_render()
-        else:
-            self.vtk_widget.GetRenderWindow().Render()
+        request_render(self.vtk_widget)
         elapsed = time.perf_counter() - t0
         logger.info("MPR[%s]: Render done (%.3fs)", self.plane, elapsed)
 
@@ -841,7 +845,7 @@ class MPRViewer(QWidget):
         if self._reslice is None or self._renderer is None:
             return
 
-        picker = vtk.vtkCellPicker()
+        picker = self._cell_picker
         picker.Pick(x, y, 0, self._renderer)
         if picker.GetCellId() < 0:
             self._last_hu_value = None
@@ -959,30 +963,14 @@ class MPRViewer(QWidget):
 
         self._update_reslice_position()
 
-        # vtkImageBinaryThreshold (VTK >= 9.7) replaces the deprecated
-        # vtkImageThreshold.ThresholdBetween(); see the same fallback in
-        # extract_vertebral_mesh (src/core/vertebral_mesh.py).
+        # Shared label filter (see vtk_helpers.label_threshold_filter): the
+        # same BinaryThreshold/Threshold fallback was copied in three places.
         if self._segmentation_label_value <= 0:
             lower, upper = 1, 1000000
         else:
             lower = upper = self._segmentation_label_value
-        if hasattr(vtk, "vtkImageBinaryThreshold"):
-            threshold = vtk.vtkImageBinaryThreshold()
-            threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
-            threshold.SetLowerThreshold(lower)
-            threshold.SetUpperThreshold(upper)
-            threshold.SetInValue(1)
-            threshold.SetOutValue(0)
-            threshold.SetReplaceIn(True)
-            threshold.SetReplaceOut(True)
-            threshold.SetOutputScalarTypeToUnsignedChar()
-        else:
-            threshold = vtk.vtkImageThreshold()
-            threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
-            threshold.ThresholdBetween(lower, upper)
-            threshold.SetInValue(1)
-            threshold.SetOutValue(0)
-            threshold.SetOutputScalarTypeToUnsignedChar()
+        threshold = label_threshold_filter(lower, upper)
+        threshold.SetInputConnection(self._mask_reslice.GetOutputPort())
         threshold.Update()
         self._mask_threshold = threshold
 
@@ -1929,8 +1917,7 @@ class MPRViewer(QWidget):
                 return
 
         # Convert display coordinates to world coordinates
-        picker = vtk.vtkCellPicker()
-        picker.SetTolerance(0.01)
+        picker = self._cell_picker
         picker.Pick(click_pos[0], click_pos[1], 0, self._renderer)
         if picker.GetCellId() < 0:
             if getattr(self, "_pending_screw_press", None) is not None:
@@ -2054,8 +2041,8 @@ class MPRViewer(QWidget):
         """Map a display position onto the active image reslice plane."""
         if self._actor is None:
             return None
-        picker = vtk.vtkCellPicker()
-        picker.PickFromListOn()
+        picker = self._slice_picker
+        picker.ClearPickList()
         picker.AddPickList(self._actor)
         if not picker.Pick(x, y, 0, self._renderer):
             return None

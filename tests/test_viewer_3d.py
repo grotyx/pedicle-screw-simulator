@@ -674,8 +674,12 @@ class TestVolumeMapperPerformanceConfig:
         import inspect
 
         from src.ui import viewer_3d
+        from src.utils import vtk_helpers
+
         method_src = inspect.getsource(viewer_3d.Viewer3D._request_render)
-        assert "safe_render" in method_src
+        assert "request_render" in method_src
+        helper_src = inspect.getsource(vtk_helpers.request_render)
+        assert "safe_render" in helper_src
 
     def test_phase2_uses_qtimer(self):
         """Phase 2 must be scheduled via QTimer (no threading.Timer needed)."""
@@ -702,9 +706,13 @@ class TestVolumeMapperPerformanceConfig:
         import inspect
 
         from src.ui import viewer_3d
+        from src.utils import vtk_helpers
+
         phase1_src = inspect.getsource(viewer_3d.Viewer3D._deferred_render_phase1)
         assert "setUpdatesEnabled(True)" in phase1_src
-        assert "safe_render" in phase1_src
+        assert "request_render" in phase1_src
+        helper_src = inspect.getsource(vtk_helpers.request_render)
+        assert "safe_render" in helper_src
 
     def test_no_process_events_in_update_volume(self):
         """update_volume must NOT call processEvents — it triggers implicit renders that hang."""

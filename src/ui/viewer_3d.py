@@ -58,6 +58,9 @@ from ..utils.vtk_helpers import (
     MAPPER_KIND_CPU,
     MAPPER_KIND_SMART,
     downsample_vtk_image,
+    label_threshold_filter,
+    request_render,
+    shared_cell_picker,
     shrink_factors,
 )
 from .click_detector import DoubleClickDetector
@@ -542,6 +545,15 @@ class Viewer3D(QWidget):
         # Measurement visualization
         self._measurement_props: Dict[int, List[vtk.vtkProp]] = {}
 
+        # One focus picker per viewer, reused on every double-click: the old
+        # path built a fresh vtkCellPicker per focus request.
+        self._focus_picker = shared_cell_picker(0.005)
+        self._focus_picker.PickFromListOn()
+        # One screw picker per viewer, rebuilt only when the screw set
+        # changes (see _build_screw_only_picker): per-click allocation on
+        # the pointer path is what this replaces.
+        self._screw_picker: Optional[vtk.vtkCellPicker] = None
+
         # Segmentation overlay
         self._segmentation_actor: Optional[vtk.vtkActor] = None
         self._segmentation_mask_image: Optional[vtk.vtkImageData] = None
@@ -961,9 +973,8 @@ class Viewer3D(QWidget):
 
     def focus_at_display(self, x: int, y: int) -> bool:
         """Focus and zoom on visible anatomy under a display coordinate."""
-        picker = vtk.vtkCellPicker()
-        picker.SetTolerance(0.005)
-        picker.PickFromListOn()
+        picker = self._focus_picker
+        picker.ClearPickList()
         for prop in (
             self._vertebral_mesh_actor,
             self._segmentation_actor,
@@ -1097,10 +1108,7 @@ class Viewer3D(QWidget):
         self.vtk_widget.setUpdatesEnabled(True)
 
         t0 = time.perf_counter()
-        if hasattr(self.vtk_widget, 'safe_render'):
-            self.vtk_widget.safe_render()
-        else:
-            self.vtk_widget.GetRenderWindow().Render()
+        request_render(self.vtk_widget)
         render_sec = time.perf_counter() - t0
         logger.info(
             "  Phase 1 done: %.3fs (mapper=%s)", render_sec, self._mapper_kind
@@ -1219,11 +1227,8 @@ class Viewer3D(QWidget):
         )
 
     def _request_render(self):
-        """Request a VTK render."""
-        if hasattr(self.vtk_widget, 'safe_render'):
-            self.vtk_widget.safe_render()
-        else:
-            self.vtk_widget.GetRenderWindow().Render()
+        """Request a VTK render (shared dirty-flag path; see vtk_helpers)."""
+        request_render(self.vtk_widget)
 
     def apply_transfer_function_preset(self, preset_name: str) -> None:
         """
@@ -1494,6 +1499,7 @@ class Viewer3D(QWidget):
             self._screw_prop_parts[self._prop_key(actor)] = (resolved_id, part)
         self._screw_actors.append(visual)
         self._apply_screw_selection_style(visual)
+        self._invalidate_screw_picker()
         self._request_render()
 
         return visual
@@ -1505,6 +1511,7 @@ class Viewer3D(QWidget):
                 self._screw_prop_parts.pop(self._prop_key(prop), None)
                 self._renderer.RemoveActor(prop)
             self._screw_actors.remove(actor)
+            self._invalidate_screw_picker()
             if not self._render_guard_active:
                 self._request_render()
         elif isinstance(actor, vtk.vtkActor):
@@ -1522,6 +1529,7 @@ class Viewer3D(QWidget):
         self._screw_actors.clear()
         self._screw_prop_parts.clear()
         self._selected_screw_id = None
+        self._invalidate_screw_picker()
         self._apply_screw_focus()
         if not self._render_guard_active:
             self._request_render()
@@ -1565,13 +1573,22 @@ class Viewer3D(QWidget):
 
     def _build_screw_only_picker(self) -> vtk.vtkCellPicker:
         """Build a picker that ignores anatomy occluding screw geometry."""
-        picker = vtk.vtkCellPicker()
-        picker.SetTolerance(0.01)
+        picker = shared_cell_picker(0.01)
         picker.PickFromListOn()
         for visual in self._screw_actors:
             for prop in visual.props:
                 picker.AddPickList(prop)
         return picker
+
+    def _screw_picker_cached(self) -> vtk.vtkCellPicker:
+        """The screw picker, rebuilt only when the screw set changed."""
+        if self._screw_picker is None:
+            self._screw_picker = self._build_screw_only_picker()
+        return self._screw_picker
+
+    def _invalidate_screw_picker(self) -> None:
+        """Drop the cached screw picker after screws are added or removed."""
+        self._screw_picker = None
 
     def _screw_visual_by_id(self, screw_id: int) -> Optional[ScrewVisual]:
         return next(
@@ -1639,7 +1656,7 @@ class Viewer3D(QWidget):
             self.vtk_widget.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
-        picker = self._build_screw_only_picker()
+        picker = self._screw_picker_cached()
         if not picker.Pick(x, y, 0, self._renderer):
             if self._focus_double_click_detector.register(x, y):
                 self.focus_at_display(x, y)
@@ -1936,30 +1953,13 @@ class Viewer3D(QWidget):
         if self._segmentation_mask_image is None:
             return
 
-        # vtkImageBinaryThreshold (VTK >= 9.7) replaces the deprecated
-        # vtkImageThreshold.ThresholdBetween(); see the same fallback in
-        # extract_vertebral_mesh (src/core/vertebral_mesh.py).
+        # Shared label filter (see vtk_helpers.label_threshold_filter).
         if self._segmentation_label_value <= 0:
             lower, upper = 1, 1000000
         else:
             lower = upper = self._segmentation_label_value
-        if hasattr(vtk, "vtkImageBinaryThreshold"):
-            threshold = vtk.vtkImageBinaryThreshold()
-            threshold.SetInputData(self._segmentation_mask_image)
-            threshold.SetLowerThreshold(lower)
-            threshold.SetUpperThreshold(upper)
-            threshold.SetInValue(1)
-            threshold.SetOutValue(0)
-            threshold.SetReplaceIn(True)
-            threshold.SetReplaceOut(True)
-            threshold.SetOutputScalarTypeToUnsignedChar()
-        else:
-            threshold = vtk.vtkImageThreshold()
-            threshold.SetInputData(self._segmentation_mask_image)
-            threshold.ThresholdBetween(lower, upper)
-            threshold.SetInValue(1)
-            threshold.SetOutValue(0)
-            threshold.SetOutputScalarTypeToUnsignedChar()
+        threshold = label_threshold_filter(lower, upper)
+        threshold.SetInputData(self._segmentation_mask_image)
         threshold.Update()
 
         scalar_range = threshold.GetOutput().GetScalarRange()
