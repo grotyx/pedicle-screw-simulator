@@ -11,6 +11,29 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
+## [Unreleased]
+
+### Added
+
+- `AGENTS.md` states the patient-data, git and verification rules for every
+  coding agent working in the repository; `CLAUDE.md` imports it.
+
+### Fixed
+
+- Re-running segmentation while Screw MPR was open could leave the 3D cut on
+  the vertebra resolved from the old segmentation (or on none) until Screw MPR
+  was left and re-entered. The label is now resolved again whenever the
+  segmentation changes.
+- In the same situation, when the cut cannot be rebuilt at once (for example
+  while a one-click edit is armed), the 3D slice no longer keeps the old
+  mask's shading; it is drawn fully opaque until the next update.
+- Loading a plan now selects its first screw, as automatic planning does, and
+  the Review header shows the screw count ("3 screws") instead of "No screws"
+  whenever screws exist but none is selected.
+- Isolate Vertebrae and the 3D **Vertebrae / Full CT** toggle stay disabled
+  when a TotalSegmentator run finds no vertebra. Isolating on such a mask
+  blanked every view while the status reported success.
+
 ## [0.2.2] - 2026-09-12
 
 A step-based right-hand panel that follows the workflow bar, a local 3D cut
