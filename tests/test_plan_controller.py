@@ -217,3 +217,40 @@ def test_loading_a_normal_screw_colours_the_3d_screw_with_the_default_colour(
 
     expected = tuple(value / 255.0 for value in COLOR_SCREW)
     assert window.viewer_3d.screws[0].color == expected
+
+
+def test_export_stl_runs_without_a_job_dialog(ui_main_window, monkeypatch, tmp_path):
+    """STL export is synchronous: no dialog surface while the GUI is blocked."""
+    import src.controllers.plan_controller as plan_module
+
+    window = ui_main_window
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": "SERIES-STL", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    path = tmp_path / "bone.stl"
+    monkeypatch.setattr(
+        plan_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(path), "STL Files (*.stl)")),
+    )
+    created = []
+    real_dialog = plan_module.JobDialog if hasattr(plan_module, "JobDialog") else None
+    assert real_dialog is None
+
+    def _boom(*_a, **_k):
+        created.append(True)
+        raise AssertionError("STL export must not build a JobDialog")
+
+    monkeypatch.setattr("src.ui.job_dialog.JobDialog", _boom)
+    calls = []
+    monkeypatch.setattr(
+        plan_module, "export_bone_stl", lambda image, out: calls.append(out)
+    )
+
+    window._plan_ctrl.export_stl_dialog()
+
+    assert created == []
+    assert calls == [str(path)]
+    assert window.statusbar.currentMessage() == f"STL exported: {path}"

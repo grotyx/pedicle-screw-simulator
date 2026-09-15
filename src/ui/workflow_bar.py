@@ -192,6 +192,7 @@ def workflow_states(
     ]
     if running_index is not None:
         running_hint = {
+            0: "Loading DICOM…",
             1: "Segmentation is running…",
             2: "Planning is running…",
         }.get(running_index, "Working…")

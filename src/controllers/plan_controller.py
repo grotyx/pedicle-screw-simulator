@@ -8,6 +8,7 @@ and applying loaded plans back to the tool state.
 import logging
 from typing import List, Optional
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.controllers.tool_controller import screw_display_color
@@ -155,8 +156,6 @@ class PlanController:
 
     def export_stl_dialog(self):
         """Export bone surface as STL file."""
-        from src.ui.job_dialog import JobDialog
-
         vtk_image = self._vm.get_vtk_image()
         if vtk_image is None:
             QMessageBox.warning(
@@ -175,16 +174,14 @@ class PlanController:
         if not path:
             return
 
-        dialog = JobDialog(
-            "Exporting STL...",
-            self._window,
-            cancellable=False,
-        )
-        dialog.set_log(path)
-        dialog.show()
+        # Synchronous march over the whole volume: no worker thread, so no
+        # dialog surface either -- a JobDialog here would sit unpainted on
+        # the blocked GUI thread (the segmentation tail's wait cursor plus
+        # processEvents is the pattern that actually repaints).
+        self._window.statusbar.showMessage("Exporting STL…")
+        QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self._window.statusbar.showMessage("Exporting STL...")
-            QApplication.processEvents()
             export_bone_stl(vtk_image, path)
             self._window.statusbar.showMessage(f"STL exported: {path}")
         except Exception as e:
@@ -192,7 +189,7 @@ class PlanController:
                 self._window, "Export Error", f"Failed to export STL: {e}"
             )
         finally:
-            dialog.close_cleanly()
+            QApplication.restoreOverrideCursor()
 
     def _apply_loaded_plan(self, screws, measurements, planes):
         """Replace current tool data with loaded plan contents."""
@@ -247,6 +244,21 @@ class PlanController:
 
         tool_ctrl._refresh_measurement_list()
 
+        # A loaded plan replaces the study's screws wholesale; anything the
+        # previous contents left on the undo stack would restore screws from
+        # a different plan (or a different study) into this one.
+        tool_ctrl.clear_screw_undo()
+
+        # Plans carry geometry only; the three thresholds the screw tool
+        # judges edits against (wall note, narrow verdict, bound rule) live
+        # in the panel's PlannerConfig, so push the active values in before
+        # the re-grade below, or the first drag is judged by stale numbers.
+        push_thresholds = getattr(
+            self._window, "_push_screw_tool_thresholds", None
+        )
+        if callable(push_thresholds):
+            push_thresholds()
+
         # Plans saved by an older HU-heuristic grader (or saved before a
         # grader was ever attached) carry stale grades. Re-grade now that
         # the screws are attached to the tool controller so the inspector
@@ -260,8 +272,11 @@ class PlanController:
 
         # Match automatic planning: land on the first screw so the Review
         # header, inspector and 3D highlight show it instead of "No screws".
+        # A loaded plan is a user opening a result to look at, so the panel
+        # follows; programmatic rebuilds above stay silent by contrast.
         if screws:
             self._window.screw_list_widget.setCurrentRow(0)
+            self._window.show_step("Review")
 
     @staticmethod
     def _build_measurement_planes(entries, count: int) -> List[Optional[str]]:

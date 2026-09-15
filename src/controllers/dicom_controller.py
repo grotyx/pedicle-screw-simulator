@@ -169,6 +169,7 @@ class DicomController:
             "Loading DICOM...",
             self._window,
             on_cancel=self._on_load_cancel_requested,
+            window_modal=True,
         )
         progress.set_log(folder)
         self._load_progress = progress
@@ -181,7 +182,13 @@ class DicomController:
         self._load_thread.error.connect(
             lambda err: self._on_error(err, progress)
         )
-        self._load_thread.progress.connect(progress.setLabelText)
+        self._load_thread.progress.connect(
+            lambda message, dialog=progress: (
+                dialog.set_log(message)
+                if not getattr(dialog, "is_cancelling", False)
+                else None
+            )
+        )
         self._load_thread.start()
 
     def _on_load_cancel_requested(self) -> None:

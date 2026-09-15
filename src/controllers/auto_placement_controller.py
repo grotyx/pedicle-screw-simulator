@@ -476,6 +476,10 @@ class AutoPlacementController:
                 select=offset == 0,
             )
         self._window.screw_list_widget.setCurrentRow(first_new_index)
+        # A finished plan run is the surgeon asking for screws to look at.
+        show_step = getattr(self._window, "show_step", None)
+        if callable(show_step):
+            show_step("Review")
 
         if cancelled:
             # A partial construct: report what was kept, not a success summary.

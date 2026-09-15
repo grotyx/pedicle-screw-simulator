@@ -145,6 +145,19 @@ def test_running_job_marks_its_step_with_a_spinner(qtbot):
             has_mask=False,
             has_plan=False,
             is_running=True,
+            running_step=0,
+        )
+    )
+
+    assert bar.buttons[0].text() == f"{RUNNING_MARK} Study"
+    assert bar.buttons[0].toolTip() == "Loading DICOM…"
+
+    bar.set_states(
+        workflow_states(
+            has_volume=True,
+            has_mask=False,
+            has_plan=False,
+            is_running=True,
             running_step=1,
         )
     )

@@ -250,6 +250,48 @@ def test_cancelled_result_is_discarded_without_touching_viewers(qapp):
     progress.deleteLater()
 
 
+def test_progress_reports_to_log_tail_and_freezes_on_cancel(qapp):
+    """Thread progress must use set_log, keeping the static label.
+
+    Wiring progress to setLabelText repainted mark_cancelling's "Cancelling
+    load…" back to a progress message; the log tail leaves the label alone.
+    """
+    from src.ui.job_dialog import JobDialog
+
+    dialog = JobDialog("Loading", None, on_cancel=lambda: None)
+    try:
+        label_before = dialog.labelText()
+        dialog.set_log("Scanning DICOM directory...")
+        assert dialog.labelText() == label_before
+        assert "Scanning" in dialog._log_label.text()
+
+        dialog.mark_cancelling("Cancelling load…")
+        # The controller's progress slot skips the log write while
+        # cancelling; mirror that guard here.
+        if not dialog.is_cancelling:
+            dialog.set_log("Loading series: X")
+        assert dialog.labelText() == "Cancelling load…"
+    finally:
+        dialog.close_cleanly()
+        dialog.deleteLater()
+
+
+def test_dicom_dialog_is_window_modal(qapp):
+    """The DICOM dialog is window-modal so it cannot widen a mid-load race."""
+    from PyQt6.QtCore import Qt
+
+    from src.ui.job_dialog import JobDialog
+
+    dialog = JobDialog(
+        "Loading DICOM...", None, on_cancel=lambda: None, window_modal=True
+    )
+    try:
+        assert dialog.windowModality() == Qt.WindowModality.WindowModal
+    finally:
+        dialog.close_cleanly()
+        dialog.deleteLater()
+
+
 def test_job_dialog_close_does_not_reenter_cancel(qapp):
     """Closing the shared dialog must not fire the cancel callback."""
     from src.ui.job_dialog import JobDialog
