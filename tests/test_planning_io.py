@@ -228,23 +228,52 @@ def test_csv_has_metric_columns(tmp_path):
     from src.models.screw import Screw
     from src.utils.planning_io import export_screws_csv
     screw = Screw(entry_point=(20, 30, 0), target_point=(12, -8, 0), side="left",
-                  metrics={"trajectory_mean_hu": 180.5, "pedicle_mean_hu": 210.0,
-                           "body_mean_hu": 150.0, "trajectory_body_ratio": 1.203,
-                           "min_wall_mm": 1.25, "heary_direction": "medial",
-                           "facet_grade": 2, "trajectory_type": "traditional"})
+                   metrics={"trajectory_mean_hu": 180.5, "pedicle_mean_hu": 210.0,
+                            "body_mean_hu": 150.0, "trajectory_body_ratio": 1.203,
+                            "min_wall_mm": 1.25, "heary_direction": "medial",
+                            "heary_secondary": "superior",
+                            "facet_grade": 2, "trajectory_type": "traditional"})
     path = tmp_path / "s.csv"
     export_screws_csv(str(path), [screw, Screw(entry_point=(0, 0, 0), target_point=(0, 0, 30))])
     with path.open("r", encoding="utf-8") as handle:
         rows = list(_csv.reader(handle))
     header = rows[0]
+    # Positional regression: new columns only ever append at the end, so a
+    # middle insert (heary_secondary once sat between heary_direction and
+    # facet_grade, shifting every later column for positional readers) must
+    # never happen again. This pins the exact full order.
+    expected_header = [
+        "index", "vertebra_level", "side", "source", "length_mm", "diameter_mm",
+        "grade", "breach_distance_mm", "mean_hu", "min_hu",
+        "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
+        "convergence_angle_deg", "craniocaudal_angle_deg",
+        "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
+        "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
+        "warnings",
+        "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
+        "lateral_breach_mm",
+        "endplate_angle_deg",
+        "width_uncertain",
+        "endplate_reference",
+        "heary_secondary",
+    ]
+    assert header == expected_header
     for column in ("trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
                    "min_wall_mm", "heary_direction", "heary_secondary", "facet_grade", "trajectory_type"):
         assert column in header
+    # Row values land by position, not just by header-keyed dict lookup.
+    assert rows[1][header.index("heary_direction")] == "medial"
+    assert rows[1][header.index("facet_grade")] == "2"
+    assert header.index("heary_secondary") == len(header) - 1
+    assert header.index("endplate_reference") == len(header) - 2
+    assert header.index("facet_grade") == header.index("heary_direction") + 1
+    assert rows[1][-1] == "superior"
+    assert rows[2][-1] == ""
     row = dict(zip(header, rows[1], strict=True))
     assert row["trajectory_mean_hu"] == "180.500"
     assert row["hu_ratio"] == "1.203"
     assert row["heary_direction"] == "medial"
-    assert row["heary_secondary"] == ""
+    assert row["heary_secondary"] == "superior"
     assert row["facet_grade"] == "2"
     assert row["trajectory_type"] == "traditional"
     # A screw with no metrics leaves the columns empty rather than shifting them.
@@ -453,12 +482,13 @@ def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
     header = rows[0]
     # Each wave appends its own columns and never reorders an earlier one, so
     # these four (W7) sit before the endplate angle (W8), the uncertainty
-    # flag and the endplate reference, not at the end of the row.
-    assert header[-7:-3] == [
+    # flag, the endplate reference, and the trailing heary_secondary column.
+    assert header[-8:-4] == [
         "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
     ]
-    assert header[-3:-1] == ["endplate_angle_deg", "width_uncertain"]
-    assert header[-1] == "endplate_reference"
+    assert header[-4:-2] == ["endplate_angle_deg", "width_uncertain"]
+    assert header[-2] == "endplate_reference"
+    assert header[-1] == "heary_secondary"
     row = dict(zip(header, rows[1], strict=True))
     assert row["pedicle_width_mm"] == "4.500"
     assert row["narrow_pedicle"] == "true"
@@ -533,7 +563,13 @@ def test_csv_has_an_endplate_angle_column(tmp_path):
 
 
 def test_csv_appends_the_endplate_reference_column_last(tmp_path):
-    """New columns append; readers key on the header, not on position."""
+    """heary_secondary (not endplate_reference) is the last CSV column.
+
+    New columns append; readers key on the header, not on position. The
+    middle-insert of heary_secondary once shifted facet_grade and every later
+    column for positional readers, so it now travels after endplate_reference
+    as the true last column.
+    """
     screws = [
         Screw(
             entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 5.0),
@@ -555,7 +591,8 @@ def test_csv_appends_the_endplate_reference_column_last(tmp_path):
 
     rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
     header = rows[0]
-    assert header[-1] == "endplate_reference"
+    assert header[-2] == "endplate_reference"
+    assert header[-1] == "heary_secondary"
     row = dict(zip(header, rows[1], strict=True))
     assert row["endplate_reference"] == "neighbours"
     blank = dict(zip(header, rows[2], strict=True))

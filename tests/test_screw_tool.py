@@ -772,6 +772,29 @@ def _two_level_tool():
     return tool
 
 
+def _two_level_hu_tool():
+    """Two levels with different body HU behind the same trajectory HU.
+
+    Both labels share the trajectory corridor's 350 HU, but a small dense
+    patch at each level's body centre gives label 28 a ~600 HU body and
+    label 29 a ~150 HU body.  A screw dragged from one level to the other
+    must not rebuild its ratio from the new trajectory against the old
+    level's body mean.
+    """
+    arr = np.zeros((60, 60, 60), dtype=np.uint8)
+    arr[20:30, 20:40, 20:40] = 28
+    arr[30:40, 20:40, 20:40] = 29
+    mask = sitk.GetImageFromArray(arr)
+    hu = np.where(arr > 0, 350, -50).astype(np.int16)
+    hu[22:28, 22:28, 22:28] = 600
+    hu[32:38, 22:28, 22:28] = 150
+    ct = sitk.GetImageFromArray(hu)
+    ct.CopyInformation(mask)
+    tool = ScrewTool(_VolumeManager())
+    tool.set_grader(ScrewGrader(mask, ct))
+    return tool
+
+
 def _narrow_l2_screw(z):
     return Screw(
         entry_point=(30.0, 38.0, z),
@@ -815,6 +838,70 @@ def test_without_a_registry_the_planner_width_survives_the_drag():
 
     assert moved.metrics["narrow_pedicle"] is True
     assert moved.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+
+
+def test_an_inter_level_drag_drops_the_level_bound_hu():
+    """Body/pedicle HU belong to the level, not the trajectory.
+
+    The merge rebuilds ``trajectory_body_ratio`` from the new trajectory HU
+    against the preserved body HU -- which is wrong once the screw changed
+    levels.  The recorded label detects the change and drops the level-bound
+    HU (and the ratio) to None instead of mixing levels.
+    """
+    from src.tools.screw_tool import _GRADED_LABEL_KEY
+
+    tool = _two_level_tool()
+    screw = _planner_screw((30.0, 38.0, 25.0), (30.0, 22.0, 25.0))
+    tool.add_screw(screw)
+    tool.regrade_all()
+    assert tool.get_screws()[0].metrics[_GRADED_LABEL_KEY] == 28
+    assert tool.get_screws()[0].metrics["body_mean_hu"] == pytest.approx(150.0)
+
+    moved = tool.replace_screw(
+        0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
+    )
+
+    assert moved.metrics[_GRADED_LABEL_KEY] == 29
+    assert moved.metrics["body_mean_hu"] is None
+    assert moved.metrics["pedicle_mean_hu"] is None
+    assert moved.metrics["trajectory_body_ratio"] is None
+    # The trajectory HU itself is re-measured, not dropped.
+    assert moved.metrics["trajectory_mean_hu"] == pytest.approx(350.0)
+
+
+def test_a_same_level_drag_keeps_the_level_bound_hu_behaviour():
+    """Same level: the preserved body HU still rebuilds the ratio."""
+    from src.tools.screw_tool import _GRADED_LABEL_KEY
+
+    tool = _two_level_tool()
+    screw = _planner_screw((30.0, 38.0, 25.0), (30.0, 22.0, 25.0))
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    moved = tool.replace_screw(
+        0, entry_point=(32.0, 38.0, 25.0), target_point=(32.0, 22.0, 25.0)
+    )
+
+    assert moved.metrics[_GRADED_LABEL_KEY] == 28
+    assert moved.metrics["body_mean_hu"] == pytest.approx(150.0)
+    assert moved.metrics["trajectory_body_ratio"] == pytest.approx(
+        moved.metrics["trajectory_mean_hu"] / 150.0
+    )
+
+
+def test_the_graded_label_is_never_exported_to_csv(tmp_path):
+    """The internal level key must not leak into the CSV export."""
+    from src.utils.planning_io import export_screws_csv
+
+    tool = _two_level_tool()
+    screw = _planner_screw((30.0, 38.0, 25.0), (30.0, 22.0, 25.0))
+    tool.add_screw(screw)
+    tool.regrade_all()
+
+    path = tmp_path / "screws.csv"
+    export_screws_csv(str(path), tool.get_screws())
+    header = path.read_text(encoding="utf-8").splitlines()[0]
+    assert "_graded_label" not in header
 
 
 def test_the_re_measured_width_uses_the_screws_own_side():

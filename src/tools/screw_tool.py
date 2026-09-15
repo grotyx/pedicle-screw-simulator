@@ -110,6 +110,14 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "medial_wall_mm",
 )
 
+#: Internal metrics key recording which mask label a screw's level-bound HU
+#: came from.  ``body_mean_hu`` and ``pedicle_mean_hu`` are measured at the
+#: level's body centre and isthmus, not along the trajectory, so dragging a
+#: screw into another level must not rebuild a ratio from the new trajectory
+#: HU against the old level's body HU.  Written by :meth:`_merge_metrics`,
+#: read there to detect a level change, and never exported to CSV.
+_GRADED_LABEL_KEY = "_graded_label"
+
 #: Mirrors the planner's ``High convergence angle`` threshold
 #: (:meth:`src.core.auto_screw_planner.AutoScrewPlanner._finalise_screw`), so a
 #: manual and an auto screw are flagged at the same convergence.
@@ -574,7 +582,7 @@ class ScrewTool:
         screw.mean_hu = result.mean_hu
         screw.min_hu = result.min_hu
         measured, derived_warnings = self._compute_metrics(screw, result)
-        screw.metrics = self._merge_metrics(screw.metrics, measured)
+        screw.metrics = self._merge_metrics(screw.metrics, measured, result.label)
         self._refresh_narrow_pedicle_warning(screw, measured)
         if not screw.vertebra_level:
             from ..core.pedicle_analyzer import VERTEBRA_LABELS
@@ -812,7 +820,9 @@ class ScrewTool:
         ]
 
     @staticmethod
-    def _merge_metrics(existing: Any, measured: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_metrics(
+        existing: Any, measured: Dict[str, Any], label: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Overlay freshly measured metrics onto the bundle a screw already has.
 
         Keys the grader does not own are carried through untouched: the
@@ -825,9 +835,23 @@ class ScrewTool:
         allowed to overwrite a planner measurement.  ``trajectory_body_ratio``
         is the exception among them: it is purely derived, so it is recomputed
         from the new trajectory HU against the preserved body HU rather than
-        left behind describing the old trajectory.
+        left behind describing the old trajectory -- but only when the body
+        HU is from the screw's current level.  ``label`` is the mask label
+        the screw was just graded against; when it differs from the recorded
+        :data:`_GRADED_LABEL_KEY`, the level-bound ``body_mean_hu``,
+        ``pedicle_mean_hu`` and the ratio are dropped to ``None`` instead of
+        mixing one level's body with another's trajectory.
         """
         merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        previous_label = merged.get(_GRADED_LABEL_KEY)
+        level_changed = (
+            label is not None
+            and previous_label is not None
+            and int(label) != int(previous_label)
+        )
+        if level_changed:
+            for key in ("body_mean_hu", "pedicle_mean_hu"):
+                merged[key] = None
         for key, value in measured.items():
             if (
                 value is None
@@ -836,6 +860,16 @@ class ScrewTool:
             ):
                 continue
             merged[key] = value
+
+        if level_changed:
+            # The preserved body HU is gone by design; a ratio rebuilt here
+            # would mix the new trajectory against nothing.  Record the new
+            # level and leave the level-bound HU to be re-measured.  The
+            # ratio reads None ("not measured"), never a stale number.
+            if label is not None:
+                merged[_GRADED_LABEL_KEY] = int(label)
+            merged["trajectory_body_ratio"] = None
+            return merged
 
         if measured.get("trajectory_body_ratio") is None:
             trajectory_hu = merged.get("trajectory_mean_hu")
@@ -848,6 +882,8 @@ class ScrewTool:
                 and float(body_hu) != 0.0
             ):
                 merged["trajectory_body_ratio"] = float(trajectory_hu) / float(body_hu)
+        if label is not None:
+            merged[_GRADED_LABEL_KEY] = int(label)
         return merged
 
     @staticmethod

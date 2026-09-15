@@ -55,10 +55,20 @@ def _jsonable_metric(value: Any) -> Any:
 
 
 def metrics_to_dict(metrics: Any) -> Dict[str, Any]:
-    """JSON-safe copy of a screw's metric bundle (``{}`` when absent)."""
+    """JSON-safe copy of a screw's metric bundle (``{}`` when absent).
+
+    Internal bookkeeping keys (``_``-prefixed, e.g. the level a re-grade
+    last measured against) never leave the process: they steer the merge
+    in :mod:`src.tools.screw_tool` but are not measurements, so neither
+    JSON nor CSV carries them.
+    """
     if not isinstance(metrics, dict):
         return {}
-    return {str(key): _jsonable_metric(value) for key, value in metrics.items()}
+    return {
+        str(key): _jsonable_metric(value)
+        for key, value in metrics.items()
+        if not str(key).startswith("_")
+    }
 
 
 def _metric_number(metrics: Dict[str, Any], key: str, spec: str = ".3f") -> str:
@@ -290,7 +300,7 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "entry_x", "entry_y", "entry_z", "target_x", "target_y", "target_z",
             "convergence_angle_deg", "craniocaudal_angle_deg",
             "trajectory_mean_hu", "pedicle_mean_hu", "body_mean_hu", "hu_ratio",
-            "min_wall_mm", "heary_direction", "heary_secondary", "facet_grade", "trajectory_type",
+            "min_wall_mm", "heary_direction", "facet_grade", "trajectory_type",
             "warnings",
             # Appended, per the plan-file contract: readers key on the header.
             "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm",
@@ -308,6 +318,10 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             # "none") -- without it a reader cannot tell an aligned screw from
             # one that was never measured against an endplate at all.
             "endplate_reference",
+            # Appended last, per the plan-file contract: the secondary Heary
+            # axis travels here, after every older column, so positional
+            # readers never see an old column shift.
+            "heary_secondary",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -337,9 +351,6 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "trajectory_body_ratio"),
                 _metric_number(metrics, "min_wall_mm"),
                 "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
-                # Appended next to heary_direction, per the plan-file contract:
-                # readers key on the header, so old columns never shift.
-                "" if metrics.get("heary_secondary") is None else str(metrics["heary_secondary"]),
                 _metric_number(metrics, "facet_grade", "d"),
                 # CBT and traditional screws are graded on the same scale but
                 # are not clinically interchangeable, so the export names the
@@ -354,4 +365,6 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "endplate_angle_deg"),
                 _metric_flag(metrics, "width_uncertain"),
                 str(metrics.get("endplate_reference") or ""),
+                # Newest column stays last, beside its header entry above.
+                "" if metrics.get("heary_secondary") is None else str(metrics["heary_secondary"]),
             ])
