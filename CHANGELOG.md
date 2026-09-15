@@ -17,14 +17,16 @@ current version; every other place the version appears is derived from it.
 
 - The Heary breach direction now travels with its secondary axis:
   `heary_secondary` in JSON `metrics`, a new `heary_secondary` CSV column
-  next to `heary_direction`, and a "primary + secondary" Heary row on the
+  after `endplate_reference`, and a "primary + secondary" Heary row on the
   Review page, so a superomedial breach keeps its medial component.
 - The Review screw list supports multi-select batch delete with
   Ctrl+Z undo, a level/side/grade text filter, and Delete / [ / ]
-  shortcuts.
+  shortcuts. Undo never restores screws across a study or plan load, and
+  hidden rows are excluded from delete and navigation.
 - One shared cancellable job dialog serves DICOM loading (now
   cancellable), segmentation, planning, and STL export, with a one-line
   log tail; the planning cancel note names the side being finished.
+  The Study step shows a spinner while DICOM loads.
 
 ### Changed
 
@@ -50,6 +52,11 @@ current version; every other place the version appears is derived from it.
   carries a mode chip (tool, armed edit, Screw MPR identity, isolation).
 - Screw drags coalesce to 30 Hz with release replay; viewers share one
   render path and reuse one cell picker each.
+- A colliding construct warns and reports the pair: the lower-score side
+  falls back to the legacy planner, and a side with no collision-free
+  option is recorded in the dropped-sides note.
+- A screw dragged to another level drops the old level's body/pedicle HU
+  and ratio instead of mixing them, and CBT records its zero entry zone.
 
 ### Fixed
 
@@ -69,6 +76,10 @@ current version; every other place the version appears is derived from it.
 - The per-voxel scalar presence check in mesh building delegates to the
   numpy path; the slow Python VTK loop survives only as a no-numpy
   fallback.
+- A screw inside the cephalad label counts as entered even on float
+  distance slack; stored planner settings reject NaN/inf.
+- The dorsal approach check sweeps sparsely out to 40 mm, so a far
+  lamina pocket behind a head no longer reads as reachable.
 
 ## [0.2.3] - 2026-09-13
 

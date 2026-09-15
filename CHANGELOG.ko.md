@@ -16,14 +16,17 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 ### 추가
 
 - Heary breach 방향에 2차 축이 함께 기록됩니다. JSON `metrics`의
-  `heary_secondary`, `heary_direction` 옆의 신규 `heary_secondary` CSV 열,
+  `heary_secondary`, `endplate_reference` 뒤의 신규 `heary_secondary` CSV 열,
   Review 페이지 Heary 행의 "primary + secondary" 표시로 superomedial
   천공의 medial 성분이 사라지지 않습니다.
 - Review 스크류 목록이 다중 선택 일괄 삭제와 Ctrl+Z 되돌리기,
   레벨/side/등급 텍스트 필터, Delete / [ / ] 단축키를 지원합니다.
+  되돌리기는 study·계획 불러오기 경계를 넘지 않으며, 숨은 행은 삭제·이동에서
+  제외됩니다.
 - DICOM 불러오기(취소 가능), segmentation, 계획, STL 내보내기가 하나의
   공용 취소 가능 작업 대화상자를 사용합니다. 한 줄 로그와 함께 계획
-  취소 시 마무리 중인 side를 표시합니다.
+  취소 시 마무리 중인 side를 표시합니다. Study 단계는 DICOM 불러오기
+  중 스피너를 표시합니다.
 
 ### 변경
 
@@ -49,6 +52,10 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   (도구, 대기 중 수정, Screw MPR 식별, isolation)이 표시됩니다.
 - 스크류 드래그가 30 Hz로 합쳐지고 해제 시 재생되며, 뷰어가 하나의
   렌더 경로를 공유하고 셀 피커를 재사용합니다.
+- 충돌하는 construct는 경고·보고됩니다. 점수가 낮은 쪽이 legacy 대체로
+  내려가고, 충돌 없는 대안이 없으면 dropped-sides 기록에 남습니다.
+- 다른 레벨로 끈 스크류는 이전 레벨의 체적·협부 HU와 비율을 버리고,
+  CBT는 entry zone 0을 기록합니다.
 
 ### 수정
 
@@ -67,6 +74,10 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   스크류 크기를 조용히 바꾸지 못합니다.
 - 메시 생성의 voxel 단위 존재 검사가 numpy 경로에 위임됩니다. 느린
   Python VTK 루프는 numpy가 없을 때의 대체 수단으로만 남습니다.
+- cephalad 내부 판정이 float 여유를 포함하며, 저장된 플래너 설정의
+  NaN/inf를 거부합니다.
+- 후방 접근 검사가 40 mm까지 성기게 훑으므로, 헤드 뒤 먼 층판 주머니가
+  도달 가능으로 오인되지 않습니다.
 
 ## [0.2.3] - 2026-09-13
 

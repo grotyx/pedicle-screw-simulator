@@ -38,6 +38,7 @@ jobs:
             requirements.txt
             requirements-dev.txt
             requirements-desktop.txt
+            requirements-lock.txt
 
       - name: Export application version
         shell: python
