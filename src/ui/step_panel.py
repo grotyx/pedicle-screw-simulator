@@ -920,12 +920,15 @@ def build_review_page(theme_name: str) -> tuple[QWidget, dict]:
     action_row.addWidget(screw_axis_mpr_btn, 0, 1)
     action_row.addWidget(standard_mpr_btn, 0, 1)
 
+    # Visible Edit split-button: mode actions live on the menu; the
+    # controller drives enabled/checked state through refresh_controls.
     screw_edit_btn = QToolButton()
     screw_edit_btn.setText("Edit")
     screw_edit_btn.setPopupMode(
         QToolButton.ToolButtonPopupMode.InstantPopup
     )
     screw_edit_btn.setEnabled(False)
+    screw_edit_btn.setCheckable(True)
     screw_edit_btn.setToolTip(
         "Move entry, tip, or the whole screw. "
         "Double-click again to finish."
@@ -934,12 +937,15 @@ def build_review_page(theme_name: str) -> tuple[QWidget, dict]:
     _screw_edit_move_entry_action = screw_edit_menu.addAction(
         "Move entry point"
     )
+    _screw_edit_move_entry_action.setCheckable(True)
     _screw_edit_move_tip_action = screw_edit_menu.addAction(
         "Move tip point"
     )
+    _screw_edit_move_tip_action.setCheckable(True)
     _screw_edit_move_whole_action = screw_edit_menu.addAction(
         "Move whole screw"
     )
+    _screw_edit_move_whole_action.setCheckable(True)
     screw_edit_menu.addSeparator()
     _screw_edit_cancel_action = screw_edit_menu.addAction("Cancel edit")
     screw_edit_btn.setMenu(screw_edit_menu)
@@ -957,30 +963,9 @@ def build_review_page(theme_name: str) -> tuple[QWidget, dict]:
     action_row.addWidget(remove_screw_btn, 1, 0, 1, 4)
     review_layout.addLayout(action_row)
 
-    # Hidden legacy edit buttons: ScrewEditController.refresh_controls
-    # still reads and writes their enabled/checked state directly, so
-    # they stay alive (never shown) rather than being renamed away.
-    screw_edit_entry_btn = QPushButton("Entry")
-    screw_edit_tip_btn = QPushButton("Tip")
-    screw_edit_move_btn = QPushButton("Move")
-    screw_edit_cancel_btn = QPushButton("Cancel")
-    for button in (
-        screw_edit_entry_btn,
-        screw_edit_tip_btn,
-        screw_edit_move_btn,
-    ):
-        button.setCheckable(True)
-        button.setEnabled(False)
-        review_layout.addWidget(button)
-    screw_edit_cancel_btn.setEnabled(False)
-    review_layout.addWidget(screw_edit_cancel_btn)
-    for button in (
-        screw_edit_entry_btn,
-        screw_edit_tip_btn,
-        screw_edit_move_btn,
-        screw_edit_cancel_btn,
-    ):
-        button.hide()
+    # No hidden legacy entry/tip/move/cancel buttons: the controller drives
+    # the visible Edit split-button above directly, so there is no second
+    # control set to keep in sync (or to confuse a test double).
 
     # Screw MPR's own position/rotation controls: only meaningful while
     # it is active, so refresh_mode_indicators toggles this whole row.
@@ -1168,10 +1153,6 @@ def build_review_page(theme_name: str) -> tuple[QWidget, dict]:
         "_screw_edit_cancel_action": _screw_edit_cancel_action,
         "screw_next_btn": screw_next_btn,
         "remove_screw_btn": remove_screw_btn,
-        "screw_edit_entry_btn": screw_edit_entry_btn,
-        "screw_edit_tip_btn": screw_edit_tip_btn,
-        "screw_edit_move_btn": screw_edit_move_btn,
-        "screw_edit_cancel_btn": screw_edit_cancel_btn,
         "screw_mpr_controls": screw_mpr_controls,
         "screw_axis_position_label": screw_axis_position_label,
         "screw_axis_position_slider": screw_axis_position_slider,

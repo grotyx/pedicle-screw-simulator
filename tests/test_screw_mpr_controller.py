@@ -102,14 +102,20 @@ class _Label:
 
 
 class _ListWidget:
-    def __init__(self, row=-1):
+    def __init__(self, row=-1, visible=None):
         self.row = row
+        self._visible = visible
 
     def currentRow(self):
         return self.row
 
     def setCurrentRow(self, row):
         self.row = int(row)
+
+    def visible_rows(self):
+        if self._visible is not None:
+            return list(self._visible)
+        return [self.row] if self.row >= 0 else []
 
 
 class _StatusBar:
@@ -241,6 +247,7 @@ def _make_controller(
     viewer_3d=None,
     grader=None,
     window_level=None,
+    visible=None,
 ):
     window = _Window(
         screws,
@@ -249,6 +256,8 @@ def _make_controller(
         grader=grader,
         window_level=window_level,
     )
+    if visible is not None:
+        window.screw_list_widget._visible = list(visible)
     controller = ScrewMPRController(_VolumeManager(loaded=loaded), window)
     return controller, window
 
@@ -434,6 +443,7 @@ def test_previous_and_next_change_list_selection():
     controller, window = _make_controller(
         [_screw(), _screw(), _screw()],
         row=1,
+        visible=[0, 1, 2],
     )
 
     controller.select_previous()
@@ -441,6 +451,38 @@ def test_previous_and_next_change_list_selection():
 
     controller.select_next()
     assert window.screw_list_widget.currentRow() == 1
+
+
+def test_previous_and_next_skip_filter_hidden_rows():
+    controller, window = _make_controller(
+        [_screw(), _screw(), _screw()],
+        row=0,
+        visible=[0, 2],
+    )
+
+    controller.select_next()
+    assert window.screw_list_widget.currentRow() == 2
+
+    controller.select_previous()
+    assert window.screw_list_widget.currentRow() == 0
+
+
+def test_3d_source_matching_ignores_case_and_whitespace():
+    controller, window = _make_controller([_screw()])
+    controller.enter()
+    original_axes = window.axial_viewer.axes
+    window._screw_edit_ctrl = SimpleNamespace(
+        is_active=True,
+        active_source="  3d  ",
+    )
+    window._tool_ctrl.screw_tool.screws[0] = _screw(
+        entry=(10.0, 0.0, 0.0),
+        target=(20.0, 0.0, 40.0),
+    )
+
+    controller.on_screw_updated(0)
+
+    assert window.axial_viewer.axes is not original_axes
 
 
 def test_selection_updates_inspector_in_standard_mode():

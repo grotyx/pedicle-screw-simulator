@@ -78,13 +78,35 @@ class _ScrewMPRController:
         self.updated.append(int(index))
 
 
+class _CheckableButton(_Button):
+    pass
+
+
+class _Action:
+    def __init__(self):
+        self.enabled = True
+        self.checked = False
+
+    def setEnabled(self, enabled):
+        self.enabled = bool(enabled)
+
+    def setChecked(self, checked):
+        self.checked = bool(checked)
+
+
 class _Window:
     def __init__(self, screw):
         self.screw_list_widget = _ListWidget()
-        self.screw_edit_entry_btn = _Button()
-        self.screw_edit_tip_btn = _Button()
-        self.screw_edit_move_btn = _Button()
-        self.screw_edit_cancel_btn = _Button()
+        self.screw_edit_btn = _CheckableButton()
+        self._screw_edit_move_entry_action = _Action()
+        self._screw_edit_move_tip_action = _Action()
+        self._screw_edit_move_whole_action = _Action()
+        self._screw_edit_cancel_action = _Action()
+        # Thin shims for the removed hidden legacy buttons.
+        self.screw_edit_entry_btn = self._screw_edit_move_entry_action
+        self.screw_edit_tip_btn = self._screw_edit_move_tip_action
+        self.screw_edit_move_btn = self._screw_edit_move_whole_action
+        self.screw_edit_cancel_btn = self._screw_edit_cancel_action
         self.statusbar = _StatusBar()
         self._tool_ctrl = _ToolController(screw)
         self._screw_mpr_ctrl = _ScrewMPRController()
@@ -172,7 +194,6 @@ def test_cancel_returns_to_idle_without_model_change():
 
     assert controller.mode == "idle"
     assert window._tool_ctrl.screw_tool.get_screws()[0] is original
-    assert window.screw_edit_cancel_btn.enabled is False
 
 
 def test_selection_change_cancels_active_edit():
@@ -183,7 +204,7 @@ def test_selection_change_cancels_active_edit():
     controller.on_screw_selection_changed(-1)
 
     assert controller.mode == "idle"
-    assert window.screw_edit_entry_btn.enabled is False
+    assert window.screw_edit_btn.enabled is False
 
 
 def test_selection_change_clears_pointer_lock_from_every_viewer():
@@ -318,6 +339,51 @@ def test_rapid_drag_samples_coalesce_to_one_rebuild():
     assert screw.target_point == (0.0, 0.0, 40.0)
     assert len(window._tool_ctrl.refreshed) == 2
     assert window._screw_mpr_ctrl.updated == [0]
+
+
+def test_begin_drag_resets_throttle_state_for_a_rapid_re_drag():
+    """A drag that starts inside the previous drag's throttle window applies."""
+    import time
+
+    controller, window = _make_controller()
+
+    assert controller.begin_drag(0, "entry", (0.0, 0.0, 0.0)) is True
+    assert controller.update_drag((1.0, 0.0, 0.0), source="Axial MPR") is True
+    assert len(window._tool_ctrl.refreshed) == 1
+
+    # Still inside the throttle window: a fresh drag must not inherit the
+    # old drag's clock or its staged sample.
+    controller._last_drag_apply_s = time.monotonic()
+    controller._pending_drag = ((9.0, 9.0, 9.0), (0.0, 0.0, 40.0), "Axial MPR")
+    assert controller.begin_drag(0, "entry", (0.0, 0.0, 0.0)) is True
+    assert controller._pending_drag is None
+    assert controller.update_drag((2.0, 0.0, 0.0), source="Axial MPR") is True
+
+    assert len(window._tool_ctrl.refreshed) == 2
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == (2.0, 0.0, 0.0)
+
+
+def test_visible_edit_controls_mirror_mode_and_selection():
+    controller, window = _make_controller()
+    controller.refresh_controls()
+
+    assert window.screw_edit_btn.enabled is True
+    assert window._screw_edit_move_entry_action.enabled is True
+    assert window._screw_edit_move_tip_action.enabled is True
+    assert window._screw_edit_move_whole_action.enabled is True
+    # Menu mode actions stay enabled so start() itself can report why an
+    # edit cannot begin; the button carries the can_edit state instead.
+
+    assert controller.start("entry") is True
+
+    assert window.screw_edit_btn.enabled is True
+    assert window._screw_edit_move_entry_action.checked is True
+    assert window._screw_edit_move_tip_action.checked is False
+
+    controller.cancel(show_message=False)
+
+    assert window._screw_edit_move_entry_action.checked is False
 
 
 def test_release_replays_a_rejected_sample_as_a_boundary_note():

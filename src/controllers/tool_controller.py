@@ -54,6 +54,9 @@ class ToolController:
         self._measurement_entries: list = []
         self._next_measurement_id: int = 1
         self._editing_measurement_row: Optional[int] = None
+        # Removal batches remembered for undo_remove_screws. Cleared with
+        # the screws themselves (clear_screws), never carried across studies.
+        self._screw_undo_stack: list = []
 
         self.screw_tool.set_callbacks(
             on_screw_placed=self._on_screw_placed,
@@ -679,8 +682,21 @@ class ToolController:
             self._window.statusbar.showMessage(f"{removed} screws removed")
 
     def _selected_screw_rows(self) -> list:
-        """Selected screw rows, current row included, in ascending order."""
+        """Selected screw rows, current row included, in ascending order.
+
+        Restricted to rows the Review filter leaves visible: a hidden row
+        keeps its selection state in the table, but Delete must act on what
+        the surgeon sees, not on rows the filter has put out of sight. A
+        table without ``visible_rows`` (unit-test stubs) means no filtering.
+        """
         table = self._window.screw_list_widget
+        visible_fn = getattr(table, "visible_rows", None)
+        visible = None
+        if callable(visible_fn):
+            try:
+                visible = {int(row) for row in visible_fn()}
+            except Exception:  # pragma: no cover - stub tables in tests
+                visible = None
         rows = set()
         try:
             for index in table.selectedIndexes():
@@ -691,7 +707,11 @@ class ToolController:
         if current is not None and int(current) >= 0:
             rows.add(int(current))
         count = len(self.screw_tool.get_screws())
-        rows = sorted(row for row in rows if 0 <= row < count)
+        rows = sorted(
+            row
+            for row in rows
+            if 0 <= row < count and (visible is None or row in visible)
+        )
         if not rows and current is not None and int(current) >= 0:
             # A stale selection (row kept, screws gone): let the caller
             # report "select a screw" rather than silently doing nothing.
@@ -724,15 +744,16 @@ class ToolController:
 
     def _push_screw_undo(self, removed, rows) -> None:
         """Remember one removal batch for :meth:`undo_remove_screws`."""
-        stack = getattr(self, "_screw_undo_stack", None)
-        if stack is None:
-            stack = self._screw_undo_stack = []
-        stack.append((list(removed), list(rows)))
-        del stack[:-20]
+        self._screw_undo_stack.append((list(removed), list(rows)))
+        del self._screw_undo_stack[:-20]
+
+    def clear_screw_undo(self) -> None:
+        """Drop remembered removals; a new study must not undo the old one."""
+        self._screw_undo_stack.clear()
 
     def undo_remove_screws(self) -> bool:
         """Restore the last removed batch; ``False`` when the stack is empty."""
-        stack = getattr(self, "_screw_undo_stack", None)
+        stack = self._screw_undo_stack
         if not stack:
             self._window.statusbar.showMessage("Nothing to undo")
             return False
@@ -761,26 +782,57 @@ class ToolController:
             self.screw_tool.set_screws(screws)
 
     def _rebuild_screw_views(self, keep_row: int = 0) -> None:
-        """Rebuild every index-linked screw view so viewport picks stay correct."""
+        """Rebuild every index-linked screw view so viewport picks stay correct.
+
+        The selection fixup stays silent: a programmatic setCurrentRow fires
+        the selection listeners, but a rebuild is not the surgeon picking a
+        screw, so it must not yank the panel to the Review step. Block the
+        table's signals around both the clear and the reselect.
+        """
         screws = self.screw_tool.get_screws()
         self._window.viewer_3d.clear_screws()
         self._screw_actors.clear()
-        self._window.screw_list_widget.clear()
-        self._rebuild_mpr_screw_overlays(screws)
-        for index, screw in enumerate(screws):
-            actor = self._window.viewer_3d.add_screw(
-                screw.entry_point,
-                screw.target_point,
-                radius=screw.diameter / 2.0,
-                color=screw_display_color(screw),
-                screw_id=index,
+        table = self._window.screw_list_widget
+        block = getattr(table, "blockSignals", None)
+        previous = block(True) if callable(block) else None
+        try:
+            table.clear()
+            self._rebuild_mpr_screw_overlays(screws)
+            for index, screw in enumerate(screws):
+                actor = self._window.viewer_3d.add_screw(
+                    screw.entry_point,
+                    screw.target_point,
+                    radius=screw.diameter / 2.0,
+                    color=screw_display_color(screw),
+                    screw_id=index,
+                )
+                self._screw_actors.append(actor)
+                self._add_screw_to_list(screw)
+            if screws:
+                table.setCurrentRow(
+                    min(max(int(keep_row), 0), len(screws) - 1)
+                )
+        finally:
+            if callable(block):
+                table.blockSignals(previous)
+        # Plain stubs without blockSignals keep the old direct-reselect
+        # path (setCurrentRow with no signal machinery); Qt tables get the
+        # silent path above plus the listener catch-up below.
+        if screws and callable(block):
+            current = table.currentRow()
+            mpr_ctrl = getattr(self._window, "_screw_mpr_ctrl", None)
+            on_selection = getattr(mpr_ctrl, "on_screw_selection_changed", None)
+            if callable(on_selection):
+                on_selection(current)
+            edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+            on_edit_selection = getattr(
+                edit_controller, "on_screw_selection_changed", None
             )
-            self._screw_actors.append(actor)
-            self._add_screw_to_list(screw)
-        if screws:
-            self._window.screw_list_widget.setCurrentRow(
-                min(max(int(keep_row), 0), len(screws) - 1)
-            )
+            if callable(on_edit_selection):
+                on_edit_selection(current)
+            visual = getattr(self._window, "_on_screw_visual_selection_changed", None)
+            if callable(visual):
+                visual(current)
 
     def _format_measurement_result(self, measurement) -> str:
         """Format measurement result text for status bar."""
@@ -795,6 +847,7 @@ class ToolController:
 
     def clear_screws(self):
         """Clear all placed screws."""
+        self.clear_screw_undo()
         edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
         if edit_controller is not None:
             edit_controller.reset()

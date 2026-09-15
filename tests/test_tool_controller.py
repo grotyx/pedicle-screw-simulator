@@ -256,6 +256,12 @@ class _ScrewListStub:
     def selectedIndexes(self):
         return []
 
+    def blockSignals(self, block):
+        return False
+
+    def visible_rows(self):
+        return list(range(len(self.rows)))
+
     def clear(self):
         self.rows = []
         self.current = -1
@@ -295,6 +301,8 @@ class _ScrewMPRStub:
     def __init__(self):
         self.updated = []
         self.removed = []
+        self.exited = 0
+        self.selections = []
 
     def on_screw_updated(self, index):
         self.updated.append(int(index))
@@ -305,17 +313,31 @@ class _ScrewMPRStub:
     def on_screws_removed(self, rows):
         self.removed.extend(int(row) for row in rows)
 
+    def on_screw_selection_changed(self, row):
+        self.selections.append(int(row))
+
+    def exit(self):
+        self.exited += 1
+
 
 class _EditStub:
     def __init__(self):
         self.removed = []
         self.refreshed = 0
+        self.reset_calls = 0
+        self.selections = []
 
     def on_screw_removed(self, row):
         self.removed.append(int(row))
 
+    def on_screw_selection_changed(self, row):
+        self.selections.append(int(row))
+
     def refresh_controls(self):
         self.refreshed += 1
+
+    def reset(self):
+        self.reset_calls += 1
 
 
 def _removal_window(screws):
@@ -418,3 +440,74 @@ def test_undo_with_empty_stack_reports_nothing_to_undo():
 
     assert controller.undo_remove_screws() is False
     assert window.statusbar.messages[-1] == "Nothing to undo"
+
+
+def test_clear_screws_drops_the_undo_stack():
+    controller, window = _removal_window([_screw(), _screw(side="right")])
+    window.screw_list_widget.setCurrentRow(0)
+    controller.remove_selected_screw()
+    assert len(controller.screw_tool.get_screws()) == 1
+
+    controller.clear_screws()
+
+    assert controller._screw_undo_stack == []
+    assert controller.undo_remove_screws() is False
+    assert window.statusbar.messages[-1] == "Nothing to undo"
+
+
+def test_clear_screw_undo_forgets_a_pending_removal():
+    controller, window = _removal_window([_screw(), _screw(side="right")])
+    assert controller.remove_screws_at_rows([0]) == 1
+
+    controller.clear_screw_undo()
+
+    assert controller.undo_remove_screws() is False
+
+
+def test_hidden_rows_are_excluded_from_delete_selection():
+    controller, window = _removal_window(
+        [_screw(), _screw(side="right"), _screw(level="L5")]
+    )
+    table = window.screw_list_widget
+
+    class _Index:
+        def __init__(self, row):
+            self._row = row
+
+        def row(self):
+            return self._row
+
+    table.selectedIndexes = lambda: [_Index(0), _Index(2)]
+    table.setCurrentRow(2)
+    table.visible_rows = lambda: [0, 1]
+
+    assert controller._selected_screw_rows() == [0]
+    # The rows passed explicitly still delete; only the *selection*
+    # derivation filters hidden rows.
+    controller2, window2 = _removal_window(
+        [_screw(), _screw(side="right"), _screw(level="L5")]
+    )
+    window2.screw_list_widget.selectedIndexes = lambda: [_Index(0), _Index(2)]
+    window2.screw_list_widget.setCurrentRow(2)
+    window2.screw_list_widget.visible_rows = lambda: [0, 1]
+    window2.screw_list_widget.setCurrentRow(0)
+    controller2.remove_selected_screw()
+    assert [s.side for s in controller2.screw_tool.get_screws()] == [
+        "right",
+        "left",
+    ]
+
+
+def test_rebuild_keeps_listeners_on_the_reselected_row_without_review_switch():
+    controller, window = _removal_window(
+        [_screw(), _screw(side="right"), _screw(level="L5")]
+    )
+    window._on_screw_visual_selection_changed = lambda row: window.statusbar.showMessage(
+        f"visual {row}"
+    )
+
+    assert controller.remove_screws_at_rows([0]) == 1
+
+    assert window._screw_mpr_ctrl.selections[-1] == 0
+    assert window._screw_edit_ctrl.selections[-1] == 0
+    assert window.statusbar.messages[-1] == "visual 0"

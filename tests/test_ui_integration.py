@@ -23,7 +23,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QWidget,
 )
 
 import src.controllers.plan_controller as plan_controller_module
@@ -31,277 +30,7 @@ import src.controllers.segmentation_controller as seg_controller_module
 import src.ui.main_window as main_window_module
 from src.core.totalseg_integration import SegmentationRunResult
 from src.models.screw import Screw
-
-
-class DummyMPRViewer(QWidget):
-    """Lightweight MPR test double for UI workflow tests."""
-
-    slice_changed = pyqtSignal(str, float)
-    crosshair_moved = pyqtSignal(str, float, float, float)
-    header_double_clicked = pyqtSignal(str)
-
-    def __init__(self, plane, volume_manager, parent=None):
-        super().__init__(parent)
-        self.plane = plane
-        self.volume_manager = volume_manager
-        self.visible = True
-        self.seg_label_value = 0
-        self.seg_mask = None
-        self.measurements = {}
-        self.custom_axes = None
-        self.custom_title = None
-        self.custom_readout = None
-        self.custom_scroll_handler = None
-        self.custom_rotate_handler = None
-        self.review_screw_id = None
-        self.screw_overlays = {}
-        self.fit_count = 0
-        self.screw_interaction_callbacks = {}
-        self.measurement_interaction_callbacks = {}
-        self.selected_measurement_id = None
-        self.screw_interaction_cancelled = 0
-        self.last_slice_position = None
-        self.orientation_refresh_count = 0
-
-    def set_window_level(self, _window, _level):
-        return
-
-    def set_segmentation_mask(self, mask_image, label_value=0, **_kwargs):
-        self.seg_mask = mask_image
-        self.seg_label_value = int(label_value)
-
-    def set_segmentation_label(self, label_value):
-        self.seg_label_value = int(label_value)
-
-    def set_segmentation_visible(self, visible):
-        self.visible = bool(visible)
-
-    def clear_segmentation_mask(self):
-        self.seg_mask = None
-        self.seg_label_value = 0
-
-    def add_measurement(self, measurement_id, points, label):
-        self.measurements[measurement_id] = {"points": points, "label": label}
-
-    def remove_measurement(self, measurement_id):
-        self.measurements.pop(measurement_id, None)
-
-    def clear_measurements(self):
-        self.measurements = {}
-
-    def set_slice_position(self, position):
-        self.last_slice_position = float(position)
-        self.volume_manager.set_slice_position(self.plane, float(position))
-
-    def cleanup(self):
-        return
-
-    # Stubs for reslice input swap (vertebral isolation)
-    def set_reslice_input(self, vtk_image):
-        return
-
-    def restore_original_input(self):
-        return
-
-    # Stubs for screw projection overlays
-    def add_screw_overlay(self, screw_id, entry, target, color=(0.2, 0.8, 0.2), diameter=6.0):
-        self.screw_overlays[screw_id] = {
-            "entry": tuple(entry),
-            "target": tuple(target),
-            "diameter": float(diameter),
-        }
-
-    def remove_screw_overlay(self, screw_id):
-        self.screw_overlays.pop(screw_id, None)
-
-    def clear_screw_overlays(self):
-        self.screw_overlays = {}
-
-    def set_custom_reslice_axes(self, axes, title):
-        self.custom_axes = axes
-        self.custom_title = title
-
-    def set_custom_readout(self, text):
-        self.custom_readout = text
-
-    def set_custom_scroll_handler(self, handler):
-        self.custom_scroll_handler = handler
-
-    def set_custom_rotate_handler(self, handler):
-        self.custom_rotate_handler = handler
-
-    def clear_custom_reslice_axes(self):
-        self.custom_axes = None
-        self.custom_title = None
-        self.custom_readout = None
-
-    def set_review_screw(self, screw_id):
-        self.review_screw_id = screw_id
-
-    def set_screw_interaction_callbacks(self, **callbacks):
-        self.screw_interaction_callbacks = callbacks
-
-    def set_measurement_interaction_callbacks(self, **callbacks):
-        self.measurement_interaction_callbacks = callbacks
-
-    def set_selected_measurement(self, measurement_id):
-        self.selected_measurement_id = measurement_id
-
-    def cancel_screw_interaction(self):
-        self.screw_interaction_cancelled += 1
-
-    def fit_to_view(self):
-        self.fit_count += 1
-
-    def refresh_orientation_markers(self, render=False):
-        self.orientation_refresh_count += 1
-
-    # Stubs for _coordinated_initial_render
-    _render_guard_active = False
-    _settled = False
-    _extra_render_count = 0
-
-    def _deferred_initial_render(self):
-        return
-
-
-class DummyViewer3D(QWidget):
-    """Lightweight 3D viewer test double for UI workflow tests."""
-
-    header_double_clicked = pyqtSignal(str)
-    isolation_requested = pyqtSignal(bool)
-
-    def __init__(self, volume_manager, parent=None):
-        super().__init__(parent)
-        self.visible = True
-        self.seg_label_value = 0
-        self.seg_mask = None
-        self.screws = []
-        self.measurements = {}
-        self.zoom_factors = []
-        self.fit_count = 0
-        self.vertebral_mesh_labels = None
-        self.volume_visible = True
-        self.screw_interaction_cancelled = 0
-        # Screw MPR in 3D: the last planes shown, or None once cleared.
-        self.screw_mpr_planes = None
-        self.screw_mpr_clear_count = 0
-        self.screw_mpr_label = None
-        self.screw_mpr_window_level = None
-        # (isolated, available) as last reported by set_isolation_state.
-        self.isolation_state = (False, False)
-
-    def set_isolation_state(self, isolated: bool, available: bool) -> None:
-        self.isolation_state = (bool(isolated), bool(available))
-
-    def show_screw_mpr(
-        self,
-        oblique_axial,
-        oblique_sagittal,
-        cross_section,
-        *,
-        vertebra_label=None,
-        window_level=None,
-    ):
-        self.screw_mpr_planes = (oblique_axial, oblique_sagittal, cross_section)
-        self.screw_mpr_label = vertebra_label
-        self.screw_mpr_window_level = window_level
-
-    def clear_screw_mpr(self):
-        self.screw_mpr_planes = None
-        self.screw_mpr_clear_count += 1
-
-    def add_screw(
-        self, entry_point, target_point, radius=3.0, color=None, screw_id=None
-    ):
-        class _Property:
-            def SetOpacity(self, v): pass
-            def GetOpacity(self): return 1.0
-        class _Actor:
-            def __init__(self, e, t, r, c, sid):
-                self.entry_point = e
-                self.target_point = t
-                self.radius = r
-                self.color = c
-                self.screw_id = sid
-                self._prop = _Property()
-            def GetProperty(self):
-                return self._prop
-        actor = _Actor(
-            tuple(entry_point), tuple(target_point), float(radius), color, screw_id
-        )
-        self.screws.append(actor)
-        return actor
-
-    def set_screw_interaction_callbacks(self, **callbacks):
-        self.screw_interaction_callbacks = callbacks
-
-    def set_selected_screw(self, screw_id):
-        self.selected_screw_id = screw_id
-
-    def cancel_screw_interaction(self):
-        self.screw_interaction_cancelled += 1
-
-    def remove_screw(self, actor):
-        if actor in self.screws:
-            self.screws.remove(actor)
-
-    def clear_screws(self):
-        self.screws = []
-
-    def add_measurement(self, measurement_id, points, label):
-        self.measurements[measurement_id] = {"points": points, "label": label}
-
-    def remove_measurement(self, measurement_id):
-        self.measurements.pop(measurement_id, None)
-
-    def clear_measurements(self):
-        self.measurements = {}
-
-    def set_segmentation_mask(self, mask_image, label_value=0, **_kwargs):
-        self.seg_mask = mask_image
-        self.seg_label_value = int(label_value)
-
-    def set_segmentation_label(self, label_value):
-        self.seg_label_value = int(label_value)
-
-    def set_segmentation_visible(self, visible):
-        self.visible = bool(visible)
-
-    # Stubs for _coordinated_initial_render
-    _render_guard_active = False
-    _extra_render_count = 0
-
-    def _deferred_render_phase1(self):
-        return
-
-    def clear_segmentation_mask(self):
-        self.seg_mask = None
-        self.seg_label_value = 0
-
-    def set_vertebral_mesh(self, _mask_image, labels=None):
-        self.vertebral_mesh_labels = list(labels) if labels is not None else None
-
-    def clear_vertebral_mesh(self):
-        return
-
-    def set_volume_visible(self, visible):
-        self.volume_visible = bool(visible)
-
-    def set_bone_opacity(self, _opacity):
-        return
-
-    def _update_plane_positions(self):
-        return
-
-    def zoom_camera(self, factor):
-        self.zoom_factors.append(float(factor))
-
-    def fit_to_view(self):
-        self.fit_count += 1
-
-    def cleanup(self):
-        return
+from tests.conftest import DummyMPRViewer, DummyViewer3D
 
 
 class _ProgressStub:
@@ -341,34 +70,18 @@ def _write_vertebra_mask(image, path, label=28):
 
 @pytest.fixture
 def isolated_qsettings(tmp_path, monkeypatch):
-    """Redirect MainWindow's QSettings into temp INI files.
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    from tests.conftest import make_isolated_qsettings
 
-    Returns the factory the window uses, so tests can read back the very
-    same store without touching the developer's real settings.
-    """
-    from PyQt6.QtCore import QSettings
-
-    directory = tmp_path / "qsettings"
-    directory.mkdir(parents=True, exist_ok=True)
-
-    def factory(organization="Default", application="App", *_args, **_kwargs):
-        path = directory / f"{organization}-{application}.ini"
-        return QSettings(str(path), QSettings.Format.IniFormat)
-
-    monkeypatch.setattr(main_window_module, "QSettings", factory)
-    return factory
+    return make_isolated_qsettings(tmp_path, monkeypatch)
 
 
 @pytest.fixture
 def ui_main_window(monkeypatch, qtbot, isolated_qsettings):
-    """Build MainWindow with lightweight viewer stubs."""
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "soft_light")
+    """Thin shim over tests.conftest (kept so old imports keep working)."""
+    from tests.conftest import make_ui_main_window
 
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
-    return window
+    return make_ui_main_window(monkeypatch, qtbot, isolated_qsettings)
 
 
 def _view_grid_position(window, widget):
@@ -846,8 +559,8 @@ def test_selected_screw_enters_and_exits_screw_axis_mpr(ui_main_window):
 
 def test_entering_screw_mpr_through_the_button_opens_review(ui_main_window):
     """Entering Screw MPR through the real button (not by poking ``_active``
-    directly) must land the step panel on Review, the way selecting a screw
-    already does."""
+    directly) must land the step panel on Review; a bare programmatic
+    selection must not."""
     window = ui_main_window
     image = _create_test_image()
     window._on_dicom_loaded(
@@ -862,9 +575,9 @@ def test_entering_screw_mpr_through_the_button_opens_review(ui_main_window):
     )
     window._tool_ctrl.screw_tool.add_screw(screw)
     window._tool_ctrl._add_screw_to_list(screw)
+    window.show_step("Plan")
     window.screw_list_widget.setCurrentRow(0)
 
-    window.show_step("Plan")
     assert window.step_panel.current_step == "Plan"
 
     window.screw_axis_mpr_btn.click()
@@ -1060,8 +773,65 @@ def test_loaded_plan_selects_the_first_screw_and_opens_review(ui_main_window):
 
     assert window.screw_list_widget.currentRow() == 0
     assert window.selected_screw_counter.text() == "Screw 1 of 2"
+    # Blocked signals (silent rebuild) skip the inspector; the explicit
+    # show_step from the load path covers the panel.
+    window._screw_mpr_ctrl.refresh_selected_screw()
     assert window.selected_screw_title.text() == "Screw #1"
     assert window.step_panel.current_step == "Review"
+
+
+def test_loaded_plan_clears_the_undo_stack_and_pushes_thresholds(
+    ui_main_window,
+):
+    """A loaded plan must not undo into the previous plan, and its screws
+    must be judged by the panel's thresholds (custom narrow verdict)."""
+    from src.models.screw import Screw as _Screw
+
+    window = ui_main_window
+    old = _Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, 0.0, 40.0),
+        diameter=6.0,
+    )
+    window._tool_ctrl.screw_tool.add_screw(old)
+    window._tool_ctrl._add_screw_to_list(old)
+    window.screw_list_widget.setCurrentRow(0)
+    window._tool_ctrl.remove_selected_screw()
+    assert window._tool_ctrl._screw_undo_stack != []
+
+    window.plan_narrow_pedicle_spin.setValue(8.0)
+    new = _Screw(
+        entry_point=(1.0, 1.0, 1.0),
+        target_point=(1.0, 1.0, 41.0),
+        diameter=6.0,
+        metrics={"pedicle_width_mm": 7.0, "narrow_pedicle": False},
+    )
+    window._plan_ctrl._apply_loaded_plan([new], [], [])
+
+    assert window._tool_ctrl._screw_undo_stack == []
+    assert window._tool_ctrl.screw_tool._narrow_pedicle_mm == 8.0
+    assert window._tool_ctrl.undo_remove_screws() is False
+
+
+def test_reset_workspace_clears_the_undo_stack(ui_main_window):
+    from src.models.screw import Screw as _Screw
+
+    window = ui_main_window
+    screw = _Screw(
+        entry_point=(0.0, 0.0, 0.0),
+        target_point=(0.0, 0.0, 40.0),
+        diameter=6.0,
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+    window._tool_ctrl.remove_selected_screw()
+    assert window._tool_ctrl._screw_undo_stack != []
+
+    window.reset_workspace()
+
+    assert window._tool_ctrl._screw_undo_stack == []
+    assert window._tool_ctrl.undo_remove_screws() is False
 
 
 def test_loaded_plan_is_regraded_when_a_grader_is_attached(ui_main_window):
@@ -1265,7 +1035,7 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     window._tool_ctrl._add_screw_to_mpr(0, screw)
     window.screw_list_widget.setCurrentRow(0)
 
-    assert window.screw_edit_entry_btn.isEnabled() is True
+    assert window.screw_edit_btn.isEnabled() is True
     window.screw_axis_mpr_btn.click()
     previous_axes = window.axial_viewer.custom_axes
     callbacks = window.axial_viewer.screw_interaction_callbacks
@@ -1301,12 +1071,12 @@ def test_escape_action_cancels_pending_screw_edit(ui_main_window):
     window.screw_tool.add_screw(screw)
     window._tool_ctrl._add_screw_to_list(screw)
     window.screw_list_widget.setCurrentRow(0)
-    window.screw_edit_move_btn.click()
+    window._screw_edit_move_whole_action.trigger()
 
     window._cancel_screw_edit_action.trigger()
 
     assert window._screw_edit_ctrl.mode == "idle"
-    assert window.screw_edit_move_btn.isChecked() is False
+    assert window._screw_edit_move_whole_action.isChecked() is False
     assert all(
         viewer.screw_interaction_cancelled == 1
         for viewer in window._get_mpr_viewers()
@@ -2573,6 +2343,32 @@ def test_workflow_bar_shows_a_spinner_while_segmentation_or_planning_runs(
 
     assert b[2].text() == "③  Plan"
     assert b[2].toolTip() == "Plan screws for the selected vertebral levels"
+
+
+def test_workflow_bar_shows_a_spinner_while_dicom_loads(
+    ui_main_window, tmp_path, monkeypatch
+):
+    """The Study step carries the spinner while the DICOM thread runs."""
+    from src.ui.workflow_bar import RUNNING_MARK
+
+    window = ui_main_window
+    _load_study(window, "WF-STUDY-DICOM-RUNNING")
+    b = window.workflow_bar.buttons
+
+    class _Running:
+        isRunning = lambda self: True  # noqa: E731
+
+    window._dicom_ctrl._load_thread = _Running()
+    try:
+        window._refresh_workflow_bar()
+
+        assert b[0].text() == f"{RUNNING_MARK} Study"
+        assert b[0].toolTip() == "Loading DICOM…"
+    finally:
+        window._dicom_ctrl._load_thread = None
+        window._refresh_workflow_bar()
+
+    assert b[0].text() == "✓ Study"
 
 
 def test_workflow_bar_steps_navigate_to_their_pages(ui_main_window, tmp_path, monkeypatch):

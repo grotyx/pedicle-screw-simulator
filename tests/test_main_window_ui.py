@@ -18,8 +18,12 @@ from PyQt6.QtWidgets import QApplication, QWidgetAction
 import src.ui.main_window as main_window_module
 from src.ui.styles import THEMES
 from src.ui.tool_icons import TOOL_ICON_KINDS, create_tool_icon
-from tests.conftest import make_isolated_qsettings, make_ui_main_window
-from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
+from tests.conftest import (
+    DummyMPRViewer,
+    DummyViewer3D,
+    make_isolated_qsettings,
+    make_ui_main_window,
+)
 
 
 @pytest.fixture
@@ -303,16 +307,13 @@ def test_every_existing_control_lives_on_its_step_page(ui_main_window):
         "screw_warnings_toggle": review,
         "selected_screw_warning": review,
         "screw_list_widget": review,
+        "screw_filter_edit": review,
         "screw_previous_btn": review,
         "screw_next_btn": review,
         "screw_axis_mpr_btn": review,
         "standard_mpr_btn": review,
         "screw_edit_btn": review,
         "remove_screw_btn": review,
-        "screw_edit_entry_btn": review,
-        "screw_edit_tip_btn": review,
-        "screw_edit_move_btn": review,
-        "screw_edit_cancel_btn": review,
         "screw_axis_position_label": review,
         "screw_axis_position_slider": review,
         "screw_axis_rotation_spin": review,
@@ -567,11 +568,9 @@ def test_edit_menu_starts_the_edit_modes(monkeypatch, qtbot, isolated_qsettings)
     monkeypatch.setattr(
         ScrewEditController, "cancel", lambda self, *a, **k: calls.append("cancel")
     )
-    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
-    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
-    QApplication.instance().setProperty("themeName", "graphite_blue")
-    window = main_window_module.MainWindow()
-    qtbot.addWidget(window)
+    window = make_ui_main_window(
+        monkeypatch, qtbot, isolated_qsettings, theme_name="graphite_blue"
+    )
 
     window._screw_edit_move_entry_action.trigger()
     window._screw_edit_move_tip_action.trigger()
@@ -581,7 +580,13 @@ def test_edit_menu_starts_the_edit_modes(monkeypatch, qtbot, isolated_qsettings)
     assert calls == ["entry", "tip", "move", "cancel"]
 
 
-def test_selecting_a_screw_shows_the_review_step(ui_main_window):
+def test_selecting_a_screw_does_not_force_the_review_step(ui_main_window):
+    """Programmatic selection (rebuilds, loads, filter fixups) stays silent.
+
+    Only an explicit user pick -- viewport pick, prev/next buttons or
+    actions, Screw MPR entry -- opens the Review page; see the guarded
+    step tests below.
+    """
     from src.models.screw import Screw
 
     window = ui_main_window
@@ -595,13 +600,93 @@ def test_selecting_a_screw_shows_the_review_step(ui_main_window):
     window._tool_ctrl._add_screw_to_list(screw)
     window.screw_list_widget.setCurrentRow(0)
 
-    assert window.step_panel.current_step == "Review"
-    # show_step must also mark the workflow bar's Review button active, not
-    # only switch the visible page.
-    from src.ui.workflow_bar import STEP_NAMES
+    assert window.step_panel.current_step == "Study"
 
-    review_index = STEP_NAMES.index("Review")
-    assert window.workflow_bar.buttons[review_index].property("active") == "true"
+
+def test_viewport_pick_and_prev_next_open_the_review_step(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    for level in ("L4", "L5"):
+        screw = Screw(
+            entry_point=(0.0, 0.0, 0.0),
+            target_point=(0.0, -40.0, 0.0),
+            diameter=6.0,
+            vertebra_level=level,
+            side="left",
+        )
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+
+    window.show_step("Study")
+    window._select_screw_from_view(1)
+    assert window.screw_list_widget.currentRow() == 1
+    assert window.step_panel.current_step == "Review"
+
+    window.show_step("Plan")
+    window.screw_list_widget.setCurrentRow(0)
+    window._select_next_screw_guarded()
+    # Current row moved to the visible next: panel follows the user step.
+    assert window.screw_list_widget.currentRow() == 1
+    assert window.step_panel.current_step == "Review"
+
+    window.show_step("Plan")
+    window._select_previous_screw_guarded()
+    assert window.screw_list_widget.currentRow() == 0
+    assert window.step_panel.current_step == "Review"
+
+    # A rebuild reselect is silent: the panel stays where it was.
+    window.show_step("Plan")
+    window._tool_ctrl._rebuild_screw_views(keep_row=0)
+    assert window.step_panel.current_step == "Plan"
+
+    # Filter fixup is silent too: the row moves but the panel does not.
+    window.show_step("Plan")
+    window.screw_filter_edit.setText("L5")
+    assert window.screw_list_widget.currentRow() == 1
+    assert window.step_panel.current_step == "Plan"
+    window.screw_filter_edit.setText("")
+
+
+def test_review_shortcuts_yield_while_typing_in_edits(ui_main_window, qtbot):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    for level in ("L4", "L5"):
+        window._tool_ctrl.screw_tool.add_screw(
+            Screw(
+                entry_point=(0.0, 0.0, 0.0),
+                target_point=(0.0, -40.0, 0.0),
+                diameter=6.0,
+                vertebra_level=level,
+                side="left",
+            )
+        )
+        window._tool_ctrl._add_screw_to_list(
+            window._tool_ctrl.screw_tool.get_screws()[-1]
+        )
+    window.screw_list_widget.setCurrentRow(0)
+    count = window.screw_list_widget.count()
+
+    # Offscreen has no focus chain, so the guard is driven by monkeypatching
+    # the focus widget instead of setFocus().
+    monkeypatch_focus = window.screw_filter_edit
+    import src.ui.main_window as _mw
+
+    real_focus_widget = _mw.QApplication.focusWidget
+    _mw.QApplication.focusWidget = staticmethod(lambda: monkeypatch_focus)
+    try:
+        assert window._review_shortcut_blocked() is True
+        window._delete_active_selection()
+        assert window.screw_list_widget.count() == count
+        window._undo_remove_screws_guarded()
+        window._select_next_screw_guarded()
+        assert window.screw_list_widget.currentRow() == 0
+
+        monkeypatch_focus = window.screw_list_widget
+        assert window._review_shortcut_blocked() is False
+    finally:
+        _mw.QApplication.focusWidget = real_focus_widget
 
 
 def test_plan_table_counts_warnings_per_row(ui_main_window):
@@ -1099,10 +1184,11 @@ def test_builders_import_and_cover_every_existing_control(qtbot):
         "standard_mpr_btn",
         "screw_edit_btn",
         "remove_screw_btn",
-        "screw_edit_entry_btn",
-        "screw_edit_tip_btn",
-        "screw_edit_move_btn",
-        "screw_edit_cancel_btn",
+        "screw_filter_edit",
+        "_screw_edit_move_entry_action",
+        "_screw_edit_move_tip_action",
+        "_screw_edit_move_whole_action",
+        "_screw_edit_cancel_action",
         "screw_axis_position_label",
         "screw_axis_position_slider",
         "screw_axis_rotation_spin",

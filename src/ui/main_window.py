@@ -502,6 +502,11 @@ class MainWindow(QMainWindow):
 
     def _workflow_running_step(self) -> tuple[bool, Optional[int]]:
         """Which workflow step a background job is running on, if any."""
+        dicom = self.__dict__.get("_dicom_ctrl")
+        if dicom is not None and bool(
+            getattr(dicom, "is_running", False)
+        ):
+            return True, 0
         seg = self.__dict__.get("_seg_ctrl")
         auto = self.__dict__.get("_auto_placement_ctrl")
         if seg is not None and bool(
@@ -616,6 +621,12 @@ class MainWindow(QMainWindow):
         case shows the count rather than claiming there are no screws while
         the table and workflow bar (see :meth:`_refresh_workflow_bar`) say
         otherwise.
+
+        ``count`` is the table's total row count, hidden rows included: the
+        counter answers "how many screws exist", while the text filter only
+        answers "how many are shown". A filtered-out screw still exists and
+        is still deleted/undone with the rest, so the header must not drop
+        it from the count.
         """
         if count <= 0:
             return "No screws"
@@ -821,10 +832,10 @@ class MainWindow(QMainWindow):
             self._on_screw_filter_changed
         )
         self.screw_previous_btn.clicked.connect(
-            self._screw_mpr_ctrl.select_previous
+            self._select_previous_screw_guarded
         )
         self.screw_next_btn.clicked.connect(
-            self._screw_mpr_ctrl.select_next
+            self._select_next_screw_guarded
         )
         self.screw_axis_mpr_btn.clicked.connect(self._screw_mpr_ctrl.enter)
         self.standard_mpr_btn.clicked.connect(self._screw_mpr_ctrl.exit)
@@ -839,18 +850,6 @@ class MainWindow(QMainWindow):
         )
         self.selected_screw_diameter.valueChanged.connect(
             self._tool_ctrl.set_selected_screw_diameter
-        )
-        self.screw_edit_entry_btn.clicked.connect(
-            lambda: self._start_screw_edit("entry")
-        )
-        self.screw_edit_tip_btn.clicked.connect(
-            lambda: self._start_screw_edit("tip")
-        )
-        self.screw_edit_move_btn.clicked.connect(
-            lambda: self._start_screw_edit("move")
-        )
-        self.screw_edit_cancel_btn.clicked.connect(
-            self._cancel_screw_edit
         )
         self._screw_edit_move_entry_action.triggered.connect(
             lambda: self._start_screw_edit("entry")
@@ -1023,6 +1022,8 @@ class MainWindow(QMainWindow):
         if 0 <= int(screw_id) < self.screw_list_widget.count():
             self._active_selection_kind = "screw"
             self.screw_list_widget.setCurrentRow(int(screw_id))
+            # A viewport pick is a user request to look at that screw.
+            self.show_step("Review")
 
     def _on_screw_filter_changed(self, text: str) -> None:
         """Show only screw rows matching every whitespace-separated word."""
@@ -1033,27 +1034,66 @@ class MainWindow(QMainWindow):
             table.set_row_visible(row, all(word in haystack for word in words))
         current = table.currentRow()
         if current >= 0 and table.isRowHidden(current):
+            # Move the selection onto a visible row and drop the hidden
+            # rows from the extended selection: they keep no business
+            # being deleted, and prev/next never land on them anyway.
+            table.clearSelection()
             visible = table.visible_rows()
+            if visible:
+                table.selectRow(visible[0])
             table.setCurrentRow(visible[0] if visible else -1)
 
     def _on_screw_visual_selection_changed(self, row: int) -> None:
         """Highlight the list-selected screw in the 3D scene.
 
-        A screw becoming selected covers a finished plan run, a pick in an
-        MPR/3D view, prev/next, and a loaded plan (``_apply_loaded_plan``
-        selects the first screw, like a plan run) -- all of them mean the
-        surgeon is now looking at one screw, so the Review step is what
-        should be on screen.
+        Never switches the step panel: the selection moves on rebuilds,
+        filter fixups, and loads too, and only an explicit user pick (a
+        viewport pick, prev/next, the Screw MPR entry) means the surgeon
+        is now looking at one screw. Those paths call show_step("Review")
+        themselves.
         """
         if row >= 0:
             self._active_selection_kind = "screw"
-            if hasattr(self, "step_panel"):
-                self.show_step("Review")
         self.viewer_3d.set_selected_screw(row if row >= 0 else None)
         self._refresh_mode_chip()
 
+    #: Text edits whose keystrokes the Review-list shortcuts must not steal.
+    #: QSpinBox/QDoubleSpinBox/QComboBox all host an editable line internally
+    #: (their up/down buttons do not take focus), and the custom spin boxes
+    #: consume plain digits themselves, so Delete/Ctrl+Z/[/] must reach them.
+    _SHORTCUT_TEXT_TYPES = None
+
+    def _review_shortcut_blocked(self) -> bool:
+        """Whether a Review-list shortcut must yield to a text edit.
+
+        Delete/Ctrl+Z/[/] are WindowShortcut, so they fire while the focus
+        sits in the Review filter or any spin box/combo. Typing there must
+        never delete a screw, undo a removal, or move the selection.
+        """
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return False
+        text_types = self._SHORTCUT_TEXT_TYPES
+        if text_types is None:
+            from PyQt6.QtWidgets import (
+                QComboBox,
+                QDoubleSpinBox,
+                QLineEdit,
+                QSpinBox,
+            )
+
+            text_types = self._SHORTCUT_TEXT_TYPES = (
+                QLineEdit,
+                QSpinBox,
+                QDoubleSpinBox,
+                QComboBox,
+            )
+        return isinstance(widget, text_types)
+
     def _delete_active_selection(self) -> None:
         """Delete the most recently selected screw or measurement."""
+        if self._review_shortcut_blocked():
+            return
         if (
             self._active_selection_kind == "measurement"
             and self.measurement_list_widget.currentRow() >= 0
@@ -1061,6 +1101,31 @@ class MainWindow(QMainWindow):
             self._tool_ctrl.remove_selected_measurement()
             return
         self._tool_ctrl.remove_selected_screw()
+
+    def _undo_remove_screws_guarded(self) -> None:
+        """Undo a screw removal unless a text edit owns the keystroke."""
+        if self._review_shortcut_blocked():
+            return
+        self._tool_ctrl.undo_remove_screws()
+
+    def _select_previous_screw_guarded(self) -> None:
+        """Step to the previous visible screw unless a text edit owns it."""
+        if self._review_shortcut_blocked():
+            return
+        self._pick_screw_step(self._screw_mpr_ctrl.select_previous)
+
+    def _select_next_screw_guarded(self) -> None:
+        """Step to the next visible screw unless a text edit owns it."""
+        if self._review_shortcut_blocked():
+            return
+        self._pick_screw_step(self._screw_mpr_ctrl.select_next)
+
+    def _pick_screw_step(self, step) -> None:
+        """Run one user-initiated screw step and open its Review page."""
+        before = self.screw_list_widget.currentRow()
+        step()
+        if self.screw_list_widget.currentRow() != before:
+            self.show_step("Review")
 
     def _setup_menubar(self):
         """Setup the application menu bar."""
@@ -1095,7 +1160,7 @@ class MainWindow(QMainWindow):
             Qt.ShortcutContext.WindowShortcut
         )
         self._undo_remove_screw_action.triggered.connect(
-            self._tool_ctrl.undo_remove_screws
+            self._undo_remove_screws_guarded
         )
         self.addAction(self._undo_remove_screw_action)
 
@@ -1105,7 +1170,7 @@ class MainWindow(QMainWindow):
             Qt.ShortcutContext.WindowShortcut
         )
         self._screw_prev_action.triggered.connect(
-            self._screw_mpr_ctrl.select_previous
+            self._select_previous_screw_guarded
         )
         self.addAction(self._screw_prev_action)
 
@@ -1115,7 +1180,7 @@ class MainWindow(QMainWindow):
             Qt.ShortcutContext.WindowShortcut
         )
         self._screw_next_action.triggered.connect(
-            self._screw_mpr_ctrl.select_next
+            self._select_next_screw_guarded
         )
         self.addAction(self._screw_next_action)
 
@@ -1597,16 +1662,12 @@ class MainWindow(QMainWindow):
     def _on_screw_visual_selection_changed(self, row: int) -> None:
         """Highlight the list-selected screw in the 3D scene and the mode chip.
 
-        A screw becoming selected covers a finished plan run, a pick in an
-        MPR/3D view, prev/next, and a loaded plan (``_apply_loaded_plan``
-        selects the first screw, like a plan run) -- all of them mean the
-        surgeon is now looking at one screw, so the Review step is what
-        should be on screen.
+        Never switches the step panel: see the list-side handler above. Only
+        explicit user picks (viewport pick, prev/next, Screw MPR entry) open
+        the Review page, and those call show_step("Review") themselves.
         """
         if row >= 0:
             self._active_selection_kind = "screw"
-            if hasattr(self, "step_panel"):
-                self.show_step("Review")
         self.viewer_3d.set_selected_screw(row if row >= 0 else None)
         self._refresh_mode_chip()
 
@@ -2383,6 +2444,12 @@ class MainWindow(QMainWindow):
 
         # Reset auto placement state
         self._auto_placement_ctrl.reset_state()
+
+        # A fresh study's screws are unrelated to the old one's: an undo
+        # after the load must not resurrect the previous study's removals.
+        # reset_workspace() itself clears the table above, so clear the
+        # tool-controller stack here rather than hiding it inside clear_screws.
+        self._tool_ctrl.clear_screw_undo()
 
         # Reset vertebra checkboxes to show all
         self._reset_all_vertebra_checkboxes()

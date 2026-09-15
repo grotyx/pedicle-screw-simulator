@@ -332,18 +332,34 @@ class ScrewMPRController:
         self.refresh_selected_screw()
         self.refresh_controls()
 
+    def _visible_rows(self) -> list:
+        """Table rows the Review filter leaves visible, in display order."""
+        table = getattr(self._window, "screw_list_widget", None)
+        visible = getattr(table, "visible_rows", None)
+        if callable(visible):
+            try:
+                return [int(row) for row in visible()]
+            except Exception:  # pragma: no cover - stub tables in tests
+                pass
+        return list(range(len(self._screws())))
+
     def select_previous(self) -> None:
-        """Select the previous screw without wrapping at the first item."""
-        current = self._window.screw_list_widget.currentRow()
-        if current > 0:
-            self._window.screw_list_widget.setCurrentRow(current - 1)
+        """Select the previous visible screw without wrapping."""
+        table = self._window.screw_list_widget
+        visible = self._visible_rows()
+        current = table.currentRow()
+        earlier = [row for row in visible if row < current]
+        if earlier:
+            table.setCurrentRow(earlier[-1])
 
     def select_next(self) -> None:
-        """Select the next screw without wrapping at the last item."""
-        current = self._window.screw_list_widget.currentRow()
-        count = len(self._screws())
-        if current < count - 1:
-            self._window.screw_list_widget.setCurrentRow(max(current + 1, 0))
+        """Select the next visible screw without wrapping."""
+        table = self._window.screw_list_widget
+        visible = self._visible_rows()
+        current = table.currentRow()
+        later = [row for row in visible if row > current]
+        if later:
+            table.setCurrentRow(later[0])
 
     def refresh_selected_screw(self) -> None:
         """Publish the current screw and review state to the inspector."""
@@ -390,7 +406,10 @@ class ScrewMPRController:
         )
         edit_from_3d = bool(
             edit_controller is not None
-            and getattr(edit_controller, "active_source", None) == "3D"
+            and str(getattr(edit_controller, "active_source", "") or "")
+            .strip()
+            .lower()
+            == "3d"
         )
         if (
             self._active

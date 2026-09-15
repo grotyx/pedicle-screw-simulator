@@ -18,8 +18,12 @@ import src.ui.main_window as main_window_module
 from src.controllers.screw_mpr_controller import SCREW_MPR_CONTROLS_HELP
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
-from tests.conftest import make_isolated_qsettings, make_ui_main_window
-from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
+from tests.conftest import (
+    DummyMPRViewer,
+    DummyViewer3D,
+    make_isolated_qsettings,
+    make_ui_main_window,
+)
 
 
 @pytest.fixture
@@ -436,7 +440,9 @@ def planner_window_factory(monkeypatch, qtbot, isolated_qsettings):
 
     Separate from ``ui_main_window`` on purpose: the migration only runs once
     per settings store, so a test about it must control when the *first* window
-    is built.
+    is built. ``make_ui_main_window`` registers the window with qtbot for
+    teardown, so the factory builds the rest the same way without touching
+    qtbot internals.
     """
     monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
     monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)

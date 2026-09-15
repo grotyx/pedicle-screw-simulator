@@ -114,6 +114,8 @@ class ScrewEditController:
         self._drag_anchor = self._point(world_point)
         self._drag_entry = self._point(screw.entry_point)
         self._drag_target = self._point(screw.target_point)
+        self._last_drag_apply_s = 0.0
+        self._pending_drag = None
         self.refresh_controls()
         labels = {"entry": "insertion head", "tip": "tip", "move": "shaft"}
         self._window.statusbar.showMessage(
@@ -277,25 +279,49 @@ class ScrewEditController:
             self._selected_index -= 1
 
     def refresh_controls(self) -> None:
-        """Synchronize edit button state with volume, selection, and mode."""
+        """Synchronize the visible Edit split-button with state.
+
+        The split-button itself mirrors the armed mode (checked while an
+        edit is active); each menu action mirrors one mode so the menu
+        shows which edit is armed. The Cancel action is enabled only while
+        an edit is active. Everything degrades when the window is a
+        lightweight stand-in without the Review page built.
+        """
         row = self._window.screw_list_widget.currentRow()
         can_edit = (
             self._vm.get_vtk_image() is not None
             and self._screw_at(row) is not None
         )
-        buttons = {
-            "entry": getattr(self._window, "screw_edit_entry_btn", None),
-            "tip": getattr(self._window, "screw_edit_tip_btn", None),
-            "move": getattr(self._window, "screw_edit_move_btn", None),
+        edit_button = getattr(self._window, "screw_edit_btn", None)
+        if edit_button is not None:
+            edit_button.setEnabled(can_edit)
+            set_checked = getattr(edit_button, "setChecked", None)
+            if callable(set_checked):
+                set_checked(self.is_active)
+        actions = {
+            "entry": getattr(
+                self._window, "_screw_edit_move_entry_action", None
+            ),
+            "tip": getattr(self._window, "_screw_edit_move_tip_action", None),
+            "move": getattr(
+                self._window, "_screw_edit_move_whole_action", None
+            ),
         }
-        for mode, button in buttons.items():
-            if button is None:
+        for mode, action in actions.items():
+            if action is None:
                 continue
-            button.setEnabled(can_edit)
-            button.setChecked(self._mode == mode)
-        cancel_button = getattr(self._window, "screw_edit_cancel_btn", None)
-        if cancel_button is not None:
-            cancel_button.setEnabled(self.is_active)
+            # Mode actions stay enabled even with nothing to edit: start()
+            # itself reports "Select a screw to edit" / "Load a DICOM
+            # volume", which is the feedback a disabled menu item hides.
+            set_checked = getattr(action, "setChecked", None)
+            if callable(set_checked):
+                set_checked(self._mode == mode)
+        cancel_action = getattr(
+            self._window, "_screw_edit_cancel_action", None
+        )
+        if cancel_action is not None:
+            set_checked = getattr(cancel_action, "setChecked", None)
+            _ = set_checked  # cancel is never a checked mode; kept enabled
 
     def _screw_at(self, index: int):
         screws = self._window._tool_ctrl.screw_tool.get_screws()
