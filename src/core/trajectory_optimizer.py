@@ -140,6 +140,16 @@ _SACRAL_LABELS = frozenset({25, 26})
 #: Fraction of a screw's own best score the construct re-ranking may trade away.
 CONSTRUCT_SCORE_TOLERANCE = 0.10
 
+#: Warning left on a screw :func:`optimize_construct` could not separate from
+#: a colliding neighbour.  The screw stays in the construct -- dropping it
+#: would silently shorten the fusion -- but the pairing violates
+#: :data:`INTER_SCREW_CLEARANCE_MM` and the surgeon must see that.
+COLLIDING_SCREWS_WARNING = "Screws collide: verify separation on CT"
+
+#: Reason recorded in ``skipped_sides`` when neither the construct choice nor
+#: the legacy fallback could place a screw without a collision.
+COLLIDING_SCREWS_SKIP_REASON = "no collision-free screw; legacy fallback collides"
+
 #: Cap on the greedy coordinate-descent sweeps over the construct.
 _CONSTRUCT_MAX_PASSES = 5
 
@@ -153,10 +163,11 @@ _ANCHOR_MAX_MM = 40.0
 #: meets on the way out, so a head under a lamina with an air pocket between
 #: them lands on the pedicle's own surface, facing the pocket: a real drill
 #: would have to go through the lamina first and then cross the pocket.  Such a
-#: head is unreachable and is discarded.  Fifteen millimetres reaches past any
-#: lamina covering an entry, and stops well short of the distant processes a
-#: lateral-dorsal approach never meets.
-DORSAL_APPROACH_CLEAR_MM = 15.0
+#: head is unreachable and is discarded.  Forty millimetres reaches past any
+#: lamina covering an entry while staying aligned with the seating sweep's own
+#: reach; the dense 0.5 mm sampling is kept as the shortfall's secondary
+#: bound, not the reach.
+DORSAL_APPROACH_CLEAR_MM = 40.0
 
 @dataclass(frozen=True)
 class OptimizerWeights:
@@ -605,6 +616,7 @@ def dorsal_approach_clear(
     directions: np.ndarray,
     label: int,
     reach_mm: float = DORSAL_APPROACH_CLEAR_MM,
+    coarse_step_mm: float = 2.0,
 ) -> np.ndarray:
     """Whether the approach behind each head is clear of the same vertebra.
 
@@ -613,12 +625,34 @@ def dorsal_approach_clear(
     the drill would have to pass through before reaching this head, with the
     gap between them left as a breach the shaft never gets graded for.  See
     :data:`DORSAL_APPROACH_CLEAR_MM`.
+
+    Two sweeps share the work: a dense 0.5 mm sweep over the first
+    15 mm (the shortfall's secondary bound -- a lamina pocket starts close
+    behind the head) and a sparse ``coarse_step_mm`` sweep out to
+    ``reach_mm``, so a >15 mm air pocket with bone beyond it is still
+    caught without paying the dense cost over the whole reach.
     """
     heads = np.asarray(heads, dtype=np.float64).reshape(-1, 3)
     directions = np.asarray(directions, dtype=np.float64).reshape(-1, 3)
     if heads.shape[0] == 0:
         return np.zeros(0, dtype=bool)
-    steps = np.arange(_ANCHOR_STEP_MM, float(reach_mm) + 1e-9, _ANCHOR_STEP_MM)
+    dense_mm = min(float(reach_mm), 15.0)
+    steps = np.arange(_ANCHOR_STEP_MM, dense_mm + 1e-9, _ANCHOR_STEP_MM)
+    if float(reach_mm) > dense_mm + 1e-9:
+        coarse = np.arange(
+            dense_mm + float(coarse_step_mm), float(reach_mm) + 1e-9,
+            float(coarse_step_mm),
+        )
+        # The coarse sweep must still see a thin lamina: pad each coarse
+        # sample half a coarse step either way at the dense resolution.
+        fringe = np.arange(
+            -float(coarse_step_mm) / 2.0,
+            float(coarse_step_mm) / 2.0 + 1e-9,
+            _ANCHOR_STEP_MM,
+        )
+        extra = (coarse[:, None] + fringe[None, :]).reshape(-1)
+        extra = extra[extra > dense_mm + 1e-9]
+        steps = np.unique(np.concatenate([steps, extra]))
     points = heads[:, None, :] - directions[:, None, :] * steps[None, :, None]
     d_out, _ = grader.distances_at_points(points.reshape(-1, 3), label)
     inside = (d_out <= 0.0).reshape(heads.shape[0], steps.size)
@@ -1435,6 +1469,7 @@ def optimize_construct(
     per_screw_candidates: Dict[Tuple[str, str], List[Candidate]],
     weights: OptimizerWeights = DEFAULT_WEIGHTS,
     levels: Optional[Mapping[Tuple[str, str], int]] = None,
+    warn_on_collision: bool = False,
 ) -> Dict[Tuple[str, str], Candidate]:
     """Re-rank per-screw candidates so each side agrees with itself.
 
@@ -1466,8 +1501,11 @@ def optimize_construct(
     distance (segment-segment over the ``(entry, target)`` pairs) falls below
     the sum of the screws' radii plus :data:`INTER_SCREW_CLEARANCE_MM` is
     rejected, even when each screw alone is feasible.  The descent only ever
-    moves to a collision-free candidate, starting from the per-screw bests, so
-    a screw with no clean alternative keeps its best rather than vanishing.
+    moves to a collision-free candidate, starting from the per-screw bests; a
+    screw with no clean alternative within tolerance falls back to its best
+    clean candidate at any score, and only when even that collides does it
+    keep its best -- marked with :data:`COLLIDING_SCREWS_WARNING` when
+    ``warn_on_collision`` is on -- rather than vanishing.
     """
     chosen: Dict[Tuple[str, str], Candidate] = {}
     eligible: Dict[Tuple[str, str], List[Candidate]] = {}
@@ -1517,6 +1555,14 @@ def optimize_construct(
                 # A colliding start is infeasible, not a cost to beat: take
                 # the best clean alternative even if it scores lower.
                 alts = [c for c in eligible[key] if not collides(key, c)]
+                if not alts:
+                    # No clean alternative within tolerance: fall back to the
+                    # best clean candidate at any score rather than keep a
+                    # colliding pair silent.
+                    alts = [
+                        c for c in per_screw_candidates.get(key, [])
+                        if not collides(key, c)
+                    ]
                 if alts:
                     best_candidate = min(
                         alts,
@@ -1539,4 +1585,9 @@ def optimize_construct(
                 changed = True
         if not changed:
             break
+    if warn_on_collision:
+        for key, candidate in chosen.items():
+            if collides(key, candidate):
+                if COLLIDING_SCREWS_WARNING not in candidate.warnings:
+                    candidate.warnings.append(COLLIDING_SCREWS_WARNING)
     return chosen

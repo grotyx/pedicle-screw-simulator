@@ -291,6 +291,23 @@ _SKIP_PEDICLE_LABELS: frozenset = frozenset({25})  # sacrum
 _IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
 
+def axial_split_origin(indices_zyx: np.ndarray) -> Tuple[float, float]:
+    """Whole-vertebra mean column/row: the axial fallback's split origin.
+
+    A fused asymmetric bulk drags a single slice's body centroid far
+    further off the body's axis than it drags the whole-vertebra mean, so
+    the global origin is the robust one for assigning gathered voxels to
+    sides.  One helper, one origin: the fallback cannot drift from the
+    origin its comment promises.  (The axial re-check gate deliberately
+    does *not* share it -- it reads the side against the slice's own
+    body-component centroid as a genuinely independent second opinion.)
+    """
+    return (
+        float(indices_zyx[:, 2].mean()),
+        float(indices_zyx[:, 1].mean()),
+    )
+
+
 class PedicleAnalyzer:
     """Analyze vertebral pedicle morphology from segmentation masks.
 
@@ -759,13 +776,10 @@ class PedicleAnalyzer:
         y_lo, y_hi = int(y_vals_all.min()), int(y_vals_all.max())
         x_lo, x_hi = int(x_vals_all.min()), int(x_vals_all.max())
         crop = binary[z_min:z_max + 1, y_lo:y_hi + 1, x_lo:x_hi + 1]
-        # Split origin: the whole vertebra's mean column/row, exactly as
-        # before.  A fused asymmetric bulk drags a single slice's body
-        # centroid far further off the body's axis than it drags the
-        # whole-vertebra mean, so the global origin is the robust one; the
-        # local frame supplies only the direction.
-        origin_cx = float(indices_zyx[:, 2].mean())
-        origin_cy = float(indices_zyx[:, 1].mean())
+        # The fallback's split origin (see axial_split_origin): the whole
+        # vertebra's mean column/row, robust against a fused asymmetric bulk
+        # that would drag a per-slice body centroid off the body's axis.
+        origin_cx, origin_cy = axial_split_origin(indices_zyx)
         for z in range(z_min, z_max + 1):
             axial_slice = crop[z - z_min]
             if axial_slice.sum() == 0:
@@ -986,19 +1000,28 @@ class PedicleAnalyzer:
         ``z_indices`` / ``x_indices`` are the slice's voxel indices.  The
         inferior end of the pedicle is the lowest ``z`` index and the medial
         side is the voxel nearest the midline *in the vertebra's own axial
-        frame*, which is the smaller ``x`` for the patient's left (+X in LPS)
-        and the larger one for the right when the frame is axis-aligned — the
-        same index-to-LPS orientation the rest of this module assumes.  The
-        corresponding vectorised point is ``_indices_to_lps``.
+        frame*, which is the smaller local-lateral for the patient's left
+        (+X in LPS) and the larger one for the right -- the same
+        index-to-LPS orientation the rest of this module assumes.  At fixed
+        ``j`` the local lateral is monotonic in ``x`` only when the frame is
+        axis-aligned, so a yawed level projects the floor voxels onto the
+        local lateral axis and takes the extremum there; the axis-aligned
+        branch keeps today's exact voxels.  The corresponding vectorised
+        point is ``_indices_to_lps``.
         """
         z_min = int(np.min(z_indices))
         on_floor = x_indices[z_indices == z_min]
         if cos_yaw == 1.0 and sin_yaw == 0.0:
             x_medial = int(on_floor.min() if side == "left" else on_floor.max())
         else:
-            # Medial = smallest local-lateral for left, largest for right;
-            # at fixed j the local lateral is monotonic in x.
-            x_medial = int(on_floor.min() if side == "left" else on_floor.max())
+            # Local lateral at fixed j varies with x alone (the y term is
+            # constant on the slice), but with a sign and offset the world
+            # extremum does not track: project onto the local lateral axis
+            # and take the extremum there.
+            sx = float(self._spacing[0])
+            lateral = on_floor.astype(np.float64) * sx * cos_yaw
+            pick = int(np.argmin(lateral) if side == "left" else np.argmax(lateral))
+            x_medial = int(on_floor[pick])
         vectorised = self._indices_to_lps(
             np.array([[z_min, int(isthmus_j), x_medial]])
         )[0]
@@ -1258,9 +1281,12 @@ class PedicleAnalyzer:
         )
         body_yx = body_centroid + np.array([float(y_lo), float(x_lo)])
         # Side of the recorded centre in the vertebra's own axial frame (the
-        # world split when the frame is axis-aligned); the axial fallback
-        # splits sides around the same whole-vertebra origin, so the gate
-        # agrees with it by construction.
+        # world split when the frame is axis-aligned).  The gate reads the
+        # side against the slice's *own body-component* centroid -- a fused
+        # asymmetric bulk drags that centroid off the body's axis, while the
+        # axial fallback splits its gathered voxels around the robust
+        # whole-vertebra origin -- so the two halves disagree under bulk by
+        # design; the re-check is a second opinion, not a second vote.
         target_offset_mm = (
             (target_yx[1] - body_yx[1]) * float(sx) * cos_yaw
             + (target_yx[0] - body_yx[0]) * float(sy) * sin_yaw
@@ -1373,7 +1399,8 @@ class PedicleAnalyzer:
 
         This is a conservative *floor* under the reported width, never a
         rescue.  After the one-voxel correction below, twice the largest
-        inscribed radius less one in-plane voxel can never exceed the isthmus
+        inscribed radius less one in-plane voxel (the smaller of the two
+        spacings) can never exceed the isthmus
         slice's own x-extent, so ``max(extent, this)`` is the extent on every
         cross-section wider than it is tall; the inscribed diameter only speaks
         up on a section whose bounding box is narrower than the corridor
@@ -1405,7 +1432,9 @@ class PedicleAnalyzer:
         )
         section[local[:, 0] + 1, local[:, 1] + 1] = True
         distances = ndi.distance_transform_edt(section, sampling=sampling)
-        return max(0.0, 2.0 * float(distances.max()) - sampling[1])
+        # One voxel, not one x voxel: the radius is measured in millimetres, so
+        # the correction is the smallest in-plane spacing.
+        return max(0.0, 2.0 * float(distances.max()) - min(sampling))
 
     @staticmethod
     def _track_candidate(

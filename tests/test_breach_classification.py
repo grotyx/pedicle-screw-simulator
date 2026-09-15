@@ -165,3 +165,24 @@ def test_facet_grade_handles_a_degenerate_trajectory():
     grader = ScrewGrader(_two_level())
     grade, _ = facet_violation_grade(grader, (30.0, 48.0, 20.0), (30.0, 48.0, 20.0), 6.0, 28)
     assert grade == 0
+
+
+def test_facet_entry_uses_inside_convention_not_equality():
+    """Inside is d_out <= 0, matching the grader; equality misses float slack."""
+    grader = ScrewGrader(_two_level())
+    real = grader.distances_at_points
+
+    def mocked(points, label):
+        d_out, d_in = real(points, label)
+        # Simulate an inside sample reported with float slack below zero.
+        d_out = d_out.copy()
+        inside = np.flatnonzero(d_out == 0.0)
+        if inside.size:
+            d_out[inside[0]] = -1e-9
+        return d_out, d_in
+
+    grader.distances_at_points = mocked
+    grade, _ = facet_violation_grade(
+        grader, (30.0, 48.0, 38.0), (30.0, 12.0, 20.0), 6.0, 28
+    )
+    assert grade == 3

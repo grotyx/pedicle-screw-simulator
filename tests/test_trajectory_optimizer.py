@@ -1218,6 +1218,37 @@ def test_dorsal_approach_clear_reports_bone_behind_the_head():
     assert dorsal_approach_clear(grader, on_the_plate, direction, LABEL)[0]
 
 
+def test_dorsal_approach_clear_catches_a_far_pocket():
+    """A >15 mm air gap with bone beyond it is still unreachable.
+
+    The dense 15 mm-only window let such a pocket pass; the sparse second
+    sweep out to DORSAL_APPROACH_CLEAR_MM catches it while the shortfall
+    stays the secondary bound.
+    """
+    from src.core.trajectory_optimizer import (
+        DORSAL_APPROACH_CLEAR_MM,
+        dorsal_approach_clear,
+    )
+
+    assert DORSAL_APPROACH_CLEAR_MM > 15.0
+    arr = np.zeros((40, 60, 40), dtype=np.uint8)
+    arr[5:35, 5:20, 5:35] = LABEL        # the "pedicle" block, y 5..19
+    arr[5:35, 40:44, 5:35] = LABEL       # a far "lamina" plate, y 40..43
+    mask = sitk.GetImageFromArray(arr)
+    grader = ScrewGrader(mask)
+    direction = np.array([[0.0, -1.0, 0.0]])
+
+    under_lamina = np.array([[20.0, 19.0, 20.0]])   # 20 mm air pocket behind it
+    on_the_plate = np.array([[20.0, 43.0, 20.0]])   # on the plate's back face
+
+    assert not dorsal_approach_clear(grader, under_lamina, direction, LABEL)[0]
+    assert dorsal_approach_clear(grader, on_the_plate, direction, LABEL)[0]
+    # The old 15 mm window alone would have passed the pocket.
+    assert dorsal_approach_clear(
+        grader, under_lamina, direction, LABEL, reach_mm=15.0
+    )[0]
+
+
 def test_keep_longest_per_trajectory_drops_the_shorter_siblings():
     from src.core.trajectory_optimizer import Candidate, keep_longest_per_trajectory
 
@@ -1433,6 +1464,72 @@ def test_colliding_construct_pair_is_reranked():
     for key, candidate in chosen.items():
         best = max(c.score for c in per[key])
         assert candidate.score >= best - 0.10 * abs(best) - 1e-12
+    # A clean pair warns nothing: the warning is for the kept collision only.
+    assert all("collide" not in " ".join(c.warnings).lower() for c in chosen.values())
+
+
+def test_colliding_pair_with_no_clean_alternative_warns():
+    """Both bests share one shaft and neither side has a clean alternative.
+
+    The pair cannot be separated, so it is kept -- with a warning, not in
+    silence -- rather than vanishing from the construct.
+    """
+    from src.core.trajectory_optimizer import (
+        COLLIDING_SCREWS_WARNING,
+        Candidate,
+        OptimizerWeights,
+        optimize_construct,
+        screws_collide,
+    )
+
+    def cand(x):
+        entry = np.array([x, 30.0, 60.0])
+        return Candidate(
+            entry=entry, target=entry + np.array([0.0, -40.0, 0.0]),
+            length=40.0, diameter=6.0, breach_mm=0.0, min_wall_mm=2.0,
+            mean_hu=300.0, convergence_deg=10.0, craniocaudal_deg=0.0,
+            score=1.0, components={},
+        )
+
+    per = {("L3", "left"): [cand(0.0)], ("L4", "left"): [cand(0.0)]}
+    levels = {("L3", "left"): 29, ("L4", "left"): 28}
+
+    chosen = optimize_construct(
+        per, OptimizerWeights(rod=0.0), levels=levels, warn_on_collision=True
+    )
+
+    assert screws_collide(chosen[("L3", "left")], chosen[("L4", "left")])
+    assert all(COLLIDING_SCREWS_WARNING in c.warnings for c in chosen.values())
+
+
+def test_colliding_pair_falls_back_below_the_score_floor():
+    """A clean alternative outside the score tolerance still beats a collision."""
+    from src.core.trajectory_optimizer import (
+        Candidate,
+        OptimizerWeights,
+        optimize_construct,
+        screws_collide,
+    )
+
+    def cand(x, score):
+        entry = np.array([x, 30.0, 60.0])
+        return Candidate(
+            entry=entry, target=entry + np.array([0.0, -40.0, 0.0]),
+            length=40.0, diameter=6.0, breach_mm=0.0, min_wall_mm=2.0,
+            mean_hu=300.0, convergence_deg=10.0, craniocaudal_deg=0.0,
+            score=score, components={},
+        )
+
+    per = {
+        ("L3", "left"): [cand(0.0, 1.00), cand(20.0, 0.50)],
+        ("L4", "left"): [cand(0.0, 1.00)],
+    }
+    levels = {("L3", "left"): 29, ("L4", "left"): 28}
+
+    chosen = optimize_construct(per, OptimizerWeights(rod=0.0), levels=levels)
+
+    assert chosen[("L3", "left")].entry[0] == pytest.approx(20.0)
+    assert not screws_collide(chosen[("L3", "left")], chosen[("L4", "left")])
 
 
 def test_distant_construct_pair_is_unaffected():

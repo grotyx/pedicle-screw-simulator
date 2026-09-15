@@ -195,7 +195,10 @@ def facet_violation_grade(
         return 0, "no facet contact"
 
     d_out, d_in = grader.distances_at_points(proximal, cephalad)
-    entered = d_out == 0.0
+    # Inside is d_out <= 0.0, the same convention the grader uses: a sample
+    # reported with float slack below zero is still bone, and equality alone
+    # would miss it.
+    entered = d_out <= 0.0
     if entered.any():
         penetration = float(d_in[entered].max())
         if penetration >= FACET_PENETRATION_MM:

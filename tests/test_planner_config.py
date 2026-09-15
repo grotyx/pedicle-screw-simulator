@@ -126,3 +126,75 @@ class TestCatalogueHygiene:
     def test_empty_catalogue_still_rejected(self):
         with pytest.raises(ValueError, match="must not be empty"):
             PlannerConfig(implant_diameters_mm=()).validate()
+
+
+class TestFromMappingCoercion:
+    """Every float/int field coerces from settings strings and rejects NaN/inf."""
+
+    def test_string_values_coerce_to_floats(self):
+        cfg = PlannerConfig.from_mapping(
+            {
+                "pedicle_fill_ratio": "0.7",
+                "wall_clearance_mm": "1.0",
+                "anterior_margin_mm": "5.0",
+                "max_convergence_deg": "30",
+                "min_convergence_deg": "-5",
+                "narrow_pedicle_mm": "6.0",
+                "narrow_lateral_breach_mm": "2.0",
+                "trajectory_hu_threshold": "120",
+                "endplate_tolerance_deg": "7.5",
+                "width_bound_disagreement_mm": "2.0",
+                "implant_lengths_mm": ["45.0", "25.0", "35.0"],
+                "implant_diameters_mm": ["6.5", "4.0"],
+                "weights": {"safety": "1.5", "density": "0.25"},
+            }
+        )
+        assert cfg.pedicle_fill_ratio == pytest.approx(0.7)
+        assert list(cfg.implant_lengths_mm) == [25.0, 35.0, 45.0]
+        assert cfg.weights.safety == pytest.approx(1.5)
+        assert cfg.weights.density == pytest.approx(0.25)
+
+    @pytest.mark.parametrize(
+        "field", ["pedicle_fill_ratio", "wall_clearance_mm", "anterior_margin_mm",
+                  "max_convergence_deg", "min_convergence_deg",
+                  "narrow_pedicle_mm", "narrow_lateral_breach_mm",
+                  "trajectory_hu_threshold", "endplate_tolerance_deg",
+                  "width_bound_disagreement_mm"],
+    )
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", float("nan")])
+    def test_non_finite_float_fields_raise(self, field, bad):
+        with pytest.raises(ValueError, match="finite"):
+            PlannerConfig.from_mapping({field: bad})
+
+    @pytest.mark.parametrize("bad", [["25.0", "nan"], ["inf"]])
+    def test_non_finite_catalogue_entries_raise(self, bad):
+        with pytest.raises(ValueError, match="finite"):
+            PlannerConfig.from_mapping({"implant_lengths_mm": bad})
+
+    def test_non_finite_weights_raise(self):
+        with pytest.raises(ValueError, match="finite"):
+            PlannerConfig.from_mapping({"weights": {"safety": "nan"}})
+
+    def test_full_string_round_trip(self):
+        """A mapping of pure strings round-trips back to the same config."""
+        cfg = PlannerConfig(
+            pedicle_fill_ratio=0.7, wall_clearance_mm=1.0, anterior_margin_mm=5.0,
+            narrow_pedicle_mm=6.0, endplate_tolerance_deg=7.5,
+            weights=__import__(
+                "src.core.trajectory_optimizer", fromlist=["OptimizerWeights"]
+            ).OptimizerWeights(safety=1.5, density=0.25),
+        )
+        raw = {
+            key: str(value)
+            for key, value in cfg.to_mapping().items()
+            if key != "weights" and not isinstance(value, (list, bool))
+            and key not in ("mode", "trajectory")
+        }
+        raw["mode"] = cfg.mode
+        raw["trajectory"] = cfg.trajectory
+        raw["endplate_parallel"] = str(cfg.endplate_parallel)
+        raw["accept_grade_b"] = str(cfg.accept_grade_b)
+        raw["implant_lengths_mm"] = [str(v) for v in cfg.implant_lengths_mm]
+        raw["implant_diameters_mm"] = [str(v) for v in cfg.implant_diameters_mm]
+        raw["weights"] = {k: str(v) for k, v in cfg.to_mapping()["weights"].items()}
+        assert PlannerConfig.from_mapping(raw) == cfg

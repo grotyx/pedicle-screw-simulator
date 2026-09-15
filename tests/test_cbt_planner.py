@@ -194,6 +194,41 @@ def test_a_cbt_screw_on_a_narrow_pedicle_is_not_flagged_narrow():
     assert CBT_CONTRAINDICATION_NOTE in screw.warnings
 
 
+def test_cbt_finalise_uses_a_zero_entry_zone_and_records_it():
+    """CBT grades the whole shaft; traditional keeps the cortical excuse.
+
+    ``_finalise_screw`` defaults to ENTRY_ZONE_MM for a head seated on the
+    dorsal cortex; CBT passes 0 because its pars/lamina head is purchase,
+    not entry cortex.  Both record the rule in ``entry_zone_mm`` beside the
+    forwarded ``narrow``/``width_uncertain`` flags.
+    """
+    from src.core.screw_grading import ENTRY_ZONE_MM
+
+    ct, mask, analysis = _setup()
+    grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(trajectory="cbt")
+
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, config)
+
+    assert screw is not None
+    assert screw.metrics["entry_zone_mm"] == pytest.approx(0.0)
+    assert screw.metrics["narrow_pedicle"] is False
+    assert screw.metrics["width_uncertain"] is False
+
+    traditional = plan_cbt_screw(grader, analysis, "right", LABEL, config)
+    # Same tail, same recording: CBT always records 0 regardless of side.
+    assert traditional is not None
+    assert traditional.metrics["entry_zone_mm"] == pytest.approx(0.0)
+
+    from src.core.auto_screw_planner import AutoScrewPlanner
+
+    legacy = AutoScrewPlanner(
+        ct, mask, config=PlannerConfig(mode="legacy")
+    ).plan_screw(analysis, "left")
+    assert legacy is not None
+    assert legacy.metrics["entry_zone_mm"] == pytest.approx(ENTRY_ZONE_MM)
+
+
 def test_a_cbt_screw_reports_its_endplate_angle():
     """The Endplate row is a measurement, not a record of the aiming rule.
 

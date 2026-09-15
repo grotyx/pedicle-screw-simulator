@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Tuple
 
@@ -30,6 +31,31 @@ def _default_weights() -> "OptimizerWeights":
     from .trajectory_optimizer import OptimizerWeights
 
     return OptimizerWeights()
+
+
+def _coerce_finite_float(value: Any, field_name: str) -> float:
+    """``float(value)`` that rejects NaN/inf, for values crossing a settings store.
+
+    QSettings hands numbers back as strings, so every float field coerces --
+    but ``float("nan")`` parses, and a NaN threshold then poisons every
+    comparison it touches.  Non-finite input raises like a missing field.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number, got {value!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be finite, got {value!r}")
+    return number
+
+
+def _coerce_bool(value: Any) -> bool:
+    """QSettings hands bools back as "true"/"false" strings; bool("false") is True."""
+    return (
+        str(value).strip().lower() in ("true", "1", "yes")
+        if isinstance(value, str)
+        else bool(value)
+    )
 
 
 @dataclass(frozen=True)
@@ -119,46 +145,50 @@ class PlannerConfig:
     def from_mapping(cls, data: Mapping[str, Any]) -> "PlannerConfig":
         names = {f.name for f in fields(cls)}
         kwargs = {k: v for k, v in data.items() if k in names}
+        for key in (
+            "pedicle_fill_ratio",
+            "wall_clearance_mm",
+            "anterior_margin_mm",
+            "max_convergence_deg",
+            "min_convergence_deg",
+            "narrow_pedicle_mm",
+            "narrow_lateral_breach_mm",
+            "trajectory_hu_threshold",
+            "endplate_tolerance_deg",
+            "width_bound_disagreement_mm",
+        ):
+            if key in kwargs:
+                kwargs[key] = _coerce_finite_float(kwargs[key], key)
         for key in ("implant_lengths_mm", "implant_diameters_mm"):
             if key in kwargs:
-                kwargs[key] = tuple(sorted(float(v) for v in kwargs[key]))
+                try:
+                    entries = [_coerce_finite_float(v, key) for v in kwargs[key]]
+                except TypeError as exc:
+                    raise ValueError(
+                        f"{key} must be a sequence of numbers, got {kwargs[key]!r}"
+                    ) from exc
+                kwargs[key] = tuple(sorted(entries))
         for key in ("mode", "trajectory"):
             if key in kwargs:
                 kwargs[key] = str(kwargs[key])
         if "endplate_parallel" in kwargs:
-            raw = kwargs["endplate_parallel"]
             # QSettings returns "true"/"false" strings, and bool("false") is True.
-            kwargs["endplate_parallel"] = (
-                raw.strip().lower() in ("true", "1", "yes")
-                if isinstance(raw, str)
-                else bool(raw)
-            )
-        if "endplate_tolerance_deg" in kwargs:
-            kwargs["endplate_tolerance_deg"] = float(kwargs["endplate_tolerance_deg"])
+            kwargs["endplate_parallel"] = _coerce_bool(kwargs["endplate_parallel"])
         if "accept_grade_b" in kwargs:
-            raw = kwargs["accept_grade_b"]
             # QSettings hands bools back as "true"/"false" strings, as with
             # endplate_parallel above.
-            kwargs["accept_grade_b"] = (
-                raw.strip().lower() in ("true", "1", "yes")
-                if isinstance(raw, str)
-                else bool(raw)
-            )
-        if "width_bound_disagreement_mm" in kwargs:
-            kwargs["width_bound_disagreement_mm"] = float(
-                kwargs["width_bound_disagreement_mm"]
-            )
+            kwargs["accept_grade_b"] = _coerce_bool(kwargs["accept_grade_b"])
         if isinstance(kwargs.get("weights"), Mapping):
             from .trajectory_optimizer import OptimizerWeights
 
             allowed = {f.name for f in fields(OptimizerWeights)}
-            kwargs["weights"] = OptimizerWeights(
-                **{
-                    name: float(value)
-                    for name, value in kwargs["weights"].items()
-                    if name in allowed
-                }
-            )
+            weights_kwargs = {}
+            for name, value in kwargs["weights"].items():
+                if name in allowed:
+                    weights_kwargs[name] = _coerce_finite_float(
+                        value, f"weights.{name}"
+                    )
+            kwargs["weights"] = OptimizerWeights(**weights_kwargs)
         cfg = cls(**kwargs)
         cfg.validate()
         return cfg

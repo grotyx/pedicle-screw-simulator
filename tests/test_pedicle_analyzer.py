@@ -104,6 +104,29 @@ def _make_h_vertebra_mask(
     return new_img
 
 
+def _make_fused_asymmetric_phantom(label: int = 29) -> sitk.Image:
+    """A vertebra with lopsided bulk but two free pedicle corridors.
+
+    Two 8 mm pedicle corridors stand clear of the body (as in the sliver
+    phantom), so the axial fallback is not needed to find them -- but an
+    extra same-label block hangs off the body's right side, dragging every
+    single-slice body centroid, the body-centre estimate and the
+    whole-vertebra mean toward +X by different amounts.  A fallback or gate
+    that split sides around a per-slice body centroid would read the gathered
+    voxels against a dragged origin; sharing the whole-vertebra origin keeps
+    both on the body's axis.
+    """
+    img = _make_mask(shape=(40, 70, 70))
+    arr = sitk.GetArrayFromImage(img)
+    arr[20:40, 5:30, 20:50] = label      # body, extended right
+    arr[20:40, 28:40, 10:18] = label     # left pedicle corridor, free
+    arr[20:40, 28:40, 54:62] = label     # right pedicle corridor, free
+    arr[20:40, 5:14, 52:66] = label      # lopsided bulk off the body's right
+    fused = sitk.GetImageFromArray(arr)
+    fused.CopyInformation(img)
+    return fused
+
+
 def _make_fused_pedicle_with_transverse_process(label: int = 29) -> sitk.Image:
     """A vertebra whose pedicle is fused to the body, plus a detached process.
 
@@ -1277,6 +1300,18 @@ class TestInscribedWidth:
             self._bar(1), (1.0, 1.0)
         ) == pytest.approx(1.0)
 
+    def test_anisotropic_correction_subtracts_the_minimum_spacing(self):
+        """The one-voxel correction is a single voxel, not an x voxel.
+
+        On an anisotropic grid the EDT radius is measured in millimetres, so
+        subtracting ``sx`` alone over- or under-corrects whenever the in-plane
+        spacings differ; the smallest spacing is the conservative voxel size.
+        A 5 x 9 voxel bar (x by z) at (sz=2.0, sx=0.5) spans 2.5 mm in x and
+        its inscribed diameter must read 2.5 mm, not 2.0.
+        """
+        edt_mm = PedicleAnalyzer._inscribed_width_mm(self._bar(5), (2.0, 0.5))
+        assert edt_mm == pytest.approx(2.5)
+
 
 # ---------------------------------------------------------------------------
 # PedicleAnalyzer: per-side fall-through to the axial pass
@@ -1335,6 +1370,35 @@ class TestAxialFallThrough:
         assert result.left_pedicle_center is None
         assert result.right_pedicle_center is not None
         assert any("left" in w for w in result.warnings)
+
+    def test_fused_asymmetric_bulk_shares_one_split_origin(self):
+        """The axial fallback splits around one shared whole-vertebra origin.
+
+        A fused asymmetric bulk drags every per-slice body centroid off the
+        body's axis; the fallback must read sides against the robust
+        whole-vertebra mean instead.  :func:`axial_split_origin` is that
+        origin in one helper, so the fallback cannot drift from it -- and
+        both pedicles of a lopsided level still land on their own side.
+        """
+        from src.core.pedicle_analyzer import axial_split_origin
+
+        mask = _make_fused_asymmetric_phantom()
+        analyzer = PedicleAnalyzer(mask)
+        vertebra = analyzer.get_available_vertebrae()[0]
+        binary = (sitk.GetArrayFromImage(mask) == vertebra.label).astype(np.uint8)
+        indices_zyx = np.argwhere(binary)
+
+        origin = axial_split_origin(indices_zyx)
+        assert origin == (
+            pytest.approx(float(indices_zyx[:, 2].mean())),
+            pytest.approx(float(indices_zyx[:, 1].mean())),
+        )
+
+        result = analyzer.analyze_pedicle(vertebra)
+        assert result.left_pedicle_center is not None
+        assert result.right_pedicle_center is not None
+        assert result.left_pedicle_center[0] > result.vertebral_body_center[0]
+        assert result.right_pedicle_center[0] < result.vertebral_body_center[0]
 
 
 # ---------------------------------------------------------------------------
@@ -2018,6 +2082,44 @@ class TestLocalVertebralFrame:
         assert np.linalg.norm(
             result.right_pedicle_center - np.array([30.0, 55.0, 32.0])
         ) <= 2.0
+
+    def test_yawed_corner_projects_onto_the_local_lateral_axis(self):
+        """The medial corner of a rotated level is the lateral extremum.
+
+        On a yawed frame the world-x extremum is not the medial voxel: the
+        corner must be the extremum of the floor voxels projected onto the
+        local lateral axis, so the CBT entry landmark tracks the pedicle
+        rather than the volume grid.
+        """
+        analyzer = PedicleAnalyzer(_make_yawed_vertebra_phantom(15.0))
+        cos_yaw, sin_yaw, reliable = analyzer._estimate_local_frame(
+            np.argwhere(
+                sitk.GetArrayFromImage(analyzer._mask_image) == 28
+            )
+        )
+        assert reliable is True
+
+        z_indices = np.array([10, 10, 10, 10])
+        x_indices = np.array([50, 52, 54, 56])
+        corner = analyzer._inferior_medial_corner_lps(
+            z_indices, x_indices, 44, "left",
+            cos_yaw=cos_yaw, sin_yaw=sin_yaw,
+        )
+        sx = float(analyzer._spacing[0])
+        lateral = x_indices.astype(np.float64) * sx * cos_yaw
+        expected_x = int(x_indices[int(np.argmin(lateral))])
+        expected = analyzer._indices_to_lps(
+            np.array([[10, 44, expected_x]])
+        )[0]
+        np.testing.assert_allclose(corner, expected, rtol=0, atol=0)
+
+        # Axis-aligned keeps today's exact voxels.
+        plain = analyzer._inferior_medial_corner_lps(
+            z_indices, x_indices, 44, "left"
+        )
+        np.testing.assert_allclose(
+            plain, analyzer._ijk_to_lps(50, 44, 10), rtol=0, atol=0
+        )
 
 
 if __name__ == "__main__":

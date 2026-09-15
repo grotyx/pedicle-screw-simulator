@@ -44,6 +44,7 @@ from .planner_config import PlannerConfig
 from .screw_geometry import convergence_angle_deg, craniocaudal_angle_deg, endplate_angle_deg
 from .screw_grading import ENTRY_ZONE_MM, ScrewGrader, resample_mask_to_ct
 from .trajectory_optimizer import (
+    COLLIDING_SCREWS_SKIP_REASON,
     Candidate,
     RunProgress,
     optimize_construct,
@@ -803,6 +804,7 @@ class AutoScrewPlanner:
         width_uncertain: bool = False,
         endplate_reference: str = "",
         endplate_reference_levels: Sequence[str] = (),
+        entry_zone_mm: float = ENTRY_ZONE_MM,
     ) -> PlannedScrew:
         """Grade an accepted trajectory and wrap it in a :class:`PlannedScrew`.
 
@@ -811,6 +813,15 @@ class AutoScrewPlanner:
         facet/Heary classification, angles and warnings as a legacy one.
         ``extra_warnings`` are the messages the caller accumulated while
         constructing the trajectory; they are copied, never mutated.
+
+        ``entry_zone_mm`` is the cortical entry length the grade excuses (see
+        :data:`~src.core.screw_grading.ENTRY_ZONE_MM`): the traditional
+        default for a head seated on the dorsal cortex.  A CBT head sits
+        inferomedial on the pars/lamina, where the whole shaft is purchase,
+        so :mod:`.cbt_planner` passes 0.  The value travels out in
+        ``metrics["entry_zone_mm"]`` beside ``narrow``/``width_uncertain``,
+        which are likewise forwarded untouched, so a reader can tell which
+        rule graded the screw.
 
         ``upper_endplate_normal`` is the normal the trajectory was actually
         aimed and should be measured against -- the caller resolves that via
@@ -840,7 +851,7 @@ class AutoScrewPlanner:
         #    this and the screw tool's re-grade of the same screw agree.
         result = self._grader.grade(
             entry, target, diameter, label=vertebra.label, side=side,
-            entry_zone_mm=ENTRY_ZONE_MM,
+            entry_zone_mm=entry_zone_mm,
         )
         if result is None:
             grade = "E"
@@ -912,6 +923,7 @@ class AutoScrewPlanner:
             "heary_secondary": heary_secondary,
             "facet_grade": facet_grade,
             "facet_text": facet_text,
+            "entry_zone_mm": float(entry_zone_mm),
             # Overwritten by :mod:`.cbt_planner`, which shares this tail.
             "trajectory_type": "traditional",
         }
@@ -1106,6 +1118,18 @@ class AutoScrewPlanner:
         back to :meth:`plan_screw`; one neither can place is appended to
         :attr:`skipped_sides` with the legacy planner's reason.
 
+        A construct choice that still collides is itself demoted to the legacy
+        fallback: the fallback plans independently of the construct, so it is
+        the best clean alternative available.  When the fallback also
+        collides, the construct screw is kept with its collision warning and
+        the side is additionally recorded in :attr:`skipped_sides` with
+        :data:`~src.core.trajectory_optimizer.COLLIDING_SCREWS_SKIP_REASON`,
+        so a colliding pair is warned *and* reported rather than silently
+        kept.  When the fallback cannot plan at all, its own reason is
+        recorded instead.  Demotion runs in visit order, so a demoted screw
+        is checked against the screws already placed, not against a
+        construct choice that may itself be demoted later.
+
         ``reporter`` narrates and cancels the candidate search — the pass that
         actually costs the time.  A cancelled run assembles a construct from the
         pedicles it reached, and never plans one it never announced.
@@ -1161,7 +1185,10 @@ class AutoScrewPlanner:
                 break
 
         chosen = (
-            optimize_construct(per_screw, self.config.weights, levels=construct_levels)
+            optimize_construct(
+                per_screw, self.config.weights, levels=construct_levels,
+                warn_on_collision=True,
+            )
             if per_screw
             else {}
         )
@@ -1170,6 +1197,28 @@ class AutoScrewPlanner:
         for analysis, side in visited:
             key = keys.get((analysis.vertebra.label, side))
             candidate = chosen.get(key) if key is not None else None
+            if candidate is not None and self._candidate_collides(
+                candidate, chosen, key, construct_levels
+            ):
+                # The construct could not separate this pair: demote to the
+                # legacy fallback, which plans independently of the
+                # construct.  The fallback's own warnings travel with it, so
+                # the demotion is visible.
+                fallback, fallback_reason = self._legacy_fallback(analysis, side)
+                if fallback is not None and not self._screw_collides(
+                    fallback, results, analysis.vertebra.label, side
+                ):
+                    results.append(fallback)
+                    continue
+                if fallback is None:
+                    self._record_skip(analysis.vertebra.name, side, fallback_reason)
+                    continue
+                # Even the fallback collides: keep the construct screw with
+                # its warning, and record the side as well so the pair is
+                # reported, not silently kept.
+                self._record_skip(
+                    analysis.vertebra.name, side, COLLIDING_SCREWS_SKIP_REASON
+                )
             planned, reason = (
                 self._screw_from_candidate(analysis, side, candidate)
                 if candidate is not None
@@ -1182,6 +1231,70 @@ class AutoScrewPlanner:
 
         self._stamp_construct_alignment(results)
         return results
+
+    @staticmethod
+    def _candidate_collides(
+        candidate: Candidate,
+        chosen: Dict[Tuple[str, str], Candidate],
+        key: Tuple[str, str],
+        levels: Dict[Tuple[str, str], int],
+    ) -> bool:
+        """Whether ``candidate`` collides with any other chosen construct screw."""
+        from .trajectory_optimizer import _adjacent_levels, screws_collide
+
+        for other, current in chosen.items():
+            if other == key:
+                continue
+            if not _adjacent_levels(levels.get(key), levels.get(other)):
+                continue
+            if screws_collide(candidate, current):
+                return True
+        return False
+
+    def _screw_collides(
+        self,
+        screw: PlannedScrew,
+        results: List[PlannedScrew],
+        label: int,
+        side: str,
+    ) -> bool:
+        """Whether ``screw`` collides with an already-planned adjacent screw."""
+        from .trajectory_optimizer import Candidate as _Candidate
+        from .trajectory_optimizer import _adjacent_levels, screws_collide
+
+        candidate = _Candidate(
+            entry=np.asarray(screw.entry_lps, dtype=np.float64),
+            target=np.asarray(screw.target_lps, dtype=np.float64),
+            length=float(screw.length_mm),
+            diameter=float(screw.diameter_mm),
+            breach_mm=0.0,
+            min_wall_mm=0.0,
+            mean_hu=0.0,
+            convergence_deg=float(screw.convergence_angle),
+            craniocaudal_deg=float(screw.craniocaudal_angle),
+            score=0.0,
+        )
+        for planned in results:
+            if planned.side != side:
+                continue
+            other_label = _LEVEL_LABELS.get(planned.vertebra_name)
+            if not _adjacent_levels(label, other_label):
+                continue
+            other = _Candidate(
+                entry=np.asarray(planned.entry_lps, dtype=np.float64),
+                target=np.asarray(planned.target_lps, dtype=np.float64),
+                length=float(planned.length_mm),
+                diameter=float(planned.diameter_mm),
+                breach_mm=0.0,
+                min_wall_mm=0.0,
+                mean_hu=0.0,
+                convergence_deg=float(planned.convergence_angle),
+                craniocaudal_deg=float(planned.craniocaudal_angle),
+                score=0.0,
+            )
+            if screws_collide(candidate, other):
+                return True
+        return False
 
     @staticmethod
     def _construct_key(

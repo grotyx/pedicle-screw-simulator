@@ -388,6 +388,10 @@ def _plan_cbt_screw(
         upper_endplate_normal=aiming_endplate_normal(analysis),
         endplate_reference=analysis.endplate_reference,
         endplate_reference_levels=analysis.endplate_reference_levels,
+        # A CBT head sits inferomedial on the pars/lamina, not on the
+        # pedicle's dorsal cortex, so the whole shaft is purchase and no
+        # entry length is excused.  Traditional callers keep the default.
+        entry_zone_mm=0.0,
     )
     # ``span`` is the catalogue length by construction; recomputing it from the
     # end points would only add float noise to a nominal implant size.
