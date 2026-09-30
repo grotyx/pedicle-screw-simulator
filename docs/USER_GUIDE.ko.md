@@ -347,7 +347,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 스크류가 segmentation을 기준으로 등급이 매겨지면, Review 페이지의 Details 섹션(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
 
-- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값입니다. 이는 3 mm 진입 구간을 제외하는 Details의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
+- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적을 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값이며, 해당 스크류가 속한 척추의 label 안에 있는 복셀만 사용합니다(연부조직·지방·척추관은 제외되므로 피질골 밖에 놓인 헤드가 수치를 낮추지 않습니다). label 안에 샘플이 하나도 없으면 값이 비어 있습니다(N/A). 이는 3 mm 진입 구간을 제외하는 Details의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
 - **Pedicle HU:** 척추경 협부(isthmus) 중심에서 10 mm 이내에 있는 궤적 샘플만으로 계산한 평균 HU입니다. 자동 계획된 스크류에서만 제공됩니다 — 수동 스크류는 기준이 될 isthmus 중심이 없기 때문입니다.
 - **Vertebral body HU(척추체 HU):** 척추체 중심에 위치한 8×8×6 mm 타원체 관심영역을 해당 척추의 segmentation label과 교차시켜 계산한 평균 HU입니다. 같은 이유로 자동 계획된 스크류에서만 제공됩니다.
 - **Trajectory/body HU 비율:** 궤적 평균 HU를 척추체 HU로 나눈 값입니다.
