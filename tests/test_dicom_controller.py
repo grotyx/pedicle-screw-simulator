@@ -188,35 +188,95 @@ def test_load_error_from_a_raised_exception_is_logged_not_printed(
     with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
         thread.run()
 
-    assert errors == ["boom"]
+    assert len(errors) == 1 and "RuntimeError" in errors[0]
     out = capsys.readouterr().out
     assert "DICOM Load Error" not in out
     assert "boom" not in out
     messages = [record.getMessage() for record in caplog.records]
-    assert any("DICOM load failed" in message and "boom" in message for message in messages)
-    assert any("Traceback" in message for message in messages)
+    assert any("DICOM load failed" in m and "RuntimeError" in m for m in messages)
+    # the frames carry source lines (code), never the exception message
+    assert not any("boom" in m for m in messages if "Frames" not in m)
+    assert any("Frames" in m for m in messages)
 
 
-def test_load_error_log_and_dialog_text_do_not_contain_the_folder_path(
+_PATIENT_FOLDERS = [
+    r"D:\PACS\HONG_GILDONG\IM1",
+    r"\\pacs\export\KIMMINSU\IM0001",
+    "Z:/PACS export/Kim Minsu 1234/CT",
+    "/mnt/pacs/PARKJISOO/study/IM2",
+    r"D:\PACS\Hong Gildong\nested\IM1",
+]
+_NAME_FRAGMENTS = ["GILDONG", "KIMMINSU", "Minsu", "PARKJISOO", "Gildong", "PACS", "pacs"]
+
+
+def _assert_no_names(*texts):
+    for text in texts:
+        for fragment in _NAME_FRAGMENTS:
+            assert fragment not in text, (fragment, text)
+
+
+def test_load_error_log_and_dialog_text_do_not_contain_patient_folders(
     monkeypatch, caplog, qapp
 ):
-    folder = "Z:/PACS export/Kim Minsu 1234/CT"
-
     def _raise(_self, directory):
         raise RuntimeError(f"Could not read {directory}/IM0001.dcm: bad header")
 
     monkeypatch.setattr(DicomLoader, "scan_directory", _raise)
-    thread = DicomLoadThread(directory=folder)
-    errors = []
-    thread.error.connect(errors.append)
-    with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
-        thread.run()
+    for folder in _PATIENT_FOLDERS:
+        caplog.clear()
+        thread = DicomLoadThread(directory=folder)
+        errors = []
+        thread.error.connect(errors.append)
+        with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
+            thread.run()
 
-    logged = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
-    assert "RuntimeError" in logged
-    for text in (logged, errors[0]):
-        assert "Minsu" not in text and "PACS" not in text
-    assert "bad header" in errors[0]
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "RuntimeError" in logged and "RuntimeError" in errors[0]
+        _assert_no_names(logged, errors[0])
+
+
+def test_scan_and_summary_failures_do_not_leak_patient_folders(monkeypatch, caplog):
+    dialogs = []
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QMessageBox.critical",
+        lambda _parent, title, text: dialogs.append(text),
+    )
+
+    class _Win(_Window):
+        _seg_ctrl = None
+
+    for folder in _PATIENT_FOLDERS:
+        monkeypatch.setattr(
+            "src.controllers.dicom_controller.QFileDialog.getExistingDirectory",
+            lambda *a, _f=folder, **k: _f,
+        )
+
+        def _raise(_self, directory):
+            raise OSError(f"cannot open {directory}/IM0001.dcm")
+
+        monkeypatch.setattr(DicomLoader, "scan_directory", _raise)
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
+            DicomController(object(), _Win()).open_folder()
+
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "OSError" in logged and "OSError" in dialogs[-1]
+        _assert_no_names(logged, dialogs[-1])
+
+    # series-summary failure (multi-series folder) is logged without the message
+    monkeypatch.setattr(DicomLoader, "scan_directory", lambda _s, d: ["A", "B"])
+
+    def _bad_summaries(_self, directory):
+        raise OSError(f"cannot open {directory}/IM0001.dcm")
+
+    monkeypatch.setattr(DicomLoader, "get_series_summaries", _bad_summaries)
+    monkeypatch.setattr(DicomController, "_select_series_id", lambda *a: None)
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
+        DicomController(object(), _Win()).open_folder()
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "OSError" in logged
+    _assert_no_names(logged)
 
 
 class _Label:

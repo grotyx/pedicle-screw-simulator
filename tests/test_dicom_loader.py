@@ -200,3 +200,52 @@ def test_geometry_check_ignores_degenerate_input():
     assert check_slice_geometry([], _AXIAL) == []
     assert check_slice_geometry([(0, 0, 0)], _AXIAL) == []
     assert check_slice_geometry(_stack([0, 1, 2]), (0, 0, 0, 0, 0, 0)) == []
+
+
+def _write_series(folder, zs):
+    writer = sitk.ImageFileWriter()
+    writer.KeepOriginalImageUIDOn()
+    for i, z in enumerate(zs):
+        img = sitk.GetImageFromArray(np.full((1, 4, 4), i, dtype=np.int16))
+        img.SetOrigin((0.0, 0.0, float(z)))
+        for tag, value in {
+            "0008|0060": "CT",
+            "0020|000d": "1.2.3.4",
+            "0020|000e": "1.2.3.4.5",
+            "0008|0018": f"1.2.3.4.5.{i + 1}",
+            "0020|0013": str(i + 1),
+        }.items():
+            img.SetMetaData(tag, value)
+        writer.SetFileName(str(folder / f"s{i:03d}.dcm"))
+        writer.Execute(img)
+
+
+def test_geometry_warnings_come_from_the_series_reader_not_a_second_read(
+    tmp_path, monkeypatch
+):
+    import pydicom
+
+    _write_series(tmp_path, [0, 1, 2, 4, 5])
+    reads = []
+    real = pydicom.dcmread
+    monkeypatch.setattr(
+        "src.core.dicom_loader.pydicom.dcmread",
+        lambda *a, **k: reads.append(a[0]) or real(*a, **k),
+    )
+    loader = DicomLoader()
+    loader.load_series(str(tmp_path), series_id="1.2.3.4.5")
+
+    warnings = loader.get_metadata()["geometry_warnings"]
+    assert len(warnings) == 1 and "not uniform" in warnings[0]
+    assert len(reads) == 1  # only the first-file header; no per-slice re-read
+
+
+def test_geometry_warnings_empty_without_position_tags():
+    class _Reader:
+        def GetFileNames(self):
+            return ["a", "b", "c"]
+
+        def GetMetaData(self, _i, _key):
+            raise RuntimeError("tag missing")
+
+    assert DicomLoader._geometry_warnings(_Reader()) == []

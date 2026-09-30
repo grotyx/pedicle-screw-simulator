@@ -6,8 +6,8 @@ and coordinated initial rendering after volume load.
 """
 
 import logging
-import re
 import time
+import traceback
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -22,19 +22,17 @@ from src.core.dicom_loader import DicomLoader
 
 logger = logging.getLogger(__name__)
 
-# Drive/UNC paths and multi-segment POSIX paths (PACS export folders are often
-# named after the patient, so paths must not reach app.log or dialogs).
-_PATH_RE = re.compile(r"(?:[A-Za-z]:|\\\\)[\\/][^\s'\"]*|/(?:[\w.\-]+/)+[\w.\-]*")
+def log_failure(what: str, exc: BaseException) -> None:
+    """Log a failure without its message: exception text can carry file paths,
+    and PACS export folders are often named after the patient. Only the type
+    and the code locations (traceback frames) are kept."""
+    logger.error("%s: %s", what, type(exc).__name__)
+    logger.debug("Frames:\n%s", "".join(traceback.format_tb(exc.__traceback__)))
 
 
-def redact_paths(text, *folders) -> str:
-    """Replace the given folders, then any remaining file path, in ``text``."""
-    text = str(text)
-    for folder in folders:
-        if folder:
-            for variant in (folder, folder.replace("\\", "/"), folder.replace("/", "\\")):
-                text = text.replace(variant, "<folder>")
-    return _PATH_RE.sub("<path>", text)
+def failure_text(what: str, exc: BaseException, hint: str) -> str:
+    """Fixed user-facing text that names the exception type, never its message."""
+    return f"{what} ({type(exc).__name__}). {hint}"
 
 
 class DicomLoadThread(QThread):
@@ -82,13 +80,14 @@ class DicomLoadThread(QThread):
             self.finished.emit(image, metadata)
 
         except Exception as e:
-            import traceback
-            message = redact_paths(e, self.directory)
-            logger.error("DICOM load failed: %s: %s", type(e).__name__, message)
-            logger.debug(
-                "Traceback:\n%s", redact_paths(traceback.format_exc(), self.directory)
+            log_failure("DICOM load failed", e)
+            self.error.emit(
+                failure_text(
+                    "Could not load a DICOM series from the selected folder",
+                    e,
+                    "Check that it contains one CT series.",
+                )
             )
-            self.error.emit(message)
 
 
 class DicomController:
@@ -132,8 +131,15 @@ class DicomController:
             scan_loader = DicomLoader()
             series_ids = scan_loader.scan_directory(folder)
         except Exception as e:
+            log_failure("DICOM scan failed", e)
             QMessageBox.critical(
-                self._window, "Error", f"Failed to scan DICOM folder: {redact_paths(e, folder)}"
+                self._window,
+                "Error",
+                failure_text(
+                    "Could not scan the selected folder for DICOM series",
+                    e,
+                    "Check that the folder exists and is readable.",
+                ),
             )
             self._window.statusbar.showMessage("Scan failed")
             return
@@ -152,10 +158,7 @@ class DicomController:
             try:
                 summaries = scan_loader.get_series_summaries(folder)
             except Exception as exc:
-                logger.warning(
-                    "Failed to read DICOM series summaries: %s: %s",
-                    type(exc).__name__, redact_paths(exc, folder),
-                )
+                log_failure("Failed to read DICOM series summaries", exc)
                 summaries = []
             selected_series_id = self._select_series_id(series_ids, summaries)
             if selected_series_id is None:
@@ -267,13 +270,13 @@ class DicomController:
 
             logger.info("_on_loaded: COMPLETE (%.3fs total)", time.perf_counter() - t0)
         except Exception as e:
-            import traceback
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            print(f"Volume Processing Error: {error_msg}")
+            log_failure("Volume processing failed", e)
             QMessageBox.critical(
                 self._window,
                 "Error",
-                f"Failed to process volume: {str(e)}",
+                failure_text(
+                    "Failed to process the loaded volume", e, "See app.log for details."
+                ),
             )
         finally:
             # update_volume() freezes every pane behind a render guard that only
@@ -287,7 +290,7 @@ class DicomController:
         """Handle DICOM loading error."""
         progress.close()
         QMessageBox.critical(
-            self._window, "Error", f"Failed to load DICOM: {error}"
+            self._window, "Error", error
         )
         self._window.statusbar.showMessage("Load failed")
         self._release_load_thread()

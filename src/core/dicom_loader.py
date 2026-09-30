@@ -286,22 +286,23 @@ class DicomLoader:
         # Extract metadata
         self._extract_metadata(reader)
         self._metadata.update(orientation_info)
-        self._metadata["geometry_warnings"] = self._geometry_warnings()
+        self._metadata["geometry_warnings"] = self._geometry_warnings(reader)
 
         return self._image
 
-    def _geometry_warnings(self) -> List[str]:
-        """Read per-slice positions (header only) and check the slice geometry."""
+    @staticmethod
+    def _geometry_warnings(reader: sitk.ImageSeriesReader) -> List[str]:
+        """Check slice geometry from the per-slice tags the series reader already read."""
         try:
             positions, orientation = [], None
-            for name in self._file_names:
-                ds = pydicom.dcmread(
-                    name, stop_before_pixels=True,
-                    specific_tags=["ImagePositionPatient", "ImageOrientationPatient"],
+            for i in range(len(reader.GetFileNames())):
+                positions.append(
+                    [float(v) for v in reader.GetMetaData(i, "0020|0032").split("\\")]
                 )
-                positions.append([float(v) for v in ds.ImagePositionPatient])
                 if orientation is None:
-                    orientation = [float(v) for v in ds.ImageOrientationPatient]
+                    orientation = [
+                        float(v) for v in reader.GetMetaData(i, "0020|0037").split("\\")
+                    ]
             return check_slice_geometry(positions, orientation)
         except Exception:  # multi-frame or missing tags: nothing to check
             return []
