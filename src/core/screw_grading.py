@@ -388,7 +388,10 @@ class ScrewGrader:
         if self._ct_array is None:
             hu_samples = np.empty(0, dtype=np.float64)
         else:
+            # Only voxels of the graded vertebra, like bone_quality's
+            # trajectory figure, so soft tissue and CSF do not drag it down.
             sel = idx_zyx[inside]
+            sel = sel[self._mask_array[sel[:, 0], sel[:, 1], sel[:, 2]] == label]
             hu_samples = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]].astype(np.float64)
 
         if breach > 0.0:
