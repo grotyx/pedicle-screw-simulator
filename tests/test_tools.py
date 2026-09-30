@@ -501,3 +501,98 @@ def test_changing_measure_mode_keeps_the_plane_lock_while_editing():
     controller._editing_measurement_row = None
     controller.on_measure_mode_changed()
     assert controller._active_measure_plane is None
+
+
+def _measure_window(screw_mpr_active):
+    from types import SimpleNamespace
+
+    class _List:
+        def __init__(self):
+            self.items, self.row = [], -1
+
+        def addItem(self, text):
+            self.items.append(text)
+
+        def clear(self):
+            self.items, self.row = [], -1
+
+        def currentRow(self):
+            return self.row
+
+        def setCurrentRow(self, row):
+            self.row = row
+
+    class _Viewer:
+        slice_positions = []
+
+        def add_measurement(self, **_kwargs):
+            pass
+
+        def set_slice_position(self, position):
+            self.slice_positions.append(position)
+
+    class _Mpr:
+        exited = 0
+
+        def __init__(self, active):
+            self.is_active = active
+
+        def exit(self):
+            self.exited += 1
+
+    viewer = _Viewer()
+    window = SimpleNamespace(
+        _coord_label=SimpleNamespace(setText=lambda _t: None),
+        _hu_label=SimpleNamespace(setText=lambda _t: None),
+        statusbar=SimpleNamespace(
+            showMessage=lambda text: setattr(window, "status", text)
+        ),
+        measurement_list_widget=_List(),
+        measure_finish_btn=SimpleNamespace(setEnabled=lambda _e: None),
+        axial_viewer=viewer,
+        sagittal_viewer=viewer,
+        coronal_viewer=viewer,
+        viewer_3d=SimpleNamespace(add_measurement=lambda **_kwargs: None),
+        _screw_mpr_ctrl=_Mpr(screw_mpr_active),
+        status="",
+    )
+    return window, viewer
+
+
+def _measure_two_points(window):
+    from src.controllers.tool_controller import ToolController
+
+    controller = ToolController(FakeVolumeManager(), window)
+    controller._current_tool = "distance"
+    controller.measurement_tool.set_mode("distance")
+    controller.on_viewer_click("axial", 0.0, 0.0, 5.0)
+    controller.on_viewer_click("axial", 10.0, 0.0, 5.0)
+    return controller
+
+
+def test_measurement_taken_in_screw_mpr_is_marked_and_not_jumpable():
+    window, viewer = _measure_window(screw_mpr_active=True)
+    controller = _measure_two_points(window)
+
+    text = window.measurement_list_widget.items[0]
+    assert "screw view" in text.lower()
+    assert " @ " not in text  # no standard-cut position for an oblique plane
+
+    window.measurement_list_widget.setCurrentRow(0)
+    controller.jump_to_selected_measurement()
+
+    assert viewer.slice_positions == []
+    assert window._screw_mpr_ctrl.exited == 0
+    assert "screw" in window.status.lower()
+
+
+def test_standard_measurement_still_reports_cut_and_jumps():
+    window, viewer = _measure_window(screw_mpr_active=False)
+    controller = _measure_two_points(window)
+
+    assert " @ 5.0 mm" in window.measurement_list_widget.items[0]
+
+    window.measurement_list_widget.setCurrentRow(0)
+    controller.jump_to_selected_measurement()
+
+    assert viewer.slice_positions == [5.0]
