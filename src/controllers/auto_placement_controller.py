@@ -11,7 +11,7 @@ import threading
 from functools import partial
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
 from src.core.auto_screw_planner import (
@@ -395,7 +395,25 @@ class AutoPlacementController:
             self._thread = None
         self._refresh_plan_button()
 
+    def _release(self, thread) -> None:
+        """Free a finished run's thread, and the CT and mask it holds.
+
+        Every slot is a partial bound to the thread, a cycle through its own
+        connections that only a full garbage-collector pass breaks -- which
+        could land while ``run()`` is still returning and destroy a running
+        QThread.  Disconnecting breaks the cycle once ``run()`` has returned.
+        """
+        if not isinstance(thread, QThread):
+            return
+        if thread.isRunning():
+            QTimer.singleShot(50, partial(self._release, thread))
+            return
+        for signal in (thread.progress, thread.finished, thread.error):
+            signal.disconnect()
+        thread.deleteLater()
+
     def _on_finished(self, thread, planned: List[PlannedScrew]):
+        self._release(thread)
         if self._is_stale(thread):
             self._discard_stale(thread, f"{len(planned)} screws")
             return
@@ -468,6 +486,7 @@ class AutoPlacementController:
         self._window.statusbar.showMessage(status)
 
     def _on_error(self, thread, error: str):
+        self._release(thread)
         if self._is_stale(thread):
             self._discard_stale(thread, f"error {error!r}")
             return

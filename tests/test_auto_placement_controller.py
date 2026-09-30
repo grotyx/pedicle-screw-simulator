@@ -1636,3 +1636,65 @@ def test_a_window_without_a_tool_controller_survives_an_empty_plan(
     ctrl._on_finished(_current_thread(ctrl), [])
 
     assert "no valid trajectories" in window.auto_screw_status._text
+
+
+# ---------------------------------------------------------------------------
+# A finished planning thread (and the CT and mask it holds) is freed
+# ---------------------------------------------------------------------------
+
+
+def test_a_finished_planning_thread_is_released(qtbot, monkeypatch, tmp_path):
+    """The partial slots bind the thread into its own connections, a cycle
+    only a full garbage-collector pass breaks: until one happened to run, every
+    plan kept its thread alive with the full CT and mask it was handed, and the
+    pass could land while ``run()`` was still returning.  Collection is off
+    here, so only an explicit release frees it."""
+    import gc
+    import weakref
+
+    import SimpleITK as sitk
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    class _Analyzer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_available_vertebrae(self):
+            return []
+
+        def analyze_all(self, labels=None):
+            return []
+
+    class _Planner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def plan_all(self, *_args, **_kwargs):
+            return []
+
+    monkeypatch.setattr(module, "PedicleAnalyzer", _Analyzer)
+    monkeypatch.setattr(module, "AutoScrewPlanner", _Planner)
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+
+    def _released():
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        return ref() is None
+
+    gc.disable()
+    try:
+        ctrl.run_planning()
+        ref = weakref.ref(ctrl._thread)
+        qtbot.waitUntil(lambda: ctrl._thread is None, timeout=10000)
+        qtbot.waitUntil(_released, timeout=10000)
+    finally:
+        gc.enable()
+    assert window.auto_screw_status._text.startswith("Planning complete")

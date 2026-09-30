@@ -6,6 +6,7 @@ import importlib.util
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,41 @@ class SegmentationCancelled(RuntimeError):
     """Raised when the user cancels a running segmentation."""
 
 
+#: ``Popen`` options that make the child the root of its own process group, so
+#: Cancel can take down the nnU-Net workers it spawns along with it.
+NEW_PROCESS_GROUP = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    if os.name == "nt"
+    else {"start_new_session": True}
+)
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and every process it spawned.
+
+    Killing the parent alone is not enough: nnU-Net workers inherit its stdout
+    and stderr pipes, so ``communicate()`` keeps blocking while they live, and
+    they go on writing into a workspace that is about to be removed.
+    """
+    try:
+        if os.name == "nt":
+            # Windows has no process-group kill; taskkill /T walks the tree.
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            # Only a child started with NEW_PROCESS_GROUP leads a group of
+            # its own PID; for any other the call fails and kills nothing.
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # The parent itself, in case the tree kill could not reach it.
+    proc.kill()
+
+
 class ProcessHolder:
     """Shared handle to the running TotalSegmentator subprocess.
 
@@ -65,16 +101,11 @@ class ProcessHolder:
         self.cancelled: bool = False
 
     def terminate(self) -> None:
-        """Mark the run as cancelled and terminate the process if running.
-
-        On Windows this kills only the TotalSegmentator process itself; the
-        nnU-Net worker children it spawned are not in a job object and may
-        outlive the call until they finish on their own.
-        """
+        """Mark the run as cancelled and kill the process tree if running."""
         self.cancelled = True
         proc = self.process
         if proc is not None and proc.poll() is None:
-            proc.terminate()
+            _kill_process_tree(proc)
 
 
 class SegmentationWorkspace:
@@ -107,15 +138,20 @@ class SegmentationWorkspace:
         if not path:
             return
         shutil.rmtree(path, ignore_errors=True)
-        try:
+        # A folder Windows kept locked stays tracked, so the next purge retries.
+        if path in self._dirs and not os.path.exists(path):
             self._dirs.remove(path)
-        except ValueError:
-            # Not tracked by this workspace; the rmtree above was still valid.
-            pass
+
+    def keep_only(self, path: str) -> None:
+        """Delete every tracked directory except `path`, the one still in use."""
+        keep = os.path.normcase(os.path.abspath(path))
+        for other in list(self._dirs):
+            if os.path.normcase(os.path.abspath(other)) != keep:
+                self.remove(other)
 
     def purge(self) -> None:
-        while self._dirs:
-            shutil.rmtree(self._dirs.pop(), ignore_errors=True)
+        for path in list(self._dirs):
+            self.remove(path)
 
     @classmethod
     def touch(cls, path: str) -> bool:
@@ -227,11 +263,18 @@ class SegmentationWorkspace:
                 continue
             if not entry.is_dir():
                 continue
-            age_mtime = entry.stat().st_mtime
+            try:
+                age_mtime = entry.stat().st_mtime
+            except OSError:
+                # Another instance's purge removed it since the glob.
+                continue
             lock_path = entry / cls.LOCK_NAME
             owner_pid: Optional[int] = None
-            if lock_path.exists():
+            try:
                 age_mtime = max(age_mtime, lock_path.stat().st_mtime)
+            except OSError:
+                pass  # no lock (legacy dir), or removed since the glob
+            else:
                 owner_pid = cls._lock_owner_pid(lock_path)
             if now - age_mtime < older_than_seconds:
                 continue
@@ -406,6 +449,7 @@ def run_totalsegmentator(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **NEW_PROCESS_GROUP,
     )
     if process_holder is not None:
         process_holder.process = process
@@ -756,6 +800,18 @@ def run_segmentation_with_fallback(
                 progress_callback=progress_callback,
                 process_holder=process_holder,
             )
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SegmentationCancelled)):
+                raise
+            errors.append(f"{attempt_device}: {exc}")
+            if attempt_index + 1 < len(attempt_devices):
+                _emit_progress(
+                    progress_callback,
+                    "GPU segmentation failed; retrying on CPU...",
+                )
+        else:
+            # Past this point the run itself succeeded: a failure reading its
+            # result is an error to report, not a reason to rerun on CPU.
             message = "TotalSegmentator segmentation completed."
             if attempt_index > 0:
                 message = (
@@ -801,15 +857,6 @@ def run_segmentation_with_fallback(
                 raw_mask_path=raw_mask_path,
                 refinement_notes=refinement_notes,
             )
-        except BaseException as exc:
-            if isinstance(exc, (KeyboardInterrupt, SegmentationCancelled)):
-                raise
-            errors.append(f"{attempt_device}: {exc}")
-            if attempt_index + 1 < len(attempt_devices):
-                _emit_progress(
-                    progress_callback,
-                    "GPU segmentation failed; retrying on CPU...",
-                )
 
     mask_path = run_threshold_fallback(
         image=image,
