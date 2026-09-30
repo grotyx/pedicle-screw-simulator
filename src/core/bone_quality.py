@@ -67,8 +67,6 @@ def vertebral_body_hu(
     ``ct`` and ``mask`` must share a grid with an identity direction, which is
     what :class:`~src.core.screw_grading.ScrewGrader` already enforces.
     """
-    ct_arr = sitk.GetArrayFromImage(ct)
-    mask_arr = sitk.GetArrayFromImage(mask)
     origin = np.asarray(mask.GetOrigin(), dtype=np.float64)
     spacing = np.asarray(mask.GetSpacing(), dtype=np.float64)
     centre_idx = (np.asarray(body_center_lps, dtype=np.float64) - origin) / spacing  # x, y, z
@@ -77,7 +75,7 @@ def vertebral_body_hu(
     # Work inside the ellipsoid's index-space bounding box: no voxel outside it
     # can satisfy the inequality, and a whole-volume grid would cost gigabytes
     # on a full-resolution CT.
-    extent = np.asarray(mask_arr.shape[::-1], dtype=np.int64)                        # x, y, z
+    extent = np.asarray(mask.GetSize(), dtype=np.int64)                              # x, y, z
     lo = np.clip(np.floor(centre_idx - radii_idx).astype(np.int64), 0, extent)
     hi = np.clip(np.ceil(centre_idx + radii_idx).astype(np.int64) + 1, 0, extent)
     if np.any(hi <= lo):
@@ -89,11 +87,13 @@ def vertebral_body_hu(
         normalised[2][:, None, None] + normalised[1][None, :, None] + normalised[0][None, None, :]
     ) <= 1.0                                                                          # (z, y, x)
 
-    box = (slice(lo[2], hi[2]), slice(lo[1], hi[1]), slice(lo[0], hi[0]))
-    roi = ellipsoid & (mask_arr[box] == label)
+    # Convert only the bounding box: slicing a SimpleITK image is a crop, so a
+    # 20-screw plan no longer copies the whole CT and mask once per screw.
+    crop = tuple(slice(int(lo[a]), int(hi[a])) for a in range(3))                    # x, y, z
+    roi = ellipsoid & (sitk.GetArrayFromImage(mask[crop]) == label)
     if int(roi.sum()) < MIN_ROI_VOXELS:
         return None
-    return float(ct_arr[box][roi].mean())
+    return float(sitk.GetArrayFromImage(ct[crop])[roi].mean())
 
 
 def assess_bone_quality(
@@ -110,11 +110,19 @@ def assess_bone_quality(
 
     ``body_center_lps`` and ``isthmus_center_lps`` come from the pedicle
     analyser; each metric that depends on one is simply omitted when it is not
-    supplied, and every metric is omitted when the grader has no CT.
+    supplied, and every metric is omitted when the grader has no CT.  Trajectory
+    and pedicle figures sample only voxels inside ``label``; a screw with none
+    there reports ``None`` rather than a number taken from outside bone.
     """
     points = grader.cylinder_points(entry, target, diameter_mm)
     hu = grader.hu_at_points(points)
-    valid = ~np.isnan(hu)
+    # Only voxels of this vertebra count: soft tissue, fat and the canal (CSF)
+    # along the cylinder would otherwise drag the mean down and set a fake min.
+    idx_zyx, in_volume = grader._indices(points)
+    in_label = np.zeros(len(points), dtype=bool)
+    sel = idx_zyx[in_volume]
+    in_label[in_volume] = grader.label_array()[sel[:, 0], sel[:, 1], sel[:, 2]] == label
+    valid = ~np.isnan(hu) & in_label
     warnings: List[str] = []
 
     traj_mean = float(hu[valid].mean()) if valid.any() else None

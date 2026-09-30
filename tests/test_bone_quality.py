@@ -148,3 +148,61 @@ class TestAssessBoneQuality:
         assert m.trajectory_mean_hu is None
         assert m.trajectory_min_hu is None
         assert m.warnings == []
+
+
+class TestTrajectoryIsRestrictedToTheVertebra:
+    def test_head_outside_the_cortex_does_not_pull_in_soft_tissue(self):
+        # Uniform bone at 300 HU inside label 28, soft tissue (-50) everywhere else.
+        ct, mask = _phantom(body_hu=300, pedicle_hu=300)
+        head_outside = (30.0, 59.0, 30.0)            # 4 mm past the bar's end (y 55)
+        m = assess_bone_quality(ScrewGrader(mask, ct), head_outside, TARGET, 4.0, 28,
+                                isthmus_center_lps=ISTHMUS_CENTRE)
+        assert m.trajectory_min_hu == pytest.approx(300.0)
+        assert m.trajectory_mean_hu == pytest.approx(300.0)
+        assert m.pedicle_mean_hu == pytest.approx(300.0)
+        assert m.warnings == []
+
+    def test_spinal_canal_voxels_inside_the_path_are_ignored(self):
+        ct, mask = _phantom(body_hu=300, pedicle_hu=300)
+        arr = sitk.GetArrayFromImage(mask)
+        hu = sitk.GetArrayFromImage(ct)
+        arr[26:34, 44:48, 26:34] = 0                  # canal-like gap, not in the label
+        hu[26:34, 44:48, 26:34] = 10
+        ct, mask = sitk.GetImageFromArray(hu), sitk.GetImageFromArray(arr)
+        m = assess_bone_quality(ScrewGrader(mask, ct), ENTRY, TARGET, 4.0, 28)
+        assert m.trajectory_min_hu == pytest.approx(300.0)
+
+    def test_screw_fully_outside_the_label_has_no_trajectory_figures(self):
+        ct, mask = _phantom()
+        m = assess_bone_quality(ScrewGrader(mask, ct), (5.0, 5.0, 5.0), (5.0, 20.0, 5.0),
+                                4.0, 28, isthmus_center_lps=ISTHMUS_CENTRE)
+        assert m.trajectory_mean_hu is None
+        assert m.trajectory_min_hu is None
+        assert m.pedicle_mean_hu is None
+        assert m.trajectory_body_ratio is None
+        assert m.warnings == []
+
+
+class TestVertebralBodyHuIsCropped:
+    def test_does_not_copy_the_whole_volume(self, monkeypatch):
+        ct, mask = _phantom(body_hu=250)
+        expected = vertebral_body_hu(ct, mask, 28, BODY_CENTRE)
+        real = sitk.GetArrayFromImage
+        sizes = []
+
+        def spy(image):
+            arr = real(image)
+            sizes.append(arr.size)
+            return arr
+
+        monkeypatch.setattr(sitk, "GetArrayFromImage", spy)
+        assert vertebral_body_hu(ct, mask, 28, BODY_CENTRE) == expected
+        assert sizes and max(sizes) < 60 * 80 * 60 / 4
+
+    def test_result_matches_with_offset_anisotropic_grid(self):
+        ct, mask = _phantom(body_hu=250)
+        for img in (ct, mask):
+            img.SetOrigin((-10.0, 5.0, 3.0))
+            img.SetSpacing((1.0, 1.0, 1.0))
+        centre = (20.0, 30.0, 33.0)
+        assert vertebral_body_hu(ct, mask, 28, centre) == pytest.approx(250.0)
