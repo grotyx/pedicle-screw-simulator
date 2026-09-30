@@ -58,7 +58,7 @@ jobs:
           python -m pip install -r requirements-desktop.txt
 
       - name: Run automated tests
-        run: python -m pytest tests -q
+        run: python -m pytest tests
 
       - name: Build native desktop package
         run: python scripts/build_desktop.py

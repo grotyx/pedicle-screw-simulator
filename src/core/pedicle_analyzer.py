@@ -770,7 +770,10 @@ class PedicleAnalyzer:
                 axis = self._body_centre_axis(isthmus_center, body_center)
 
             # --- Minimum transverse width ---
-            width = self._measure_pedicle_width(isthmus_voxels, voxel_area_mm2)
+            # One slice only: the width is area / extent of a single section,
+            # so pooling the neighbours above would multiply it by their count.
+            width_voxels = all_voxels[all_voxels[:, 0] == isthmus_z]
+            width = self._measure_pedicle_width(width_voxels, voxel_area_mm2)
 
             # Store results.  This path has only the one width estimate, so it
             # is its own lower bound -- leaving the bound at its 0.0 default

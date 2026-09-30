@@ -153,14 +153,22 @@ def theme_rgb_float(theme_name: str, key: str) -> tuple[float, float, float]:
     Returns:
         (red, green, blue) each in 0.0-1.0; white if the key is missing.
     """
-    value = get_theme(theme_name).get(key, "#FFFFFF").lstrip("#")
+    r, g, b = _hex_to_rgb(get_theme(theme_name).get(key, "#FFFFFF"))
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Parse ``#RRGGBB`` to 0-255 ints; anything malformed is white."""
+    value = hex_color.lstrip("#")
     if len(value) != 6:
-        return (1.0, 1.0, 1.0)
-    return (
-        int(value[0:2], 16) / 255.0,
-        int(value[2:4], 16) / 255.0,
-        int(value[4:6], 16) / 255.0,
-    )
+        return (255, 255, 255)
+    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """``#RRGGBB`` plus a 0..1 alpha as a QSS ``rgba()`` (alpha 0-255)."""
+    r, g, b = _hex_to_rgb(hex_color)
+    return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
 
 
 def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
@@ -334,6 +342,10 @@ QComboBox#workspaceMode {{
 QComboBox#themeSelector {{
     min-width: 100px;
 }}
+QWidget#toolbarSpacer {{
+    background: transparent;
+}}
+
 QToolBar QPushButton {{
     min-width: 72px;
     border-radius: 3px;
@@ -668,6 +680,181 @@ QLabel#viewerReadout {{
     color: #98A3AE;
     padding: 4px 8px;
     font-size: 11px;
+}}
+
+/* ===== Viewer overlays (flat) =====
+   Opaque on purpose: Qt cannot blend alpha over a native VTK/GL window, so a
+   translucent overlay leaves ghost copies of itself. Viewer tokens, because
+   the viewports stay dark in every theme. */
+QWidget[viewerOverlay="true"], QToolButton[viewerOverlay="true"] {{
+    background: {t["viewer_header"]};
+    border: 1px solid {t["viewer_separator"]};
+    border-radius: 8px;
+    color: {t["viewer_foreground"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: {t["viewer_foreground"]};
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px 4px;
+    font-weight: 600;
+}}
+QWidget[viewerOverlay="true"] QLabel {{
+    background: transparent;
+    color: {t["viewer_foreground"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton:hover {{
+    background: {_rgba(t["viewer_foreground"], 0.12)};
+}}
+QWidget[viewerOverlay="true"] QToolButton:checked {{
+    background: {_rgba(t["accent"], 0.30)};
+    border-color: {t["accent"]};
+}}
+QToolButton[viewerOverlay="true"]:hover {{
+    background: {t["viewer_readout"]};
+}}
+QToolButton[viewerOverlay="true"]:checked {{
+    background: {t["accent"]};
+    border-color: {t["accent"]};
+    color: {t["button_text"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton:disabled {{
+    color: {t["text_disabled"]};
+}}
+QFrame#toolDock {{
+    border-radius: 12px;
+    padding: 4px;
+}}
+QFrame#toolDock QToolButton {{
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 8px;
+}}
+QFrame#toolDockSeparator {{
+    background: {t["viewer_separator"]};
+    min-width: 1px;
+    max-width: 1px;
+    margin: 6px 3px;
+}}
+
+/* ===== Step rail and step headers ===== */
+#stepRail {{
+    background: {t["bg_secondary"]};
+    border-right: 1px solid {t["border"]};
+}}
+#stepRail QPushButton#workflowStep {{
+    min-width: 64px;
+    max-width: 64px;
+    min-height: 56px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
+#stepRail QPushButton#workflowStep[active="true"] {{
+    background: {t["accent_dim"]};
+    color: {t["text_primary"]};
+}}
+#stepRail QPushButton#workflowStep[role="primary"] {{
+    color: {t["accent"]};
+    font-weight: 600;
+}}
+#stepRail QPushButton#workflowStep[role="secondary"] {{
+    color: {t["success"]};
+}}
+#stepHeader {{
+    border-bottom: 1px solid {t["border"]};
+    padding: 10px 12px 8px 12px;
+}}
+#stepHeaderEyebrow {{
+    color: {t["accent"]};
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}}
+#stepHeaderTitle {{
+    color: {t["text_primary"]};
+    font-size: 15px;
+    font-weight: 600;
+}}
+#stepHeaderSubtitle {{
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
+
+/* ===== Construct map ===== */
+QLabel#constructTitle {{
+    color: {t["text_primary"]};
+    font-weight: 600;
+    padding: 4px 2px 0 2px;
+}}
+#constructMap {{
+    background: transparent;
+}}
+QLabel#constructLevel {{
+    color: {t["text_secondary"]};
+    font-family: Consolas, monospace;
+}}
+QFrame#constructBar {{
+    background: {t["bg_tertiary"]};
+    border: 1px solid {t["border_light"]};
+    border-radius: 4px;
+    min-height: 16px;
+}}
+QLabel#constructChip {{
+    border-radius: 4px;
+    padding: 0 5px;
+    color: {t["grade_text"]};
+    font-weight: 600;
+}}
+QLabel#constructChip[grade="A"] {{ background: {t["grade_a"]}; }}
+QLabel#constructChip[grade="B"] {{ background: {t["grade_b"]}; }}
+QLabel#constructChip[grade="C"] {{ background: {t["grade_c"]}; }}
+QLabel#constructChip[grade="D"], QLabel#constructChip[grade="E"] {{
+    background: {t["grade_d"]};
+}}
+QLabel#constructChip[grade="NA"] {{ background: {t["grade_na"]}; }}
+QLabel#constructChip[selected="true"] {{
+    border: 2px solid {t["accent"]};
+}}
+QLabel#constructEmpty {{
+    border: 1px dashed {t["border_light"]};
+    border-radius: 4px;
+    min-width: 14px;
+    min-height: 14px;
+}}
+
+/* ===== Study chip, research-use badge, promote button ===== */
+QLabel#studyChip {{
+    color: {t["text_secondary"]};
+    background: {t["bg_tertiary"]};
+    border: 1px solid {t["border"]};
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-family: Consolas, monospace;
+}}
+QLabel#ruoBadge {{
+    color: {t["warning_text"]};
+    background: {t["warning_bg"]};
+    border: 1px solid {t["warning"]};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}}
+QToolButton#promoteViewButton {{
+    background: transparent;
+    border: none;
+    color: {t["text_secondary"]};
+    padding: 0 4px;
+}}
+QToolButton#promoteViewButton:hover {{
+    color: {t["text_primary"]};
 }}
 
 /* ===== Tables ===== */

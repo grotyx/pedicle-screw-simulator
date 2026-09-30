@@ -1,9 +1,12 @@
 """Tests for selectable application theme palettes."""
 
+import pytest
+
 from src.ui.styles import (
     DEFAULT_THEME,
     THEME_LABELS,
     THEMES,
+    _rgba,
     get_theme,
     load_stylesheet,
 )
@@ -164,3 +167,59 @@ def test_a_disabled_current_workflow_step_does_not_look_pressable_in_every_theme
         assert rule["background-color"] != palette["accent"]
         assert rule["color"] != enabled["color"]
         assert rule != _rule(stylesheet, "QPushButton:disabled")
+
+
+NEW_SELECTORS = [
+    'QWidget[viewerOverlay="true"]',
+    "#stepRail",
+    "#stepHeaderTitle",
+    "#constructMap",
+    'QLabel#constructChip[grade="A"]',
+    "QLabel#studyChip",
+    "QLabel#ruoBadge",
+    "QToolButton#promoteViewButton",
+    "QFrame#toolDock",
+]
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_redesign_selectors_exist_in_every_theme(theme):
+    qss = load_stylesheet(theme)
+    for selector in NEW_SELECTORS:
+        assert selector in qss, (theme, selector)
+
+
+def test_rgba_helper():
+    assert _rgba("#15181C", 0.86) == "rgba(21, 24, 28, 219)"
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_grade_chips_use_theme_grade_tokens(theme):
+    qss = load_stylesheet(theme)
+    block = qss.split('QLabel#constructChip[grade="A"]', 1)[1].split("}", 1)[0]
+    assert THEMES[theme]["grade_a"].lower() in block.lower()
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_viewer_overlays_are_opaque_and_follow_the_dark_viewport(theme):
+    # Alpha over a native VTK window leaves ghost copies, and the viewports
+    # are dark in every theme, so the overlay uses the solid viewer header.
+    qss = load_stylesheet(theme)
+    selector = 'QWidget[viewerOverlay="true"], QToolButton[viewerOverlay="true"] {'
+    block = qss.split(selector, 1)[1].split("}", 1)[0]
+    assert "rgba(" not in block
+    assert THEMES[theme]["viewer_header"].lower() in block.lower()
+    assert THEMES[theme]["viewer_foreground"].lower() in block.lower()
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_labels_inside_viewer_overlays_use_the_viewer_foreground(theme):
+    qss = load_stylesheet(theme)
+    block = qss.split('QWidget[viewerOverlay="true"] QLabel {', 1)[1].split("}", 1)[0]
+    assert THEMES[theme]["viewer_foreground"].lower() in block.lower()
+
+
+def test_rgba_and_theme_rgb_float_share_the_malformed_colour_fallback():
+    assert _rgba("#102030", 0.5) == "rgba(16, 32, 48, 128)"
+    # A malformed value falls back to white instead of raising.
+    assert _rgba("#FFF", 1.0) == "rgba(255, 255, 255, 255)"

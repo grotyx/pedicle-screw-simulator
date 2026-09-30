@@ -841,7 +841,7 @@ class AutoScrewPlanner:
         )
         if result is not None and result.breach_point_lps is not None:
             heary = heary_direction(
-                result.breach_point_lps, result.breach_centre_lps, side
+                result.breach_point_lps, result.breach_surface_lps, side
             )
         else:
             heary = "none"

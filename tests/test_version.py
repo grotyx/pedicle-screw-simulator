@@ -37,6 +37,15 @@ def test_citation_and_notices_match_VERSION():
     ).read_text(encoding="utf-8")
 
 
+def test_citation_date_matches_changelog_release_date():
+    version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    released = re.search(rf"^## \[{re.escape(version)}\] - (\d{{4}}-\d{{2}}-\d{{2}})", changelog, re.M)
+    assert released, f"CHANGELOG.md has no dated heading for {version}"
+    citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    assert re.search(rf"^date-released:\s*{released.group(1)}\s*$", citation, re.M)
+
+
 @pytest.mark.parametrize(
     "relative_path",
     [

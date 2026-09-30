@@ -71,17 +71,19 @@ Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니�
 
 Planning 작업화면은 다음 영역으로 구성됩니다.
 
-- **작업 단계 표시줄(workflow bar):** MPR/3D 화면 위에서 ① Study, ② Segment, ③ Plan, ④ Review 네 단계로 오른쪽 패널을 전환하는 표시줄 — 더 이상 스스로 어떤 동작도 실행하지 않습니다
+- **단계 레일(step rail):** 왼쪽 가장자리에 세로로 놓인 ① Study, ② Segment, ③ Plan, ④ Review 네 단계로 오른쪽 패널을 전환합니다(아래 참고) — 스스로 어떤 동작도 실행하지 않습니다
+- **메인 뷰와 썸네일 세 개:** 큰 메인 뷰 하나(기본값은 3D)와 그 아래 작은 썸네일로 놓이는 나머지 세 화면. 썸네일의 확대 버튼을 누르면 그 화면이 메인 뷰로 바뀝니다("메인 뷰와 썸네일" 참고)
 - **Axial, Sagittal, Coronal MPR:** crosshair, segmentation, 측정 및 스크류가 표시되는 동기화 CT 단면
 - **3D 화면:** CT volume, 척추 메시, 스크류 및 선택적인 MPR plane — **Screw MPR**이 활성화된 동안에는 표준 axial/sagittal/coronal plane 대신 스크류 정렬 plane이 표시됩니다(5.8절 참고). 머리글에는 **Vertebrae / Full CT** 토글이 있습니다(5.2절 참고)
-- **오른쪽 단계 패널:** 작업 단계 표시줄의 각 단계에 대응하는 페이지 — Study, Segment, Plan, Review — 아래에서 페이지별로 설명합니다
-- **도구 모음:** Select, Add Screw, Distance, Angle
+- **오른쪽 단계 패널:** 단계 레일의 각 단계에 대응하는 페이지 — Study, Segment, Plan, Review — 각 페이지는 머리글로 시작하며, 아래에서 페이지별로 설명합니다
+- **도구 독(tool dock):** 메인 뷰 바로 아래의 작은 도구 막대. Select, Add Screw, Distance, Angle, Screw MPR과 화면 맞춤 버튼이 들어 있습니다
+- **상단 도구 모음:** 왼쪽에 **Open DICOM**, 오른쪽에 voxel 간격을 보여주는 study chip과 **RESEARCH USE ONLY** 배지
 
-### 작업 단계 표시줄
+### 단계 레일
 
-MPR/3D 화면 위의 표시줄에는 "① Study → ② Segment → ③ Plan → ④ Review"가 표시됩니다. 단계를 클릭하면 오른쪽 패널에 해당 페이지가 표시됩니다. 어떤 단계든 항상 클릭할 수 있는데, study 상태와 무관하게 모든 페이지에 언제든 접근할 수 있기 때문입니다 — 표시줄은 이제 이동만 담당하며, Open DICOM, Run Auto Segmentation, Plan Screws를 직접 실행하지 않습니다(해당 버튼들은 각자의 페이지에 있으며, 아래에서 설명합니다).
+왼쪽 가장자리의 레일에는 위에서 아래로 "① Study, ② Segment, ③ Plan, ④ Review"가 나열되며, 각 단계는 이름 위에 번호가 표시됩니다. 단계를 클릭하면 오른쪽 패널에 해당 페이지가 표시됩니다. 어떤 단계든 항상 클릭할 수 있는데, study 상태와 무관하게 모든 페이지에 언제든 접근할 수 있기 때문입니다 — 레일은 이동만 담당하며, Open DICOM, Run Auto Segmentation, Plan Screws를 직접 실행하지 않습니다(해당 버튼들은 각자의 페이지에 있으며, 아래에서 설명합니다).
 
-완료된 단계에는 체크 표시("✓ Study")가 붙습니다. 다음에 할 일은 주요 동작으로 강조되어 표시줄이 항상 다음 할 일을 가리키며, 현재 화면에 표시된 단계의 버튼 아래에는 작은 표시가 붙어 지금 어떤 페이지가 열려 있는지(다음에 할 일과는 별개로) 보여줍니다. 각 단계에 마우스를 올리면 무엇을 해야 하는지, 또는 무엇이 아직 막고 있는지 알려주는 tooltip이 나타납니다.
+완료된 단계에는 체크 표시("✓ Study")가 붙습니다. 다음에 할 일은 주요 동작으로 강조되어 레일이 항상 다음 할 일을 가리키며, 현재 화면에 표시된 단계의 버튼에는 표시가 붙어 지금 어떤 페이지가 열려 있는지(다음에 할 일과는 별개로) 보여줍니다. 각 단계에 마우스를 올리면 무엇을 해야 하는지, 또는 무엇이 아직 막고 있는지 알려주는 tooltip이 나타납니다.
 
 | 단계 | 완료 조건 | Tooltip |
 |---|---|---|
@@ -90,22 +92,44 @@ MPR/3D 화면 위의 표시줄에는 "① Study → ② Segment → ③ Plan →
 | ③ Plan | 자동으로 계획된 스크류가 존재 | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Plan step", 또는 "Run segmentation first" |
 | ④ Review | 완료로 표시되는 일이 없음 — 끝내야 할 단계가 아니라 도착지입니다 | "Review the screws level by level", 또는 "Plan or place screws first" |
 
-수동으로 배치한 스크류는 ③ 완료 조건에 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 표시줄 전체가 초기화되고 패널은 Segment 페이지로 전환됩니다. TotalSegmentator 실행이 척추 라벨을 찾으면 패널은 Plan 페이지로 전환됩니다. 목록·MPR·3D에서 스크류를 선택하거나 Screw MPR을 켜면 패널은 Review 페이지로 전환됩니다 — 다만 이렇게 전환되는 것은 Screw MPR을 *켤* 때뿐입니다: 일단 켜진 뒤에는 어느 페이지로 옮겨가든 패널이 그 페이지에 그대로 머무르며, Screw MPR을 다시 끈다고 해서 그 자체로 페이지가 바뀌지는 않습니다.
+수동으로 배치한 스크류는 ③ 완료 조건에 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 레일 전체가 초기화되고 패널은 Segment 페이지로 전환됩니다. TotalSegmentator 실행이 척추 라벨을 찾으면 패널은 Plan 페이지로 전환됩니다. 목록·MPR·3D에서 스크류를 선택하거나 Screw MPR을 켜면 패널은 Review 페이지로 전환됩니다 — 다만 이렇게 전환되는 것은 Screw MPR을 *켤* 때뿐입니다: 일단 켜진 뒤에는 어느 페이지로 옮겨가든 패널이 그 페이지에 그대로 머무르며, Screw MPR을 다시 끈다고 해서 그 자체로 페이지가 바뀌지는 않습니다.
 
 ### 오른쪽 패널, 페이지별 안내
+
+모든 페이지는 머리글로 시작합니다: 작은 "Step N of 4" 줄, 페이지 제목, 한 줄 안내문입니다. 제목은 "Load a study"(Study), "Segment vertebrae"(Segment), "Plan screws"(Plan), "Review screws"(Review)입니다.
 
 - **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
 - **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 화면 머리글 토글에 대한 안내문.
 - **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 원래 Study 탭의 Segmentation 섹션에 있었음 — 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
-- **Review:** 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
+- **Review:** **Construct** 지도(아래 "구성 지도" 참고)로 시작하고, 이어서 페이지 대부분을 차지하는 레벨별 스크류 목록이 있습니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
 
 ### 3D 화면 머리글: Vertebrae / Full CT
 
 3D 화면 머리글에는 제목 옆에 두 상태를 오가는 **Vertebrae / Full CT** 토글이 있습니다. 이 토글은 항상 실제로 화면에 보이는 상태를 그대로 반영하며 — 자동 isolation이 실패해 Full CT로 되돌아간 경우도 포함됩니다 — 이제 3D에서 CT volume 표시 여부를 결정하는 유일한 요소입니다(5.2절 참고).
 
+### 구성 지도
+
+Review 페이지 맨 위의 **Construct** 그룹은 계획을 레벨별로 요약합니다. 스크류가 있는 척추 레벨마다 한 행이 있으며 cranial에서 caudal 순서로 정렬됩니다. 각 행은 **Right** | 척추 | **Left** 순서로 읽고, 방사선과 MPR 화면과 맞추기 위해 Right가 지도의 왼쪽에 놓입니다. 각 스크류는 등급과 직경 × 길이를 보여주는 작은 chip입니다(예: "B  6.5×45"). 점선으로 된 빈 칸은 그 레벨의 해당 쪽에 스크류가 없다는 뜻입니다. 레벨 없이 수동으로 배치한 스크류는 **Manual** 행에 나열됩니다. 좌우를 알 수 없는 스크류는 Right나 Left 아래가 아니라 가운데 열에 나타납니다. 스크류가 없으면 지도에 "No screws planned yet"이 표시됩니다.
+
+chip을 클릭하면 그 스크류가 선택되고, 스크류 목록·화면·지도의 강조된 chip이 함께 따라갑니다. 지도는 목록과 같은 스크류를 읽으며, 스크류를 추가·수정·삭제하면 갱신됩니다. 요약을 돕는 도구일 뿐 임상 평가가 아닙니다.
+
+### 메인 뷰와 썸네일
+
+**Planning** 배치에서는 한 화면이 크게 표시되고 나머지 세 화면은 그 아래 썸네일 한 줄로 놓입니다. study를 열면 메인 뷰는 3D입니다. 화면을 메인 뷰로 바꾸려면 그 화면 머리글의 확대 버튼(⤢, tooltip "Show in the main view")을 누릅니다. 이전 메인 뷰는 썸네일이 됩니다. 썸네일 안을 클릭하면 원래 의미(crosshair, 선택)가 그대로 유지됩니다. 화면이 썸네일인 동안에는 떠 있는 확대·축소 및 오버레이 조절이 숨겨지며, 메인 뷰가 되면 다시 나타납니다. 머리글을 더블클릭하면 여전히 그 창이 최대화됩니다(아래 참고).
+
+**Screw MPR**을 켜면 axial 화면이 메인 뷰가 됩니다. 스크류를 수정하는 곳이 oblique axial이기 때문입니다. 끄면 직접 고른 메인 뷰가 그대로 유지됩니다. 새 study를 열면 메인 뷰는 3D로 돌아가고 최대화된 창은 원래대로 돌아옵니다. MPR Focus 배치는 그대로 유지됩니다.
+
+### 도구 독
+
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 메인 뷰 바로 아래 별도 줄의 가운데에 놓인 독의 버튼이며, 그룹별로 구분됩니다(Select·Add Screw | Distance·Angle | Screw MPR | Fit MPR·Fit 3D). 예전에 상단 도구 모음에 있던 것과 같은 도구이며 동작도 같습니다. 강조된 버튼이 현재 도구입니다. 독은 영상을 가리지 않으므로 방향 글자와 각 화면의 조절 버튼이 늘 보입니다. 최대화된 창에서도 그 아래에, MPR Focus 배치에서는 2×2 격자 아래에 놓입니다. 3D 확대·축소 명령과 화면 맞춤 명령은 **View** 메뉴에도 있습니다.
+
+### Study chip과 연구 전용 배지
+
+상단 도구 모음 오른쪽 끝에는 불러온 CT의 voxel 간격을 보여주는 chip이 표시됩니다(예: "CT · 0.39 × 0.39 × 1.00 mm", 또는 "No study loaded"). 간격만 표시하며 환자 정보는 절대 표시하지 않습니다. 그 옆의 **RESEARCH USE ONLY** 배지는 이 프로그램이 인증받은 의료기기가 아니라 연구·교육용 소프트웨어임을 항상 알려줍니다.
+
 ### 배치
 
-**Planning**은 큰 3D 화면과 작은 MPR을 사용합니다. **MPR Focus**는 MPR 검토를 위한 큰 2×2 배치를 사용합니다.
+**Planning**은 큰 메인 뷰 하나와 썸네일 세 개를 사용합니다. **MPR Focus**는 MPR 검토를 위한 큰 2×2 배치를 사용하며, 이 배치에는 메인 뷰와 썸네일이 적용되지 않고 도구 독은 2×2 격자 아래에 놓입니다.
 
 ### 방향 표시
 
@@ -115,22 +139,23 @@ MPR/3D 화면 위의 표시줄에는 "① Study → ② Segment → ③ Plan →
 
 ### 한 창 최대화
 
-창 머리글을 더블클릭하거나 `Ctrl+M`을 누르면 작업 중인 창이 전체 영역으로 확대됩니다. 같은 동작으로 이전 배치로 돌아갑니다. `Ctrl+M`은 어떤 도구를 쓰고 있든 포인터가 마지막으로 작업한 창을 따라갑니다.
+창 머리글을 더블클릭하거나 `Ctrl+M`을 누르면 작업 중인 창이 전체 영역으로 확대됩니다. 같은 동작으로 이전 배치로 돌아갑니다. 창이 최대화된 동안 메인 뷰를 바꾸면 그 창은 최대화된 채로 남고, 복원된 배치에는 새 메인 뷰가 적용됩니다. `Ctrl+M`은 어떤 도구를 쓰고 있든 포인터가 마지막으로 작업한 창을 따라갑니다.
 
 ### 테마
 
-**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다.
+**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다. 세 테마 모두 평면(flat) 색을 사용하며, 도구 독과 화면 위에 떠 있는 조절(확대·축소 조절, 3D 오버레이)은 테마를 따르는 하나의 불투명 평면 스타일을 공유합니다.
 
 ## 5. 기본 계획 과정
 
-작업 단계 표시줄의 네 페이지(4절 참고)는 이 절의 순서와 대략 대응합니다. Study는 5.1절, Segment는 5.2절, Plan은 5.3절(레벨)·5.4절(제안)·5.5절(매개변수)에 해당합니다. 생성된 제안의 검토와 수정은 5.8절 이후, Review 페이지(5.9/5.10절), 6절에서 이어집니다.
+단계 레일의 네 페이지(4절 참고)는 이 절의 순서와 대략 대응합니다. Study는 5.1절, Segment는 5.2절, Plan은 5.3절(레벨)·5.4절(제안)·5.5절(매개변수)에 해당합니다. 생성된 제안의 검토와 수정은 5.8절 이후, Review 페이지(5.9/5.10절), 6절에서 이어집니다.
 
 ### 5.1 CT 열기
 
-1. **Study** 페이지에서 **Open DICOM…**을 누릅니다(툴바 버튼과 File 메뉴의 **Open DICOM Folder**(`Ctrl+O`)도 그대로 사용할 수 있습니다).
+1. **Study** 페이지에서 **Open DICOM…**을 누릅니다(상단 도구 모음의 **Open DICOM** 버튼과 File 메뉴의 **Open DICOM Folder**(`Ctrl+O`)도 그대로 사용할 수 있습니다).
 2. DICOM 시리즈가 들어 있는 폴더를 선택합니다.
 3. 여러 시리즈가 있으면 사용할 CT 시리즈를 선택합니다.
 4. 세 MPR과 3D에서 해부학 구조와 방향이 올바른지 확인합니다.
+5. 상태 표시줄과 **Study** 정보에 **Warning**(슬라이스 간격 불균일 — 대개 누락된 슬라이스 — 또는 갠트리 기울기)이 나타나면 불러오기는 완료되지만 스캔 축 방향 길이가 부정확하거나 볼륨이 기울어져 있을 수 있으니, 측정값을 신뢰하기 전에 시리즈를 확인합니다.
 
 ### 5.2 자동 분할
 
@@ -297,7 +322,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 #### Review 페이지 구성
 
-**Review** 페이지는 레벨별 스크류 목록을 중심으로 구성되며(예전에는 고정된 "Planning Cockpit" 요약 아래에 작은 표로 눌려 있었습니다), 이제 페이지 대부분을 차지합니다. 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
+**Review** 페이지는 레벨별 스크류 목록을 중심으로 구성되며(예전에는 고정된 "Planning Cockpit" 요약 아래에 작은 표로 눌려 있었습니다), 이제 페이지 대부분을 차지합니다. 맨 위에는 **Construct** 지도가 있습니다(4절 참고). 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
 
 목록 자체는 오른쪽 끝에 기존 **Source** 열 대신 **⚠** 열을 두어, 해당 스크류의 경고 개수(0이면 빈칸)를 표시합니다. 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다 — auto/manual 출처 정보는 아래의 접이식 Details 섹션으로 옮겨졌습니다(CSV 내보내기에는 원래대로 그대로 남아 있습니다, 9절 참고). 빠르게 훑어볼 때는 스크류가 어떻게 배치되었는지보다 경고 개수가 더 중요하기 때문입니다.
 
@@ -322,7 +347,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 스크류가 segmentation을 기준으로 등급이 매겨지면, Review 페이지의 Details 섹션(Body HU, Wall margin, Facet, Heary 행)과 CSV/JSON 내보내기에 문헌에 근거한 골질·안전성 지표 모음이 표시됩니다.
 
-- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적 전체를 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값입니다. 이는 3 mm 진입 구간을 제외하는 Details의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
+- **Trajectory HU(평균/최소; 내보내기 필드 `trajectory_mean_hu`(CSV·JSON), `trajectory_min_hu`(JSON `metrics`에만)):** 스크류의 원통형 궤적을 따라(진입 구간 포함) 측정한 HU(Hounsfield unit)의 평균값과 최소값이며, 해당 스크류가 속한 척추의 label 안에 있는 복셀만 사용합니다(연부조직·지방·척추관은 제외되므로 피질골 밖에 놓인 헤드가 수치를 낮추지 않습니다). label 안에 샘플이 하나도 없으면 값이 비어 있습니다(N/A). 이는 3 mm 진입 구간을 제외하는 Details의 **Trajectory HU** 행(CSV `mean_hu` / `min_hu`, 5.9절 참고)과는 별개의 수치입니다.
 - **Pedicle HU:** 척추경 협부(isthmus) 중심에서 10 mm 이내에 있는 궤적 샘플만으로 계산한 평균 HU입니다. 자동 계획된 스크류에서만 제공됩니다 — 수동 스크류는 기준이 될 isthmus 중심이 없기 때문입니다.
 - **Vertebral body HU(척추체 HU):** 척추체 중심에 위치한 8×8×6 mm 타원체 관심영역을 해당 척추의 segmentation label과 교차시켜 계산한 평균 HU입니다. 같은 이유로 자동 계획된 스크류에서만 제공됩니다.
 - **Trajectory/body HU 비율:** 궤적 평균 HU를 척추체 HU로 나눈 값입니다.
@@ -371,10 +396,11 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 ### 6.3 직경 입력
 
-직경 입력칸은 축약 입력을 지원합니다.
+직경 입력칸에는 값을 그대로 쓰거나 축약해서 입력할 수 있습니다.
 
 | 입력 | 결과 |
 |---:|---:|
+| `6.5` 또는 `6,5` | 6.5 mm |
 | `65` | 6.5 mm |
 | `55` | 5.5 mm |
 | `60` | 6.0 mm |
@@ -388,7 +414,7 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 ## 7. 수동 도구
 
-Add Screw, Distance, Angle은 도구 모음의 동작입니다. **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
+Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4절 참고). **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
 
 ### Add Screw
 
@@ -413,6 +439,8 @@ Add Screw, Distance, Angle은 도구 모음의 동작입니다. **Measurements**
 ## 8. 화면 조작
 
 **Window/Level**(window/level 슬라이더, Bone·Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋, opacity — 이전 이름은 **Validation**)은 모두 **Study** 페이지의 접이식 섹션입니다(4절 참고).
+
+오버레이 조절(MPR 확대·축소 버튼과 3D 창의 떠 있는 버튼)은 메인 뷰와 최대화된 창에 표시되고, 화면이 썸네일인 동안에는 숨겨집니다. 사용하려면 썸네일의 확대 버튼으로 그 화면을 메인 뷰로 바꾸십시오.
 
 ### MPR
 

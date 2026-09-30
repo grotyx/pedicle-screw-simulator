@@ -100,8 +100,8 @@ GRADE_COLUMN = 6
 #: Index of the column that carries the per-row warning count.
 WARNINGS_COLUMN = 7
 
-#: Columns sized to their content: the number, the three measurements and the
-#: two chips, neither of which may elide.
+#: Columns sized to their content: the number, the three
+#: measurements and the two chips, none of which may elide.
 _FIT_COLUMNS = (0, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
 
 #: Columns that absorb the leftover width.
@@ -135,7 +135,8 @@ def screw_row_cells(index: int, screw) -> tuple[str, ...]:
     """
     level = getattr(screw, "vertebra_level", None) or "Manual"
     side_value = getattr(screw, "side", None)
-    side = str(side_value).capitalize() if side_value else "--"
+    # One letter: the column is narrow and "Left"/"Right" elided to "L…".
+    side = {"left": "L", "right": "R"}.get(str(side_value or "").lower(), "--")
     warning_count = screw_warning_count(screw)
     return (
         str(index + 1),

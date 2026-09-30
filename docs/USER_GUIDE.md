@@ -71,17 +71,19 @@ The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The firs
 
 The Planning workspace contains:
 
-- **Workflow bar:** a bar above the MPR/3D views with four steps, ① Study, ② Segment, ③ Plan, and ④ Review, that navigate the right-hand panel (see below) — it no longer runs any action itself
+- **Step rail:** a vertical column at the left edge with four steps, ① Study, ② Segment, ③ Plan, and ④ Review, that navigate the right-hand panel (see below) — it does not run any action itself
+- **Main view and three thumbnails:** one large main view (3D by default) with the other three views as small thumbnails underneath it; the enlarge button on a thumbnail swaps it into the main view (see "The main view and thumbnails")
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
-- **Right-hand step panel:** one page per workflow-bar step — Study, Segment, Plan, Review — described page by page below
-- **Tools palette:** Select, Add Screw, Distance, and Angle
+- **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
+- **Tool dock:** a small tool bar directly below the main view with Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
-### Workflow bar
+### Step rail
 
-The bar above the MPR/3D views reads "① Study → ② Segment → ③ Plan → ④ Review." Clicking a step shows that step's page in the right-hand panel; every step is always clickable, since every page is reachable whatever the study's state — the bar only navigates, it no longer runs Open DICOM, Run Auto Segmentation, or Plan Screws itself (those buttons live on their own pages, described below).
+The rail at the left edge lists "① Study, ② Segment, ③ Plan, ④ Review" from top to bottom, each with its number above its name. Clicking a step shows that step's page in the right-hand panel; every step is always clickable, since every page is reachable whatever the study's state — the rail only navigates, it does not run Open DICOM, Run Auto Segmentation, or Plan Screws itself (those buttons live on their own pages, described below).
 
-A finished step shows a check mark ("✓ Study"). The next thing to do is highlighted as the primary action so the bar always points at what to do next, and a small marker under the currently shown step's button tracks which page is on screen right now (independent of which step is "next"). Hovering a step shows a tooltip describing what to do there, or what still blocks it.
+A finished step shows a check mark ("✓ Study"). The next thing to do is highlighted as the primary action so the rail always points at what to do next, and a marker on the currently shown step's button tracks which page is on screen right now (independent of which step is "next"). Hovering a step shows a tooltip describing what to do there, or what still blocks it.
 
 | Step | Counts as done when | Tooltip |
 |---|---|---|
@@ -90,22 +92,44 @@ A finished step shows a check mark ("✓ Study"). The next thing to do is highli
 | ③ Plan | An automatically planned screw exists | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Plan step", or "Run segmentation first" |
 | ④ Review | Never shown as done — it is the destination, not a step to finish | "Review the screws level by level", or "Plan or place screws first" |
 
-A manually placed screw does not count toward ③; deleting the automatic screws reopens it. A later step never shows done while an earlier one is not. Loading a new study resets the whole bar and switches the panel to the Segment page; a TotalSegmentator run that finds vertebra labels switches it to the Plan page; selecting a screw (from the list, an MPR view, or 3D) or turning on Screw MPR switches it to the Review page — only turning Screw MPR *on* does that: once it is on, the panel stays on whatever page you switch to, and turning it off again does not itself switch pages.
+A manually placed screw does not count toward ③; deleting the automatic screws reopens it. A later step never shows done while an earlier one is not. Loading a new study resets the whole rail and switches the panel to the Segment page; a TotalSegmentator run that finds vertebra labels switches it to the Plan page; selecting a screw (from the list, an MPR view, or 3D) or turning on Screw MPR switches it to the Review page — only turning Screw MPR *on* does that: once it is on, the panel stays on whatever page you switch to, and turning it off again does not itself switch pages.
 
 ### The right-hand panel, page by page
+
+Every page opens with a header: a small "Step N of 4" line, the page title, and a one-line hint. The titles are "Load a study" (Study), "Segment vertebrae" (Segment), "Plan screws" (Plan), and "Review screws" (Review).
 
 - **Study:** the **Open DICOM…** button, the **Study** info section, then the collapsed **Window/Level** (window/level sliders and Bone/Soft Tissue presets) and **3D Rendering** (transfer-function preset and opacity) sections.
 - **Segment:** the **Segmentation** group (**Run Auto Segmentation**, **Refine boundaries against CT**, the status line, and the isolate/restore button — see 5.2) and a hint about the automatic isolation and the 3D header toggle.
 - **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, formerly in the Study tab's Segmentation section — see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
-- **Review:** built around the per-level screw list, which takes most of the page (see 5.9/5.10 for its layout, and 6 for editing); **Measurements** are collapsed at the bottom (see 7).
+- **Review:** starts with the **Construct** map (see "The construct map" below), then the per-level screw list, which takes most of the page (see 5.9/5.10 for its layout, and 6 for editing); **Measurements** are collapsed at the bottom (see 7).
 
 ### 3D header: Vertebrae / Full CT
 
 The 3D viewport's header carries a two-state **Vertebrae / Full CT** toggle next to its title. It always reflects what is actually on screen — including after a failed automatic isolation, which snaps it back to Full CT — and it is the only thing that now decides whether the CT volume is visible in 3D (see 5.2).
 
+### The construct map
+
+The **Construct** group at the top of the Review page summarizes the plan level by level. There is one row per vertebral level that has a screw, ordered cranial to caudal. Each row reads **Right** | vertebra | **Left**, with Right on the left of the map to match the radiological MPR views. Each screw is a small chip showing its grade and its diameter × length (for example "B  6.5×45"); a dashed empty cell means that side has no screw at that level. Screws placed by hand without a level are listed in a **Manual** row. A screw with no known side appears in the centre column instead of under Right or Left. With no screws the map reads "No screws planned yet".
+
+Click a chip to select that screw; the screw list, the views, and the map's highlighted chip all follow. The map reads the same screws as the list and updates when you add, edit, or delete one. It is a summary aid, not a clinical assessment.
+
+### The main view and thumbnails
+
+In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
+
+Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
+
+### Tool dock
+
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). They are the same tools that used to sit in the top toolbar and behave the same; a highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+
+### Study chip and research-use badge
+
+The right end of the top toolbar shows a chip with the loaded CT's voxel spacing, for example "CT · 0.39 × 0.39 × 1.00 mm", or "No study loaded". It shows spacing only, never patient information. Next to it, the **RESEARCH USE ONLY** badge is a standing reminder that this is research and education software, not a certified medical device.
+
 ### Layouts
 
-Use **Planning** for a large 3D view and compact MPR panels. Use **MPR Focus** for a larger 2×2 review layout.
+Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
 
 ### Orientation markers
 
@@ -115,22 +139,23 @@ Always confirm the markers against the patient's known laterality before plannin
 
 ### Maximise a single pane
 
-Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are working in to the full viewing area. The same gesture restores the previous layout. `Ctrl+M` follows the pane your pointer last worked in, whichever tool is active.
+Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are working in to the full viewing area. The same gesture restores the previous layout. If you swap the main view while a pane is maximised, the pane stays maximised and the restored layout uses the new main view. `Ctrl+M` follows the pane your pointer last worked in, whichever tool is active.
 
 ### Themes
 
-The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool dock and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
 
 ## 5. Standard Planning Workflow
 
-The workflow bar's four pages (see section 4) roughly follow this section's order: Study is 5.1, Segment is 5.2, and Plan covers 5.3 (levels), 5.4 (proposals), and 5.5 (parameters). Reviewing and editing the resulting proposals follow in 5.8 onward, in the Review page (5.9/5.10), and in section 6.
+The step rail's four pages (see section 4) roughly follow this section's order: Study is 5.1, Segment is 5.2, and Plan covers 5.3 (levels), 5.4 (proposals), and 5.5 (parameters). Reviewing and editing the resulting proposals follow in 5.8 onward, in the Review page (5.9/5.10), and in section 6.
 
 ### 5.1 Open a CT Study
 
-1. On the **Study** page, select **Open DICOM…** (the toolbar button and the File menu's **Open DICOM Folder**, `Ctrl+O`, still work too).
+1. On the **Study** page, select **Open DICOM…** (the top toolbar's **Open DICOM** button and the File menu's **Open DICOM Folder**, `Ctrl+O`, still work too).
 2. Select a directory containing a DICOM series.
 3. If multiple series are present, choose the intended CT series.
 4. Confirm the anatomy and orientation in all MPR views and 3D.
+5. If the status bar and the **Study** info show a **Warning** (uneven slice spacing, which usually means missing slices, or a gantry tilt), the load still succeeds but lengths along the scan axis may be wrong or the volume sheared; check the series before relying on measurements.
 
 ### 5.2 Run Segmentation
 
@@ -297,7 +322,7 @@ Only the vertebra the selected screw is graded against — the same one its Gert
 
 #### The Review page layout
 
-The **Review** page is built around the per-level screw list (formerly a small table squeezed under a fixed "Planning Cockpit" summary), which now takes most of the page. Above the list, the key numbers for the selected screw are shown large: level and side, diameter (editable in place), length, and a coloured Gertzbein-Robbins grade chip. Just below that sits a single collapsed line, "⚠ _N_ warnings" (or "✓ No warnings"), that expands on click to the full warning text — the same text every warning list in the app already used, just collapsed by default so it does not compete with the numbers above it. The action buttons — ‹ › previous/next navigation, **Screw MPR** / **Std MPR**, **Edit** (a menu, see section 6), and, alone on a second row, **Delete Screw** — sit in a fixed two-row block right under the list. While Screw MPR is active, a **Position** slider, **Rotation** spin box, and **Reset view** button appear in two rows under the action buttons, Position on the first and Rotation with Reset view on the second (5.8).
+The **Review** page is built around the per-level screw list (formerly a small table squeezed under a fixed "Planning Cockpit" summary), which now takes most of the page. At the very top sits the **Construct** map (see 4). Above the list, the key numbers for the selected screw are shown large: level and side, diameter (editable in place), length, and a coloured Gertzbein-Robbins grade chip. Just below that sits a single collapsed line, "⚠ _N_ warnings" (or "✓ No warnings"), that expands on click to the full warning text — the same text every warning list in the app already used, just collapsed by default so it does not compete with the numbers above it. The action buttons — ‹ › previous/next navigation, **Screw MPR** / **Std MPR**, **Edit** (a menu, see section 6), and, alone on a second row, **Delete Screw** — sit in a fixed two-row block right under the list. While Screw MPR is active, a **Position** slider, **Rotation** spin box, and **Reset view** button appear in two rows under the action buttons, Position on the first and Rotation with Reset view on the second (5.8).
 
 The list itself carries a **⚠** column at its right in place of the old **Source** column: a plain count of that screw's warnings (blank at zero), so which screws deserve a second look is visible at a glance without opening each row — auto/manual provenance moved to the collapsed Details section below (it stays in the CSV export, section 9, where it already lived), since a screw's warning count matters more for a quick scan than how it was placed.
 
@@ -322,7 +347,7 @@ Loaded volumes are reoriented to LPS (identity direction) before display. An obl
 
 Once a screw is graded against a segmentation, the Review page's Details section (Body HU, Wall margin, Facet, Heary rows) and the CSV/JSON export report a bundle of literature-based bone-quality and safety measurements:
 
-- **Trajectory HU (mean / min), exported as `trajectory_mean_hu` (CSV and JSON) and `trajectory_min_hu` (JSON `metrics` only):** the mean and minimum HU (Hounsfield units) sampled along the screw's whole cylindrical trajectory, entry zone included. This is a separate figure from the **Trajectory HU** row in Details (CSV `mean_hu` / `min_hu`, see 5.9), which excludes the 3 mm entry zone.
+- **Trajectory HU (mean / min), exported as `trajectory_mean_hu` (CSV and JSON) and `trajectory_min_hu` (JSON `metrics` only):** the mean and minimum HU (Hounsfield units) sampled along the screw's cylindrical trajectory, entry zone included, but only at voxels inside the screw's own vertebra label (soft tissue, fat and the spinal canal are ignored, so a head seated outside the cortex does not lower the figures). When no sample falls inside the label the values are empty (N/A). This is a separate figure from the **Trajectory HU** row in Details (CSV `mean_hu` / `min_hu`, see 5.9), which excludes the 3 mm entry zone.
 - **Pedicle HU:** mean HU restricted to trajectory samples within 10 mm of the pedicle isthmus centre. Auto-planned screws only — a manually placed screw has no isthmus centre to sample around.
 - **Vertebral body HU:** mean HU of an 8×8×6 mm ellipsoidal region of interest at the vertebral body centre, intersected with that vertebra's segmentation label. Auto-planned screws only, for the same reason.
 - **Trajectory/body HU ratio:** trajectory mean HU divided by vertebral body HU.
@@ -371,10 +396,11 @@ During MPR editing the CT image remains fixed and the screw moves. After editing
 
 ### 6.3 Diameter
 
-The diameter field accepts shorthand:
+The diameter field accepts the value as written or as shorthand:
 
 | Input | Result |
 |---:|---:|
+| `6.5` or `6,5` | 6.5 mm |
 | `65` | 6.5 mm |
 | `55` | 5.5 mm |
 | `60` | 6.0 mm |
@@ -388,7 +414,7 @@ Select a screw and use **Delete Screw** or the `Delete` key.
 
 ## 7. Manual Tools
 
-Add Screw, Distance, and Angle are the Tools-palette gestures; **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
+Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
 
 ### Add Screw
 
@@ -413,6 +439,8 @@ Measurements belong to the cut where they were created. They hide on another cut
 ## 8. Display Controls
 
 **Window/Level** (window/level sliders, Bone and Soft Tissue presets) and **3D Rendering** (transfer-function preset, opacity — formerly named **Validation**) are both collapsed sections on the **Study** page (see section 4).
+
+Overlay controls (the MPR zoom buttons and the 3D pane's floating buttons) are shown on the main view and on a maximised pane, and hidden while a view is a thumbnail. Swap a thumbnail into the main view with its enlarge button to use them.
 
 ### MPR
 

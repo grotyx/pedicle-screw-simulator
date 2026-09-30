@@ -20,9 +20,11 @@ from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QGridLayout,
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QToolButton,
     QWidget,
 )
 
@@ -33,15 +35,38 @@ from src.core.totalseg_integration import SegmentationRunResult
 from src.models.screw import Screw
 
 
-class DummyMPRViewer(QWidget):
+class _ViewerOverlayHooks:
+    """The overlay/thumbnail API of the real viewers, for the test doubles."""
+
+    def _init_overlay_hooks(self):
+        self.promote_button = QToolButton(self)
+        self.promote_button.hide()
+        self.promote_button.clicked.connect(
+            lambda: self.promote_requested.emit(getattr(self, "plane", "3d"))
+        )
+        self.viewport_container = QWidget(self)
+        QGridLayout(self.viewport_container)
+        self._thumbnail = False
+
+    def set_thumbnail(self, on):
+        self._thumbnail = bool(on)
+        self.promote_button.setVisible(self._thumbnail)
+
+    def is_thumbnail(self):
+        return self._thumbnail
+
+
+class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     """Lightweight MPR test double for UI workflow tests."""
 
     slice_changed = pyqtSignal(str, float)
     crosshair_moved = pyqtSignal(str, float, float, float)
     header_double_clicked = pyqtSignal(str)
+    promote_requested = pyqtSignal(str)
 
     def __init__(self, plane, volume_manager, parent=None):
         super().__init__(parent)
+        self._init_overlay_hooks()
         self.plane = plane
         self.volume_manager = volume_manager
         self.visible = True
@@ -165,14 +190,16 @@ class DummyMPRViewer(QWidget):
         return
 
 
-class DummyViewer3D(QWidget):
+class DummyViewer3D(_ViewerOverlayHooks, QWidget):
     """Lightweight 3D viewer test double for UI workflow tests."""
 
     header_double_clicked = pyqtSignal(str)
     isolation_requested = pyqtSignal(bool)
+    promote_requested = pyqtSignal(str)
 
     def __init__(self, volume_manager, parent=None):
         super().__init__(parent)
+        self._init_overlay_hooks()
         self.visible = True
         self.seg_label_value = 0
         self.seg_mask = None
@@ -377,14 +404,14 @@ def _view_grid_position(window, widget):
     return window._view_layout.getItemPosition(index)
 
 
-def test_vworks_planning_layout_is_default(ui_main_window):
+def test_planning_layout_with_a_3d_main_view_is_default(ui_main_window):
     window = ui_main_window
 
     assert window._view_layout_mode == "planning"
-    assert _view_grid_position(window, window.axial_viewer) == (0, 0, 1, 1)
-    assert _view_grid_position(window, window.sagittal_viewer) == (1, 0, 1, 1)
-    assert _view_grid_position(window, window.coronal_viewer) == (2, 0, 1, 1)
-    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (0, 0, 1, 3)
+    assert _view_grid_position(window, window.axial_viewer) == (2, 0, 1, 1)
+    assert _view_grid_position(window, window.sagittal_viewer) == (2, 1, 1, 1)
+    assert _view_grid_position(window, window.coronal_viewer) == (2, 2, 1, 1)
 
 
 def test_default_window_size_is_screen_aware_and_compact(ui_main_window):
@@ -448,7 +475,7 @@ def test_layout_can_switch_to_mpr_focus_and_back(ui_main_window):
 
     window.set_view_layout("planning")
 
-    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (0, 0, 1, 3)
     assert window.layout_combo.currentData() == "planning"
 
 
@@ -1177,7 +1204,7 @@ def test_screw_list_row_shows_level_side_and_geometry(ui_main_window):
 
     text = window.screw_list_widget.rowText(0)
     assert "L4" in text
-    assert "Left" in text
+    assert window.screw_list_widget.item(0, 2).text() == "L"
     assert "6.5" in text
     assert "40.0" in text
     assert window.screw_list_widget.currentRow() == 0
@@ -1504,6 +1531,19 @@ def test_reset_workspace_purges_segmentation_temp_dirs(ui_main_window, tmp_path)
     window.reset_workspace()
 
     assert not Path(created).exists()
+
+
+def test_reset_workspace_clears_mpr_screw_overlays(ui_main_window):
+    """A new study must not show the previous study's screws on the 2D views."""
+    window = ui_main_window
+    for viewer in window._get_mpr_viewers():
+        viewer.add_screw_overlay(0, (10.0, 20.0, 30.0), (10.0, 0.0, 30.0))
+        assert viewer.screw_overlays
+
+    window.reset_workspace()
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays == {}
 
 
 def test_close_event_purges_segmentation_temp_dirs(ui_main_window, tmp_path):
@@ -2407,17 +2447,18 @@ def _add_screw(window, source):
     window._tool_ctrl._add_screw_to_list(screw)
 
 
-def test_workflow_bar_sits_above_the_views_and_starts_at_study(ui_main_window):
+def test_step_rail_sits_left_of_the_views_and_starts_at_study(ui_main_window):
     window = ui_main_window
     bar = window.workflow_bar
     b = bar.buttons
 
     layout = bar.parentWidget().layout()
     assert layout.indexOf(bar) == 0
+    assert layout.indexOf(window.main_splitter) == 1
 
     assert all(button.isEnabled() for button in b)
     assert b[0].property("role") == "primary"
-    assert b[0].text() == "①  Study"
+    assert b[0].text() == "①\nStudy"
     assert b[1].toolTip() == "Open a DICOM series first"
 
 
@@ -2426,7 +2467,7 @@ def test_workflow_bar_advances_to_segment_after_a_study_loads(ui_main_window):
     _load_study(window, "WF-STUDY-1")
     b = window.workflow_bar.buttons
 
-    assert b[0].text() == "✓ Study"
+    assert b[0].text() == "✓\nStudy"
     assert b[0].property("role") == "secondary"
     assert b[1].property("role") == "primary"
     assert b[1].toolTip() == "Run TotalSegmentator on the loaded study"
@@ -2442,7 +2483,7 @@ def test_workflow_bar_finishes_segment_for_a_totalsegmentator_mask(
     _finish_segmentation(window, tmp_path, monkeypatch)
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "✓ Segment"
+    assert b[1].text() == "✓\nSegment"
     assert b[2].property("role") == "primary"
     assert b[2].toolTip() == "Select vertebral levels in the Plan step"
 
@@ -2455,7 +2496,7 @@ def test_workflow_bar_keeps_segment_open_after_a_threshold_fallback(
     _finish_segmentation(window, tmp_path, monkeypatch, method="threshold_fallback")
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "②  Segment"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
 
 
@@ -2485,16 +2526,16 @@ def test_workflow_bar_finishes_plan_for_auto_screws_but_not_manual_ones(
     b = window.workflow_bar.buttons
 
     _add_screw(window, "manual")
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
 
     _add_screw(window, "auto")
-    assert b[2].text() == "✓ Plan"
+    assert b[2].text() == "✓\nPlan"
     assert b[3].property("role") == "primary"
 
     window.screw_list_widget.setCurrentRow(1)
     window._tool_ctrl.remove_selected_screw()
 
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
     assert b[2].property("role") == "primary"
 
 
@@ -2512,14 +2553,14 @@ def test_workflow_bar_resets_when_a_new_study_is_loaded(
     _finish_segmentation(window, tmp_path, monkeypatch)
     _add_screw(window, "auto")
     b = window.workflow_bar.buttons
-    assert b[2].text() == "✓ Plan"
+    assert b[2].text() == "✓\nPlan"
 
     _load_study(window, "WF-STUDY-SECOND")
 
-    assert b[0].text() == "✓ Study"
-    assert b[1].text() == "②  Segment"
+    assert b[0].text() == "✓\nStudy"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
 
 
 def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
@@ -2532,7 +2573,7 @@ def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
     window._seg_ctrl.clear_overlay()
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "②  Segment"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
 
 

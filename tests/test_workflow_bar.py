@@ -363,3 +363,52 @@ def test_every_theme_styles_the_workflow_bar():
         assert "QPushButton#workflowStep" in stylesheet
         assert "QLabel#workflowChevron" in stylesheet
         assert 'QPushButton#workflowStep[active="true"]' in stylesheet
+
+
+# ---------------------------------------------------------------------------
+# Vertical step rail.
+# ---------------------------------------------------------------------------
+
+
+def _rail(qtbot):
+    rail = WorkflowBar(
+        [WorkflowStep(n, lambda: None) for n in STEP_NAMES],
+        orientation=Qt.Orientation.Vertical,
+    )
+    qtbot.addWidget(rail)
+    return rail
+
+
+def test_vertical_rail_stacks_steps_without_chevrons(qtbot):
+    from PyQt6.QtWidgets import QApplication
+
+    rail = _rail(qtbot)
+    rail.resize(80, 400)
+    rail.show()
+    QApplication.processEvents()
+    assert rail.objectName() == "stepRail"
+    assert rail.orientation == Qt.Orientation.Vertical
+    assert not rail.findChildren(QLabel, "workflowChevron")
+    ys = [b.geometry().y() for b in rail.buttons]
+    assert ys == sorted(ys) and len(set(ys)) == 4
+    assert rail.buttons[2].text() == "③\nPlan"
+
+
+def test_vertical_rail_marks_done_steps(qtbot):
+    rail = _rail(qtbot)
+    rail.set_states(
+        workflow_states(
+            has_volume=True,
+            segment_available=True,
+            has_mask=True,
+            plan_available=True,
+            has_plan=False,
+        )
+    )
+    assert rail.buttons[0].text() == f"{DONE_MARK}\nStudy"
+    assert rail.buttons[2].property("role") == "primary"
+
+
+def test_bar_defaults_to_horizontal(qtbot):
+    bar, _calls = _build_bar(qtbot)
+    assert bar.orientation == Qt.Orientation.Horizontal

@@ -311,7 +311,8 @@ class ToolController:
         """Handle measurement mode changes from UI."""
         mode = self._window.measure_mode_combo.currentData()
         self.measurement_tool.set_mode(mode)
-        self._active_measure_plane = None
+        if self._editing_measurement_row is None:
+            self._active_measure_plane = None
         self._window.measure_finish_btn.setEnabled(mode == "path")
         if self._current_tool in self.MEASUREMENT_TOOLS:
             if mode == "path":

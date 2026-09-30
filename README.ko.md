@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 v0.2.3 검증에 사용한 핵심 실행·테스트 환경을 기록합니다. `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
+`requirements.txt`는 호환 가능한 최소 버전을 제공하고, `requirements-lock.txt`는 macOS arm64와 Python 3.12에서 마지막으로 검증한 핵심 실행·테스트 환경을 기록합니다(파일 머리말 참고, 릴리스마다 다시 검증하지는 않음). `requirements-desktop.txt`는 standalone 빌드에 추가되는 TotalSegmentator와 PyTorch 버전을 고정합니다.
 
 ## 단독 실행 패키지
 

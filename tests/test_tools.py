@@ -200,6 +200,22 @@ class TestScrewTool:
         assert screw.breach_distance > 0
         assert screw.metrics["heary_direction"] == "medial"
 
+    def test_heary_direction_reports_an_anterior_tip_breach(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask))
+        # The tip runs 8 mm past the y = 20 (anterior, LPS -y) wall.
+        tool.add_screw(Screw(entry_point=(30.0, 35.0, 30.0), target_point=(30.0, 12.0, 30.0),
+                             diameter=6.0, side="left"))
+        tool.regrade_all()
+        assert tool.get_screws()[0].metrics["heary_direction"] == "anterior"
+
     def test_regrade_replaces_stale_planner_breach_warnings(self):
         import numpy as np
         import SimpleITK as sitk
@@ -386,6 +402,31 @@ class TestMeasurementTool:
         assert pytest.approx(measurement.angle, rel=1e-6) == 90.0
         assert measurement.label == "90.0°"
 
+    def test_angle_with_coincident_points_drops_the_duplicate_and_continues(self):
+        tool = MeasurementTool()
+        tool.set_mode("angle")
+
+        tool.on_click(1.0, 0.0, 0.0)
+        tool.on_click(0.0, 0.0, 0.0)
+        assert tool.on_click(0.0, 0.0, 0.0) is None  # vertex == third point
+
+        assert tool.get_pending_points() == [(1.0, 0.0, 0.0), (0.0, 0.0, 0.0)]
+        measurement = tool.on_click(0.0, 1.0, 0.0)
+        assert measurement is not None
+        assert pytest.approx(measurement.angle, rel=1e-6) == 90.0
+
+    def test_angle_with_first_two_points_coincident_also_recovers(self):
+        tool = MeasurementTool()
+        tool.set_mode("angle")
+
+        tool.on_click(0.0, 0.0, 0.0)
+        tool.on_click(0.0, 0.0, 0.0)
+        assert tool.on_click(0.0, 1.0, 0.0) is None
+
+        assert len(tool.get_pending_points()) == 2
+        tool.on_click(1.0, 0.0, 0.0)
+        assert len(tool.get_measurements()) == 1
+
     def test_remove_measurement_by_index(self):
         tool = MeasurementTool()
         tool.set_mode("distance")
@@ -438,3 +479,25 @@ class TestMeasurementTool:
         tool.replace_measurement(0, replacement)
 
         assert tool.get_measurements() == [replacement]
+
+
+def test_changing_measure_mode_keeps_the_plane_lock_while_editing():
+    from types import SimpleNamespace
+
+    from src.controllers.tool_controller import ToolController
+
+    window = SimpleNamespace(
+        measure_mode_combo=SimpleNamespace(currentData=lambda: "angle"),
+        measure_finish_btn=SimpleNamespace(setEnabled=lambda _enabled: None),
+        statusbar=SimpleNamespace(showMessage=lambda _text: None),
+    )
+    controller = ToolController(FakeVolumeManager(), window)
+    controller._active_measure_plane = "sagittal"
+
+    controller._editing_measurement_row = 0
+    controller.on_measure_mode_changed()
+    assert controller._active_measure_plane == "sagittal"
+
+    controller._editing_measurement_row = None
+    controller.on_measure_mode_changed()
+    assert controller._active_measure_plane is None

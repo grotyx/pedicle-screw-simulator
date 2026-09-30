@@ -412,8 +412,11 @@ class _FakePopen:
         return "", ""
 
 
-def test_process_holder_terminate_marks_cancelled():
+def test_process_holder_terminate_marks_cancelled(monkeypatch):
     from src.core.totalseg_integration import ProcessHolder
+
+    # Fakes have no real process tree; the real kill is tested below.
+    monkeypatch.setattr(totalseg, "_kill_process_tree", lambda proc: proc.terminate())
 
     class Fake:
         def __init__(self):
@@ -451,6 +454,8 @@ def test_process_holder_does_not_terminate_finished_process():
 def test_run_totalsegmentator_raises_cancelled_when_holder_cancelled(
     tmp_path, monkeypatch
 ):
+    # Fakes have no real process tree; the real kill is tested below.
+    monkeypatch.setattr(totalseg, "_kill_process_tree", lambda proc: proc.terminate())
     holder = totalseg.ProcessHolder()
 
     def _fake_popen(command, **kwargs):
@@ -622,6 +627,8 @@ def test_run_totalsegmentator_does_not_spawn_when_already_cancelled(
 
 
 def test_cancel_racing_the_spawn_still_terminates_process(tmp_path, monkeypatch):
+    # Fakes have no real process tree; the real kill is tested below.
+    monkeypatch.setattr(totalseg, "_kill_process_tree", lambda proc: proc.terminate())
     holder = totalseg.ProcessHolder()
 
     def _fake_popen(command, **kwargs):
@@ -1230,3 +1237,171 @@ def test_refinement_progress_tells_the_user_cancel_is_available(
     assert any(
         "Cancel stops after the current vertebra" in message for message in messages
     )
+
+
+# ---------------------------------------------------------------------------
+# Cancel kills the whole TotalSegmentator process tree
+# ---------------------------------------------------------------------------
+
+_TREE_SCRIPT = r'''
+import os, subprocess, sys, time
+# Like an nnU-Net worker: a grandchild that inherits the parent's stdout and
+# stderr pipes, so communicate() cannot return while it lives.
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(120)"],
+    stdout=sys.stdout, stderr=sys.stderr,
+)
+pid_file = sys.argv[sys.argv.index("-o") + 1] + ".grandchild"
+with open(pid_file + ".tmp", "w") as handle:
+    handle.write(str(child.pid))
+os.replace(pid_file + ".tmp", pid_file)
+time.sleep(120)
+'''
+
+
+def test_cancel_kills_the_grandchildren_holding_the_output_pipes(
+    tmp_path, monkeypatch
+):
+    import signal
+    import threading
+
+    script = tmp_path / "fake_totalsegmentator.py"
+    script.write_text(_TREE_SCRIPT, encoding="utf-8")
+    fake_spec = types.SimpleNamespace(origin=str(script))
+    monkeypatch.setattr(totalseg.importlib.util, "find_spec", lambda _n: fake_spec)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+    work_dir = tmp_path / "run"
+    holder = totalseg.ProcessHolder()
+    outcome = []
+
+    def _run():
+        try:
+            totalseg.run_totalsegmentator(
+                image=_create_test_image(),
+                work_dir=str(work_dir),
+                process_holder=holder,
+            )
+        except BaseException as exc:  # noqa: BLE001 - handed to the test
+            outcome.append(exc)
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    pid_file = work_dir / "totalseg_multilabel.nii.gz.grandchild"
+    deadline = time.monotonic() + 30
+    while not pid_file.exists():
+        assert time.monotonic() < deadline, "fake TotalSegmentator never started"
+        time.sleep(0.05)
+    grandchild = int(pid_file.read_text())
+    alive = SegmentationWorkspace._pid_is_alive
+    try:
+        holder.terminate()
+        worker.join(15)
+
+        assert not worker.is_alive(), "communicate() is still blocked on the pipes"
+        assert len(outcome) == 1
+        assert isinstance(outcome[0], totalseg.SegmentationCancelled)
+        deadline = time.monotonic() + 10
+        while alive(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not alive(grandchild)
+    finally:
+        if alive(grandchild):
+            os.kill(grandchild, signal.SIGTERM)
+        worker.join(15)
+
+
+# ---------------------------------------------------------------------------
+# Workspace bookkeeping survives failed deletes and concurrent purges
+# ---------------------------------------------------------------------------
+
+
+def test_a_dir_that_could_not_be_deleted_stays_tracked_for_a_retry(
+    tmp_path, monkeypatch
+):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    locked = ws.create()
+    monkeypatch.setattr(totalseg.shutil, "rmtree", lambda *_a, **_k: None)
+
+    ws.remove(locked)
+    ws.purge()
+
+    assert Path(locked).exists()
+    monkeypatch.undo()
+    ws.purge()
+    assert not Path(locked).exists()
+
+
+def test_keep_only_removes_every_other_tracked_dir(tmp_path):
+    ws = SegmentationWorkspace(root=str(tmp_path))
+    first = ws.create()
+    second = ws.create()
+    third = ws.create()
+
+    ws.keep_only(second)
+
+    assert not Path(first).exists() and not Path(third).exists()
+    assert Path(second).exists()
+    ws.purge()
+    assert not Path(second).exists()
+
+
+def test_purge_stale_tolerates_a_dir_removed_by_another_instance(
+    tmp_path, monkeypatch
+):
+    import shutil
+
+    racing = tmp_path / (SegmentationWorkspace.PREFIX + "racing")
+    racing.mkdir()
+    stale = tmp_path / (SegmentationWorkspace.PREFIX + "stale")
+    stale.mkdir()
+    old = time.time() - 10
+    os.utime(stale, (old, old))
+    real_is_dir = Path.is_dir
+
+    def _is_dir_then_vanish(self):
+        result = real_is_dir(self)
+        if self == racing and result:
+            # Another instance's purge deletes it right after our check.
+            shutil.rmtree(self)
+        return result
+
+    monkeypatch.setattr(Path, "is_dir", _is_dir_then_vanish)
+
+    removed = SegmentationWorkspace.purge_stale(
+        root=str(tmp_path), older_than_seconds=5
+    )
+
+    assert removed == 1
+    assert not stale.exists()
+
+
+# ---------------------------------------------------------------------------
+# Only a failed GPU run is retried on CPU
+# ---------------------------------------------------------------------------
+
+
+def test_a_result_read_failure_after_a_gpu_run_is_not_retried_on_cpu(
+    tmp_path, monkeypatch
+):
+    devices = []
+    monkeypatch.setattr(totalseg, "is_totalsegmentator_available", lambda: True)
+
+    def _fake_totalseg(image, work_dir, device, **_kwargs):
+        devices.append(device)
+        return str(Path(work_dir) / "totalseg_multilabel.nii.gz")
+
+    def _unreadable(*_args, **_kwargs):
+        raise RuntimeError("could not read the mask")
+
+    monkeypatch.setattr(totalseg, "run_totalsegmentator", _fake_totalseg)
+    monkeypatch.setattr(totalseg, "validate_segmentation_output", _unreadable)
+
+    with pytest.raises(RuntimeError, match="could not read the mask"):
+        totalseg.run_segmentation_with_fallback(
+            image=_create_test_image(),
+            work_dir=str(tmp_path),
+            device="gpu",
+            refine=False,
+        )
+
+    assert devices == ["gpu"]

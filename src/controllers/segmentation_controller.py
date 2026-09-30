@@ -109,6 +109,8 @@ class SegmentationController:
         self._window = main_window
         self.workspace = SegmentationWorkspace()
         self._segmentation_thread: Optional[AutoSegmentationThread] = None
+        # Finished runs whose run() has not returned yet; see _release_thread.
+        self._retired_threads: list[QThread] = []
         self._segmentation_progress: Optional[QProgressDialog] = None
         self._active_work_dir: Optional[str] = None
         # Keeps the workspace lock fresh for as long as this instance owns a
@@ -344,13 +346,37 @@ class SegmentationController:
         """Reset UI state after the segmentation run was cancelled."""
         self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
-        self._segmentation_thread = None
+        self._release_thread()
         # Only this run's directory: earlier runs may still own the mask that
         # `_last_segmentation_mask_path` points at.
         self.workspace.remove(self._active_work_dir)
         self._active_work_dir = None
         self._window.seg_status_label.setText("Segmentation cancelled")
         self._window.statusbar.showMessage("Auto segmentation cancelled")
+
+    def _release_thread(self) -> None:
+        """Forget the finished run's thread without destroying it mid-run.
+
+        Its signals are emitted from inside ``run()``, so the handler can run
+        before ``run()`` returns, and dropping the last reference then makes Qt
+        abort with "QThread: Destroyed while thread is still running". The
+        thread is kept until it stops, as ``DicomController`` does.
+        """
+        thread, self._segmentation_thread = self._segmentation_thread, None
+        if isinstance(thread, QThread):
+            self._retired_threads.append(thread)
+        self._reap_retired_threads()
+
+    def _reap_retired_threads(self) -> None:
+        running = []
+        for thread in self._retired_threads:
+            if thread.isRunning():
+                running.append(thread)
+            else:
+                thread.deleteLater()
+        self._retired_threads = running
+        if running:
+            QTimer.singleShot(50, self._reap_retired_threads)
 
     def _on_progress(self, message: str):
         """Update UI while segmentation is running."""
@@ -362,7 +388,7 @@ class SegmentationController:
         """Handle completed segmentation run."""
         self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
-        self._segmentation_thread = None
+        self._release_thread()
 
         logger.info(
             "_on_finished: method=%s, mask=%s, msg=%s",
@@ -419,6 +445,8 @@ class SegmentationController:
             # `run_planning` plan screws on a mask with no vertebra labels.
             self._last_segmentation_mask_path = result.mask_path
             self._last_segmentation_method = result.method
+            # Every earlier run holds a full CT copy that nothing needs now.
+            self.workspace.keep_only(os.path.dirname(result.mask_path))
             self._last_raw_mask_path = getattr(result, "raw_mask_path", None)
             self._last_refinement_notes = list(
                 getattr(result, "refinement_notes", None) or []
@@ -634,7 +662,9 @@ class SegmentationController:
         """Handle segmentation failure."""
         self._close_progress_dialog()
         self._window.seg_run_btn.setEnabled(True)
-        self._segmentation_thread = None
+        self._release_thread()
+        self.workspace.remove(self._active_work_dir)
+        self._active_work_dir = None
         self._window.seg_status_label.setText("Segmentation failed")
         QMessageBox.critical(
             self._window,
