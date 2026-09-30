@@ -77,10 +77,9 @@ class PlanController:
                 screws=screws,
                 measurements=measurements,
                 measurement_planes=planes,
-                measurement_screw_aligned=[
-                    bool(entry.get("screw_aligned"))
-                    for entry in tool_ctrl._measurement_entries[: len(measurements)]
-                ],
+                measurement_screw_aligned=self._build_measurement_screw_aligned(
+                    tool_ctrl._measurement_entries, len(measurements)
+                ),
                 metadata={
                     "mask_refinement": (
                         self._window._seg_ctrl.mask_refinement_metadata()
@@ -289,3 +288,11 @@ class PlanController:
         for index, entry in enumerate(entries[:count]):
             planes[index] = entry.get("plane")
         return planes
+
+    @staticmethod
+    def _build_measurement_screw_aligned(entries, count: int) -> List[bool]:
+        """Per-measurement screw-view flags, False where there is no entry."""
+        flags = [False] * count
+        for index, entry in enumerate(entries[:count]):
+            flags[index] = bool(entry.get("screw_aligned"))
+        return flags

@@ -467,8 +467,11 @@ class AutoPlacementController:
                 return
             # Looked up now, not when the user confirmed: the list may have been
             # edited, reordered or cleared while the plan was running.
+            # Per (level, side): an old screw goes only where the new plan has
+            # one, so a side the planner skipped is not left bare.
+            replaced = {(ps.vertebra_name, ps.side) for ps in planned}
             self._window._tool_ctrl.remove_screws(
-                self._auto_rows_on(replace_levels)
+                self._auto_rows_on(replace_levels, replaced)
             )
 
         first_new_index = len(
@@ -528,13 +531,19 @@ class AutoPlacementController:
     # Private: helpers
     # ------------------------------------------------------------------
 
-    def _auto_rows_on(self, levels) -> List[int]:
-        """Rows of the automatically planned screws on the named ``levels``."""
+    def _auto_rows_on(self, levels, sides=None) -> List[int]:
+        """Rows of the automatically planned screws on the named ``levels``.
+
+        ``sides``, when given, is a set of ``(level, side)`` pairs that further
+        restricts the rows to those pairs.
+        """
         screws = self._window._tool_ctrl.screw_tool.get_screws()
         return [
             row
             for row, screw in enumerate(screws)
-            if screw.source == "auto" and screw.vertebra_level in levels
+            if screw.source == "auto"
+            and screw.vertebra_level in levels
+            and (sides is None or (screw.vertebra_level, screw.side) in sides)
         ]
 
     def _confirm_replace(self, labels: List[int]) -> Optional[Tuple[str, ...]]:
@@ -558,9 +567,11 @@ class AutoPlacementController:
         box.setWindowTitle("Replace planned screws?")
         box.setText(
             f"Replace the {count} automatically planned "
-            f"screw{'s' if count != 1 else ''} on {', '.join(levels)} with a new "
-            "plan? Screws you placed by hand, and planned screws on other "
-            "levels, are kept."
+            f"screw{'s' if count != 1 else ''} on {', '.join(levels)}, "
+            "including any you adjusted, with a new plan? The new plan's "
+            "screws replace the automatic screws on the same level and side; "
+            "automatic screws on a level or side it skips, screws you placed "
+            "by hand, and screws on other levels are kept."
         )
         replace = box.addButton("Replace", QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Cancel)

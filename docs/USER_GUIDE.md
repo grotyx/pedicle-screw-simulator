@@ -196,7 +196,7 @@ Use the **Levels to plan** checkboxes on the **Plan** page (moved there from the
 
 ### 5.4 Generate Proposals
 
-On the **Plan** page, select **Plan Screws**. Proposals appear immediately in the screw list and remain editable. **Clear All Screws**, just below it, removes every screw at once. If automatically planned screws already exist on any of the levels being planned, a **Replace planned screws?** confirmation asks before anything starts; choosing **Cancel** changes nothing. After **Replace**, the earlier automatic screws on those levels are removed only when the new plan finishes successfully (a failed, cancelled or empty run keeps them), so the rod-fit figures describe the new plan alone. Screws you placed by hand, and automatic screws on other levels, are always kept.
+On the **Plan** page, select **Plan Screws**. Proposals appear immediately in the screw list and remain editable. **Clear All Screws**, just below it, removes every screw at once. If automatically planned screws already exist on any of the levels being planned, a **Replace planned screws?** confirmation asks before anything starts; choosing **Cancel** changes nothing. The count includes automatic screws you have since adjusted, because they remain automatic screws. After **Replace**, when the new plan finishes successfully (a failed, cancelled or empty run keeps everything), each new screw replaces the earlier automatic screw on the same level and side. Automatic screws on a level or side the new plan skipped are kept, so no side is left bare. Screws you placed by hand, and screws on other levels, are always kept.
 
 Current defaults:
 

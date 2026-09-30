@@ -1857,6 +1857,11 @@ def test_replan_dialog_names_levels_and_count_only(replan, monkeypatch):
     assert sorted(buttons) == ["Cancel", "Replace"]
     assert default == "Replace"
     assert "2 automatically planned screws on L4, L5" in text
+    # Adjusted auto screws keep source "auto", so the text must not promise
+    # that only untouched ones are replaced.
+    assert "including any you adjusted" in text
+    assert "same level and side" in text
+    assert "by hand" in text
     assert "L3" not in text
     assert _StubThread.instances[0].started is True
     assert _StubThread.instances[0].replace_levels == ("L4", "L5")
@@ -1883,15 +1888,36 @@ def test_replan_finish_replaces_only_old_auto_screws_on_planned_levels(
         thread, [_planned("L4", "left"), _planned("L5", "left")]
     )
 
+    # L5 right had no counterpart in the new plan, so it is kept.
     assert _screw_keys(window) == [
         ("L4", "right", "manual"),
         ("L3", "left", "auto"),
+        ("L5", "right", "auto"),
         ("L4", "left", "auto"),
         ("L5", "left", "auto"),
     ]
     # Removed in one batch; the new plan's first screw is the selection.
-    assert window._tool_ctrl.removed_rows == [3, 0]
-    assert window.screw_list_widget.currentRow() == 2
+    assert window._tool_ctrl.removed_rows == [0]
+    assert window.screw_list_widget.currentRow() == 3
+
+
+def test_replan_keeps_old_auto_screw_on_a_side_the_new_plan_skipped(
+    replan, monkeypatch
+):
+    """Replacement is per (level, side): a skipped side must not go bare."""
+    ctrl, window = replan
+    tool = window._tool_ctrl.screw_tool
+    tool.add_screw(_auto_screw("L4", "left"))
+    tool.add_screw(_auto_screw("L4", "right"))
+    thread = _confirmed_run(ctrl, monkeypatch)
+
+    ctrl._on_finished(thread, [_planned("L4", "left")])
+
+    assert _screw_keys(window) == [
+        ("L4", "right", "auto"),
+        ("L4", "left", "auto"),
+    ]
+    assert window._tool_ctrl.removed_rows == [0]
 
 
 def test_replan_finish_finds_old_screws_after_the_list_changed(
@@ -1911,6 +1937,7 @@ def test_replan_finish_finds_old_screws_after_the_list_changed(
         ("L2", "left", "manual"),
         ("L4", "right", "manual"),
         ("L3", "left", "auto"),
+        ("L5", "right", "auto"),  # no new L5 right screw: kept
         ("L4", "left", "auto"),
     ]
 
