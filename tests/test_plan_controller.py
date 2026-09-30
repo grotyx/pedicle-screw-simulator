@@ -237,3 +237,139 @@ def test_loading_a_normal_screw_colours_the_3d_screw_with_the_default_colour(
 
     expected = tuple(value / 255.0 for value in COLOR_SCREW)
     assert window.viewer_3d.screws[0].color == expected
+
+
+def _capture_dialog_dirs(monkeypatch, path):
+    """Record the start directory every plan file dialog is opened in."""
+    starts = []
+
+    def save(*args, **_kwargs):
+        starts.append(args[2])
+        return (str(path), "")
+
+    def open_(*args, **_kwargs):
+        starts.append(args[2])
+        return (str(path), "")
+
+    qfd = plan_controller_module.QFileDialog
+    monkeypatch.setattr(qfd, "getSaveFileName", staticmethod(save))
+    monkeypatch.setattr(qfd, "getOpenFileName", staticmethod(open_))
+    return starts
+
+
+def test_plan_dialogs_start_in_documents_not_the_working_directory(
+    ui_main_window, monkeypatch, tmp_path
+):
+    """Plans are patient-identifiable; never default into the git checkout."""
+    from PyQt6.QtCore import QStandardPaths
+
+    window = ui_main_window
+    _load_volume(window)
+    docs = str(tmp_path / "Documents")
+    monkeypatch.setattr(
+        QStandardPaths, "writableLocation", staticmethod(lambda *_a: docs)
+    )
+    starts = _capture_dialog_dirs(monkeypatch, tmp_path / "out" / "p.json")
+    monkeypatch.setattr(
+        plan_controller_module.QMessageBox, "critical", lambda *a, **k: None
+    )
+
+    window._plan_ctrl.load_dialog()
+    window._settings.remove("plan/last_dir")
+    window._plan_ctrl.save_dialog()
+
+    assert starts == [docs, docs]
+
+
+def test_plan_dialogs_reopen_in_the_last_plan_folder(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    _load_volume(window)
+    folder = tmp_path / "plans"
+    folder.mkdir()
+    starts = _capture_dialog_dirs(monkeypatch, folder / "p.json")
+    monkeypatch.setattr(
+        plan_controller_module.QMessageBox, "critical", lambda *a, **k: None
+    )
+
+    window._plan_ctrl.save_dialog()
+    window._plan_ctrl.load_dialog()
+
+    assert starts[1] == str(folder)
+    assert (folder / "p.json").exists()
+
+
+def test_saved_plan_stores_a_digest_of_the_series_uid_not_the_uid(
+    ui_main_window, monkeypatch, tmp_path
+):
+    import hashlib
+
+    window = ui_main_window
+    _load_volume(window)
+    path = tmp_path / "saved.json"
+    _capture_dialog_dirs(monkeypatch, path)
+    window._plan_ctrl.save_dialog()
+
+    text = path.read_text(encoding="utf-8")
+    payload = json.loads(text)
+    assert "SERIES-V1" not in text
+    assert "series_id" not in payload
+    assert payload["series_uid_sha256"] == hashlib.sha256(b"SERIES-V1").hexdigest()
+
+
+def _mismatch_asked(window, monkeypatch, tmp_path, payload):
+    asked = []
+    _load_volume(window)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    qfd = plan_controller_module.QFileDialog
+    monkeypatch.setattr(
+        qfd, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    box = plan_controller_module.QMessageBox
+    monkeypatch.setattr(box, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(
+        box,
+        "question",
+        lambda *a, **k: asked.append(a[1]) or box.StandardButton.No,
+    )
+    window._plan_ctrl.load_dialog()
+    return asked
+
+
+def test_series_mismatch_is_detected_from_the_digest(
+    ui_main_window, monkeypatch, tmp_path
+):
+    import hashlib
+
+    def payload(uid):
+        data = _v1_plan_payload()
+        del data["series_id"]
+        data["version"] = 3
+        data["series_uid_sha256"] = hashlib.sha256(uid.encode()).hexdigest()
+        return data
+
+    window = ui_main_window
+    assert _mismatch_asked(window, monkeypatch, tmp_path, payload("OTHER")) == [
+        "Series Mismatch"
+    ]
+    assert _mismatch_asked(window, monkeypatch, tmp_path, payload("SERIES-V1")) == []
+
+
+def test_legacy_plan_with_raw_series_id_still_checks_and_is_not_re_emitted(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    legacy = _v1_plan_payload()
+    legacy["series_id"] = "OTHER"
+    assert _mismatch_asked(window, monkeypatch, tmp_path, legacy) == [
+        "Series Mismatch"
+    ]
+    assert _mismatch_asked(window, monkeypatch, tmp_path, _v1_plan_payload()) == []
+
+    _load_plan(window, monkeypatch, tmp_path, _v1_plan_payload())
+    saved = tmp_path / "resaved.json"
+    _capture_dialog_dirs(monkeypatch, saved)
+    window._plan_ctrl.save_dialog()
+    assert "SERIES-V1" not in saved.read_text(encoding="utf-8")

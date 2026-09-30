@@ -6,8 +6,10 @@ and applying loaded plans back to the tool state.
 """
 
 import logging
+import os
 from typing import List, Optional
 
+from PyQt6.QtCore import QStandardPaths
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.controllers.tool_controller import screw_display_color
@@ -17,10 +19,14 @@ from src.utils.planning_io import (
     load_plan_json,
     save_plan_json,
     serialize_plan,
+    series_uid_digest,
 )
 from src.utils.stl_export import export_bone_stl
 
 logger = logging.getLogger(__name__)
+
+#: QSettings key holding the folder the user last saved or loaded a plan in.
+_PLAN_DIR_KEY = "plan/last_dir"
 
 
 class PlanController:
@@ -30,16 +36,33 @@ class PlanController:
         self._vm = volume_manager
         self._window = main_window
 
+    def _start_dir(self) -> str:
+        """Folder file dialogs open in: last plan folder, else Documents.
+
+        Never the working directory, which is the git checkout when the app
+        is started from the run scripts; plans are patient-identifiable.
+        """
+        last = self._window._settings.value(_PLAN_DIR_KEY)
+        if isinstance(last, str) and os.path.isdir(last):
+            return last
+        return QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DocumentsLocation
+        )
+
+    def _remember_dir(self, path: str) -> None:
+        self._window._settings.setValue(_PLAN_DIR_KEY, os.path.dirname(path))
+
     def save_dialog(self):
         """Save current screw/measurement plan to JSON."""
         path, _ = QFileDialog.getSaveFileName(
             self._window,
             "Save Plan JSON",
-            "",
+            self._start_dir(),
             "JSON Files (*.json)",
         )
         if not path:
             return
+        self._remember_dir(path)
 
         tool_ctrl = self._window._tool_ctrl
         screws = tool_ctrl.screw_tool.get_screws()
@@ -83,23 +106,19 @@ class PlanController:
         path, _ = QFileDialog.getOpenFileName(
             self._window,
             "Load Plan JSON",
-            "",
+            self._start_dir(),
             "JSON Files (*.json)",
         )
         if not path:
             return
+        self._remember_dir(path)
 
         try:
             payload = load_plan_json(path)
             parsed = deserialize_plan(payload)
-            plan_series_id = parsed.get("series_id")
-            if (
-                isinstance(plan_series_id, str)
-                and isinstance(self._window._current_series_id, str)
-                and plan_series_id
-                and self._window._current_series_id
-                and plan_series_id != self._window._current_series_id
-            ):
+            plan_digest = parsed.get("series_uid_sha256")
+            current_digest = series_uid_digest(self._window._current_series_id)
+            if plan_digest and current_digest and plan_digest != current_digest:
                 answer = QMessageBox.question(
                     self._window,
                     "Series Mismatch",
@@ -139,11 +158,12 @@ class PlanController:
         path, _ = QFileDialog.getSaveFileName(
             self._window,
             "Export Screws CSV",
-            "",
+            self._start_dir(),
             "CSV Files (*.csv)",
         )
         if not path:
             return
+        self._remember_dir(path)
 
         try:
             export_screws_csv(path, screws)
@@ -167,11 +187,12 @@ class PlanController:
         path, _ = QFileDialog.getSaveFileName(
             self._window,
             "Export Bone STL",
-            "",
+            self._start_dir(),
             "STL Files (*.stl)",
         )
         if not path:
             return
+        self._remember_dir(path)
 
         try:
             self._window.statusbar.showMessage("Exporting STL...")

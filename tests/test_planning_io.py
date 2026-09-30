@@ -3,6 +3,7 @@ Tests for plan JSON/CSV persistence helpers.
 """
 
 import csv
+import json
 import os
 import sys
 
@@ -18,6 +19,7 @@ from src.utils.planning_io import (
     load_plan_json,
     save_plan_json,
     serialize_plan,
+    series_uid_digest,
 )
 
 
@@ -56,7 +58,8 @@ class TestPlanningIO:
         loaded_payload = load_plan_json(str(file_path))
         parsed = deserialize_plan(loaded_payload)
 
-        assert parsed["series_id"] == "1.2.840.test"
+        assert "1.2.840.test" not in json.dumps(loaded_payload)
+        assert parsed["series_uid_sha256"] == series_uid_digest("1.2.840.test")
         assert len(parsed["screws"]) == 1
         assert parsed["screws"][0].grade == "B"
         assert len(parsed["measurements"]) == 1
