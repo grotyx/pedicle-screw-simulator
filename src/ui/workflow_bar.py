@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 #: Circled digits for the step numbers; a plain "1." read as a list, not a path.
 _STEP_NUMBERS = ("①", "②", "③", "④", "⑤")
@@ -51,23 +58,37 @@ class WorkflowStep:
 
 
 class WorkflowBar(QWidget):
-    """A row of numbered, state-aware step buttons joined by arrows."""
+    """Numbered, state-aware step buttons: a row joined by arrows, or a vertical rail."""
 
-    def __init__(self, steps: Sequence[WorkflowStep], parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        steps: Sequence[WorkflowStep],
+        parent: Optional[QWidget] = None,
+        *,
+        orientation: Qt.Orientation = Qt.Orientation.Horizontal,
+    ):
         super().__init__(parent)
-        self.setObjectName("workflowBar")
+        self._orientation = orientation
+        vertical = orientation == Qt.Orientation.Vertical
         # QWidget subclasses ignore stylesheet backgrounds without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        if vertical:
+            self.setObjectName("stepRail")
+            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(6, 10, 6, 10)
+            layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        else:
+            self.setObjectName("workflowBar")
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(8)
 
         self._steps: List[WorkflowStep] = list(steps)
         self._buttons: List[QPushButton] = []
         for index, step in enumerate(self._steps):
-            if index:
+            if index and not vertical:
                 chevron = QLabel("→")
                 chevron.setObjectName("workflowChevron")
                 chevron.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -109,9 +130,14 @@ class WorkflowBar(QWidget):
                 button.style().unpolish(button)
                 button.style().polish(button)
 
-    @staticmethod
-    def _text(index: int, label: str, *, done: bool) -> str:
+    @property
+    def orientation(self) -> Qt.Orientation:
+        return self._orientation
+
+    def _text(self, index: int, label: str, *, done: bool) -> str:
         number = _STEP_NUMBERS[index] if index < len(_STEP_NUMBERS) else f"{index + 1}."
+        if self._orientation == Qt.Orientation.Vertical:
+            return f"{DONE_MARK if done else number}\n{label}"
         return f"{DONE_MARK} {label}" if done else f"{number}  {label}"
 
 

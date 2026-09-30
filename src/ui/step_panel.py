@@ -46,32 +46,87 @@ class StepPanel(QWidget):
         layout.addWidget(self.stack)
         self._pages: dict[str, QWidget] = {}
         self._scroll_areas: dict[str, QScrollArea] = {}
+        self._headers: dict[str, QWidget] = {}
+        self._stack_widgets: dict[str, QWidget] = {}
         self._current: str | None = None
 
-    def add_page(self, name: str, page: QWidget, *, scrollable: bool = True) -> None:
-        """Add one named page, wrapped in a scroll area unless told otherwise."""
+    def add_page(
+        self,
+        name: str,
+        page: QWidget,
+        *,
+        scrollable: bool = True,
+        title: str | None = None,
+        subtitle: str = "",
+    ) -> None:
+        """Add one named page, wrapped in a scroll area unless told otherwise.
+
+        With a *title* the page sits under a header (step number, title, hint).
+        """
         if scrollable:
-            scroll = QScrollArea(self.stack)
-            scroll.setObjectName(f"stepPage{name}")
-            scroll.setWidgetResizable(True)
-            scroll.setHorizontalScrollBarPolicy(
+            body = QScrollArea(self.stack)
+            body.setObjectName(f"stepPage{name}")
+            body.setWidgetResizable(True)
+            body.setHorizontalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
-            scroll.setWidget(page)
-            self._scroll_areas[name] = scroll
-            self.stack.addWidget(scroll)
+            body.setWidget(page)
+            self._scroll_areas[name] = body
         else:
             page.setObjectName(f"stepPage{name}")
-            self.stack.addWidget(page)
+            body = page
+        if title is None:
+            shown = body
+        else:
+            shown = QWidget(self.stack)
+            shown.setObjectName(f"stepPageContainer{name}")
+            column = QVBoxLayout(shown)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            header = self._build_header(name, title, subtitle, shown)
+            self._headers[name] = header
+            column.addWidget(header)
+            column.addWidget(body, 1)
+        self.stack.addWidget(shown)
+        self._stack_widgets[name] = shown
         self._pages[name] = page
         if self._current is None:
             self._current = name
+
+    @staticmethod
+    def _build_header(name: str, title: str, subtitle: str, parent: QWidget) -> QWidget:
+        header = QWidget(parent)
+        header.setObjectName("stepHeader")
+        # QWidget subclasses ignore stylesheet borders/backgrounds without this.
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        eyebrow = (
+            f"Step {STEP_NAMES.index(name) + 1} of {len(STEP_NAMES)}"
+            if name in STEP_NAMES
+            else ""
+        )
+        for object_name, text in (
+            ("stepHeaderEyebrow", eyebrow),
+            ("stepHeaderTitle", title),
+            ("stepHeaderSubtitle", subtitle),
+        ):
+            label = QLabel(text, header)
+            label.setObjectName(object_name)
+            label.setWordWrap(object_name == "stepHeaderSubtitle")
+            layout.addWidget(label)
+        return header
+
+    def header(self, name: str) -> QWidget | None:
+        """Return *name*'s header widget, or None if the page has no title."""
+        return self._headers.get(name)
 
     def show_step(self, name: str) -> None:
         """Show the named page; raises ValueError for an unknown name."""
         if name not in self._pages:
             raise ValueError(f"Unknown step: {name}")
-        widget = self._scroll_areas.get(name, self._pages[name])
+        widget = self._stack_widgets[name]
         if self._current != name:
             self._current = name
             self.stack.setCurrentWidget(widget)
