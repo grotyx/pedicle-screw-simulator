@@ -70,6 +70,8 @@ class VolumeManager:
         """
         self._sitk_image = sitk_image
         self._vtk_image = sitk_to_vtk(sitk_image)
+        # Derived from the previous study's volume and mask; never valid here.
+        self._vertebral_only_image = None
 
         # Cache geometry from VTK image (SINGLE SOURCE OF TRUTH)
         self._dimensions = self._vtk_image.GetDimensions()

@@ -64,6 +64,11 @@ from .click_detector import DoubleClickDetector
 from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
+# Pause before a new segmentation label's surface is built, and how many
+# built surfaces are kept for instant return.
+SEGMENTATION_LABEL_DEBOUNCE_MS = 250
+SEGMENTATION_SURFACE_CACHE_SIZE = 8
+
 logger = logging.getLogger(__name__)
 
 VIEWPORT_BACKGROUND = (0.035, 0.035, 0.035)
@@ -551,6 +556,7 @@ class Viewer3D(QWidget):
         self._segmentation_actor: Optional[vtk.vtkActor] = None
         self._segmentation_mask_image: Optional[vtk.vtkImageData] = None
         self._segmentation_label_value: int = 0
+        self._segmentation_surface_cache: Dict[Tuple[int, int], Optional[vtk.vtkPolyData]] = {}
         self._segmentation_color: Tuple[float, float, float] = (0.92, 0.82, 0.70)
         self._segmentation_opacity: float = 0.35
         self._segmentation_default_opacity: float = 0.35
@@ -1904,6 +1910,8 @@ class Viewer3D(QWidget):
         # A new mask invalidates every cached label box, even one at the same
         # Python id as a previous (now-freed) mask.
         self._screw_mpr_label_box_cache = {}
+        self._segmentation_surface_cache = {}
+        self._cancel_segmentation_label_rebuild()
         # A live cut was built against the old mask's label geometry: drop it
         # and let the slice fall back to full opacity (its alpha was resliced
         # from the old mask) until the next show_screw_mpr rebuilds both
@@ -1919,11 +1927,40 @@ class Viewer3D(QWidget):
         self._render_segmentation_actor()
 
     def set_segmentation_label(self, label_value: int) -> None:
-        """Update active segmentation label filter (0 means all labels)."""
+        """Update active segmentation label filter (0 means all labels).
+
+        A label whose surface was already built swaps in at once; a new one
+        is rebuilt after a short pause, so stepping the spin box does not
+        re-run the whole-mask surface pipeline on the UI thread per click.
+        """
         self._segmentation_label_value = max(0, int(label_value))
         if self._segmentation_mask_image is None:
             return
-        self._render_segmentation_actor()
+        if self._segmentation_surface_key() in self.__dict__.get(
+            "_segmentation_surface_cache", {}
+        ):
+            self._flush_segmentation_label()
+            return
+        timer = self.__dict__.get("_segmentation_label_timer")
+        if timer is None:
+            timer = self._segmentation_label_timer = QTimer()
+            timer.setSingleShot(True)
+            timer.setInterval(SEGMENTATION_LABEL_DEBOUNCE_MS)
+            timer.timeout.connect(lambda: self._flush_segmentation_label())
+        timer.start()
+
+    def _cancel_segmentation_label_rebuild(self) -> None:
+        timer = self.__dict__.get("_segmentation_label_timer")
+        if timer is not None:
+            timer.stop()
+
+    def _flush_segmentation_label(self) -> None:
+        self._cancel_segmentation_label_rebuild()
+        if self._segmentation_mask_image is not None:
+            self._render_segmentation_actor(keep_visibility=True)
+
+    def _segmentation_surface_key(self) -> Tuple[int, int]:
+        return id(self._segmentation_mask_image), self._segmentation_label_value
 
     def set_segmentation_visible(self, visible: bool) -> None:
         """Toggle visibility of segmentation overlay actor."""
@@ -1932,11 +1969,37 @@ class Viewer3D(QWidget):
         self._segmentation_actor.SetVisibility(visible)
         self._request_render()
 
-    def _render_segmentation_actor(self) -> None:
-        """Build or rebuild segmentation actor with current label filter."""
+    def _render_segmentation_actor(self, keep_visibility: bool = False) -> None:
+        """Build or rebuild segmentation actor with current label filter.
+
+        ``keep_visibility`` carries the old actor's show/hide state over to
+        the new one (a label change, unlike a new mask, must not un-hide it).
+        """
+        visible = (
+            self._segmentation_actor is None
+            or self._segmentation_actor.GetVisibility()
+            or not keep_visibility
+        )
         self.clear_segmentation_actor_only()
         if self._segmentation_mask_image is None:
             return
+
+        # Surfaces already built for this (mask, label); None = empty label.
+        cache = self.__dict__.setdefault("_segmentation_surface_cache", {})
+        key = self._segmentation_surface_key()
+        if key in cache:
+            surface = cache[key]
+        else:
+            surface = self._build_segmentation_surface()
+            if len(cache) >= SEGMENTATION_SURFACE_CACHE_SIZE:
+                cache.pop(next(iter(cache)))
+            cache[key] = surface
+        if surface is None:
+            return
+        self._add_segmentation_actor(surface, visible)
+
+    def _build_segmentation_surface(self) -> Optional[vtk.vtkPolyData]:
+        """Whole-mask surface for the current label (None when empty)."""
 
         # vtkImageBinaryThreshold (VTK >= 9.7) replaces the deprecated
         # vtkImageThreshold.ThresholdBetween(); see the same fallback in
@@ -1997,7 +2060,7 @@ class Viewer3D(QWidget):
         n_points = surface_extractor.GetOutput().GetNumberOfPoints()
         logger.info("3D seg: flying edges produced %d points", n_points)
         if n_points == 0:
-            return
+            return None
 
         decimator = vtk.vtkDecimatePro()
         decimator.SetInputConnection(surface_extractor.GetOutputPort())
@@ -2019,12 +2082,19 @@ class Viewer3D(QWidget):
         normals.ComputeCellNormalsOff()
         normals.SplittingOff()
 
+        normals.Update()
+        surface = vtk.vtkPolyData()
+        surface.ShallowCopy(normals.GetOutput())
+        return surface
+
+    def _add_segmentation_actor(self, surface: vtk.vtkPolyData, visible: bool) -> None:
         mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(normals.GetOutputPort())
+        mapper.SetInputData(surface)
         mapper.ScalarVisibilityOff()
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
+        actor.SetVisibility(visible)
         actor.GetProperty().SetColor(*self._segmentation_color)
         actor.GetProperty().SetOpacity(
             self.__dict__.get("_vertebral_surface_opacity", 0.50)
@@ -2055,6 +2125,8 @@ class Viewer3D(QWidget):
         self._segmentation_mask_image = None
         self._segmentation_label_value = 0
         self._screw_mpr_label_box_cache = {}
+        self._segmentation_surface_cache = {}
+        self._cancel_segmentation_label_rebuild()
         # No mask left to cut or shade the slice by: drop the local cut and
         # let the slice fall back to full opacity, even if Screw MPR is
         # still open.

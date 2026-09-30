@@ -385,3 +385,21 @@ def test_entering_screw_mpr_makes_axial_the_main_view(ui_main_window):
 
     window._screw_mpr_ctrl.exit()
     assert window.hero_view == "axial"
+
+
+def test_startup_lays_out_the_views_once(monkeypatch, qtbot, isolated_qsettings):
+    monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
+    calls = []
+    original = main_window_module.MainWindow.set_view_layout
+
+    def counting(self, mode):
+        calls.append(mode)
+        original(self, mode)
+
+    monkeypatch.setattr(main_window_module.MainWindow, "set_view_layout", counting)
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+
+    assert calls == ["planning"]
+    assert _position(window, window.tool_dock) == (1, 0, 1, 3)

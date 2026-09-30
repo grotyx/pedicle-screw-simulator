@@ -634,6 +634,8 @@ class MPRViewer(QWidget):
             self._reslice.Update()
         if self._mask_reslice is not None:
             self._mask_reslice.SetResliceAxes(axes)
+            # Custom (Screw MPR) axes change the main output rectangle.
+            self._sync_mask_reslice_grid()
             self._mask_reslice.Update()
 
         # Propagate reslice changes through downstream filters.
@@ -648,6 +650,22 @@ class MPRViewer(QWidget):
         if self._screw_data:
             self._update_screw_projections()
         self._update_measurement_visibility()
+
+    def _sync_mask_reslice_grid(self) -> None:
+        """Give the mask reslice the main reslice's spacing/extent/origin.
+
+        Both actors then cover the same pixel grid, so overlays align
+        pixel-for-pixel (the mask is 1.5 mm isotropic, unlike the CT).
+        """
+        if self._reslice is None or self._mask_reslice is None:
+            return
+        self._reslice.Update()
+        main_output = self._reslice.GetOutput()
+        if main_output is None:
+            return
+        self._mask_reslice.SetOutputSpacing(main_output.GetSpacing())
+        self._mask_reslice.SetOutputExtent(main_output.GetExtent())
+        self._mask_reslice.SetOutputOrigin(main_output.GetOrigin())
 
     def _active_reslice_axes(self) -> Optional[vtk.vtkMatrix4x4]:
         """Return the matrix mapping slice-local points into DICOM world space."""
@@ -985,20 +1003,7 @@ class MPRViewer(QWidget):
         self._mask_reslice.SetInterpolationModeToNearestNeighbor()
         self._mask_reslice.SetBackgroundLevel(0)
 
-        # Copy output spacing/extent from main reslice so overlays align pixel-for-pixel
-        if self._reslice is not None:
-            self._reslice.Update()
-            main_output = self._reslice.GetOutput()
-            if main_output is not None:
-                sp = main_output.GetSpacing()
-                ext = main_output.GetExtent()
-                self._mask_reslice.SetOutputSpacing(sp[0], sp[1], sp[2])
-                self._mask_reslice.SetOutputExtent(
-                    ext[0], ext[1], ext[2], ext[3], ext[4], ext[5]
-                )
-                origin = main_output.GetOrigin()
-                self._mask_reslice.SetOutputOrigin(origin[0], origin[1], origin[2])
-
+        self._sync_mask_reslice_grid()
         self._update_reslice_position()
 
         # vtkImageBinaryThreshold (VTK >= 9.7) replaces the deprecated

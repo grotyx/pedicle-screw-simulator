@@ -851,3 +851,48 @@ def test_leaving_custom_axes_cancels_an_in_flight_rotate_drag():
     assert viewer._rotate_drag_active is False
     assert viewer._rotate_drag_last_display is None
     assert viewer._custom_readout is None
+
+
+def test_mask_overlay_grid_follows_the_main_reslice_on_oblique_axes():
+    image = vtk.vtkImageData()
+    image.SetDimensions(40, 30, 20)
+    image.AllocateScalars(vtk.VTK_SHORT, 1)
+    main = vtk.vtkImageReslice()
+    main.SetInputData(image)
+    main.SetOutputDimensionality(2)
+    mask = vtk.vtkImageReslice()
+    mask.SetInputData(image)
+    mask.SetOutputDimensionality(2)
+
+    viewer = MPRViewer.__new__(MPRViewer)
+    viewer.plane = "axial"
+    viewer._reslice = main
+    viewer._mask_reslice = mask
+    viewer._color_map = None
+    viewer._mask_color_map = None
+    viewer._screw_data = {}
+    viewer._update_measurement_visibility = lambda: None
+    viewer.volume_manager = SimpleNamespace(
+        center=(20.0, 15.0, 10.0), get_slice_position=lambda _plane: 10.0
+    )
+
+    # What _build_segmentation_overlay pins once, from the standard plane.
+    main.Update()
+    mask.SetOutputExtent(main.GetOutput().GetExtent())
+    mask.SetOutputOrigin(main.GetOutput().GetOrigin())
+    mask.SetOutputSpacing(main.GetOutput().GetSpacing())
+
+    oblique = vtk.vtkTransform()
+    oblique.RotateX(40.0)
+    oblique.RotateZ(25.0)
+    axes = vtk.vtkMatrix4x4()
+    axes.DeepCopy(oblique.GetMatrix())
+    viewer._custom_reslice_axes = axes
+    viewer._update_reslice_position()
+    assert main.GetOutput().GetExtent() != (0, 39, 0, 29, 0, 0)  # really oblique
+    assert mask.GetOutput().GetExtent() == main.GetOutput().GetExtent()
+    assert mask.GetOutput().GetOrigin() == main.GetOutput().GetOrigin()
+
+    viewer._custom_reslice_axes = None
+    viewer._update_reslice_position()
+    assert mask.GetOutput().GetExtent() == main.GetOutput().GetExtent()

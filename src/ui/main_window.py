@@ -338,7 +338,8 @@ class MainWindow(QMainWindow):
         self.coronal_viewer = MPRViewer("coronal", self.volume_manager)
         self.viewer_3d = Viewer3D(self.volume_manager)
 
-        self.set_view_layout("planning")
+        # The views are laid out once, at the end of _setup_toolbar, when the
+        # tool dock they reserve a row for exists.
 
         splitter.addWidget(left_panel)
 
@@ -510,11 +511,9 @@ class MainWindow(QMainWindow):
         Not over the image: floating there it covered the A/P and S/I
         orientation letters and, on narrow windows, the 3D overlays.
         """
-        dock = self.__dict__.get("tool_dock")
-        if dock is not None:
-            self._view_layout.addWidget(
-                dock, row, 0, 1, column_span, Qt.AlignmentFlag.AlignHCenter
-            )
+        self._view_layout.addWidget(
+            self.tool_dock, row, 0, 1, column_span, Qt.AlignmentFlag.AlignHCenter
+        )
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -2361,7 +2360,7 @@ class MainWindow(QMainWindow):
                 self._fit_3d_action,
             ]
         )
-        # The views were laid out before the dock existed; lay them out again.
+        # First and only startup layout: the dock now exists to be placed.
         self.set_view_layout(self._view_layout_mode)
 
         self._refresh_themed_icons()
