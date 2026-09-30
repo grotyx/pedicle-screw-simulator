@@ -426,3 +426,22 @@ def test_a_screw_view_measurement_cannot_be_edited(ui_main_window, monkeypatch):
     tool.begin_edit_selected_measurement()
     assert tool._editing_measurement_row is None
     assert "delete" in window.statusbar.currentMessage().lower()
+
+
+def test_a_screw_view_measurement_cannot_be_dragged(ui_main_window):
+    """Dragging a handle would re-pick it on whichever oblique plane is shown."""
+    from src.models.measurement import Measurement
+
+    window = ui_main_window
+    _load_volume(window)
+    window._plan_ctrl._apply_loaded_plan(
+        screws=[],
+        measurements=[Measurement(points=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)], distance=5.0)],
+        planes=["axial"],
+        screw_aligned=[True],
+    )
+    tool = window._tool_ctrl
+    entry_id = tool._measurement_entries[0]["id"]
+    tool.update_measurement_point(entry_id, 1, (9.0, 0.0, 0.0))
+    assert tool.measurement_tool.get_measurements()[0].points[1] == (5.0, 0.0, 0.0)
+    assert "delete" in window.statusbar.currentMessage().lower()

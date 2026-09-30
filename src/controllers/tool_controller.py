@@ -527,6 +527,13 @@ class ToolController:
         measurements = self.measurement_tool.get_measurements()
         if not 0 <= row < len(measurements):
             return
+        if self._measurement_entries[row].get("screw_aligned"):
+            # Same reason Edit refuses it: its oblique plane is not recorded.
+            self._window.statusbar.showMessage(
+                "Screw-view measurements cannot be moved; delete it and "
+                "re-measure in Screw MPR"
+            )
+            return
         original = measurements[row]
         if not 0 <= int(point_index) < len(original.points):
             return
