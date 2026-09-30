@@ -178,6 +178,9 @@ class _DummyScrewTool:
     def get_screws(self):
         return list(self._screws)
 
+    def remove_screw(self, index):
+        del self._screws[index]
+
 
 class _DummyToolCtrl:
     def __init__(self):
@@ -189,6 +192,11 @@ class _DummyToolCtrl:
         self.screw_tool.add_screw(screw)
         self.added.append((screw, bool(select)))
         return len(self.screw_tool.get_screws()) - 1
+
+    def remove_screws(self, rows):
+        self.removed_rows = sorted(set(rows), reverse=True)
+        for row in self.removed_rows:
+            self.screw_tool.remove_screw(row)
 
 
 class _DummySegCtrl:
@@ -1698,3 +1706,238 @@ def test_a_finished_planning_thread_is_released(qtbot, monkeypatch, tmp_path):
     finally:
         gc.enable()
     assert window.auto_screw_status._text.startswith("Planning complete")
+
+
+# ---------------------------------------------------------------------------
+# Re-planning replaces the earlier automatic screws, after a confirmation
+# ---------------------------------------------------------------------------
+
+
+def _auto_screw(level, side="left", **kw):
+    return planned_screw_to_screw(_planned(level, side, **kw))
+
+
+def _manual_screw(level, side="left"):
+    screw = _auto_screw(level, side)
+    screw.source = "manual"
+    return screw
+
+
+class _StubSignal:
+    def connect(self, _callback):
+        return None
+
+
+class _StubThread:
+    """Records the run ``run_planning`` would have started."""
+
+    instances = []
+
+    def __init__(self, *_args, **_kwargs):
+        self.progress = _StubSignal()
+        self.finished = _StubSignal()
+        self.error = _StubSignal()
+        self.started = False
+        _StubThread.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def isRunning(self):
+        return self.started
+
+    def request_cancel(self):
+        return None
+
+
+@pytest.fixture
+def replan(controller_with_window, monkeypatch, tmp_path):
+    """A controller ready for ``run_planning`` with a recording thread stub."""
+    import SimpleITK as sitk
+
+    import src.controllers.auto_placement_controller as module
+
+    ctrl, window = controller_with_window
+    ctrl._vm.set_volume(sitk.Image([4, 4, 4], sitk.sitkInt16))
+    mask_path = tmp_path / "mask.nii.gz"
+    sitk.WriteImage(sitk.Image([4, 4, 4], sitk.sitkUInt8), str(mask_path))
+    window._seg_ctrl._last_segmentation_mask_path = str(mask_path)
+    _StubThread.instances = []
+    monkeypatch.setattr(module, "_PlanningThread", _StubThread)
+    return ctrl, window
+
+
+def _answer(monkeypatch, choice):
+    """Drive the confirmation box: ``choice`` is "Replace" or "Cancel".
+
+    Returns what the box showed: (title, text, button texts, default button).
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    shown = []
+
+    def exec_(box):
+        shown.append(
+            (
+                box.windowTitle(),
+                box.text(),
+                [b.text().replace("&", "") for b in box.buttons()],
+                box.defaultButton().text().replace("&", ""),
+            )
+        )
+        return 0
+
+    def clicked(box):
+        return next(
+            b for b in box.buttons() if b.text().replace("&", "") == choice
+        )
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    monkeypatch.setattr(QMessageBox, "clickedButton", clicked)
+    return shown
+
+
+def _screw_keys(window):
+    return [
+        (s.vertebra_level, s.side, s.source)
+        for s in window._tool_ctrl.screw_tool.get_screws()
+    ]
+
+
+def _seed(window):
+    """Auto L4/L5 (planned levels), auto L3 (not planned), manual L4."""
+    tool = window._tool_ctrl.screw_tool
+    for screw in (
+        _auto_screw("L4", "left"),
+        _manual_screw("L4", "right"),
+        _auto_screw("L3", "left"),
+        _auto_screw("L5", "right"),
+    ):
+        tool.add_screw(screw)
+
+
+def test_replan_without_earlier_auto_screws_asks_nothing(replan, monkeypatch):
+    ctrl, window = replan
+    window._tool_ctrl.screw_tool.add_screw(_manual_screw("L4"))
+    window._tool_ctrl.screw_tool.add_screw(_auto_screw("L3"))
+    shown = _answer(monkeypatch, "Cancel")
+
+    ctrl.run_planning()
+
+    assert shown == []
+    assert _StubThread.instances[0].started is True
+    assert _StubThread.instances[0].replace_levels == ()
+
+
+def test_replan_cancel_starts_nothing_and_keeps_screws(replan, monkeypatch):
+    ctrl, window = replan
+    _seed(window)
+    before = _screw_keys(window)
+    shown = _answer(monkeypatch, "Cancel")
+
+    ctrl.run_planning()
+
+    assert len(shown) == 1
+    assert _StubThread.instances == []
+    assert ctrl._thread is None
+    assert ctrl._progress_dialog is None
+    assert window._seg_ctrl.ensure_mpr_calls == 0
+    assert _screw_keys(window) == before
+
+
+def test_replan_dialog_names_levels_and_count_only(replan, monkeypatch):
+    ctrl, window = replan
+    _seed(window)
+    shown = _answer(monkeypatch, "Replace")
+
+    ctrl.run_planning()
+
+    title, text, buttons, default = shown[0]
+    assert title == "Replace planned screws?"
+    assert sorted(buttons) == ["Cancel", "Replace"]
+    assert default == "Replace"
+    assert "2 automatically planned screws on L4, L5" in text
+    assert "L3" not in text
+    assert _StubThread.instances[0].started is True
+    assert _StubThread.instances[0].replace_levels == ("L4", "L5")
+    # Nothing is touched until the new plan has actually finished.
+    assert len(window._tool_ctrl.screw_tool.get_screws()) == 4
+
+
+def _confirmed_run(ctrl, monkeypatch):
+    _answer(monkeypatch, "Replace")
+    ctrl.run_planning()
+    thread = _StubThread.instances[0]
+    thread.cancelled = False
+    return thread
+
+
+def test_replan_finish_replaces_only_old_auto_screws_on_planned_levels(
+    replan, monkeypatch
+):
+    ctrl, window = replan
+    _seed(window)
+    thread = _confirmed_run(ctrl, monkeypatch)
+
+    ctrl._on_finished(
+        thread, [_planned("L4", "left"), _planned("L5", "left")]
+    )
+
+    assert _screw_keys(window) == [
+        ("L4", "right", "manual"),
+        ("L3", "left", "auto"),
+        ("L4", "left", "auto"),
+        ("L5", "left", "auto"),
+    ]
+    # Removed in one batch; the new plan's first screw is the selection.
+    assert window._tool_ctrl.removed_rows == [3, 0]
+    assert window.screw_list_widget.currentRow() == 2
+
+
+def test_replan_finish_finds_old_screws_after_the_list_changed(
+    replan, monkeypatch
+):
+    """Rows are looked up at finish time, not recorded as stale indices."""
+    ctrl, window = replan
+    _seed(window)
+    thread = _confirmed_run(ctrl, monkeypatch)
+    tool = window._tool_ctrl.screw_tool
+    tool._screws.pop(0)  # the user deleted the first planned screw meanwhile
+    tool._screws.insert(0, _manual_screw("L2"))  # and placed one by hand
+
+    ctrl._on_finished(thread, [_planned("L4", "left")])
+
+    assert _screw_keys(window) == [
+        ("L2", "left", "manual"),
+        ("L4", "right", "manual"),
+        ("L3", "left", "auto"),
+        ("L4", "left", "auto"),
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["cancelled", "empty", "error", "stale"])
+def test_replan_that_does_not_complete_keeps_old_screws(
+    replan, monkeypatch, outcome
+):
+    ctrl, window = replan
+    _seed(window)
+    before = _screw_keys(window)
+    thread = _confirmed_run(ctrl, monkeypatch)
+    thread.cancelled = outcome == "cancelled"
+
+    if outcome == "error":
+        monkeypatch.setattr(
+            "src.controllers.auto_placement_controller.QMessageBox.critical",
+            lambda *a, **k: None,
+        )
+        ctrl._on_error(thread, "boom")
+    elif outcome == "stale":
+        ctrl.reset_state()  # a new study supersedes the run
+        ctrl._on_finished(thread, [_planned("L4", "left")])
+    elif outcome == "empty":
+        ctrl._on_finished(thread, [])
+    else:
+        ctrl._on_finished(thread, [_planned("L4", "left")])
+
+    assert _screw_keys(window) == before
+    assert not hasattr(window._tool_ctrl, "removed_rows")

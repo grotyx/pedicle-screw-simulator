@@ -669,12 +669,34 @@ class ToolController:
             self._window.statusbar.showMessage("Select a screw to remove")
             return
 
+        self.remove_screws([row])
+        screws = self.screw_tool.get_screws()
+        if screws:
+            self._window.screw_list_widget.setCurrentRow(
+                min(row, len(screws) - 1)
+            )
+
         edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
         if edit_controller is not None:
-            edit_controller.on_screw_removed(row)
-        self._window._screw_mpr_ctrl.on_screw_removed(row)
+            edit_controller.refresh_controls()
 
-        self.screw_tool.remove_screw(row)
+        self._window.statusbar.showMessage("Selected screw removed")
+
+    def remove_screws(self, rows) -> None:
+        """Remove the screws at ``rows`` and rebuild every index-linked view once.
+
+        Rows are removed highest first, so each edit/MPR-mode hand-off sees the
+        indices it was promised.  Selection is left to the caller: the list is
+        rebuilt, so no row is current afterwards.
+        """
+        edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+        for row in sorted({int(r) for r in rows}, reverse=True):
+            if not 0 <= row < len(self.screw_tool.get_screws()):
+                continue
+            if edit_controller is not None:
+                edit_controller.on_screw_removed(row)
+            self._window._screw_mpr_ctrl.on_screw_removed(row)
+            self.screw_tool.remove_screw(row)
 
         # Rebuild every index-linked view so later viewport picks remain correct.
         screws = self.screw_tool.get_screws()
@@ -692,15 +714,6 @@ class ToolController:
             )
             self._screw_actors.append(actor)
             self._add_screw_to_list(screw)
-        if screws:
-            self._window.screw_list_widget.setCurrentRow(
-                min(row, len(screws) - 1)
-            )
-
-        if edit_controller is not None:
-            edit_controller.refresh_controls()
-
-        self._window.statusbar.showMessage("Selected screw removed")
 
     def _format_measurement_result(self, measurement) -> str:
         """Format measurement result text for status bar."""

@@ -19,7 +19,11 @@ from src.core.auto_screw_planner import (
     PlannedScrew,
     construct_summary,
 )
-from src.core.pedicle_analyzer import PedicleAnalyzer, endplate_context_labels
+from src.core.pedicle_analyzer import (
+    VERTEBRA_LABELS,
+    PedicleAnalyzer,
+    endplate_context_labels,
+)
 from src.core.planner_config import PlannerConfig
 from src.models.screw import Screw
 
@@ -202,6 +206,10 @@ class AutoPlacementController:
             )
             return
 
+        replace_levels = self._confirm_replace(selected_labels)
+        if replace_levels is None:
+            return
+
         if not seg_ctrl.ensure_mpr_vertebrae_isolated():
             self._window.statusbar.showMessage(
                 "Unable to display segmented CT for screw planning"
@@ -273,6 +281,7 @@ class AutoPlacementController:
             pedicle_mask=getattr(seg_ctrl, "_last_pedicle_mask", None),
         )
         thread.generation = self._run_generation
+        thread.replace_levels = replace_levels
         self._thread = thread
         thread.progress.connect(partial(self._on_progress, thread))
         thread.finished.connect(partial(self._on_finished, thread))
@@ -447,6 +456,21 @@ class AutoPlacementController:
             self._window.statusbar.showMessage(bar + note)
             return
 
+        replace_levels = getattr(thread, "replace_levels", ())
+        if replace_levels:
+            if cancelled:
+                # A partial plan must not sit next to the screws it would have
+                # replaced: keep the old ones and drop the partial result.
+                status = "Planning cancelled — existing planned screws kept"
+                self._window.auto_screw_status.setText(status + note)
+                self._window.statusbar.showMessage(status + note)
+                return
+            # Looked up now, not when the user confirmed: the list may have been
+            # edited, reordered or cleared while the plan was running.
+            self._window._tool_ctrl.remove_screws(
+                self._auto_rows_on(replace_levels)
+            )
+
         first_new_index = len(
             self._window._tool_ctrl.screw_tool.get_screws()
         )
@@ -503,6 +527,46 @@ class AutoPlacementController:
     # ------------------------------------------------------------------
     # Private: helpers
     # ------------------------------------------------------------------
+
+    def _auto_rows_on(self, levels) -> List[int]:
+        """Rows of the automatically planned screws on the named ``levels``."""
+        screws = self._window._tool_ctrl.screw_tool.get_screws()
+        return [
+            row
+            for row, screw in enumerate(screws)
+            if screw.source == "auto" and screw.vertebra_level in levels
+        ]
+
+    def _confirm_replace(self, labels: List[int]) -> Optional[Tuple[str, ...]]:
+        """Ask before a new plan replaces earlier automatic screws.
+
+        Returns the level names whose automatic screws will be replaced once the
+        plan succeeds (empty when there is nothing to replace, and no question
+        is asked), or ``None`` when the user cancelled.
+        """
+        # Cranial first, as the level checkboxes read.
+        levels = tuple(
+            VERTEBRA_LABELS[label]
+            for label in sorted(labels, reverse=True)
+            if label in VERTEBRA_LABELS
+        )
+        count = len(self._auto_rows_on(levels))
+        if not count:
+            return ()
+        box = QMessageBox(self._window)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Replace planned screws?")
+        box.setText(
+            f"Replace the {count} automatically planned "
+            f"screw{'s' if count != 1 else ''} on {', '.join(levels)} with a new "
+            "plan? Screws you placed by hand, and planned screws on other "
+            "levels, are kept."
+        )
+        replace = box.addButton("Replace", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(replace)
+        box.exec()
+        return levels if box.clickedButton() is replace else None
 
     def _get_selected_labels(self) -> List[int]:
         """Return labels shared by 3D vertebra visibility and planning."""
