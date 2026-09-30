@@ -844,6 +844,7 @@ def test_leaving_custom_axes_cancels_an_in_flight_rotate_drag():
     viewer._update_reslice_position = lambda: None
     viewer._update_slice_info = lambda: None
     viewer.fit_to_view = lambda render=True: None
+    viewer.sync_crosshairs = lambda render=True: None
 
     viewer.clear_custom_reslice_axes()
 

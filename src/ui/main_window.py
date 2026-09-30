@@ -482,19 +482,26 @@ class MainWindow(QMainWindow):
         """Name of the pane shown large in the planning layout."""
         return self._hero_view
 
-    def set_hero_view(self, view_name: str) -> None:
+    def set_hero_view(self, view_name: str, *, show_planning: bool = False) -> None:
         """Make one pane the planning layout's main view.
 
         While a pane is maximised (or in MPR Focus) only the choice is
         recorded; the planning layout picks it up when it is shown again.
+        ``show_planning`` switches to the planning layout in the same single
+        layout pass, so a caller does not rebuild the grid twice.
         """
         name = str(view_name)
         if name not in self.MAXIMIZABLE_VIEWS:
             raise ValueError(f"Unknown view: {name}")
-        if name == self._hero_view:
-            return
+        changed = name != self._hero_view
         self._hero_view = name
-        if self._maximized_view is None and self._view_layout_mode == "planning":
+        if show_planning:
+            self.set_view_layout("planning")
+        elif (
+            changed
+            and self._maximized_view is None
+            and self._view_layout_mode == "planning"
+        ):
             self.set_view_layout("planning")
 
     def _place_dock(self, row: int, column_span: int) -> None:

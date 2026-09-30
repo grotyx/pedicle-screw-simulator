@@ -101,6 +101,10 @@ class MeasurementTool:
                 return None
             angle = self._calculate_angle_from_points(self._pending_points[:3])
             if angle is None:
+                # Coincident points have no angle: drop the duplicate so the
+                # next click continues instead of piling onto a stuck list.
+                first, vertex = self._pending_points[:2]
+                del self._pending_points[1 if first == vertex else 2]
                 return None
             label = self.format_angle(angle)
 

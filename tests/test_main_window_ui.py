@@ -1005,12 +1005,9 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
     stretch = QHeaderView.ResizeMode.Stretch
     assert [
         header.sectionResizeMode(c)
-        for c in (0, 3, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
-    ] == [fit, fit, fit, fit, fit, fit]
-    assert [header.sectionResizeMode(c) for c in (1, 2)] == [
-        stretch,
-        stretch,
-    ]
+        for c in (0, 2, 3, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
+    ] == [fit, fit, fit, fit, fit, fit, fit]
+    assert header.sectionResizeMode(1) == stretch
     assert header.minimumSectionSize() == MINIMUM_SECTION_WIDTH_PX
 
 

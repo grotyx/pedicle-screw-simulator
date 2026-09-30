@@ -153,20 +153,21 @@ def theme_rgb_float(theme_name: str, key: str) -> tuple[float, float, float]:
     Returns:
         (red, green, blue) each in 0.0-1.0; white if the key is missing.
     """
-    value = get_theme(theme_name).get(key, "#FFFFFF").lstrip("#")
+    r, g, b = _hex_to_rgb(get_theme(theme_name).get(key, "#FFFFFF"))
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Parse ``#RRGGBB`` to 0-255 ints; anything malformed is white."""
+    value = hex_color.lstrip("#")
     if len(value) != 6:
-        return (1.0, 1.0, 1.0)
-    return (
-        int(value[0:2], 16) / 255.0,
-        int(value[2:4], 16) / 255.0,
-        int(value[4:6], 16) / 255.0,
-    )
+        return (255, 255, 255)
+    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
 def _rgba(hex_color: str, alpha: float) -> str:
     """``#RRGGBB`` plus a 0..1 alpha as a QSS ``rgba()`` (alpha 0-255)."""
-    value = hex_color.lstrip("#")
-    r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = _hex_to_rgb(hex_color)
     return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
 
 
