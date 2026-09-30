@@ -20,6 +20,9 @@ current version; every other place the version appears is derived from it.
   diameter x length. Screws without a level are listed under Manual, screws
   without a known side in the centre column. Clicking a chip selects that
   screw.
+- Loading a study warns (without blocking) when slice spacing is not
+  uniform, which usually means missing slices, or when the series has a
+  gantry tilt; either can distort lengths along the scan axis.
 
 ### Changed
 
@@ -53,6 +56,37 @@ current version; every other place the version appears is derived from it.
 - Typing a diameter with a decimal point ("7.5", "5,5") entered the wrong
   value (5.0). Typed values are now taken as written; the digit-only
   shorthand ("65" → 6.5 mm) still works.
+- DICOM load errors no longer write the folder path (often named after the
+  patient) to the log file or the error dialog.
+- An empty SliceThickness or KVP tag no longer discards all study metadata
+  ("Loaded 0 slices").
+- Unsigned oblique series no longer turn the -1000 background into bone
+  values after reorientation.
+- The views no longer stay frozen and black when a step of a study load
+  fails.
+- Finishing or cancelling a segmentation run could crash the app ("QThread:
+  Destroyed while thread is still running"). Worker threads are now kept
+  until they stop, and planning threads are freed promptly.
+- Cancel now stops TotalSegmentator's and the subregion model's worker
+  processes too, not just the parent process.
+- Earlier segmentation runs' temporary CT copies are deleted after a
+  successful run, and startup survives another instance cleaning up at the
+  same time.
+- A failure reading a GPU segmentation result is reported instead of
+  silently rerunning the whole segmentation on the CPU.
+- Plan loading rejects NaN/Infinity values, malformed measurement entries
+  and plans from a newer version with a clear error. Saving a plan is
+  atomic, so a crash cannot truncate the existing file. CSV export
+  neutralises text cells that start with =, +, - or @.
+- Trajectory and pedicle HU are sampled only inside the screw's own vertebra
+  label, so soft tissue, fat and the spinal canal no longer lower the mean
+  or set the minimum; a screw with no samples inside the vertebra shows N/A
+  instead of a false loosening-risk warning. The vertebral-body HU region no
+  longer copies the whole CT and mask for every screw.
+- CI and the run scripts no longer pass a second -q to pytest (the summary
+  line was hidden), and CI now runs git diff --check. The CITATION release
+  date matches 0.2.3, and CONTRIBUTING names the project and its checks
+  correctly.
 
 ## [0.2.3] - 2026-09-13
 
