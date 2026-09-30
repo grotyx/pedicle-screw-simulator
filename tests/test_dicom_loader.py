@@ -1,7 +1,7 @@
 import numpy as np
 import SimpleITK as sitk
 
-from src.core.dicom_loader import normalize_orientation
+from src.core.dicom_loader import DicomLoader, check_slice_geometry, normalize_orientation
 
 
 def _ramp_image(direction):
@@ -123,3 +123,80 @@ def test_transform_direction_left_multiplies_only():
     out = np.array(CoordinateSystem.transform_direction(d)).reshape(3, 3)
     expected = np.diag([-1, -1, 1]) @ np.array(d).reshape(3, 3)
     assert np.allclose(out, expected)
+
+
+def test_unsigned_oblique_series_background_is_not_bone():
+    arr = np.full((4, 5, 6), 500, dtype=np.uint16)
+    img = sitk.GetImageFromArray(arr)
+    c, s = np.cos(np.radians(30)), np.sin(np.radians(30))
+    img.SetDirection((c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0))
+
+    out, info = normalize_orientation(img)
+
+    assert info["resampled"]
+    assert out.GetPixelID() in (sitk.sitkInt16, sitk.sitkFloat32, sitk.sitkInt32)
+    assert sitk.GetArrayViewFromImage(out).min() == -1000
+
+
+def test_empty_optional_numeric_tags_do_not_drop_metadata(monkeypatch):
+    import pydicom
+
+    ds = pydicom.Dataset()
+    ds.Modality = "CT"
+    ds.SliceThickness = None  # empty Type-2 tag
+    ds.KVP = ""
+    monkeypatch.setattr("src.core.dicom_loader.pydicom.dcmread", lambda *a, **k: ds)
+    loader = DicomLoader()
+    loader._file_names = ["a.dcm", "b.dcm"]
+
+    loader._extract_metadata(None)
+    meta = loader.get_metadata()
+
+    assert "error" not in meta
+    assert meta["modality"] == "CT"
+    assert meta["num_slices"] == 2
+    assert meta["slice_thickness"] == 0.0
+    assert meta["kvp"] == 0.0
+
+
+def test_no_series_error_does_not_contain_the_folder_path(tmp_path):
+    folder = tmp_path / "Patient Kim Minsu"
+    folder.mkdir()
+    try:
+        DicomLoader().load_series(str(folder))
+    except ValueError as exc:
+        assert "Minsu" not in str(exc)
+        assert str(tmp_path) not in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+_AXIAL = (1, 0, 0, 0, 1, 0)
+
+
+def _stack(zs, shift=0.0):
+    return [(shift * i, 0.0, float(z)) for i, z in enumerate(zs)]
+
+
+def test_uniform_axial_stack_has_no_geometry_warnings():
+    assert check_slice_geometry(_stack([0, 1, 2, 3, 4]), _AXIAL) == []
+
+
+def test_missing_slice_reports_non_uniform_spacing():
+    warnings = check_slice_geometry(_stack([0, 1, 2, 4, 5]), _AXIAL)
+    assert len(warnings) == 1
+    assert "not uniform" in warnings[0]
+    assert "min 1.00 mm" in warnings[0] and "max 2.00 mm" in warnings[0]
+
+
+def test_gantry_tilt_is_reported():
+    # 20 degree shear: in-plane shift of tan(20) mm per 1 mm slice
+    warnings = check_slice_geometry(_stack(range(6), shift=np.tan(np.radians(20))), _AXIAL)
+    assert len(warnings) == 1
+    assert "Gantry tilt of 20.0" in warnings[0]
+
+
+def test_geometry_check_ignores_degenerate_input():
+    assert check_slice_geometry([], _AXIAL) == []
+    assert check_slice_geometry([(0, 0, 0)], _AXIAL) == []
+    assert check_slice_geometry(_stack([0, 1, 2]), (0, 0, 0, 0, 0, 0)) == []

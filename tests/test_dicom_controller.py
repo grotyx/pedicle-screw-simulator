@@ -195,3 +195,89 @@ def test_load_error_from_a_raised_exception_is_logged_not_printed(
     messages = [record.getMessage() for record in caplog.records]
     assert any("DICOM load failed" in message and "boom" in message for message in messages)
     assert any("Traceback" in message for message in messages)
+
+
+def test_load_error_log_and_dialog_text_do_not_contain_the_folder_path(
+    monkeypatch, caplog, qapp
+):
+    folder = "Z:/PACS export/Kim Minsu 1234/CT"
+
+    def _raise(_self, directory):
+        raise RuntimeError(f"Could not read {directory}/IM0001.dcm: bad header")
+
+    monkeypatch.setattr(DicomLoader, "scan_directory", _raise)
+    thread = DicomLoadThread(directory=folder)
+    errors = []
+    thread.error.connect(errors.append)
+    with caplog.at_level(logging.DEBUG, logger="src.controllers.dicom_controller"):
+        thread.run()
+
+    logged = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
+    assert "RuntimeError" in logged
+    for text in (logged, errors[0]):
+        assert "Minsu" not in text and "PACS" not in text
+    assert "bad header" in errors[0]
+
+
+class _Label:
+    def __init__(self):
+        self.text = ""
+
+    def setText(self, text):
+        self.text = text
+
+
+class _Progress:
+    def close(self):
+        pass
+
+
+class _LoadedWindow(_Window):
+    def __init__(self, reset):
+        super().__init__()
+        self.info_label = _Label()
+        self._reset = reset
+
+    def reset_workspace(self):
+        self._reset()
+
+
+class _VM:
+    def set_volume(self, _image):
+        pass
+
+
+def test_initial_render_is_scheduled_even_when_reset_workspace_raises(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QTimer.singleShot",
+        lambda ms, fn: scheduled.append(fn),
+    )
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QMessageBox.critical", lambda *a: None
+    )
+
+    def _boom():
+        raise RuntimeError("reset failed")
+
+    controller = DicomController(_VM(), _LoadedWindow(_boom))
+    controller._on_loaded(object(), {"num_slices": 3}, _Progress())
+
+    assert controller._coordinated_initial_render in scheduled
+
+
+def test_geometry_warnings_are_shown_without_blocking_the_load(monkeypatch):
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QTimer.singleShot", lambda ms, fn: None
+    )
+    window = _LoadedWindow(lambda: None)
+    controller = DicomController(_VM(), window)
+    controller._on_loaded(
+        object(),
+        {"num_slices": 3, "geometry_warnings": ["Gantry tilt of 20.0\u00b0 detected"]},
+        _Progress(),
+    )
+
+    assert "Loaded 3 slices" in window.statusbar.message
+    assert "Gantry tilt" in window.statusbar.message
+    assert "Gantry tilt" in window.info_label.text
