@@ -34,6 +34,8 @@ from .pedicle_analyzer import (
     ENDPLATE_REFERENCE_NEIGHBOURS,
     ENDPLATE_REFERENCE_NONE,
     ENDPLATE_REFERENCE_OWN,
+    NO_REFERENCE_AIM_LEGACY,
+    NO_REFERENCE_AIM_OPTIMIZER,
     VERTEBRA_LABELS,
     endplate_fit_warning,
     endplate_neighbour_reference_warning,
@@ -95,11 +97,21 @@ def narrow_pedicle_warning(pedicle_width_mm: float, diameter_mm: float) -> str:
     )
 
 
-def _endplate_warnings(analysis: PedicleAnalysisResult, endplate_parallel: bool) -> List[str]:
+def _endplate_warnings(
+    analysis: PedicleAnalysisResult,
+    endplate_parallel: bool,
+    aim: str = NO_REFERENCE_AIM_LEGACY,
+) -> List[str]:
     """The endplate-fit warnings for one analysis, shared by both planning modes.
 
-    With ``endplate_parallel`` off the trajectory is deliberately horizontal,
-    so only today's rough-fit warning on the *own* measurement still applies
+    ``aim`` is how the calling back-end aims a level left with no reference
+    (:data:`~src.core.pedicle_analyzer.NO_REFERENCE_AIM_LEGACY` or
+    :data:`~src.core.pedicle_analyzer.NO_REFERENCE_AIM_OPTIMIZER`): only the
+    legacy planner falls back to a horizontal trajectory, and the warning has
+    to say what was actually done.
+
+    With ``endplate_parallel`` off the trajectory is deliberately not aimed
+    along the endplate, so only today's rough-fit warning on the *own* measurement still applies
     -- the reference resolution decided nothing this screw is aimed by, and
     saying otherwise would misdescribe a setting the surgeon chose.  With it
     on, the wording follows ``analysis.endplate_reference``:
@@ -107,8 +119,8 @@ def _endplate_warnings(analysis: PedicleAnalysisResult, endplate_parallel: bool)
     * ``own`` -- :func:`~src.core.pedicle_analyzer.endplate_fit_warning` when
       the RMSE exceeds :data:`ENDPLATE_FIT_RMSE_WARNING_MM`, as before.
     * ``neighbours`` -- :func:`endplate_neighbour_reference_warning`.
-    * ``none`` with no own normal at all -- today's exact wording for a
-      missing endplate.
+    * ``none`` with no own normal at all -- "Upper endplate unavailable" plus
+      ``aim``.
     * ``none`` with a rough own normal -- :func:`endplate_no_reference_warning`.
     """
     rmse = analysis.endplate_fit_rmse_mm
@@ -133,8 +145,8 @@ def _endplate_warnings(analysis: PedicleAnalysisResult, endplate_parallel: bool)
         ]
     assert reference == ENDPLATE_REFERENCE_NONE  # only remaining possibility
     if analysis.upper_endplate_normal is None:
-        return ["Upper endplate unavailable; used horizontal sagittal trajectory"]
-    return [endplate_no_reference_warning(rmse)]
+        return [f"Upper endplate unavailable; {aim}"]
+    return [endplate_no_reference_warning(rmse, aim)]
 
 
 def construct_summary(screws: Sequence[PlannedScrew]) -> str:
@@ -1187,7 +1199,9 @@ class AutoScrewPlanner:
             return self._legacy_fallback(analysis, side)
 
         warnings: List[str] = list(
-            _endplate_warnings(analysis, self.config.endplate_parallel)
+            _endplate_warnings(
+                analysis, self.config.endplate_parallel, NO_REFERENCE_AIM_OPTIMIZER
+            )
         )
         uncertain = self._is_width_uncertain(analysis, side)
         if uncertain:
@@ -1279,43 +1293,31 @@ class AutoScrewPlanner:
     ) -> Optional[np.ndarray]:
         """Find entry point on posterior bone surface.
 
-        Ray-cast from pedicle centre in BOTH directions along the
-        pedicle axis to find the posterior bone-air boundary.
-        Then back up ``ENTRY_BACKOFF`` mm inside bone for a safe entry.
+        Ray-cast from the pedicle centre along the posterior pedicle axis to
+        the bone-air boundary, then back up ``ENTRY_BACKOFF`` mm inside bone
+        for a safe entry.
+
+        Returns ``None`` when the ray is still inside bone where it leaves the
+        volume or reaches the 50 mm limit: a mask cut off posteriorly has no
+        surface to enter at.  The ray is never turned round -- cast anteriorly
+        it exits through the vertebral body's anterior cortex, which is not an
+        entry point.
         """
         step = self.TRAJECTORY_SAMPLE_STEP
         max_distance = 50.0  # mm -- safety limit
         n_steps = int(max_distance / step)
 
-        # Try both posterior (+axis) and anterior (-axis) directions;
-        # keep the one in the posterior direction (higher Y in LPS).
-        best_entry = None
-        best_y = -1e9
-
-        for direction_sign in [1.0, -1.0]:
-            direction = pedicle_axis_posterior * direction_sign
-            last_bone_point = None
-            in_bone = False
-
-            for i in range(n_steps):
-                distance = i * step
-                point = pedicle_center + direction * distance
-                if self._lps_to_index(point) is None:
-                    break  # outside volume
-                if self._is_point_inside_mask(point, vertebra_label):
-                    last_bone_point = point.copy()
-                    in_bone = True
-                elif in_bone:
-                    # Transition from bone to air — found the surface.
-                    backoff_point = last_bone_point - direction * self.ENTRY_BACKOFF
-                    if backoff_point[1] > best_y:
-                        best_y = backoff_point[1]
-                        best_entry = backoff_point
-                    break
-                # If not yet in bone, keep searching (skip air gaps)
-
-        if best_entry is not None:
-            return best_entry
+        last_bone_point = None
+        for i in range(n_steps):
+            point = pedicle_center + pedicle_axis_posterior * (i * step)
+            if self._lps_to_index(point) is None:
+                return None  # outside volume
+            if self._is_point_inside_mask(point, vertebra_label):
+                last_bone_point = point.copy()
+            elif last_bone_point is not None:
+                # Transition from bone to air -- found the surface.
+                return last_bone_point - pedicle_axis_posterior * self.ENTRY_BACKOFF
+            # If not yet in bone, keep searching (skip air gaps)
         return None
 
     def _find_target_point(
@@ -1720,6 +1722,10 @@ class AutoScrewPlanner:
         implant still gets :attr:`MIN_SCREW_DIAMETER`: the policy is to place the
         smallest screw and mark the level, never to leave the side bare, so this
         never returns ``None`` and no caller has to handle "no diameter".
+
+        Otherwise the answer is always a catalogue size: the level preference
+        (6.5 mm for L3-S1, say) is snapped down to the largest catalogue
+        diameter not above it and not above what the pedicle holds.
         """
         available = min(
             self.config.pedicle_fill_ratio * pedicle_width,
@@ -1737,7 +1743,11 @@ class AutoScrewPlanner:
         recommendation = preferred
         if available >= preferred + self.DIAMETER_WIDE_HEADROOM:
             recommendation = min(preferred + 0.5, automatic_maximum)
-        return min(available, recommendation)
+        ceiling = min(available, recommendation)
+        fitting = [d for d in catalogue if d <= ceiling + 1e-9]
+        # A catalogue with nothing at or under the preference still has a size
+        # the pedicle holds: the smallest one.
+        return float(max(fitting) if fitting else min(catalogue))
 
     def _next_smaller_diameter(self, diameter: float) -> Optional[float]:
         """The largest catalogue diameter strictly below ``diameter``, or ``None``.

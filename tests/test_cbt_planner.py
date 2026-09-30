@@ -17,7 +17,7 @@ from src.core.pedicle_analyzer import PedicleAnalyzer
 from src.core.planner_config import PlannerConfig
 from src.core.screw_geometry import endplate_angle_deg, endplate_slope_deg
 from src.core.screw_grading import ScrewGrader
-from src.core.trajectory_optimizer import TIP_MARGIN_RELIEF_MM, TIP_SEGMENT_MM
+from src.core.trajectory_optimizer import TIP_SEGMENT_MM, anterior_margin_clear
 from src.utils.constants import CBT_CONTRAINDICATION_NOTE, CBT_DEFAULTS
 
 LABEL = 28  # L4
@@ -275,8 +275,10 @@ def test_cbt_screw_diverges_laterally_on_both_sides():
         assert travel[2] > 0.0                    # advancing cranially
 
 
-def test_planned_cbt_tip_clears_the_anterior_margin():
-    """The tip, not just the shaft, has to respect ``anterior_margin_mm``."""
+def test_planned_cbt_tip_keeps_the_optimiser_anterior_rule():
+    """The tip keeps ``anterior_margin_mm`` of bone ahead along the screw, and
+    the distal cylinder stays contained with the wall clearance -- the rule
+    :func:`~src.core.trajectory_optimizer.score_candidates` applies."""
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
     config = PlannerConfig(trajectory="cbt")        # 4 mm anterior margin
@@ -286,6 +288,10 @@ def test_planned_cbt_tip_clears_the_anterior_margin():
     assert screw is not None
     direction = screw.target_lps - screw.entry_lps
     direction /= np.linalg.norm(direction)
+    assert anterior_margin_clear(
+        grader, screw.target_lps[None, :], direction[None, :], LABEL,
+        config.anterior_margin_mm,
+    )[0]
     tip = grader.evaluate_batch(
         (screw.target_lps - direction * TIP_SEGMENT_MM)[None, :],
         screw.target_lps[None, :],
@@ -293,7 +299,7 @@ def test_planned_cbt_tip_clears_the_anterior_margin():
         LABEL,
     )
     assert tip.breach_mm[0] <= 0.0
-    assert tip.min_wall_mm[0] >= config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM
+    assert tip.min_wall_mm[0] >= config.wall_clearance_mm
 
 
 def test_the_chosen_cbt_trajectory_is_pinned():
@@ -305,11 +311,13 @@ def test_the_chosen_cbt_trajectory_is_pinned():
 
     assert screw is not None
     assert screw.entry_lps == pytest.approx(np.array([54.0, 76.0, 18.0]))
+    # Re-pinned when CBT took the optimiser's along-axis anterior margin and
+    # longest-per-direction rule (was 6.0 x 40 mm at a 0.626 score).
     assert screw.target_lps == pytest.approx(
-        np.array([60.20376069, 38.92778793, 31.68080573])
+        np.array([61.81492327, 39.2336767, 31.68080573])
     )
-    assert (screw.diameter_mm, screw.length_mm) == (6.0, 40.0)
-    assert screw.metrics["score"] == pytest.approx(0.6262872628726288)
+    assert (screw.diameter_mm, screw.length_mm) == (5.0, 40.0)
+    assert screw.metrics["score"] == pytest.approx(0.6680216802168022)
     assert screw.metrics["cbt_cranial_angle_deg"] == pytest.approx(20.0)
 
 
@@ -331,21 +339,30 @@ def test_the_tip_batch_only_grades_shaft_feasible_candidates():
     assert sum(graded) < 2 * sweep * len(CBT_DEFAULTS["diameter_mm"])
 
 
-def test_an_unreachable_anterior_margin_rejects_every_candidate():
+def test_a_deep_anterior_margin_is_measured_along_the_screw_not_all_around():
+    """CBT used to demand ``anterior_margin_mm - 1`` mm of wall round the whole
+    distal cylinder.  At a 15 mm margin no tip in this phantom is 14 mm off
+    every wall, so that rule dropped the side, although its tips have 15 mm of
+    bone ahead of them along the screw -- which the optimiser's rule accepts.
+    Containment is not relaxed: the whole screw still has zero breach and the
+    configured wall clearance."""
     ct, mask, analysis = _setup()
     grader = ScrewGrader(mask, ct)
+    config = PlannerConfig(trajectory="cbt", anterior_margin_mm=15.0)
 
-    lax = plan_cbt_screw(
-        grader, analysis, "left", LABEL,
-        PlannerConfig(trajectory="cbt", anterior_margin_mm=0.0),
-    )
-    strict = plan_cbt_screw(
-        grader, analysis, "left", LABEL,
-        PlannerConfig(trajectory="cbt", anterior_margin_mm=15.0),
-    )
+    screw = plan_cbt_screw(grader, analysis, "left", LABEL, config)
 
-    assert lax is not None
-    assert strict is None       # no tip in this phantom is 14 mm off every wall
+    assert screw is not None
+    direction = screw.target_lps - screw.entry_lps
+    direction /= np.linalg.norm(direction)
+    assert anterior_margin_clear(
+        grader, screw.target_lps[None, :], direction[None, :], LABEL, 15.0
+    )[0]
+    whole = grader.evaluate_batch(
+        screw.entry_lps[None, :], screw.target_lps[None, :], screw.diameter_mm, LABEL
+    )
+    assert whole.breach_mm[0] <= 0.0
+    assert whole.min_wall_mm[0] >= config.wall_clearance_mm - 1e-6
 
 
 # --------------------------------------------------------------- plan_all wiring

@@ -25,7 +25,6 @@ from src.core.trajectory_optimizer import (
     ENDPLATE_BAND_RELAXED_PREFIX,
     MAX_CONVERGENCE_RECENTRE_DEG,
     MAX_DIAMETER_STEPS,
-    MAX_ENTRY_SHORTFALL_MM,
     SAFETY_CAP_MM,
     TIP_MARGIN_RELIEF_MM,
     TIP_SEGMENT_MM,
@@ -38,6 +37,7 @@ from src.core.trajectory_optimizer import (
     make_planner,
     optimize_screw,
     score_candidates,
+    seat_on_cortex,
 )
 from tests.test_pedicle_analyzer import (
     _make_anatomical_phantom,
@@ -158,9 +158,13 @@ def test_buried_entry_on_arch_phantom_is_rejected():
 
 
 def test_best_candidate_reaches_the_posterior_cortex():
+    """The head sits on the dorsal cortex of its own trajectory: nothing to climb."""
     ct, mask, analysis = _setup()
-    best = optimize_screw(ScrewGrader(mask, ct), analysis, "left", PlannerConfig())[0]
-    assert best.surface_shortfall_mm <= MAX_ENTRY_SHORTFALL_MM
+    grader = ScrewGrader(mask, ct)
+    best = optimize_screw(grader, analysis, "left", PlannerConfig())[0]
+    direction = (best.target - best.entry) / np.linalg.norm(best.target - best.entry)
+    _, climb = seat_on_cortex(grader, best.entry[None, :], direction[None, :], LABEL)
+    assert climb[0] == 0.0
 
 
 # --------------------------------------------------------------- runtime bound
@@ -275,26 +279,6 @@ def test_the_tip_margin_follows_the_named_relief_not_the_wall_clearance():
             PlannerConfig().anterior_margin_mm - TIP_MARGIN_RELIEF_MM - 0.1
         ),
     ) == []
-
-
-def test_a_buried_entry_is_admitted_up_to_the_shortfall_bound():
-    """A shortfall is countersinking depth, so 5 mm of it is placeable.
-
-    The entry sits *inside* bone; containment of the shaft is a separate test
-    the grader still enforces.  7 mm is past the bound and still rejected.
-    """
-    _ct, _mask, analysis = _setup()
-    entries = np.array([[60.0, 58.0, 32.0]])
-    targets = np.array([[60.0, 28.0, 32.0]])
-    lengths = np.array([30.0])
-    args = (
-        _flat_candidate(2.0), entries, targets, lengths, 6.0, analysis, "left",
-        PlannerConfig(), OptimizerWeights(),
-    )
-
-    assert MAX_ENTRY_SHORTFALL_MM == 6.0
-    assert score_candidates(*args, surface_shortfall_mm=np.array([5.0]))
-    assert score_candidates(*args, surface_shortfall_mm=np.array([7.0])) == []
 
 
 # ------------------------------------------------------------------- behaviour
@@ -665,6 +649,50 @@ def test_neutral_endplate_component_does_not_change_the_ranking():
 
     assert np.allclose(with_weight[0].entry, without_weight[0].entry)
     assert np.allclose(with_weight[0].target, without_weight[0].target)
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_endplate_band_measures_the_true_angle_on_a_coronally_tilted_endplate(side):
+    """A scoliotic level: the endplate is tilted 10 degrees coronally.
+
+    Measured as craniocaudal elevation minus the endplate's sagittal slope, a
+    trajectory lying exactly in the plane at 20 degrees convergence reads about
+    3.5 degrees off -- caudal on one side, cranial on the other -- so a 2 degree
+    band rejected it and admitted a 5 degree-off one instead (or relaxed).  The
+    band now uses the same exact angle to the plane as the endplate objective.
+    """
+    _ct, _mask, analysis = _setup()
+    tilt = math.radians(10.0)
+    normal = np.array([-math.sin(tilt), 0.0, math.cos(tilt)])
+    analysis.upper_endplate_normal = normal
+    medial = -1.0 if side == "left" else 1.0
+    convergence = math.radians(20.0)
+    heading = np.array([medial * math.sin(convergence), -math.cos(convergence), 0.0])
+    parallel = math.atan2(-float(heading @ normal), float(normal[2]))
+    assert abs(math.degrees(parallel)) > 3.0     # what the old band misjudged
+
+    def direction(off_plane_deg):
+        elevation = parallel + math.radians(off_plane_deg)
+        return heading * math.cos(elevation) + np.array([0.0, 0.0, math.sin(elevation)])
+
+    entries = np.array([[60.0, 58.0, 32.0], [60.0, 58.0, 32.0]])
+    targets = entries + 40.0 * np.array([direction(0.0), direction(5.0)])
+    batch = BatchResult(
+        breach_mm=np.zeros(2),
+        min_wall_mm=np.full(2, 2.0),
+        mean_hu=np.full(2, 300.0),
+        min_hu=np.full(2, 300.0),
+    )
+
+    ranked = score_candidates(
+        batch, entries, targets, np.array([40.0, 40.0]), 6.0, analysis, side,
+        PlannerConfig(endplate_tolerance_deg=2.0), OptimizerWeights(),
+    )
+
+    assert len(ranked) == 1
+    assert np.allclose(ranked[0].target, targets[0])
+    assert not ranked[0].warnings
+    assert ranked[0].components["endplate"] == pytest.approx(1.0)
 
 
 def test_endplate_band_relaxed_warning_formats_a_fractional_tolerance():
