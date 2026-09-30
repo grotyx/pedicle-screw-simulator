@@ -773,8 +773,6 @@ class PedicleAnalyzer:
             # One slice only: the width is area / extent of a single section,
             # so pooling the neighbours above would multiply it by their count.
             width_voxels = all_voxels[all_voxels[:, 0] == isthmus_z]
-            if width_voxels.shape[0] == 0:
-                width_voxels = isthmus_voxels
             width = self._measure_pedicle_width(width_voxels, voxel_area_mm2)
 
             # Store results.  This path has only the one width estimate, so it

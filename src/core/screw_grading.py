@@ -373,11 +373,15 @@ class ScrewGrader:
             breach_point = tuple(float(v) for v in points[worst])
             breach_centre = tuple(float(v) for v in centres[worst // per_step])
             normal = self._outward_normal(maps, idx_zyx[worst]) if inside[worst] else None
-            breach_surface = (
-                breach_centre
-                if normal is None
-                else tuple(float(v) for v in points[worst] - normal * breach)
-            )
+            if normal is not None:
+                surface = points[worst] - normal * breach
+            elif not self._on_map(maps, idx_zyx[worst], inside[worst]):
+                # Off the map (or off the CT) there is no gradient; the crop box
+                # the vertebra sits in still says which way the sample left it.
+                surface = self._clamp_to_crop(maps, points[worst])
+            else:
+                surface = np.asarray(breach_centre)
+            breach_surface = tuple(float(v) for v in surface)
 
         on_surface = d_out == 0.0
         min_wall = float(d_in[on_surface].min()) if on_surface.any() else math.inf
@@ -889,6 +893,21 @@ class ScrewGrader:
         maps = _DistanceMaps(outside.astype(np.float32), inside.astype(np.float32), lo)
         self._maps[label] = maps
         return maps
+
+    @staticmethod
+    def _on_map(maps: _DistanceMaps, idx_zyx: np.ndarray, in_volume: bool) -> bool:
+        local = np.asarray(idx_zyx, dtype=np.int64) - maps.crop_min
+        return bool(in_volume) and bool(np.all((local >= 0) & (local < maps.shape)))
+
+    def _clamp_to_crop(self, maps: _DistanceMaps, point: np.ndarray) -> np.ndarray:
+        """``point`` (LPS mm) pulled into the physical box of the cropped maps."""
+        lo_xyz = maps.crop_min[::-1].astype(np.float64)
+        hi_xyz = lo_xyz + maps.shape[::-1].astype(np.float64) - 1.0
+        return np.clip(
+            np.asarray(point, dtype=np.float64),
+            self._origin + lo_xyz * self._spacing,
+            self._origin + hi_xyz * self._spacing,
+        )
 
     def _outward_normal(self, maps: _DistanceMaps, idx_zyx: np.ndarray) -> Optional[np.ndarray]:
         """Unit LPS direction in which the outside distance grows at one voxel.

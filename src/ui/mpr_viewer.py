@@ -280,6 +280,9 @@ class MPRViewer(QWidget):
     def set_thumbnail(self, on: bool) -> None:
         """Thumbnail panes offer a promote button and hide floating controls."""
         self._thumbnail = bool(on)
+        if self._thumbnail:
+            # Its toggle is hidden here, so pan mode could not be turned off.
+            self.pan_button.setChecked(False)
         self.promote_button.setVisible(self._thumbnail)
         self.mpr_zoom_controls.setVisible(not self._thumbnail)
 

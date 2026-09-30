@@ -61,6 +61,15 @@ def test_promote_emits_view_name(viewer, qtbot):
     assert sig.args == [name]
 
 
+def test_becoming_a_thumbnail_turns_pan_mode_off(viewer):
+    """Its Pan toggle is hidden on a thumbnail, so it must not stay on there."""
+    v, name = viewer
+    pan = v.pan_mode_toggle if name == "3d" else v.pan_button
+    pan.setChecked(True)
+    v.set_thumbnail(True)
+    assert not pan.isChecked()
+
+
 def test_thumbnail_hides_floating_controls_and_restores_them(viewer):
     v, _ = viewer
     overlays = _overlays(v)

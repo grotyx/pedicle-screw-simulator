@@ -273,6 +273,23 @@ class TestBreachPoint:
         assert surface[1] == pytest.approx(20.0, abs=1.0)
         assert heary_direction(result.breach_point_lps, result.breach_surface_lps, "left") == "anterior"
 
+    def test_tip_leaving_the_ct_volume_still_reads_anterior(self):
+        """A tip past the edge of the CT has no distance map to read a gradient from.
+
+        The vertebra sits 4 mm from the -y (anterior) edge of the volume, so its
+        crop is cut short there; samples off the volume all score the crop margin,
+        which beats every on-map value, and the first of those ties is a
+        centreline point.
+        """
+        from src.core.breach_classification import heary_direction
+
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 4:24, 20:40] = 28  # z, y, x
+        grader = ScrewGrader(sitk.GetImageFromArray(arr))
+        result = grader.grade(entry=(30.0, 20.0, 30.0), target=(30.0, -6.0, 30.0), diameter_mm=6.0, label=28)
+        assert result.breach_mm > 0.0
+        assert heary_direction(result.breach_point_lps, result.breach_surface_lps, "left") == "anterior"
+
     def test_side_wall_breach_surface_lies_on_that_wall(self):
         grader = ScrewGrader(_cube_mask())  # label occupies x in [20, 40)
         result = grader.grade(entry=(39.0, 35.0, 30.0), target=(39.0, 25.0, 30.0), diameter_mm=6.0, label=28)
