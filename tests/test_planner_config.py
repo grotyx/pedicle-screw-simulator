@@ -72,6 +72,14 @@ class TestEndplateOption:
         assert PlannerConfig.from_mapping({"endplate_parallel": "0"}).endplate_parallel is False
         assert PlannerConfig.from_mapping({"endplate_parallel": False}).endplate_parallel is False
 
+    def test_uncontained_narrow_is_off_by_default_and_round_trips(self):
+        assert PlannerConfig().place_uncontained_narrow is False
+        read = PlannerConfig.from_mapping
+        assert read({"place_uncontained_narrow": "false"}).place_uncontained_narrow is False
+        assert read({"place_uncontained_narrow": "true"}).place_uncontained_narrow is True
+        restored = read(PlannerConfig(place_uncontained_narrow=True).to_mapping())
+        assert restored.place_uncontained_narrow is True
+
     def test_round_trips_through_to_mapping(self):
         config = PlannerConfig(endplate_parallel=False, endplate_tolerance_deg=7.5)
         restored = PlannerConfig.from_mapping(config.to_mapping())
