@@ -28,6 +28,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from src.core.totalseg_integration import (
+    NEW_PROCESS_GROUP,
     ProcessHolder,
     SegmentationCancelled,
     _emit_progress,
@@ -303,6 +304,7 @@ def run_subregion_segmentation(
         stderr=subprocess.PIPE,
         text=True,
         env=env,
+        **NEW_PROCESS_GROUP,  # so Cancel can kill the model's worker tree
     )
     if process_holder is not None:
         process_holder.process = process
