@@ -516,7 +516,7 @@ class TestSegmentationSurfaceSmoothing:
 
         from src.ui.viewer_3d import Viewer3D
 
-        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        source = inspect.getsource(Viewer3D._build_segmentation_surface)
         assert "vtkImageGaussianSmooth" in source
         assert "vtkWindowedSincPolyDataFilter" in source
         assert "vtkPolyDataNormals" in source
@@ -1219,7 +1219,7 @@ class TestSingleLabelSurfaceExtractor:
 
         from src.ui.viewer_3d import Viewer3D
 
-        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        source = inspect.getsource(Viewer3D._build_segmentation_surface)
         assert "vtkFlyingEdges3D()" in source
         assert "vtkMarchingCubes()" not in source
 
@@ -1228,7 +1228,7 @@ class TestSingleLabelSurfaceExtractor:
 
         from src.ui.viewer_3d import Viewer3D
 
-        source = inspect.getsource(Viewer3D._render_segmentation_actor)
+        source = inspect.getsource(Viewer3D._build_segmentation_surface)
         assert "SetNumberOfIterations(MESH_SMOOTHING_ITERATIONS)" in source
         assert "SetPassBand(MESH_SMOOTHING_PASSBAND)" in source
 
@@ -1252,6 +1252,68 @@ class TestSingleLabelSurfaceExtractor:
         viewer = self._render(31)
 
         assert viewer._segmentation_actor is None
+
+
+class TestSegmentationLabelDebounceAndCache:
+    """Spinning the label must not rebuild the whole surface on every step."""
+
+    @staticmethod
+    def _viewer(monkeypatch):
+        import vtk
+        from PyQt6.QtWidgets import QApplication
+
+        from src.ui import viewer_3d as module
+        from src.ui.viewer_3d import Viewer3D
+
+        QApplication.instance() or QApplication([])
+        builds = []
+        real = vtk.vtkFlyingEdges3D
+        monkeypatch.setattr(
+            module.vtk,
+            "vtkFlyingEdges3D",
+            lambda: builds.append(1) or real(),
+        )
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._segmentation_actor = None
+        viewer._segmentation_mask_image = (
+            TestSingleLabelSurfaceExtractor._sphere_mask()
+        )
+        viewer._segmentation_label_value = 27
+        viewer._segmentation_color = (0.9, 0.8, 0.7)
+        viewer._request_render = lambda: None
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._screw_mpr_label_box_cache = {}
+        return viewer, builds
+
+    def test_rapid_label_changes_build_once_after_the_debounce(self, monkeypatch):
+        viewer, builds = self._viewer(monkeypatch)
+        for label in (1, 2, 3, 27):
+            viewer.set_segmentation_label(label)
+        assert builds == []
+        viewer._flush_segmentation_label()
+        assert len(builds) == 1
+        assert viewer._segmentation_actor is not None
+
+    def test_returning_to_a_built_label_is_served_from_the_cache(self, monkeypatch):
+        viewer, builds = self._viewer(monkeypatch)
+        viewer.set_segmentation_label(27)
+        viewer._flush_segmentation_label()
+        viewer.set_segmentation_label(31)
+        viewer._flush_segmentation_label()
+        assert viewer._segmentation_actor is None
+        viewer.set_segmentation_label(27)
+        assert len(builds) == 2  # 27 and 31 only; the return built nothing
+        assert viewer._segmentation_actor is not None
+
+    def test_a_new_mask_invalidates_the_cache(self, monkeypatch):
+        viewer, builds = self._viewer(monkeypatch)
+        viewer.set_segmentation_label(27)
+        viewer._flush_segmentation_label()
+        viewer.set_segmentation_mask(
+            TestSingleLabelSurfaceExtractor._sphere_mask(), label_value=27
+        )
+        assert len(builds) == 2
 
 
 if __name__ == "__main__":

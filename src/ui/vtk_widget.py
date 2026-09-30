@@ -96,6 +96,17 @@ class _VTKWidget(QVTKRenderWindowInteractor):
         self._render_needed = True
         super().resizeEvent(ev)
 
+    def showEvent(self, ev):
+        """Mark dirty when shown so a restored/re-exposed pane repaints.
+
+        Minimise/restore (or a tab switch) re-exposes the native surface
+        without a resize; with the flag clear paintEvent would skip it and
+        leave the pane black until the next interaction.  A show happens
+        once per expose, so this cannot restart the repaint loop.
+        """
+        self._render_needed = True
+        super().showEvent(ev)
+
     def Render(self):
         """Override VTK's Render() to go through the dirty-flag system.
 

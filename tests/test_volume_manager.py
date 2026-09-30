@@ -52,6 +52,15 @@ class TestSetVolume:
         vm.set_volume(img)
         assert vm.get_sitk_image() is img
 
+    def test_new_volume_drops_the_previous_studys_vertebral_only_image(self):
+        import vtk
+
+        vm = VolumeManager()
+        vm.set_volume(_make_test_volume())
+        vm._vertebral_only_image = vtk.vtkImageData()
+        vm.set_volume(_make_test_volume())
+        assert vm.get_vertebral_only_image() is None
+
     def test_caches_dimensions(self):
         vm = VolumeManager()
         img = _make_test_volume(size=(64, 48, 32))
