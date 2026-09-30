@@ -123,6 +123,24 @@ def test_promoting_the_current_main_view_is_a_no_op(ui_main_window):
         window.set_hero_view("oblique")
 
 
+def test_showing_planning_with_a_new_hero_lays_the_grid_out_once(ui_main_window):
+    window = ui_main_window
+    window.set_hero_view("sagittal")
+    calls = []
+    original = window.set_view_layout
+    window.set_view_layout = lambda mode: (calls.append(mode), original(mode))
+
+    window.set_hero_view("axial", show_planning=True)
+
+    assert calls == ["planning"]
+    assert window.hero_view == "axial"
+    assert _position(window, window.axial_viewer) == (0, 0, 1, 3)
+
+    window.set_view_layout("maximize:coronal")
+    window.set_hero_view("axial", show_planning=True)
+    assert window._maximized_view is None
+
+
 def test_dock_sits_on_its_own_row_under_the_big_view(ui_main_window):
     window = ui_main_window
     dock = window.tool_dock

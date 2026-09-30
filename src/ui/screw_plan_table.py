@@ -100,12 +100,12 @@ GRADE_COLUMN = 6
 #: Index of the column that carries the per-row warning count.
 WARNINGS_COLUMN = 7
 
-#: Columns sized to their content: the number, the three measurements and the
-#: two chips, neither of which may elide.
-_FIT_COLUMNS = (0, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
+#: Columns sized to their content: the number, the side, the three
+#: measurements and the two chips, none of which may elide.
+_FIT_COLUMNS = (0, 2, PEDICLE_COLUMN, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
 
 #: Columns that absorb the leftover width.
-_STRETCH_COLUMNS = (1, 2)
+_STRETCH_COLUMNS = (1,)
 
 #: Floor under every column. Qt applies one minimum to the whole header, so
 #: this stays modest -- the grade chip gets its full width from

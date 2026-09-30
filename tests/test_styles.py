@@ -217,3 +217,9 @@ def test_labels_inside_viewer_overlays_use_the_viewer_foreground(theme):
     qss = load_stylesheet(theme)
     block = qss.split('QWidget[viewerOverlay="true"] QLabel {', 1)[1].split("}", 1)[0]
     assert THEMES[theme]["viewer_foreground"].lower() in block.lower()
+
+
+def test_rgba_and_theme_rgb_float_share_the_malformed_colour_fallback():
+    assert _rgba("#102030", 0.5) == "rgba(16, 32, 48, 128)"
+    # A malformed value falls back to white instead of raising.
+    assert _rgba("#FFF", 1.0) == "rgba(255, 255, 255, 255)"

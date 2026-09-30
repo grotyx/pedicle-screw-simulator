@@ -209,6 +209,7 @@ class _Window:
         self.statusbar = _StatusBar()
         self._tool_ctrl = SimpleNamespace(screw_tool=_ScrewTool(screws, grader=grader))
         self.layout_mode = None
+        self.layout_calls = 0
         self.inspector_updates = []
         self.viewer_3d = viewer_3d
         if window_level is not None:
@@ -217,9 +218,12 @@ class _Window:
 
     def set_view_layout(self, mode):
         self.layout_mode = mode
+        self.layout_calls += 1
 
-    def set_hero_view(self, name):
+    def set_hero_view(self, name, *, show_planning=False):
         self.hero_view = name
+        if show_planning:
+            self.set_view_layout("planning")
 
     def _get_mpr_viewers(self):
         return [self.axial_viewer, self.sagittal_viewer, self.coronal_viewer]
@@ -271,6 +275,7 @@ def test_valid_screw_applies_two_long_axes_and_midpoint_cross_section():
 
     assert controller.is_active is True
     assert window.layout_mode == "planning"
+    assert window.layout_calls == 1
     assert window.hero_view == "axial"
     assert window.axial_viewer.title == "Oblique Axial · Screw #1"
     assert window.sagittal_viewer.title == "Oblique Sagittal · Screw #1"

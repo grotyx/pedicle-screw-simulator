@@ -389,9 +389,11 @@ class MPRViewer(QWidget):
     def _create_crosshairs(self):
         """Create crosshair overlay actors."""
         colors = {
-            "axial": [(COLOR_SAGITTAL, "h"), (COLOR_CORONAL, "v")],
-            "sagittal": [(COLOR_CORONAL, "h"), (COLOR_AXIAL, "v")],
-            "coronal": [(COLOR_SAGITTAL, "h"), (COLOR_AXIAL, "v")],
+            # "h" is constant in-slice y, "v" constant in-slice x; each takes
+            # the colour of the plane it marks (see the reslice cosines).
+            "axial": [(COLOR_CORONAL, "h"), (COLOR_SAGITTAL, "v")],
+            "sagittal": [(COLOR_AXIAL, "h"), (COLOR_CORONAL, "v")],
+            "coronal": [(COLOR_AXIAL, "h"), (COLOR_SAGITTAL, "v")],
         }
 
         for color, orientation in colors.get(self.plane, []):
@@ -573,6 +575,7 @@ class MPRViewer(QWidget):
 
         self.fit_to_view(render=False)
         self.refresh_orientation_markers()
+        self.sync_crosshairs(render=False)
 
         # Update display
         self._update_slice_info()
@@ -691,6 +694,7 @@ class MPRViewer(QWidget):
         self.refresh_orientation_markers()
         if not was_custom:
             self.fit_to_view(render=False)
+        self.sync_crosshairs(render=False)
         self._request_render()
 
     def clear_custom_reslice_axes(self) -> None:
@@ -705,6 +709,7 @@ class MPRViewer(QWidget):
         self._update_slice_info()
         self.refresh_orientation_markers()
         self.fit_to_view(render=False)
+        self.sync_crosshairs(render=False)
         self._request_render()
 
     def set_custom_scroll_handler(self, handler: Optional[Callable]) -> None:
@@ -881,12 +886,21 @@ class MPRViewer(QWidget):
         )
         self._update_slice_info()
 
-    def update_crosshairs(self, x: float, y: float, z: float):
+    def sync_crosshairs(self, render: bool = True) -> None:
+        """Move the reference lines to the volume manager's current position."""
+        self.update_crosshairs(
+            *self.volume_manager.get_crosshair_position(), render=render
+        )
+
+    def update_crosshairs(
+        self, x: float, y: float, z: float, render: bool = True
+    ):
         """
         Update crosshair positions.
 
         Args:
             x, y, z: World coordinates of crosshair intersection
+            render: Request a render afterwards
         """
         if self._reslice is None:
             return
@@ -904,7 +918,8 @@ class MPRViewer(QWidget):
                 source.SetPoint1(local[0], bounds[2], overlay_z)
                 source.SetPoint2(local[0], bounds[3], overlay_z)
 
-        self._request_render()
+        if render:
+            self._request_render()
 
     def set_window_level(self, window: float, level: float):
         """Set window/level values."""
@@ -1866,11 +1881,9 @@ class MPRViewer(QWidget):
             if kwargs.get("plane") == self.plane:
                 self._update_reslice_position()
                 self._update_slice_info()
-                self._request_render()
+            self.sync_crosshairs()
         elif event == "crosshair_changed":
-            pos = kwargs.get("position")
-            if pos and kwargs.get("source") != self.plane:
-                self.update_crosshairs(*pos)
+            self.sync_crosshairs()
 
     def _on_left_click(self, obj, event):
         """Handle left click for crosshair positioning."""
