@@ -1304,6 +1304,19 @@ class TestAxialFallThrough:
             result.left_pedicle_width
         )
 
+    def test_axial_pass_measures_width_on_one_slice(self):
+        """The isthmus centre pools neighbouring slices; the width must not.
+
+        The left sliver is 3 mm wide on every one of its three slices.  Pooling
+        the isthmus +/- 1 slice into one area while dividing by a single
+        slice's extent multiplied the width by the slice count.
+        """
+        analyzer = PedicleAnalyzer(_make_one_sided_coronal_phantom())
+        result = analyzer.analyze_pedicle(analyzer.get_available_vertebrae()[0])
+
+        assert result.method == "coronal_isthmus+axial_components"
+        assert result.left_pedicle_width == pytest.approx(3.0)
+
     def test_axial_pass_rejects_an_overtilted_pca_axis(self):
         """The axial pass's PCA gets the same tilt guard as the other two paths.
 

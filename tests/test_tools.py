@@ -200,6 +200,22 @@ class TestScrewTool:
         assert screw.breach_distance > 0
         assert screw.metrics["heary_direction"] == "medial"
 
+    def test_heary_direction_reports_an_anterior_tip_breach(self):
+        import numpy as np
+        import SimpleITK as sitk
+
+        from src.core.screw_grading import ScrewGrader
+        arr = np.zeros((60, 60, 60), dtype=np.uint8)
+        arr[20:40, 20:40, 20:40] = 28
+        mask = sitk.GetImageFromArray(arr)
+        tool = ScrewTool(FakeVolumeManager())
+        tool.set_grader(ScrewGrader(mask))
+        # The tip runs 8 mm past the y = 20 (anterior, LPS -y) wall.
+        tool.add_screw(Screw(entry_point=(30.0, 35.0, 30.0), target_point=(30.0, 12.0, 30.0),
+                             diameter=6.0, side="left"))
+        tool.regrade_all()
+        assert tool.get_screws()[0].metrics["heary_direction"] == "anterior"
+
     def test_regrade_replaces_stale_planner_breach_warnings(self):
         import numpy as np
         import SimpleITK as sitk

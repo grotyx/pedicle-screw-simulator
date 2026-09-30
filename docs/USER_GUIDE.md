@@ -371,10 +371,11 @@ During MPR editing the CT image remains fixed and the screw moves. After editing
 
 ### 6.3 Diameter
 
-The diameter field accepts shorthand:
+The diameter field accepts the value as written or as shorthand:
 
 | Input | Result |
 |---:|---:|
+| `6.5` or `6,5` | 6.5 mm |
 | `65` | 6.5 mm |
 | `55` | 5.5 mm |
 | `60` | 6.0 mm |

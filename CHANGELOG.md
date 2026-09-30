@@ -11,6 +11,23 @@ current version; every other place the version appears is derived from it.
 > clinical validation. Every segmentation, screw proposal, dimension, breach
 > grade, and warning requires independent review by a qualified clinician.
 
+## [Unreleased]
+
+### Fixed
+
+- A pedicle measured by the axial fallback reported up to three times its
+  width: the width was taken from the isthmus slice and its two neighbours
+  pooled together. It is now measured on the isthmus slice alone.
+- A screw whose tip ran through the anterior cortex had its Heary breach
+  direction reported as "none". The direction is now read from the nearest
+  point of the vertebra rather than from the screw's own centreline, so tip
+  breaches read "anterior".
+- Opening a new study left the previous study's screw projections drawn on
+  the axial, sagittal and coronal views.
+- Typing a diameter with a decimal point ("7.5", "5,5") entered the wrong
+  value (5.0). Typed values are now taken as written; the digit-only
+  shorthand ("65" → 6.5 mm) still works.
+
 ## [0.2.3] - 2026-09-13
 
 ### Added

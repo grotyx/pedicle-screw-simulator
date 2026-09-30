@@ -1506,6 +1506,19 @@ def test_reset_workspace_purges_segmentation_temp_dirs(ui_main_window, tmp_path)
     assert not Path(created).exists()
 
 
+def test_reset_workspace_clears_mpr_screw_overlays(ui_main_window):
+    """A new study must not show the previous study's screws on the 2D views."""
+    window = ui_main_window
+    for viewer in window._get_mpr_viewers():
+        viewer.add_screw_overlay(0, (10.0, 20.0, 30.0), (10.0, 0.0, 30.0))
+        assert viewer.screw_overlays
+
+    window.reset_workspace()
+
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays == {}
+
+
 def test_close_event_purges_segmentation_temp_dirs(ui_main_window, tmp_path):
     from PyQt6.QtGui import QCloseEvent
 

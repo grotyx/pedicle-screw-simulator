@@ -257,6 +257,35 @@ class TestBreachPoint:
         centres = grader.cylinder_points(entry, target, 0.0)
         assert np.isclose(centres, np.asarray(result.breach_centre_lps)).all(axis=1).any()
 
+    def test_tip_through_the_anterior_cortex_reads_anterior(self):
+        """The breach direction is taken from the bone, not from the centreline.
+
+        The tip runs 8 mm through the -y (anterior, LPS) wall.  Seen from its
+        own centreline point the worst sample is either coincident ("none") or
+        a radial offset perpendicular to the axis, so "anterior" was unreachable.
+        """
+        from src.core.breach_classification import heary_direction
+
+        grader = ScrewGrader(_cube_mask())  # label occupies y in [20, 40)
+        result = grader.grade(entry=(30.0, 35.0, 30.0), target=(30.0, 12.0, 30.0), diameter_mm=6.0, label=28)
+        assert result.grade == "E"
+        surface = np.asarray(result.breach_surface_lps)
+        assert surface[1] == pytest.approx(20.0, abs=1.0)
+        assert heary_direction(result.breach_point_lps, result.breach_surface_lps, "left") == "anterior"
+
+    def test_side_wall_breach_surface_lies_on_that_wall(self):
+        grader = ScrewGrader(_cube_mask())  # label occupies x in [20, 40)
+        result = grader.grade(entry=(39.0, 35.0, 30.0), target=(39.0, 25.0, 30.0), diameter_mm=6.0, label=28)
+        point = np.asarray(result.breach_point_lps)
+        surface = np.asarray(result.breach_surface_lps)
+        assert surface[0] == pytest.approx(39.0)
+        assert surface[1:] == pytest.approx(point[1:])
+
+    def test_contained_screw_has_no_breach_surface(self):
+        grader = ScrewGrader(_cube_mask())
+        result = grader.grade(entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0), diameter_mm=6.0)
+        assert result.breach_surface_lps is None
+
     def test_breach_point_without_radial_samples_is_the_centreline_point(self):
         grader = ScrewGrader(_cube_mask(), radial_samples=0)
         result = grader.grade(entry=(5.0, 30.0, 30.0), target=(15.0, 30.0, 30.0), diameter_mm=6.0, label=28)

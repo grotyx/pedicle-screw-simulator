@@ -798,10 +798,10 @@ class ScrewTool:
         known_side = str(side).lower()
         if known_side in ("left", "right"):
             return heary_direction(
-                result.breach_point_lps, result.breach_centre_lps, known_side
+                result.breach_point_lps, result.breach_surface_lps, known_side
             )
         label = heary_direction(
-            result.breach_point_lps, result.breach_centre_lps, "left"
+            result.breach_point_lps, result.breach_surface_lps, "left"
         )
         return "mediolateral" if label in ("medial", "lateral") else label
 

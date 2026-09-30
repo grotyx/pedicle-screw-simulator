@@ -3051,6 +3051,7 @@ class MainWindow(QMainWindow):
         # Clear viewer overlays
         for viewer in self._get_mpr_viewers():
             viewer.clear_segmentation_mask()
+            viewer.clear_screw_overlays()
         self.viewer_3d.clear_screws()
         self.viewer_3d.clear_segmentation_mask()
 
