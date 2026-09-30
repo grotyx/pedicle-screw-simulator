@@ -548,19 +548,30 @@ class AutoScrewPlanner:
             endplate_reference=analysis.endplate_reference,
             endplate_reference_levels=analysis.endplate_reference_levels,
         )
-        # Judged on the final graded screw, with the same directional medial
-        # figure the lateral slide ranked by and the canal warning quotes.
+        # Judged on the final graded screw by the optimiser's narrow rule
+        # (trajectory_optimizer.score_candidates): no medial or craniocaudal
+        # breach, and a lateral (in-out-in) breach within the configured cap.
         medial = float(planned.metrics.get("medial_breach_mm") or 0.0)
-        if narrow and (planned.gertzbein_grade not in {"A", "B"} or medial > 0.0):
+        lateral = float(planned.metrics.get("lateral_breach_mm") or 0.0)
+        craniocaudal = float(planned.metrics.get("craniocaudal_breach_mm") or 0.0)
+        cap = float(self.config.narrow_lateral_breach_mm)
+        failures = []
+        if medial > 0.0:
+            failures.append(f"medial breach {medial:.1f} mm")
+        if craniocaudal > 0.0:
+            failures.append(f"craniocaudal breach {craniocaudal:.1f} mm")
+        if lateral > cap + 1e-9:
+            failures.append(f"lateral breach {lateral:.1f} mm over the {cap:.1f} mm cap")
+        if narrow and failures:
             if not self.config.place_uncontained_narrow:
                 logger.info(
-                    "Not placing uncontained narrow %s %s (grade %s, medial %.1f mm)",
-                    vertebra.name, side, planned.gertzbein_grade, medial,
+                    "Not placing uncontained narrow %s %s (grade %s, %s)",
+                    vertebra.name, side, planned.gertzbein_grade, ", ".join(failures),
                 )
                 kind = "uncertain-width" if uncertain else "narrow"
                 return None, (
                     f"{kind} {side} pedicle: no contained trajectory (grade "
-                    f"{planned.gertzbein_grade}, medial breach {medial:.1f} mm) "
+                    f"{planned.gertzbein_grade}, {', '.join(failures)}) "
                     "— not placed"
                 )
             planned.warnings.append(UNCONTAINED_NARROW_WARNING)

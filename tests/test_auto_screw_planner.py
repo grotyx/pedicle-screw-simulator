@@ -2012,6 +2012,54 @@ class TestNarrowPedicle:
         assert screw.metrics["medial_breach_mm"] == 0.0
         assert UNCONTAINED_NARROW_WARNING not in screw.warnings
 
+    @staticmethod
+    def _plan_narrow_with_breaches(monkeypatch, config, grade, medial, lateral, craniocaudal):
+        """Plan the contained narrow case with the final grade's figures forced."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(ct, mask, config=config)
+        original = planner._finalise_screw
+
+        def forced(*args, **kwargs):
+            planned = original(*args, **kwargs)
+            planned.gertzbein_grade = grade
+            planned.metrics["medial_breach_mm"] = medial
+            planned.metrics["lateral_breach_mm"] = lateral
+            planned.metrics["craniocaudal_breach_mm"] = craniocaudal
+            return planned
+
+        monkeypatch.setattr(planner, "_finalise_screw", forced)
+        screws = planner.plan_all([analysis], sides="left")
+        return screws, planner.skipped_sides
+
+    def test_a_narrow_lateral_breach_within_the_cap_is_placed(self, monkeypatch):
+        """The legacy gate accepts what the optimiser's narrow rule accepts."""
+        screws, skipped = self._plan_narrow_with_breaches(
+            monkeypatch,
+            PlannerConfig(mode="legacy", narrow_lateral_breach_mm=4.0),
+            grade="C", medial=0.0, lateral=3.0, craniocaudal=0.0,
+        )
+        assert len(screws) == 1 and skipped == []
+
+    @pytest.mark.parametrize(
+        "lateral,craniocaudal,figure",
+        [(0.0, 1.0, "craniocaudal breach 1.0 mm"), (3.0, 0.0, "lateral breach 3.0 mm")],
+    )
+    def test_a_narrow_breach_outside_the_optimiser_rule_is_skipped(
+        self, monkeypatch, lateral, craniocaudal, figure
+    ):
+        screws, skipped = self._plan_narrow_with_breaches(
+            monkeypatch, PlannerConfig(mode="legacy"),
+            grade="B" if lateral < 2.0 else "C",
+            medial=0.0, lateral=lateral, craniocaudal=craniocaudal,
+        )
+        assert screws == []
+        (_, side, reason), = skipped
+        assert side == "left"
+        assert figure in reason and reason.endswith("not placed")
+
     def test_a_shift_re_seats_on_the_cortex_of_a_sloped_lamina(self):
         """C1 fix: a shift re-seats with ``_find_entry_point``, not a translate.
 

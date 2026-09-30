@@ -54,6 +54,22 @@ class TestScrewGrader:
         assert result.label == 28
         assert result.mean_hu == pytest.approx(350.0)
 
+    def test_trajectory_hu_samples_only_the_graded_label(self):
+        # Half the shaft runs through soft tissue (-50 HU); like
+        # bone_quality's trajectory figure, only voxels of the graded label count.
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        result = grader.grade(entry=(30.0, 50.0, 30.0), target=(30.0, 25.0, 30.0), diameter_mm=6.0, label=28)
+        assert result.mean_hu == pytest.approx(350.0)
+        assert result.min_hu == pytest.approx(350.0)
+
+    def test_trajectory_hu_is_none_without_a_sample_in_the_label(self):
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        result = grader.grade(entry=(5.0, 5.0, 30.0), target=(5.0, 15.0, 30.0), diameter_mm=6.0, label=28)
+        assert result.mean_hu is None
+        assert result.min_hu is None
+
     def test_fully_outside_bone_is_grade_e(self):
         mask = _cube_mask()
         grader = ScrewGrader(mask)
@@ -798,9 +814,11 @@ class TestEvaluateBatch:
         entries = np.array([[30.0, 37.3, 30.0], [30.0, 45.0, 30.0]])
         targets = np.array([[30.0, 22.1, 30.0], [30.0, 15.0, 30.0]])
         batch = grader.evaluate_batch(entries, targets, 6.0, 28)
-        for i in range(2):
-            single = grader.grade(entries[i], targets[i], 6.0, label=28)
-            assert batch.mean_hu[i] == pytest.approx(single.mean_hu, rel=0.01)
+        # Only the first candidate lies wholly inside the label: grade() now
+        # samples label voxels only, while the batch still averages every
+        # in-volume sample, so the second (which leaves the label) differs.
+        single = grader.grade(entries[0], targets[0], 6.0, label=28)
+        assert batch.mean_hu[0] == pytest.approx(single.mean_hu, rel=0.01)
 
 
 class TestCorticalEntryZone:
