@@ -1187,6 +1187,19 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(QLabel("Lateral breach cap"), 8, 0)
         params_layout.addWidget(self.plan_narrow_lateral_spin, 8, 1, 1, 2)
 
+        self.plan_uncontained_narrow_check = QCheckBox(
+            "Place narrow screws even if not contained"
+        )
+        self.plan_uncontained_narrow_check.setChecked(
+            planner_defaults.place_uncontained_narrow
+        )
+        self.plan_uncontained_narrow_check.setToolTip(
+            "Off: a narrow pedicle whose best trajectory still breaches (grade C "
+            "or worse, or any medial breach) is left unplanned and reported.\n"
+            "On: the smallest screw is placed anyway, with a warning."
+        )
+        params_layout.addWidget(self.plan_uncontained_narrow_check, 9, 0, 1, 3)
+
         weight_rows = (
             ("Safety weight", "safety", "Importance of cortical wall clearance"),
             ("Density weight", "density",
@@ -1197,7 +1210,7 @@ class MainWindow(QMainWindow):
         )
         self._planner_weight_value_labels = {}
         self._planner_weight_captions = {}
-        for row, (caption, name, tip) in enumerate(weight_rows, start=9):
+        for row, (caption, name, tip) in enumerate(weight_rows, start=10):
             attribute = f"plan_weight_{name}"
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 300)
@@ -2535,7 +2548,7 @@ class MainWindow(QMainWindow):
     #: PLANNER_SETTINGS_KEYS because that tuple's loader coerces with float(),
     #: and because QSettings gives a bool back as the string "true"/"false" --
     #: PlannerConfig.from_mapping does that coercion.
-    PLANNER_BOOL_SETTINGS_KEYS = ("endplate_parallel",)
+    PLANNER_BOOL_SETTINGS_KEYS = ("endplate_parallel", "place_uncontained_narrow")
 
     #: Views that "maximize:<name>" accepts.
     MAXIMIZABLE_VIEWS = ("axial", "sagittal", "coronal", "3d")
@@ -2638,7 +2651,10 @@ class MainWindow(QMainWindow):
 
     def _planner_check_boxes(self) -> dict:
         """Map PlannerConfig boolean field names to their check boxes."""
-        return {"endplate_parallel": self.plan_endplate_parallel_check}
+        return {
+            "endplate_parallel": self.plan_endplate_parallel_check,
+            "place_uncontained_narrow": self.plan_uncontained_narrow_check,
+        }
 
     def _planner_weight_sliders(self) -> dict:
         """Map OptimizerWeights field names to their percent sliders."""

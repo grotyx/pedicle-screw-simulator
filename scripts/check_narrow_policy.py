@@ -10,8 +10,13 @@ segmentation, runs the pedicle analysis and the auto planner with the shipped
 
 then exits non-zero when any of W7's acceptance items fails:
 
-* a side was skipped for a reason mentioning the pedicle width;
-* a screw the optimiser placed on a narrow side has a medial breach;
+* a side was skipped for a reason mentioning the pedicle width, other than
+  the narrow containment gate (a narrow side with no contained trajectory is
+  left unplanned under the default ``place_uncontained_narrow=False``, and is
+  reported, not failed);
+* a screw placed on a narrow side has a medial breach (the optimiser never
+  allows one, and the legacy fallback only places one when
+  ``place_uncontained_narrow`` is on, which this CLI never sets);
 * a screw the optimiser placed on a narrow side is not at
   :attr:`~src.core.auto_screw_planner.AutoScrewPlanner.MIN_SCREW_DIAMETER`;
 * a level that produced no screw at all did so without a reason (except the
@@ -151,19 +156,13 @@ def main(argv: list[str] | None = None) -> int:
             f"{screw.gertzbein_grade:>7}"
         )
         if narrow and medial > 0.0:
-            # The "narrow => no medial breach" contract binds the optimiser's
-            # own trajectory search, not the legacy fallback it falls back to
-            # when no feasible trajectory is found -- that path predates the
-            # zero-breach guarantee and is reported, not failed.
-            if is_fallback:
-                print(
-                    f"  narrow (legacy fallback) medial {medial:.2f} mm"
-                )
-            else:
-                failures.append(
-                    f"{screw.vertebra_name} {screw.side}: narrow screw breaches "
-                    f"medially by {medial:.2f} mm"
-                )
+            # With the shipped default (place_uncontained_narrow off) neither
+            # the optimiser nor its legacy fallback may place this.
+            source = "legacy fallback" if is_fallback else "optimiser"
+            failures.append(
+                f"{screw.vertebra_name} {screw.side}: narrow screw ({source}) "
+                f"breaches medially by {medial:.2f} mm"
+            )
         if narrow and abs(screw.diameter_mm - AutoScrewPlanner.MIN_SCREW_DIAMETER) > 1e-6:
             failures.append(
                 f"{screw.vertebra_name} {screw.side}: narrow screw has diameter "
@@ -173,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for name, side, reason in planner.skipped_sides:
         print(f"SKIPPED {name} {side}: {reason}")
+        if "no contained trajectory" in reason:
+            continue    # the narrow containment gate: expected, reported above
         if "width" in reason or "narrow" in reason:
             failures.append(f"{name} {side} was dropped for its width: {reason}")
 

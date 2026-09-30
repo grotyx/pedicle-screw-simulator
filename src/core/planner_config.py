@@ -51,6 +51,10 @@ class PlannerConfig:
     #: default inside a Gertzbein grade B; the literature accepts up to about
     #: 6 mm in T4-T9 with the in-out-in technique, which the range allows.
     narrow_lateral_breach_mm: float = 2.0
+    #: Let the legacy fallback place a narrow side's smallest screw even when
+    #: its best trajectory is not contained (grade C or worse, or any medial
+    #: breach).  Off by default: such a side is left unplanned with a reason.
+    place_uncontained_narrow: bool = False
     implant_lengths_mm: Tuple[float, ...] = IMPLANT_LENGTHS_MM
     implant_diameters_mm: Tuple[float, ...] = IMPLANT_DIAMETERS_MM
     trajectory_hu_threshold: float = TRAJECTORY_HU_LOOSENING_THRESHOLD
@@ -103,14 +107,15 @@ class PlannerConfig:
         for key in ("mode", "trajectory"):
             if key in kwargs:
                 kwargs[key] = str(kwargs[key])
-        if "endplate_parallel" in kwargs:
-            raw = kwargs["endplate_parallel"]
-            # QSettings returns "true"/"false" strings, and bool("false") is True.
-            kwargs["endplate_parallel"] = (
-                raw.strip().lower() in ("true", "1", "yes")
-                if isinstance(raw, str)
-                else bool(raw)
-            )
+        for key in ("endplate_parallel", "place_uncontained_narrow"):
+            if key in kwargs:
+                raw = kwargs[key]
+                # QSettings returns "true"/"false" strings, and bool("false") is True.
+                kwargs[key] = (
+                    raw.strip().lower() in ("true", "1", "yes")
+                    if isinstance(raw, str)
+                    else bool(raw)
+                )
         if "endplate_tolerance_deg" in kwargs:
             kwargs["endplate_tolerance_deg"] = float(kwargs["endplate_tolerance_deg"])
         if isinstance(kwargs.get("weights"), Mapping):

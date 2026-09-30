@@ -535,9 +535,10 @@ def _dropped_sides_note(skipped: List[Tuple[str, str, str]]) -> str:
     was requested must never reach the surgeon unannounced.
 
     The reason itself stays in the log: every remaining reason is a search
-    failure the surgeon can see for themselves once they open the level, and a
-    width is no longer a reason at all -- a narrow pedicle is planned and
-    marked, never dropped.
+    failure the surgeon can see for themselves once they open the level.  A
+    width alone is never a reason; a narrow pedicle is dropped only when no
+    contained trajectory exists and the "place even if not contained" option
+    is off.
 
     A whole-spine run can drop a dozen sides, which would push the rest of the
     status line off the label, so only the first

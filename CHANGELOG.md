@@ -26,6 +26,12 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Automatic planning no longer places a narrow-pedicle screw from the legacy
+  fallback when its best trajectory is not contained (Gertzbein grade C or
+  worse, or any medial breach); the side is left unplanned and the reason is
+  shown. The new Planning Parameters option "Place narrow screws even if not
+  contained" (off by default) restores the old placement, and such a screw
+  carries a warning naming the option.
 - The four workflow steps now run down a vertical step rail at the left edge
   instead of a bar above the views. Each right-hand page opens with a header
   ("Step N of 4", title, one-line hint).

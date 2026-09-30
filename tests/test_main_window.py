@@ -416,6 +416,27 @@ def test_reset_defaults_restores_the_endplate_option(ui_main_window, isolated_qs
     assert window.plan_endplate_tolerance_spin.value() == pytest.approx(10.0)
 
 
+def test_uncontained_narrow_option_defaults_off_feeds_config_and_persists(
+    ui_main_window, isolated_qsettings
+):
+    window = ui_main_window
+    check = window.plan_uncontained_narrow_check
+    assert check.isChecked() is False
+    assert window.planner_config().place_uncontained_narrow is False
+
+    check.setChecked(True)          # autosaves
+    assert window.planner_config().place_uncontained_narrow is True
+
+    check.blockSignals(True)
+    check.setChecked(False)
+    check.blockSignals(False)
+    window.load_planner_settings()
+    assert check.isChecked() is True
+
+    window.reset_planner_settings()
+    assert check.isChecked() is False
+
+
 def test_cockpit_shows_the_endplate_angle(ui_main_window):
     window = ui_main_window
     screw = Screw(

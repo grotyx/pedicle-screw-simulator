@@ -70,6 +70,13 @@ WIDTH_UNCERTAIN_SCREW_WARNING = "Pedicle width uncertain – verify diameter"
 #: re-grade verbatim.
 NARROW_PEDICLE_WARNING_PREFIX = "Narrow pedicle"
 
+#: Warning on a narrow screw the legacy path placed although it is not
+#: contained, so a reviewer can see which setting let it through.
+UNCONTAINED_NARROW_WARNING = (
+    "Not contained — placed only because \"Place narrow screws even if not "
+    "contained\" is on"
+)
+
 
 def narrow_pedicle_warning(pedicle_width_mm: float, diameter_mm: float) -> str:
     """Why this level got the smallest screw, and what the surgeon has to decide.
@@ -419,8 +426,8 @@ class AutoScrewPlanner:
         # 4b. A narrow side is already on the smallest implant, so the
         #     diameter step-down below cannot help it.  Slide the entry
         #     laterally instead and keep whichever trajectory leaves the least
-        #     screw in the canal.  The side is never dropped for width: if even
-        #     the best shift breaches medially it is placed and warned about.
+        #     screw in the canal.  Whether an uncontained result is placed at
+        #     all is decided after grading (see place_uncontained_narrow).
         if narrow:
             entry, target, lateral_shift = self._least_medial_entry(
                 side,
@@ -468,7 +475,8 @@ class AutoScrewPlanner:
         )
         # A narrow side has nothing to step down to -- it is already on the
         # smallest implant -- and stepping down would only shrink the screw
-        # without buying containment, so it is graded and placed as it stands.
+        # without buying containment, so it is graded as it stands and the
+        # containment gate after _finalise_screw decides whether it is placed.
         while not narrow and grade not in {"A", "B"}:
             smaller = self._next_smaller_diameter(diameter)
             if smaller is None:
@@ -528,6 +536,22 @@ class AutoScrewPlanner:
             endplate_reference=analysis.endplate_reference,
             endplate_reference_levels=analysis.endplate_reference_levels,
         )
+        # Judged on the final graded screw, with the same directional medial
+        # figure the lateral slide ranked by and the canal warning quotes.
+        medial = float(planned.metrics.get("medial_breach_mm") or 0.0)
+        if narrow and (planned.gertzbein_grade not in {"A", "B"} or medial > 0.0):
+            if not self.config.place_uncontained_narrow:
+                logger.info(
+                    "Not placing uncontained narrow %s %s (grade %s, medial %.1f mm)",
+                    vertebra.name, side, planned.gertzbein_grade, medial,
+                )
+                kind = "uncertain-width" if uncertain else "narrow"
+                return None, (
+                    f"{kind} {side} pedicle: no contained trajectory (grade "
+                    f"{planned.gertzbein_grade}, medial breach {medial:.1f} mm) "
+                    "— not placed"
+                )
+            planned.warnings.append(UNCONTAINED_NARROW_WARNING)
         return planned, None
 
     def _longest_length_from(

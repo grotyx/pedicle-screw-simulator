@@ -1895,23 +1895,77 @@ class TestNarrowPedicle:
         assert screw.metrics["medial_breach_mm"] == 0.0
         assert not any(w.startswith("Entry moved") for w in screw.warnings)
 
-    def test_a_narrow_side_with_no_clean_shift_is_still_placed(self):
-        """Policy: width never skips a side, so the least bad entry is kept."""
-        from src.core.auto_screw_planner import AutoScrewPlanner, medial_breach_warning
-
+    @staticmethod
+    def _uncontained_narrow_case():
+        """A narrow left side whose best lateral shift still breaches medially."""
         ct, mask = _make_thin_medial_wall_phantom(lateral_edge=41)
         analysis = _make_analysis(
             left_center=np.array([40.0, 37.0, 20.0]),
             body_center=np.array([40.0, 18.0, 20.0]),
             left_width=4.5,
         )
-        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+        return ct, mask, analysis
+
+    @pytest.mark.parametrize("mode", ["legacy", "optimizer"])
+    def test_an_uncontained_narrow_side_is_not_placed_by_default(self, mode):
+        """Owner policy: no uncontained narrow screw unless the user opts in."""
+        from src.core.auto_screw_planner import AutoScrewPlanner
+
+        ct, mask, analysis = self._uncontained_narrow_case()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode=mode))
+        assert planner.config.place_uncontained_narrow is False
+
+        screws = planner.plan_all([analysis], sides="left")
+
+        assert screws == []
+        assert len(planner.skipped_sides) == 1
+        name, side, reason = planner.skipped_sides[0]
+        assert side == "left"
+        assert reason.startswith("narrow left pedicle: no contained trajectory")
+        assert "medial breach" in reason and reason.endswith("not placed")
+
+    def test_the_opt_in_places_an_uncontained_narrow_side_with_warnings(self):
+        """With the option on, today's placement stands -- and says why."""
+        from src.core.auto_screw_planner import (
+            UNCONTAINED_NARROW_WARNING,
+            AutoScrewPlanner,
+            medial_breach_warning,
+        )
+
+        ct, mask, analysis = self._uncontained_narrow_case()
+        planner = AutoScrewPlanner(
+            ct, mask,
+            config=PlannerConfig(mode="legacy", place_uncontained_narrow=True),
+        )
 
         screw = planner.plan_screw(analysis, "left")
 
         assert screw is not None
         assert screw.metrics["medial_breach_mm"] > 0.0
         assert medial_breach_warning(screw.metrics["medial_breach_mm"]) in screw.warnings
+        assert UNCONTAINED_NARROW_WARNING in screw.warnings
+
+    @pytest.mark.parametrize("opt_in", [False, True])
+    def test_a_contained_narrow_side_is_placed_either_way(self, opt_in):
+        from src.core.auto_screw_planner import (
+            UNCONTAINED_NARROW_WARNING,
+            AutoScrewPlanner,
+        )
+
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=4.5)
+        planner = AutoScrewPlanner(
+            ct, mask,
+            config=PlannerConfig(mode="legacy", place_uncontained_narrow=opt_in),
+        )
+
+        screw = planner.plan_screw(analysis, "left")
+
+        assert screw is not None
+        assert screw.metrics["narrow_pedicle"] is True
+        assert screw.gertzbein_grade in {"A", "B"}
+        assert screw.metrics["medial_breach_mm"] == 0.0
+        assert UNCONTAINED_NARROW_WARNING not in screw.warnings
 
     def test_a_shift_re_seats_on_the_cortex_of_a_sloped_lamina(self):
         """C1 fix: a shift re-seats with ``_find_entry_point``, not a translate.
