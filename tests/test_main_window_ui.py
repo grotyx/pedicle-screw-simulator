@@ -645,7 +645,7 @@ def test_screw_plan_table_round_trips_rows_and_selection(ui_main_window):
         )
 
     assert table.count() == 2
-    assert table.rowText(0) == "1 · L3 · Left · -- · 6.5 · 40.0 · Grade A · "
+    assert table.rowText(0) == "1 · L3 · L · -- · 6.5 · 40.0 · Grade A · "
     assert "Grade D" in table.rowText(1)
 
     table.setCurrentRow(1)
@@ -728,7 +728,7 @@ def test_screw_plan_table_updates_a_row_in_place(ui_main_window):
     )
 
     assert table.count() == 1
-    assert table.rowText(0) == "1 · L5 · Left · -- · 7.5 · 50.0 · Grade C · "
+    assert table.rowText(0) == "1 · L5 · L · -- · 7.5 · 50.0 · Grade C · "
 
 
 def _grid_position(window, widget):
@@ -1005,9 +1005,10 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
     stretch = QHeaderView.ResizeMode.Stretch
     assert [
         header.sectionResizeMode(c)
-        for c in (0, 2, 3, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
-    ] == [fit, fit, fit, fit, fit, fit, fit]
+        for c in (0, 3, 4, 5, GRADE_COLUMN, WARNINGS_COLUMN)
+    ] == [fit, fit, fit, fit, fit, fit]
     assert header.sectionResizeMode(1) == stretch
+    assert header.sectionResizeMode(2) == stretch
     assert header.minimumSectionSize() == MINIMUM_SECTION_WIDTH_PX
 
 
@@ -1033,7 +1034,7 @@ def test_grade_chip_column_is_wide_enough_for_its_text(ui_main_window):
     text_width = table.fontMetrics().horizontalAdvance(chip.text())
     assert table.columnWidth(GRADE_COLUMN) >= text_width
     # The values themselves are unchanged by the shorter headers.
-    assert table.rowText(0) == "1 · L4 · Left · -- · 6.5 · 40.0 · Grade B · "
+    assert table.rowText(0) == "1 · L4 · L · -- · 6.5 · 40.0 · Grade B · "
 
 
 def test_narrow_screws_render_red_in_3d_and_mpr(ui_main_window):
@@ -1106,7 +1107,7 @@ def test_screw_plan_table_shows_the_pedicle_width_and_chips_the_narrow_ones(
     assert table.item(1, PEDICLE_COLUMN).background().color() != QColor(
         palette["grade_d"]
     )
-    assert table.rowText(0) == "1 · T11 · Left · 4.5 mm · 4.0 · 40.0 · Grade B · "
+    assert table.rowText(0) == "1 · T11 · L · 4.5 mm · 4.0 · 40.0 · Grade B · "
 
 
 def test_cockpit_shows_the_pedicle_row_and_the_narrow_legend(ui_main_window):

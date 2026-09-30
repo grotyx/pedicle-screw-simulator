@@ -1204,7 +1204,7 @@ def test_screw_list_row_shows_level_side_and_geometry(ui_main_window):
 
     text = window.screw_list_widget.rowText(0)
     assert "L4" in text
-    assert "Left" in text
+    assert window.screw_list_widget.item(0, 2).text() == "L"
     assert "6.5" in text
     assert "40.0" in text
     assert window.screw_list_widget.currentRow() == 0

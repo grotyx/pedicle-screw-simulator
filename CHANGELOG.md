@@ -93,7 +93,8 @@ current version; every other place the version appears is derived from it.
   three views had them swapped).
 - The Angle tool no longer gets stuck when two of its points coincide, and
   changing the measure mode while editing a measurement keeps its plane.
-- The Side column of the screw table no longer truncates.
+- The Side column of the screw table shows L or R, so it no longer
+  truncates to "L…" at the default panel width.
 
 
 ## [0.2.3] - 2026-09-13
