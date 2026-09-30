@@ -229,7 +229,7 @@ class TestBreachPoint:
         result = grader.grade(entry=(30.0, 35.0, 30.0), target=(30.0, 25.0, 30.0), diameter_mm=6.0)
         assert result.breach_mm == 0.0
         assert result.breach_point_lps is None
-        assert result.breach_centre_lps is None
+        assert result.breach_surface_lps is None
 
     def test_breach_point_is_the_worst_sample_and_its_centreline_point(self):
         grader = ScrewGrader(_cube_mask())  # label occupies x in [20, 40)
@@ -237,16 +237,16 @@ class TestBreachPoint:
         result = grader.grade(entry=entry, target=target, diameter_mm=6.0, label=28)
         assert result.breach_mm > 0.0
         point = np.asarray(result.breach_point_lps)
-        centre = np.asarray(result.breach_centre_lps)
         # The deepest sample sits one radius beyond the +x wall of the label.
         assert point[0] == pytest.approx(42.0)
-        assert centre[0] == pytest.approx(39.0)
-        assert centre[2] == pytest.approx(30.0)
-        # The centreline point belongs to the trajectory and matches the sample.
-        assert np.linalg.norm(point - centre) == pytest.approx(3.0)
-        assert 25.0 <= centre[1] <= 35.0
+        # It belongs to a centreline point on the trajectory, one radius away.
+        assert point[2] == pytest.approx(30.0)
+        assert 25.0 <= point[1] <= 35.0
         assert isinstance(result.breach_point_lps, tuple)
-        assert isinstance(result.breach_centre_lps, tuple)
+        # The bone's nearest point is the +x wall, straight in from the sample.
+        surface = np.asarray(result.breach_surface_lps)
+        assert surface[0] == pytest.approx(39.0)
+        assert np.linalg.norm(point - surface) == pytest.approx(3.0)
 
     def test_breach_point_is_one_of_the_cylinder_samples(self):
         grader = ScrewGrader(_asymmetric_mask())
@@ -254,8 +254,6 @@ class TestBreachPoint:
         result = grader.grade(entry=entry, target=target, diameter_mm=8.0, label=28)
         points = grader.cylinder_points(entry, target, 8.0)
         assert np.isclose(points, np.asarray(result.breach_point_lps)).all(axis=1).any()
-        centres = grader.cylinder_points(entry, target, 0.0)
-        assert np.isclose(centres, np.asarray(result.breach_centre_lps)).all(axis=1).any()
 
     def test_tip_through_the_anterior_cortex_reads_anterior(self):
         """The breach direction is taken from the bone, not from the centreline.
@@ -305,9 +303,12 @@ class TestBreachPoint:
 
     def test_breach_point_without_radial_samples_is_the_centreline_point(self):
         grader = ScrewGrader(_cube_mask(), radial_samples=0)
-        result = grader.grade(entry=(5.0, 30.0, 30.0), target=(15.0, 30.0, 30.0), diameter_mm=6.0, label=28)
+        entry, target = (5.0, 30.0, 30.0), (15.0, 30.0, 30.0)
+        result = grader.grade(entry=entry, target=target, diameter_mm=6.0, label=28)
         assert result.breach_mm > 0.0
-        assert result.breach_point_lps == result.breach_centre_lps
+        centres = grader.cylinder_points(entry, target, 0.0)
+        assert np.isclose(centres, np.asarray(result.breach_point_lps)).all(axis=1).any()
+        assert result.breach_surface_lps is not None
 
 
 class TestDirectionalBreach:

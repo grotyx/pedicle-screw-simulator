@@ -4,6 +4,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from scripts.validate_plans import main  # noqa: E402
@@ -150,3 +152,19 @@ def test_out_argument_is_not_required_by_the_parser():
 
     args = parse_args(["--pred", "a.json", "--ref", "b.json"])
     assert args.out is None
+
+
+@pytest.mark.parametrize(
+    "name, csv_name, json_name",
+    [
+        ("report", "report.csv", "report.json"),
+        ("report.v2", "report.v2.csv", "report.v2.json"),
+        ("report.csv", "report.csv", "report.json"),
+    ],
+)
+def test_out_keeps_dotted_names_and_a_given_csv_suffix(tmp_path, name, csv_name, json_name):
+    pred, ref = _matched_pair(tmp_path)
+    main(["--pred", str(pred), "--ref", str(ref), "--out", str(tmp_path / name)])
+    assert (tmp_path / csv_name).exists()
+    assert (tmp_path / json_name).exists()
+    assert not (tmp_path / "report.csv").exists() or csv_name == "report.csv"
