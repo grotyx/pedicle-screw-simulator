@@ -15,6 +15,7 @@ current version; every other place the version appears is derived from it.
 
 ### Added
 
+- The user guide lists every keyboard shortcut.
 - A Construct map at the top of the Review page summarizes the plan level by
   level, cranial to caudal, as Right | vertebra | Left grade chips with
   diameter x length. Screws without a level are listed under Manual, screws
@@ -26,6 +27,16 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Plan Save, Load and Export dialogs open in the last plan folder (or
+  Documents), never the application folder, and root-level plan exports are
+  git-ignored. Plans store only a SHA-256 digest of the series UID; older
+  plans with the raw UID still load and are not re-saved with it.
+- CBT holds its anterior margin along the screw like the optimizer and keeps
+  the longest feasible length per direction (zero breach and wall clearance
+  still required), so it no longer drops or over-shortens screws the
+  optimizer's rule accepts. The chosen CBT screw can differ from before.
+- Implant catalogues are sorted on load and the automatic diameter is always
+  a catalogue size.
 - Running Plan Screws again asks before replacing the automatically planned
   screws on the levels being planned. After Replace, the earlier screws are
   removed only when the new plan succeeds, so the rod-fit figures no longer
@@ -106,6 +117,23 @@ current version; every other place the version appears is derived from it.
   changing the measure mode while editing a measurement keeps its plane.
 - The Side column of the screw table shows L or R, so it no longer
   truncates to "L…" at the default panel width.
+- Stepping the segmentation label no longer freezes the window: changes are
+  coalesced and recently built surfaces are cached.
+- 3D and MPR panes repaint after the window is minimised and restored.
+- The Screw MPR 2D mask overlay no longer clips on oblique planes.
+- Loading a new study clears the previous vertebral-only volume.
+- Measurements taken in Screw MPR are marked "(screw view)", keep that mark in
+  saved plans, and no longer jump to a standard slice they do not lie on.
+- Starting a screw drag in one view releases any other view's drag lock, so
+  one screw cannot be moved by two views at once.
+- The endplate band uses the true 3-D angle to the endplate, so a coronally
+  tilted endplate is judged the same on both sides.
+- Optimizer warnings for a level without an endplate reference no longer
+  claim a horizontal trajectory.
+- The legacy planner skips a side whose posterior surface is cut off instead
+  of entering at the anterior cortex.
+- validate_plans --out no longer truncates dotted names, and run_app.sh stops
+  with a clear message when python3 is older than 3.12.
 
 
 ## [0.2.3] - 2026-09-13
