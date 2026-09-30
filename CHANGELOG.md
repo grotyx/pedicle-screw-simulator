@@ -13,6 +13,32 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Added
+
+- A Construct map at the top of the Review page summarizes the plan level by
+  level, cranial to caudal, as Right | vertebra | Left grade chips with
+  diameter x length. Screws without a level are listed under Manual, screws
+  without a known side in the centre column. Clicking a chip selects that
+  screw.
+
+### Changed
+
+- The four workflow steps now run down a vertical step rail at the left edge
+  instead of a bar above the views. Each right-hand page opens with a header
+  ("Step N of 4", title, one-line hint).
+- The Planning layout shows one large main view (3D by default) with the other
+  three views as thumbnails underneath. The enlarge button (tooltip "Show in
+  the main view") on a thumbnail swaps it into the main view; header
+  double-click still maximises. Turning Screw MPR on makes the axial view the
+  main view. MPR Focus (2x2) is unchanged.
+- The tool buttons (Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR,
+  Fit 3D) moved from the top toolbar into a floating tool dock over the main
+  view. The 3D zoom in/out and fit commands are also in the View menu.
+- The top toolbar keeps Open DICOM and adds a study chip (voxel spacing only,
+  for example "CT · 0.39 × 0.39 × 1.00 mm") and a RESEARCH USE ONLY badge.
+- The floating controls over the views (tool dock, MPR zoom buttons, 3D
+  overlays) share one flat, theme-driven style in all three themes.
+
 ### Fixed
 
 - A pedicle measured by the axial fallback reported up to three times its
