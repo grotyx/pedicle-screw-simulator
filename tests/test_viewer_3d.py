@@ -1306,6 +1306,21 @@ class TestSegmentationLabelDebounceAndCache:
         assert len(builds) == 2  # 27 and 31 only; the return built nothing
         assert viewer._segmentation_actor is not None
 
+    def test_hidden_overlay_stays_hidden_after_stepping_through_an_empty_label(
+        self, monkeypatch
+    ):
+        viewer, _ = self._viewer(monkeypatch)
+        viewer.set_segmentation_label(27)
+        viewer._flush_segmentation_label()
+        viewer.set_segmentation_visible(False)
+        viewer.set_segmentation_label(31)  # empty: no actor left
+        viewer._flush_segmentation_label()
+        assert viewer._segmentation_actor is None
+        viewer.set_segmentation_visible(False)  # checkbox state while no actor
+        viewer.set_segmentation_label(27)
+        viewer._flush_segmentation_label()
+        assert viewer._segmentation_actor.GetVisibility() == 0
+
     def test_a_new_mask_invalidates_the_cache(self, monkeypatch):
         viewer, builds = self._viewer(monkeypatch)
         viewer.set_segmentation_label(27)

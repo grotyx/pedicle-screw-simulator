@@ -406,3 +406,23 @@ def test_a_screw_view_measurement_survives_save_and_load(ui_main_window, monkeyp
     entries = window._tool_ctrl._measurement_entries
     assert len(entries) == 1
     assert entries[0]["screw_aligned"] is True
+
+
+def test_a_screw_view_measurement_cannot_be_edited(ui_main_window, monkeypatch):
+    """Its plane belongs to one screw/slider, so re-picking must be refused."""
+    from src.models.measurement import Measurement
+
+    window = ui_main_window
+    _load_volume(window)
+    window._plan_ctrl._apply_loaded_plan(
+        screws=[],
+        measurements=[Measurement(points=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)], distance=5.0)],
+        planes=["axial"],
+        screw_aligned=[True],
+    )
+    tool = window._tool_ctrl
+    window.measurement_list_widget.setCurrentRow(0)
+    monkeypatch.setattr(tool, "_screw_mpr_active", lambda: True)  # any screw's view
+    tool.begin_edit_selected_measurement()
+    assert tool._editing_measurement_row is None
+    assert "delete" in window.statusbar.currentMessage().lower()

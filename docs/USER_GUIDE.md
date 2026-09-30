@@ -432,7 +432,7 @@ Add Screw, Distance, and Angle are buttons in the tool dock below the main view 
 Measurements belong to the cut where they were created. They hide on another cut and reappear when the original cut is restored.
 
 - Select **Show Cut** to return to the source cut.
-- Select **Show Cut** to return to the source cut. A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane rather than a standard slice; **Show Cut** does not jump for it, and **Edit** works only while Screw MPR is active.
+- Select **Show Cut** to return to the source cut. A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane rather than a standard slice; **Show Cut** does not jump for it, and **Edit** is not available for it, because the screw-aligned plane is not stored with the measurement: delete it and measure again in Screw MPR.
 - Click a measurement to select it and display yellow handles.
 - Drag a handle to correct one point.
 - Select **Edit** to re-measure the item.
