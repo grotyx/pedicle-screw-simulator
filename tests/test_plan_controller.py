@@ -375,6 +375,36 @@ def test_legacy_plan_with_raw_series_id_still_checks_and_is_not_re_emitted(
     assert "SERIES-V1" not in saved.read_text(encoding="utf-8")
 
 
+def test_save_pads_screw_view_flags_when_entries_are_shorter_than_measurements(
+    ui_main_window, monkeypatch, tmp_path
+):
+    from src.models.measurement import Measurement
+
+    window = ui_main_window
+    _load_volume(window)
+    for _ in range(2):
+        window._tool_ctrl.measurement_tool.add_measurement(
+            Measurement(points=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)], distance=5.0)
+        )
+    # Only the first measurement has a view entry; the second has none.
+    window._tool_ctrl._measurement_entries[:] = [
+        {"plane": "axial", "screw_aligned": True}
+    ]
+    path = tmp_path / "plan.json"
+    _capture_dialog_dirs(monkeypatch, path)
+    errors = []
+    monkeypatch.setattr(
+        plan_controller_module.QMessageBox,
+        "critical",
+        lambda *a, **k: errors.append(a[2]),
+    )
+
+    window._plan_ctrl.save_dialog()
+
+    assert errors == []
+    assert len(json.loads(path.read_text(encoding="utf-8"))["measurements"]) == 2
+
+
 def test_a_screw_view_measurement_survives_save_and_load(ui_main_window, monkeypatch, tmp_path):
     """Reloaded, it must still read "(screw view)", not a standard axial slice."""
     from src.models.measurement import Measurement
