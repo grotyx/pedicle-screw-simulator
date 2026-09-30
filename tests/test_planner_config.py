@@ -11,6 +11,22 @@ def test_defaults_match_constants():
     assert cfg.trajectory_hu_threshold == c.TRAJECTORY_HU_LOOSENING_THRESHOLD
 
 
+def test_implant_catalogues_are_sorted_on_construction():
+    cfg = PlannerConfig(implant_lengths_mm=(45, 30.0, 55.0), implant_diameters_mm=(6.5, 4.0, 5.5))
+    assert cfg.implant_lengths_mm == (30.0, 45.0, 55.0)
+    assert cfg.implant_diameters_mm == (4.0, 5.5, 6.5)
+    assert PlannerConfig.from_mapping({"implant_lengths_mm": [50, 25]}).implant_lengths_mm == (
+        25.0,
+        50.0,
+    )
+
+
+@pytest.mark.parametrize("field", ["implant_lengths_mm", "implant_diameters_mm"])
+def test_validate_rejects_a_non_positive_catalogue_size(field):
+    with pytest.raises(ValueError):
+        PlannerConfig(**{field: (0.0, 5.0)}).validate()
+
+
 def test_roundtrip_mapping_ignores_unknown_keys():
     cfg = PlannerConfig(pedicle_fill_ratio=0.7, anterior_margin_mm=5.0)
     data = cfg.to_mapping()

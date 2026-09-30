@@ -33,9 +33,9 @@ from .trajectory_optimizer import (
     DENSITY_HIGH_HU,
     DENSITY_LOW_HU,
     SAFETY_CAP_MM,
-    TIP_MARGIN_RELIEF_MM,
     TIP_SEGMENT_MM,
     RunProgress,
+    anterior_margin_clear,
 )
 from .vertebra import PedicleAnalysisResult, aiming_endplate_normal
 
@@ -220,13 +220,16 @@ def plan_cbt_screw(
     catalogue diameter and length is graded in one
     :meth:`ScrewGrader.evaluate_batch` pass per diameter.  A candidate is
     feasible when it is fully contained (breach 0), keeps
-    ``config.wall_clearance_mm`` of cortical wall, and clears
-    ``config.anterior_margin_mm`` at the tip — the last measured over its distal
-    :data:`~src.core.trajectory_optimizer.TIP_SEGMENT_MM` exactly as the
-    optimiser measures it.  Feasible candidates are ranked by
+    ``config.wall_clearance_mm`` of cortical wall, and keeps
+    ``config.anterior_margin_mm`` of bone ahead of its tip along the screw --
+    the optimiser's anterior rule (see
+    :func:`~src.core.trajectory_optimizer.anterior_margin_clear`), with the
+    distal :data:`~src.core.trajectory_optimizer.TIP_SEGMENT_MM` held to the
+    same containment and wall clearance as the shaft.  Feasible candidates are ranked by
     ``safety + density`` — the optimiser's two bone-contact objectives, with
     density at full weight because cortical purchase is the whole point of CBT.
-    Ties go to the longer screw, then the wider one.
+    Only the longest feasible length is kept per direction, as the optimiser
+    does; ties go to the longer screw, then the wider one.
 
     The returned screw is finalised through the same tail as every other planned
     screw, so its grade, HU statistics, bone-quality metrics and facet
@@ -266,7 +269,7 @@ def _plan_cbt_screw(
         return None, reason
 
     directions, cranial_deg, _lateral_deg = cbt_directions(side)
-    lengths = np.asarray(CBT_DEFAULTS["lengths_mm"], dtype=np.float64)
+    lengths = np.sort(np.asarray(CBT_DEFAULTS["lengths_mm"], dtype=np.float64))
     n_dir, n_len = directions.shape[0], lengths.shape[0]
 
     # One row per (direction, length): the entry is fixed, so the whole sweep is
@@ -281,14 +284,10 @@ def _plan_cbt_screw(
     # longer screw, then the wider one.
     # The anterior safety margin is a property of the *tip*, not of the whole
     # screw: a trajectory can keep a millimetre of wall along its shaft and still
-    # end a millimetre behind the anterior cortex.  Measured over the distal
-    # TIP_SEGMENT_MM exactly as the optimiser measures it, so a CBT screw and a
-    # traditional one are held to the same anterior rule.
-    # The relief is :data:`TIP_MARGIN_RELIEF_MM`, not the configured wall
-    # clearance: the tip rule was calibrated against a 1 mm clearance, and
-    # coupling it to the setting silently moved the anterior margin whenever
-    # the default changed.
-    tip_margin = max(config.anterior_margin_mm - TIP_MARGIN_RELIEF_MM, 0.0)
+    # end a millimetre behind the anterior cortex.  It is measured the way the
+    # optimiser measures it -- along the screw to the anterior cortex, with the
+    # distal TIP_SEGMENT_MM only held to the shaft's containment and wall
+    # clearance -- so a CBT screw and a traditional one obey the same rule.
     tip_entries = targets - dirs * TIP_SEGMENT_MM
 
     best_key: Optional[Tuple[float, float, float]] = None
@@ -316,10 +315,22 @@ def _plan_cbt_screw(
             tip_entries[rows], targets[rows], float(diameter), int(label)
         )
         rows = rows[
-            (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
+            (tip_batch.breach_mm <= 0.0)
+            & (tip_batch.min_wall_mm >= config.wall_clearance_mm - _CLEARANCE_EPS)
+            & anterior_margin_clear(
+                grader, targets[rows], dirs[rows], int(label), config.anterior_margin_mm
+            )
         ]
         if rows.size == 0:
             continue
+        # The longest feasible length per direction, as the optimiser's
+        # keep_longest_per_trajectory: the along-axis margin admits short
+        # screws the all-around test used to reject, and the density term
+        # would otherwise reward them for stopping in the dense pedicle.
+        # ``rows`` is ascending and lengths vary fastest, so each direction's
+        # last row is its longest.
+        direction = rows // n_len
+        rows = rows[np.r_[direction[1:] != direction[:-1], True]]
 
         safety = np.clip(np.minimum(batch.min_wall_mm, SAFETY_CAP_MM) / SAFETY_CAP_MM, 0.0, 1.0)
         density = np.clip(

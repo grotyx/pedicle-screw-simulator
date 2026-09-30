@@ -122,12 +122,25 @@ def endplate_neighbour_reference_warning(
     )
 
 
-def endplate_no_reference_warning(rmse_mm: float) -> str:
-    """Wording for a rough fit with no well-fitted neighbour to borrow from."""
+#: How a level with no endplate reference is aimed, per planning back-end: the
+#: legacy planner keeps the target at the entry height, while the optimiser
+#: sweeps the sagittal angle around the pedicle axis and lets its other
+#: objectives choose.
+NO_REFERENCE_AIM_LEGACY = "used horizontal sagittal trajectory"
+NO_REFERENCE_AIM_OPTIMIZER = "sagittal angle searched around the pedicle axis"
+
+
+def endplate_no_reference_warning(
+    rmse_mm: float, aim: str = NO_REFERENCE_AIM_LEGACY
+) -> str:
+    """Wording for a rough fit with no well-fitted neighbour to borrow from.
+
+    ``aim`` says what the back-end did instead: :data:`NO_REFERENCE_AIM_LEGACY`
+    or :data:`NO_REFERENCE_AIM_OPTIMIZER`.
+    """
     return (
         f"{ENDPLATE_REFERENCE_WARNING_PREFIX}: own upper-endplate fit too "
-        f"rough (RMSE {rmse_mm:.1f} mm) and no well-fitted neighbour; used "
-        "horizontal sagittal trajectory"
+        f"rough (RMSE {rmse_mm:.1f} mm) and no well-fitted neighbour; {aim}"
     )
 
 

@@ -20,6 +20,7 @@ from src.core.auto_screw_planner import AutoScrewPlanner, PlannedScrew
 from src.core.pedicle_analyzer import (
     ENDPLATE_REFERENCE_NEIGHBOURS,
     ENDPLATE_REFERENCE_WARNING_PREFIX,
+    NO_REFERENCE_AIM_OPTIMIZER,
     endplate_fit_warning,
     endplate_no_reference_warning,
 )
@@ -362,6 +363,26 @@ class TestEntryPointFinding:
 
         entry = planner._find_entry_point(center, axis, vertebra_label=27)
         assert entry is None
+
+    def test_entry_is_none_when_the_posterior_ray_never_leaves_bone(self):
+        """A mask cut off posteriorly has no posterior surface to enter at.
+
+        The pedicles here run into the volume's posterior edge (y = 44), so
+        the posterior ray is still in bone when it leaves the volume.  The
+        anterior ray's exit is the vertebral body's *anterior* cortex, which
+        is not an entry point; the side is skipped instead.
+        """
+        ct, mask = _make_bone_cylinder(shape=(40, 45, 60))
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="legacy"))
+
+        entry = planner._find_entry_point(
+            np.array([40.0, 37.0, 20.0]), np.array([0.0, 1.0, 0.0]), vertebra_label=27
+        )
+        screw, reason = planner._plan_screw(_make_analysis(), "left")
+
+        assert entry is None
+        assert screw is None
+        assert reason == "no left entry point on the posterior surface"
 
     def test_entry_uses_vertebra_label_not_adjacent_high_hu(self):
         _, mask = _make_bone_cylinder()
@@ -1400,6 +1421,30 @@ class TestPlannerConfig:
         # A recommendation between catalogue entries steps to the next one below.
         assert planner._next_smaller_diameter(6.0) == pytest.approx(5.5)
 
+    def test_length_limits_read_an_unsorted_catalogue(self):
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = TestGrading()._cube()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(implant_lengths_mm=(45.0, 30.0, 55.0, 35.0))
+        )
+        assert planner.MIN_SCREW_LENGTH == pytest.approx(30.0)
+        assert planner.MAX_SCREW_LENGTH == pytest.approx(55.0)
+
+    def test_computed_diameter_is_always_a_catalogue_size(self):
+        """An L4 prefers 6.5 mm; a catalogue without it gets the next size down."""
+        from src.core.planner_config import PlannerConfig
+
+        ct, mask = TestGrading()._cube()
+        planner = AutoScrewPlanner(
+            ct, mask, config=PlannerConfig(implant_diameters_mm=(4.0, 5.0, 6.0, 7.0))
+        )
+        # Width 10 holds 8.0 mm, so the catalogue offers up to 7.0; the 6.5 mm
+        # preference snaps down to 6.0, never up to 7.0.
+        assert planner._compute_diameter(10.0, "L4") == pytest.approx(6.0)
+        # Width 7 holds 5.6 mm: the pedicle, not the preference, limits it.
+        assert planner._compute_diameter(7.0, "L4") == pytest.approx(5.0)
+
 
 class TestGridAlignment:
     """A mask that drifted off the CT grid is resampled, not rejected."""
@@ -2219,6 +2264,32 @@ class TestEndplateOptionAndMetric:
             assert any(
                 w.startswith(ENDPLATE_REFERENCE_WARNING_PREFIX) for w in screw.warnings
             )
+
+    @pytest.mark.parametrize("rmse", [None, 5.2])
+    def test_optimizer_without_a_reference_does_not_claim_a_horizontal_trajectory(
+        self, rmse
+    ):
+        """Only the legacy planner aims a reference-less level horizontally;
+        the optimiser searches its sagittal angle around the pedicle axis, so
+        its warning has to say that instead."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=PlannerConfig(mode="optimizer"))
+        analysis = _make_analysis(
+            upper_endplate_normal=None if rmse is None else self._NORMAL_10_DEG
+        )
+        analysis.endplate_fit_rmse_mm = rmse
+
+        results = planner.plan_all([analysis])
+
+        assert len(results) == 2
+        for screw in results:
+            assert "score" in screw.metrics  # proves the optimizer path built it
+            assert not any("horizontal" in w for w in screw.warnings)
+            assert any(NO_REFERENCE_AIM_OPTIMIZER in w for w in screw.warnings)
+        if rmse is not None:
+            assert endplate_no_reference_warning(
+                rmse, NO_REFERENCE_AIM_OPTIMIZER
+            ) in results[0].warnings
 
     def test_endplate_parallel_off_ignores_a_neighbour_reference(self):
         """With aiming disabled the trajectory is deliberately horizontal, so

@@ -85,25 +85,6 @@ TIP_SEGMENT_MM = 4.0
 #: a future clearance change from moving the anterior margin with it.
 TIP_MARGIN_RELIEF_MM = 1.0
 
-#: How far the seated entry may sit anterior of the posterior cortex before the
-#: trajectory counts as unreachable.  A pedicle is continuous with the lamina, so
-#: a few millimetres of countersinking is normal; more than this means a drill
-#: would have to cross air (or another structure) to reach the corridor.
-#:
-#: The shortfall measures *burial*, not exposure: the entry sits inside bone,
-#: anterior of the cortex the posterior ray-cast reached, so a larger value can
-#: never admit a screw hanging in air.  Containment is a separate, unrelaxed
-#: test -- the grader still requires ``breach_mm <= 0`` and the configured wall
-#: clearance over the whole shaft -- so the only thing this bound buys is a
-#: shallower countersink.  Part of what it measures is an artefact besides:
-#: ``surface_reach`` is cast along the *pedicle axis* while ``travel`` runs
-#: along each candidate's own direction, so an obliquely angled candidate on a
-#: tilted axis reports a shortfall from the geometry of the two rays alone.  At
-#: 3 mm that made this the sole binder on tilted levels whose trajectories were
-#: otherwise contained; 6 mm still rejects an entry buried in the lamina with
-#: no drillable bone behind it (the arch phantom reports 12 mm and up).
-MAX_ENTRY_SHORTFALL_MM = 6.0
-
 #: How many catalogue steps below the recommended diameter the search may go
 #: before giving up.  Bounds the worst-case runtime of :func:`optimize_screw`.
 MAX_DIAMETER_STEPS = 2
@@ -223,9 +204,6 @@ class Candidate:
     convergence_deg: float
     craniocaudal_deg: float
     score: float
-    #: How far anterior of the posterior cortex the entry had to be seated, in
-    #: mm along the trajectory; 0 when the entry sits on the cortex itself.
-    surface_shortfall_mm: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     #: Directional split of ``breach_mm`` from the grader, and the wall left on
@@ -536,10 +514,10 @@ def generate_candidates(
 
     Feasibility (containment, wall clearance, anterior margin, reachability) is
     *not* checked here -- :func:`score_candidates` does that from the batch
-    grading.  Pass a dict as ``diagnostics`` to receive per-candidate arrays
-    aligned with the return value; it currently carries
-    ``"surface_shortfall_mm"``, how far anterior of the posterior cortex each
-    entry had to be seated.
+    grading.  Pass a dict as ``diagnostics`` to receive
+    ``"cortical_climb_mm"``, how far each returned entry climbed back to its
+    dorsal cortex (aligned with the return value), and ``"occluded_entries"``,
+    how many heads :func:`dorsal_approach_clear` discarded.
 
     When ``config.endplate_parallel`` is on and the analysis carries an
     upper-endplate normal, the craniocaudal window is centred on the
@@ -651,7 +629,7 @@ def generate_candidates(
 
     # One ray per direction, seated from the isthmus centre where the corridor
     # is widest; the tangential grid then spreads entry points over that surface.
-    anchors, travel = _seat_entries(
+    anchors, _travel = _seat_entries(
         grader,
         np.repeat(center[None, :], directions.shape[0], axis=0),
         directions,
@@ -659,12 +637,10 @@ def generate_candidates(
         label,
         radius,
     )
-    shortfall_per_direction = np.maximum(surface_reach - travel, 0.0)
 
     entries = []
     entry_directions = []
-    shortfall = []
-    for anchor, direction, short in zip(anchors, directions, shortfall_per_direction, strict=True):
+    for anchor, direction in zip(anchors, directions, strict=True):
         # ``lateral_axis`` is deliberately *not* rotated with the direction: it is
         # a fixed patient-frame axis, so the "a" offsets are a stable mediolateral
         # slide across the entry surface for every candidate angle.  Only the
@@ -674,14 +650,15 @@ def generate_candidates(
             for b in offsets:
                 entries.append(anchor + a * lateral_axis + b * tangent)
                 entry_directions.append(direction)
-                shortfall.append(short)
     # The anchors above sit where the whole cross-section first fits, which is
     # the right place to spread the tangential grid but the wrong place for a
     # head.  Each entry now climbs back along its own direction to the dorsal
     # cortex, which is where the drill starts: the screw gains the length the
     # buried head was hiding, and the head lands at the facet instead of inside
-    # the lamina.  ``shortfall`` measured burial against a cortex found along
-    # the *pedicle axis*; a head on its own trajectory's cortex has none left.
+    # the lamina.  The burial bound that used to reject entries seated too far
+    # inside the cortex is gone with it: it measured burial against a cortex
+    # found along the *pedicle axis*, and a head on its own trajectory's
+    # cortex has none left.
     entries, climb = seat_on_cortex(
         grader,
         np.asarray(entries, dtype=np.float64),
@@ -690,7 +667,7 @@ def generate_candidates(
     )
     # A head with the same vertebra's bone behind it sits in a pocket the drill
     # cannot reach without crossing that bone first -- discard it here, where
-    # the old burial bound used to reject the same geometry by proxy.
+    # the burial bound used to reject the same geometry by proxy.
     reachable = dorsal_approach_clear(
         grader, entries, np.asarray(entry_directions, dtype=np.float64), label
     )
@@ -699,11 +676,9 @@ def generate_candidates(
     entry_directions = [d for d, ok in zip(entry_directions, reachable, strict=True) if ok]
     if entries.shape[0] == 0:
         if diagnostics is not None:
-            diagnostics["surface_shortfall_mm"] = np.zeros(0)
             diagnostics["cortical_climb_mm"] = np.zeros(0)
             diagnostics["occluded_entries"] = int((~reachable).sum())
         return empty
-    shortfall = np.zeros(len(entries), dtype=np.float64)
 
     entry_count = len(entries)
     per_entry = lengths_catalogue.size
@@ -711,7 +686,6 @@ def generate_candidates(
     entry_directions = np.repeat(
         np.asarray(entry_directions, dtype=np.float64), per_entry, axis=0
     )
-    shortfall = np.repeat(np.asarray(shortfall, dtype=np.float64), per_entry)
     climb = np.repeat(np.asarray(climb, dtype=np.float64), per_entry)
     lengths = np.tile(lengths_catalogue, entry_count)
     targets = entries + entry_directions * lengths[:, None]
@@ -721,7 +695,6 @@ def generate_candidates(
     tip_out, _ = grader.distances_at_points(targets, label)
     keep = (entry_out <= 0.0) & (tip_out <= 0.0)
     if diagnostics is not None:
-        diagnostics["surface_shortfall_mm"] = shortfall[keep]
         diagnostics["cortical_climb_mm"] = climb[keep]
         diagnostics["occluded_entries"] = int((~reachable).sum())
     return entries[keep], targets[keep], lengths[keep]
@@ -739,7 +712,6 @@ def score_candidates(
     config: PlannerConfig,
     weights: OptimizerWeights,
     tip_batch: Optional[BatchResult] = None,
-    surface_shortfall_mm: Optional[np.ndarray] = None,
     grader: Optional[ScrewGrader] = None,
     narrow: bool = False,
     anterior_clear: Optional[np.ndarray] = None,
@@ -753,9 +725,8 @@ def score_candidates(
     clearance, like the rest of the shaft.  Given ``tip_batch`` alone, the
     older all-around test applies: the distal cylinder's surface must keep the
     anterior margin (less :data:`TIP_MARGIN_RELIEF_MM`) in every direction.
-    ``surface_shortfall_mm`` (from ``generate_candidates(..., diagnostics=...)``)
-    rejects entries buried more than :data:`MAX_ENTRY_SHORTFALL_MM` inside the
-    posterior cortex.
+    Reachability of the entry is settled before scoring, by
+    :func:`generate_candidates` (see :func:`dorsal_approach_clear`).
 
     A grader with no CT reports ``NaN`` HU for *every* candidate; that is a
     missing measurement, not an unrankable trajectory, so the density objective
@@ -776,7 +747,8 @@ def score_candidates(
     do not have to be on the same scale.
 
     With ``config.endplate_parallel`` on and a fitted endplate plane, a
-    candidate is feasible only while its endplate angle stays inside
+    candidate is feasible only while its angle to the endplate plane -- the
+    exact 3-D angle the ``endplate`` objective uses -- stays inside
     ``config.endplate_tolerance_deg``.  If that empties the set the band is
     dropped for this call and every returned candidate carries
     :func:`endplate_band_relaxed_warning`.  With the option off the soft
@@ -802,6 +774,16 @@ def score_candidates(
     directions[movable] = deltas[movable] / norms[movable, None]
 
     convergence, craniocaudal = _trajectory_angles(deltas, side)
+    # Signed angle between each screw and the endplate plane (degrees): the one
+    # measurement the hard band and the soft objective share.  Exact in 3-D, so
+    # the plane's coronal tilt and the screw's convergence both count -- the
+    # craniocaudal angle minus the plane's sagittal slope misses both, and on a
+    # scoliotic level misjudged left and right in opposite directions.
+    tilt = (
+        np.degrees(np.arcsin(np.clip(directions @ normal, -1.0, 1.0)))
+        if normal is not None
+        else None
+    )
 
     sampled_hu = np.isfinite(batch.mean_hu)
     without_ct = not sampled_hu.any()
@@ -835,26 +817,13 @@ def score_candidates(
         feasible &= (tip_batch.breach_mm <= 0.0) & (tip_batch.min_wall_mm >= tip_margin)
     if anterior_clear is not None:
         feasible &= np.asarray(anterior_clear, dtype=bool).reshape(-1)
-    if surface_shortfall_mm is not None:
-        shortfall = np.asarray(surface_shortfall_mm, dtype=np.float64).reshape(-1)
-        feasible &= shortfall <= MAX_ENTRY_SHORTFALL_MM + 1e-9
-    else:
-        shortfall = np.zeros(count)
 
     # Hard endplate band.  A band that admits nothing is dropped for this side
     # with a note rather than costing it a screw: an off-parallel screw the
     # surgeon can see is better than a missing one they have to explain.
     band_relaxed = False
-    endplate_slope = (
-        endplate_slope_deg(aiming_endplate_normal(analysis))
-        if config.endplate_parallel
-        else None
-    )
-    if endplate_slope is not None:
-        within_band = feasible & (
-            np.abs(craniocaudal - endplate_slope)
-            <= config.endplate_tolerance_deg + 1e-9
-        )
+    if config.endplate_parallel and endplate_slope_deg(aiming_normal) is not None:
+        within_band = feasible & (np.abs(tilt) <= config.endplate_tolerance_deg + 1e-9)
         if within_band.any():
             feasible = within_band
         else:
@@ -877,7 +846,6 @@ def score_candidates(
         # while keeping the component present in every candidate's breakdown.
         endplate = np.ones(count)
     else:
-        tilt = np.degrees(np.arcsin(np.clip(directions @ normal, -1.0, 1.0)))
         endplate = np.clip(1.0 - np.abs(tilt) / ENDPLATE_TOLERANCE_DEG, 0.0, 1.0)
 
     # Insertion order is the order the weighted sum is accumulated in, and it
@@ -929,7 +897,6 @@ def score_candidates(
             convergence_deg=float(convergence[i]),
             craniocaudal_deg=float(craniocaudal[i]),
             score=float(total[i]),
-            surface_shortfall_mm=float(shortfall[i]),
             medial_breach_mm=float(batch.medial_breach_mm[i]),
             lateral_breach_mm=float(batch.lateral_breach_mm[i]),
             craniocaudal_breach_mm=float(batch.craniocaudal_breach_mm[i]),
@@ -1036,7 +1003,6 @@ def optimize_screw(
         )[: MAX_DIAMETER_STEPS + 1]
         entry_grid = DEFAULT_ENTRY_GRID_MM
     for diameter in catalogue:
-        diagnostics: Dict[str, np.ndarray] = {}
         entries, targets, lengths = generate_candidates(
             grader,
             analysis,
@@ -1045,7 +1011,6 @@ def optimize_screw(
             entry_grid_mm=entry_grid,
             corridor_radius_mm=diameter / 2.0,
             planner=planner,
-            diagnostics=diagnostics,
         )
         if entries.shape[0] == 0:
             continue
@@ -1066,7 +1031,6 @@ def optimize_screw(
         ranked = score_candidates(
             batch, entries, targets, lengths, diameter, analysis, side, config, weights,
             tip_batch=tip_batch,
-            surface_shortfall_mm=diagnostics.get("surface_shortfall_mm"),
             grader=grader,
             narrow=narrow,
             anterior_clear=anterior_margin_clear(

@@ -73,6 +73,15 @@ class PlannerConfig:
     #: Objective weights consumed by the optimiser (ignored in legacy mode).
     weights: "OptimizerWeights" = field(default_factory=_default_weights)
 
+    def __post_init__(self) -> None:
+        # Consumers read the catalogues' ends as the smallest and largest
+        # implant, so they are kept ascending (and free of repeats) however a
+        # caller or a saved setting listed them.
+        for name in ("implant_lengths_mm", "implant_diameters_mm"):
+            object.__setattr__(
+                self, name, tuple(sorted({float(v) for v in getattr(self, name)}))
+            )
+
     def validate(self) -> None:
         if not 0.5 <= self.pedicle_fill_ratio <= 1.0:
             raise ValueError("pedicle_fill_ratio must be within [0.5, 1.0]")
@@ -90,6 +99,8 @@ class PlannerConfig:
             raise ValueError("narrow_lateral_breach_mm must be within [0, 6]")
         if not self.implant_lengths_mm or not self.implant_diameters_mm:
             raise ValueError("implant catalogues must not be empty")
+        if self.implant_lengths_mm[0] <= 0.0 or self.implant_diameters_mm[0] <= 0.0:
+            raise ValueError("implant catalogue sizes must be positive")
         if self.mode not in PLANNER_MODES:
             raise ValueError(f"mode must be one of {PLANNER_MODES}, got {self.mode!r}")
         if self.trajectory not in TRAJECTORY_KINDS:

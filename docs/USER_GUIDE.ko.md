@@ -233,7 +233,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 | Lateral breach cap (mm) | 2.0 mm | narrow 척추경에서 허용하는 lateral(in-out-in) 천공 한도이며, medial 벽은 절대 뚫지 않음 |
 | Place narrow screws even if not contained | 꺼짐 | 꺼짐: legacy 대체 경로의 최선 궤적으로도 천공이 남는(Gertzbein 등급 C 이하이거나 medial 천공이 조금이라도 있는) narrow 척추경은 계획하지 않고 "No screw planned"에 표시함. 켜짐: 가장 작은 스크류를 그대로 배치하고, 천공 경고와 함께 이 옵션 때문에 배치되었다는 경고를 붙임 |
 | Parallel to upper endplate | 켜짐 | 궤적을 수평 대신 상위 종판(upper endplate)을 따라 정렬함 |
-| Endplate band | 10° | 위 옵션이 켜져 있을 때 최적화기가 종판 방향에서 얼마나 벗어난 각도까지 허용하는지 |
+| Endplate band | 10° | 위 옵션이 켜져 있을 때 최적화기가 종판 방향에서 얼마나 벗어난 각도까지 허용하는지. 스크류와 종판 평면 사이의 실제 3차원 각도로 측정하므로, 관상면으로 기울어진 종판도 좌우를 똑같이 판정함 |
 | Construct alignment | 0.30 | 스크류 헤드를 로드에 맞춰 정렬하고 레벨 간 수렴각을 맞추는 데 주어지는 가중치(5.6절 참고) |
 
 **Reset Defaults**를 선택하면 이 열 개 값과 아래에서 설명하는 플래너 모드, 궤적 방식, Safety·Density 목적함수 가중치까지 모두 기본값으로 즉시 복원되고 저장됩니다. Lateral divergence 한계값(−5°, 플래너가 허용하는 가장 lateral한 각도)은 이번 버전에서 고정되어 있으며 패널에 노출되지 않습니다.
@@ -244,7 +244,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 - **RMSE 1.5 mm 이하:** 적합을 신뢰하고 그대로 사용합니다 — `endplate_reference` = `own`, 경고 없음.
 - **1.5–3.0 mm:** 여전히 해당 레벨 자체의 적합(`own`)을 사용하지만, rough-fit 경고("Upper endplate fit is rough (RMSE _x_.x mm) — check the sagittal view")가 함께 표시됩니다. 요추 CT 한 복셀이 약 1 mm이고, 1.5 mm는 적합이 mask 자체의 계단 노이즈와 더 이상 구별되지 않기 시작하는 지점이기 때문입니다.
-- **3.0 mm 초과, 또는 적합 자체가 없음:** 이제 해당 레벨 자체의 적합은 정렬 기준으로 신뢰하지 않습니다. 이 임계값은 요추 CT 슬라이스로 두세 장 깊이에 해당하며 — 1.5 mm 경고가 다루는 계단 노이즈보다 훨씬 깊고, 실제 압박골절이나 Schmorl node가 도달하는 깊이와 비슷합니다. 대신 플래너는 위아래 두 레벨 이내에 있는 가장 가까운 적합이 양호한(well-fitted, "신뢰 가능한") 레벨들의 역거리 가중 평균을 따라 정렬합니다 — `endplate_reference` = `neighbours` — 이때 경고에는 어느 레벨에서 빌려왔는지가 함께 표시됩니다. 자체 적합이 rough했던 경우는 "Endplate reference: own upper-endplate fit too rough (RMSE _x_.x mm); aimed along T12 and L3 — check the sagittal view"이고, 자체 적합 자체가 없었던 경우는 "Endplate reference: no upper-endplate fit; aimed along T12 and L3 — check the sagittal view"입니다. 도달 범위 안에 신뢰 가능한 이웃 레벨이 전혀 없으면 궤적은 수평(horizontal)으로 대체됩니다 — `endplate_reference` = `none` — 이때도 고유의 경고가 표시됩니다("...and no well-fitted neighbour; used horizontal sagittal trajectory", 또는 애초에 적합 자체가 없어 rough라고 할 것도 없는 경우에는 "Upper endplate unavailable; used horizontal sagittal trajectory").
+- **3.0 mm 초과, 또는 적합 자체가 없음:** 이제 해당 레벨 자체의 적합은 정렬 기준으로 신뢰하지 않습니다. 이 임계값은 요추 CT 슬라이스로 두세 장 깊이에 해당하며 — 1.5 mm 경고가 다루는 계단 노이즈보다 훨씬 깊고, 실제 압박골절이나 Schmorl node가 도달하는 깊이와 비슷합니다. 대신 플래너는 위아래 두 레벨 이내에 있는 가장 가까운 적합이 양호한(well-fitted, "신뢰 가능한") 레벨들의 역거리 가중 평균을 따라 정렬합니다 — `endplate_reference` = `neighbours` — 이때 경고에는 어느 레벨에서 빌려왔는지가 함께 표시됩니다. 자체 적합이 rough했던 경우는 "Endplate reference: own upper-endplate fit too rough (RMSE _x_.x mm); aimed along T12 and L3 — check the sagittal view"이고, 자체 적합 자체가 없었던 경우는 "Endplate reference: no upper-endplate fit; aimed along T12 and L3 — check the sagittal view"입니다. 도달 범위 안에 신뢰 가능한 이웃 레벨이 전혀 없으면 — `endplate_reference` = `none` — Legacy 플래너는 수평(horizontal) 궤적으로 대체하고, Optimizer는 척추경 축을 중심으로 시상면 각도를 탐색합니다. 이때도 각각 고유의 경고가 표시됩니다: "...and no well-fitted neighbour; used horizontal sagittal trajectory"(Legacy) 또는 "...and no well-fitted neighbour; sagittal angle searched around the pedicle axis"(Optimizer)이며, 애초에 적합 자체가 없어 rough라고 할 것도 없는 경우에는 "Upper endplate unavailable; " 뒤에 같은 문구가 붙습니다.
 
 S1과 sacrum은 이웃 레벨 기준 차용에서 양방향 모두 제외됩니다. 요천추각(lumbosacral angle)은 L5 자체의 각도와 15–30° 차이가 나므로, S1은 자신의 적합 상태와 무관하게 L5에 법선(normal)을 빌려주지도, L5로부터 빌리지도 않습니다.
 
@@ -277,7 +277,7 @@ Planning Parameters의 **Trajectory** 콤보박스는 **Plan Screws**가 목표�
 - **Traditional(기본값)** — 척추경 축을 따라가는 수렴형(convergent) 척추경 나사못이며, 위의 두 백엔드 중 어느 쪽으로도 계획할 수 있습니다.
 - **Cortical bone trajectory** — pars/lamina 접합부, 즉 척추경 협부(isthmus)보다 약간 inferior·medial 지점에서 시작해 cranial·lateral 방향으로 척추체 안쪽으로 들어가는 짧고 가는 나사못으로, traditional 궤적과 정반대 방향입니다. 척추경을 가득 채우는 대신 지나가는 경로 상의 피질골 접촉에서 뽑힘 강도(pull-out strength)를 얻으며, 이 점이 골다공증 뼈에서 이 술식이 갖는 장점입니다. CBT를 선택하면 Planner 모드 설정과 무관하게 궤적 탐색 자체가 완전히 바뀌며, 최적화기의 후보 그리드도 legacy 플래너의 medial 탐색도 사용되지 않습니다.
 
-시작 각도는 CBT 문헌을 따릅니다: cranial 각도 ≈25°, lateral 각도 ≈12°이며, 각각 ±5° 범위를 2.5° 간격으로 훑어 가장 점수가 높은 방향을 찾습니다. 임플란트 카탈로그는 직경 5.0/5.5/6.0 mm, 길이 30/35/40 mm로 traditional 카탈로그보다 가늘고 짧습니다. 후보는 safety와 density를 동일한 비중으로 채점해 순위를 매기며(피질골과의 접촉이 이 술식의 핵심이기 때문입니다), 실현 가능하려면 천공이 전혀 없고 설정된 벽 여유거리를 만족해야 합니다. 동점일 경우 더 긴 스크류, 그다음 더 굵은 스크류를 우선합니다.
+시작 각도는 CBT 문헌을 따릅니다: cranial 각도 ≈25°, lateral 각도 ≈12°이며, 각각 ±5° 범위를 2.5° 간격으로 훑어 가장 점수가 높은 방향을 찾습니다. 임플란트 카탈로그는 직경 5.0/5.5/6.0 mm, 길이 30/35/40 mm로 traditional 카탈로그보다 가늘고 짧습니다. 후보는 safety와 density를 동일한 비중으로 채점해 순위를 매기며(피질골과의 접촉이 이 술식의 핵심이기 때문입니다), 실현 가능하려면 천공이 전혀 없고 설정된 벽 여유거리를 만족하며, 스크류 자체 축을 따라 팁 앞쪽에 설정된 Anterior margin만큼의 뼈를 남겨야 합니다 — Optimizer와 같은 전방 규칙입니다(5.6절). 동점일 경우 더 긴 스크류, 그다음 더 굵은 스크류를 우선합니다.
 
 계획된 모든 CBT 스크류에는 다음과 같은 고정 경고가 함께 표시되어, CT에서 이 술식의 금기사항을 직접 확인하도록 안내합니다. 플래너 스스로는 이를 자동으로 판별할 수 없기 때문입니다: "CBT consensus contraindications: spondylolisthesis grade >= 3, pars defect, absent lamina/isthmus, rotational deformity > 2° (Zhang 2024)". 실현 가능한 CBT 궤적이 없는 방향(side)은 traditional 궤적으로 대체되지 않고 그대로 제외됩니다. 두 술식은 헤드 위치가 서로 다르므로 섞어 쓰면 구조물(construct) 전체가 어긋나기 때문입니다.
 
@@ -521,7 +521,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 
 ### 골절된 종판과 스크류가 평행하지 않음
 
-어떤 레벨의 상연(上緣)이 압박골절이나 Schmorl node로 손상되어 있으면, 플래너가 그 레벨의 스크류를 자체 종판이 아니라 이웃 레벨의 종판을 따라 정렬할 수 있습니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. Review 페이지의 "⚠ N warnings" 줄을 펼쳐 "Endplate reference: …" 경고나 "Upper endplate unavailable; used horizontal sagittal trajectory" 경고가 있는지 확인하십시오. Details 섹션의 Endplate 행 자체에는 `own`/`neighbours`/`none`이라는 글자가 그대로 나오지 않습니다 — `own`이면 그냥 각도("+2.3°")만 표시되고, `neighbours`이면 각도 뒤에 빌려온 레벨이 붙어("+2.3° vs T12, L3") tooltip에도 표시되며, `none`이면 비교할 기준 자체가 없어 "--"로 표시됩니다. 기준값 자체(`own`/`neighbours`/`none`)는 CSV 내보내기의 `endplate_reference` 열에서만 문자 그대로 확인할 수 있습니다(9절 참고). 이는 자체 적합을 신뢰할 수 없는 레벨에서 나타나는 정상적인 동작이며 버그가 아닙니다 — 어느 경우든 sagittal 화면에서 궤적을 직접 확인하십시오.
+어떤 레벨의 상연(上緣)이 압박골절이나 Schmorl node로 손상되어 있으면, 플래너가 그 레벨의 스크류를 자체 종판이 아니라 이웃 레벨의 종판을 따라 정렬할 수 있습니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. Review 페이지의 "⚠ N warnings" 줄을 펼쳐 "Endplate reference: …" 경고나 "Upper endplate unavailable; …" 경고(Legacy 플래너는 "used horizontal sagittal trajectory", Optimizer는 "sagittal angle searched around the pedicle axis")가 있는지 확인하십시오. Details 섹션의 Endplate 행 자체에는 `own`/`neighbours`/`none`이라는 글자가 그대로 나오지 않습니다 — `own`이면 그냥 각도("+2.3°")만 표시되고, `neighbours`이면 각도 뒤에 빌려온 레벨이 붙어("+2.3° vs T12, L3") tooltip에도 표시되며, `none`이면 비교할 기준 자체가 없어 "--"로 표시됩니다. 기준값 자체(`own`/`neighbours`/`none`)는 CSV 내보내기의 `endplate_reference` 열에서만 문자 그대로 확인할 수 있습니다(9절 참고). 이는 자체 적합을 신뢰할 수 없는 레벨에서 나타나는 정상적인 동작이며 버그가 아닙니다 — 어느 경우든 sagittal 화면에서 궤적을 직접 확인하십시오.
 
 ### 실행 문제
 
