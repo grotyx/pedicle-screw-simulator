@@ -3,6 +3,7 @@ Planning I/O helpers for saving/loading simulation plans.
 """
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,18 @@ from src.models.screw import Screw
 PLAN_VERSION = 3
 VALID_PLANES = {"axial", "sagittal", "coronal"}
 _FORMULA_LEAD = ("=", "+", "-", "@", chr(9), chr(13))
+
+
+def series_uid_digest(series_uid: Optional[str]) -> Optional[str]:
+    """One-way SHA-256 of a DICOM Series Instance UID (``None`` if absent).
+
+    A plan file must not carry the raw UID: it can be looked up in PACS to
+    re-link a shared plan to its patient. The digest still tells the same
+    study from a different one.
+    """
+    if not isinstance(series_uid, str) or not series_uid:
+        return None
+    return hashlib.sha256(series_uid.encode("utf-8")).hexdigest()
 
 
 def _finite(value: Any, field_name: str) -> float:
@@ -222,6 +235,9 @@ def serialize_plan(
     produced (currently the mask-refinement settings). It never affects how
     screws or measurements are read back, so a reader that does not know a key
     simply ignores it and the plan version stays at 3.
+
+    ``series_id`` is stored only as a SHA-256 digest (``series_uid_sha256``),
+    never as the raw UID.
     """
     planes = measurement_planes
     if planes is None:
@@ -239,7 +255,7 @@ def serialize_plan(
 
     return {
         "version": PLAN_VERSION,
-        "series_id": series_id,
+        "series_uid_sha256": series_uid_digest(series_id),
         "screws": [screw_to_dict(screw) for screw in screws],
         "measurements": measurement_items,
         "metadata": dict(metadata or {}),
@@ -287,7 +303,10 @@ def deserialize_plan(
 
     return {
         "version": version,
-        "series_id": payload.get("series_id"),
+        # Older plans hold the raw UID under ``series_id``; digest it here so
+        # callers compare digests either way and never see (or re-save) it.
+        "series_uid_sha256": payload.get("series_uid_sha256")
+        or series_uid_digest(payload.get("series_id")),
         "screws": screws,
         "measurements": measurements,
         "measurement_planes": planes,

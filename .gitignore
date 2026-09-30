@@ -55,3 +55,8 @@ docs/superpowers/
 *.stl
 *.nii
 *.nii.gz
+
+# Plan exports are patient-identifiable (SECURITY.md); never stage one that was
+# saved into the checkout. Root-level only, so project JSON stays trackable.
+/*.csv
+/*plan*.json

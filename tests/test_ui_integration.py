@@ -1471,7 +1471,8 @@ def test_ui_workflow_load_segmentation_toggle_and_save_plan(
 
     assert output_path.exists()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["series_id"] == "SERIES-TEST-001"
+    assert "series_id" not in payload
+    assert payload["series_uid_sha256"]
     assert len(payload["screws"]) == 1
 
 

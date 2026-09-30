@@ -494,6 +494,8 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 
 계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고).
 
+저장·불러오기·내보내기 대화상자는 마지막으로 계획에 사용한 폴더(처음에는 문서 폴더)에서 열리며, 응용 프로그램 폴더에서는 열리지 않습니다. 계획 파일은 DICOM Series Instance UID를 일방향 SHA-256 해시(`series_uid_sha256`)로만 기록합니다. 다른 series에 계획을 불러올 때 경고하기에는 충분하지만 PACS에서 조회할 수는 없습니다. 원본 UID가 들어 있는 이전 계획도 그대로 불러오며 같은 방식으로 검사하고, 다시 저장하면 해시만 기록됩니다.
+
 계획 파일, 스크린샷과 3D 메시는 DICOM 헤더가 없어도 환자와 연결될 수 있으므로 공유 전에 확인하십시오.
 
 ## 10. 문제 해결
