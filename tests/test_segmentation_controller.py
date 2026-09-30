@@ -1008,3 +1008,131 @@ def test_isolate_refuses_a_mask_without_vertebrae_from_every_caller(
             == "No vertebrae detected in this segmentation"
         )
         assert window.viewer_3d.isolation_state == (False, False)
+
+
+# ---------------------------------------------------------------------------
+# A finished run's QThread outlives its handler until run() has returned
+# ---------------------------------------------------------------------------
+
+_RELEASE_SCRIPT = r'''
+import gc, os, sys, threading, time, weakref
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from unittest.mock import MagicMock
+from PyQt6.QtCore import QCoreApplication, QEvent, QThread
+from PyQt6.QtWidgets import QApplication
+
+app = QApplication([])
+import src.controllers.segmentation_controller as module
+
+module.QMessageBox = MagicMock()
+release = threading.Event()
+
+
+class Worker(QThread):
+    def run(self):
+        release.wait(10)
+
+
+ctrl = module.SegmentationController(None, MagicMock())
+worker = Worker()
+worker.start()
+ref = weakref.ref(worker)
+ctrl._segmentation_thread = worker
+del worker
+# The handler runs while run() is still going, exactly as a queued signal
+# emitted from inside run() does.  Dropping the last reference here aborts.
+getattr(ctrl, sys.argv[1])(*sys.argv[2:])
+gc.collect()
+release.set()
+deadline = time.monotonic() + 10
+while ref() is not None and time.monotonic() < deadline:
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    gc.collect()
+    time.sleep(0.02)
+sys.exit(0 if ref() is None else 3)
+'''
+
+
+@pytest.mark.parametrize(
+    "handler", [["_on_cancelled"], ["_on_error", "boom"]], ids=lambda h: h[0]
+)
+def test_a_handler_never_destroys_a_thread_that_is_still_running(handler):
+    """Qt6 aborts the whole app on "QThread: Destroyed while thread is still
+    running", so this runs in a child interpreter: exit 0 means the thread was
+    kept alive while running and released once it stopped."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _RELEASE_SCRIPT, *handler],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr[-2000:]
+
+
+# ---------------------------------------------------------------------------
+# Each run's workspace (a full CT copy) goes once nothing needs it
+# ---------------------------------------------------------------------------
+
+
+def test_a_new_mask_removes_the_workspace_it_replaced(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": "SERIES-WS-1", "num_slices": image.GetSize()[2]},
+        progress=_ProgressStub(),
+    )
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    old_dir = ctrl.workspace.create()
+    _write_mask(image, Path(old_dir) / "totalseg_multilabel.nii.gz")
+    _finish_run(
+        window, ctrl, Path(old_dir) / "totalseg_multilabel.nii.gz",
+        "totalsegmentator", monkeypatch,
+    )
+    assert Path(old_dir).exists()   # still holds the mask in use
+
+    new_dir = ctrl.workspace.create()
+    ctrl._active_work_dir = new_dir
+    new_mask = Path(new_dir) / "totalseg_multilabel.nii.gz"
+    _write_mask(image, new_mask)
+    _finish_run(window, ctrl, new_mask, "totalsegmentator", monkeypatch)
+
+    assert not Path(old_dir).exists()
+    assert new_mask.exists()
+
+
+def test_a_failed_run_removes_its_own_workspace_only(
+    ui_main_window, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from src.core.totalseg_integration import SegmentationWorkspace
+
+    monkeypatch.setattr(
+        seg_controller_module.QMessageBox, "critical", lambda *a, **k: None
+    )
+    ctrl = ui_main_window._seg_ctrl
+    ctrl.workspace = SegmentationWorkspace(root=str(tmp_path))
+    previous_dir = ctrl.workspace.create()
+    failed_dir = ctrl.workspace.create()
+    ctrl._active_work_dir = failed_dir
+
+    ctrl._on_error("boom")
+
+    assert not Path(failed_dir).exists()
+    assert Path(previous_dir).exists()
+    assert ctrl._active_work_dir is None
