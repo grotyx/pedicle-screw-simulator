@@ -95,6 +95,10 @@ class ScrewEditController:
         if screw is None:
             return False
 
+        # The starting viewer sets its own lock only after this returns, so
+        # this releases every other viewer's lock even when the selected row
+        # does not change (on_screw_selection_changed would not fire).
+        self._cancel_active_viewer_locks()
         self._window._tool_ctrl.set_tool("navigate")
         self._window.screw_list_widget.setCurrentRow(index)
         self._selected_index = int(index)

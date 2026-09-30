@@ -206,7 +206,12 @@ def test_selection_change_clears_pointer_lock_from_every_viewer():
         )
     window._get_mpr_viewers = lambda: mpr_viewers
     window.viewer_3d = viewer_3d
+    # Viewers take their lock only after begin_drag returns.
+    for viewer in [*mpr_viewers, viewer_3d]:
+        viewer.is_screw_interaction_active = False
     assert controller.begin_drag(0, "shaft", (0.0, 0.0, 20.0)) is True
+    for viewer in [*mpr_viewers, viewer_3d]:
+        viewer.is_screw_interaction_active = True
 
     window.screw_list_widget.row = -1
     controller.on_screw_selection_changed(-1)
@@ -214,6 +219,30 @@ def test_selection_change_clears_pointer_lock_from_every_viewer():
     assert controller.mode == "idle"
     assert [viewer.cancelled for viewer in mpr_viewers] == [1, 1, 1]
     assert viewer_3d.cancelled == 1
+
+
+def test_begin_drag_cancels_locks_held_by_other_viewers_without_selection_change():
+    """Double-clicking the already selected screw in 3D must not leave an MPR
+    drag lock alive: both viewers would otherwise send update_drag."""
+    controller, window = _make_controller()
+    mpr = SimpleNamespace(cancelled=0, is_screw_interaction_active=True)
+    mpr.cancel_screw_interaction = lambda: setattr(
+        mpr, "cancelled", mpr.cancelled + 1
+    )
+    viewer_3d = SimpleNamespace(
+        cancelled=0, is_screw_interaction_active=False
+    )
+    viewer_3d.cancel_screw_interaction = lambda: setattr(
+        viewer_3d, "cancelled", viewer_3d.cancelled + 1
+    )
+    window._get_mpr_viewers = lambda: [mpr]
+    window.viewer_3d = viewer_3d
+    assert window.screw_list_widget.currentRow() == 0
+
+    assert controller.begin_drag(0, "shaft", (0.0, 0.0, 20.0)) is True
+
+    assert mpr.cancelled == 1
+    assert viewer_3d.cancelled == 0
 
 
 def test_entry_handle_drag_updates_only_entry_continuously():

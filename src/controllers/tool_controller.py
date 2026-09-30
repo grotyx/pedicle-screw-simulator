@@ -279,6 +279,9 @@ class ToolController:
         entry = {
             "id": measurement_id,
             "plane": self._active_measure_plane,
+            # Screw MPR shows oblique cuts: the points do not lie on any
+            # standard slice, so the list/Jump must not claim one.
+            "screw_aligned": self._screw_mpr_active(),
             "mode": measurement.mode,
             "label": (
                 measurement.label
@@ -378,6 +381,10 @@ class ToolController:
         self._refresh_measurement_list()
         self._window.statusbar.showMessage("Selected measurement removed")
 
+    def _screw_mpr_active(self) -> bool:
+        controller = getattr(self._window, "_screw_mpr_ctrl", None)
+        return bool(controller is not None and controller.is_active)
+
     def jump_to_selected_measurement(self):
         """Restore the standard MPR cut containing the selected measurement."""
         row = self._window.measurement_list_widget.currentRow()
@@ -390,6 +397,12 @@ class ToolController:
         entry = self._measurement_entries[row]
         measurement = measurements[row]
         plane = entry.get("plane")
+        if entry.get("screw_aligned"):
+            self._window.statusbar.showMessage(
+                f"Measurement #{row + 1} was taken on the screw-aligned "
+                "view; it has no standard cut to jump to"
+            )
+            return
         viewer = self._get_viewer_by_plane(plane)
         if viewer is None or not measurement.points:
             self._window.statusbar.showMessage(
@@ -427,6 +440,12 @@ class ToolController:
         if self._get_viewer_by_plane(plane) is None:
             self._window.statusbar.showMessage(
                 "This measurement cannot be edited on an MPR cut"
+            )
+            return
+        if bool(entry.get("screw_aligned")) != self._screw_mpr_active():
+            self._window.statusbar.showMessage(
+                "Edit this measurement in "
+                + ("Screw MPR" if entry.get("screw_aligned") else "Standard MPR")
             )
             return
         measurement = measurements[row]
@@ -550,6 +569,8 @@ class ToolController:
             plane = (
                 entry["plane"].capitalize() if entry["plane"] else "Unknown"
             )
+            if entry.get("screw_aligned"):
+                plane += " (screw view)"
             mode = entry["mode"].capitalize()
             cut_text = ""
             if index - 1 < len(measurements) and measurements[index - 1].points:
@@ -559,7 +580,7 @@ class ToolController:
                     "sagittal": point[0],
                     "coronal": point[1],
                 }.get(entry.get("plane"))
-                if cut_position is not None:
+                if cut_position is not None and not entry.get("screw_aligned"):
                     cut_text = f" @ {cut_position:.1f} mm"
             self._window.measurement_list_widget.addItem(
                 f"#{index} | {mode} | {plane}{cut_text} | {entry['label']}"

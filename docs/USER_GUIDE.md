@@ -432,6 +432,7 @@ Add Screw, Distance, and Angle are buttons in the tool dock below the main view 
 Measurements belong to the cut where they were created. They hide on another cut and reappear when the original cut is restored.
 
 - Select **Show Cut** to return to the source cut.
+- Select **Show Cut** to return to the source cut. A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane rather than a standard slice; **Show Cut** does not jump for it, and **Edit** works only while Screw MPR is active.
 - Click a measurement to select it and display yellow handles.
 - Drag a handle to correct one point.
 - Select **Edit** to re-measure the item.
@@ -472,6 +473,19 @@ In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; se
 See 5.8 for how Screw MPR changes what these planes show and cut.
 
 Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `Ctrl+O` | Open a DICOM folder |
+| `Ctrl+S` | Save the plan |
+| `Ctrl+L` | Load a plan |
+| `Ctrl+Q` | Exit |
+| `Ctrl+M` | Maximise the pane you last worked in; repeat to restore |
+| `R` | Reset Camera: fit the MPR views and the 3D view (ignored while you type in a field) |
+| `Esc` | Cancel a screw edit, a screw pointer-move lock, or a pending measurement edit |
+| `Delete` | Delete the selected screw or measurement (ignored while you type in a field) |
 
 ## 9. Save and Export
 
