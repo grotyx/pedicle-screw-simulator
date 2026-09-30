@@ -578,3 +578,78 @@ def test_endplate_reference_survives_a_plan_round_trip():
     metrics = parsed["screws"][0].metrics
     assert metrics["endplate_reference"] == "neighbours"
     assert metrics["endplate_reference_levels"] == "T12, L3"
+
+
+# --- plan files are an input trust boundary ---------------------------------
+
+def _valid_screw_item():
+    return {"entry_point": [0, 0, 0], "target_point": [0, 0, 30], "diameter": 6.0}
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_load_rejects_non_finite_screw_numbers(tmp_path, token):
+    path = tmp_path / "plan.json"
+    path.write_text(
+        '{"version": 3, "screws": [{"entry_point": [%s, 0, 0], '
+        '"target_point": [0, 0, 30], "diameter": 6.0}]}' % token,
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="finite"):
+        deserialize_plan(load_plan_json(str(path)))
+
+
+@pytest.mark.parametrize("field", ["diameter", "breach_distance", "mean_hu"])
+def test_screw_from_dict_rejects_non_finite_scalars(field):
+    item = _valid_screw_item()
+    item[field] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        deserialize_plan({"screws": [item]})
+
+
+def test_measurement_rejects_non_finite_point_and_angle():
+    bad_point = {"points": [[0, 0, 0], [float("inf"), 0, 0]], "mode": "distance"}
+    with pytest.raises(ValueError, match="finite"):
+        deserialize_plan({"measurements": [bad_point]})
+    bad_angle = {"points": [], "mode": "angle", "angle": float("nan")}
+    with pytest.raises(ValueError, match="finite"):
+        deserialize_plan({"measurements": [bad_angle]})
+
+
+def test_newer_plan_version_is_rejected_with_supported_version():
+    from src.utils.planning_io import PLAN_VERSION
+
+    with pytest.raises(ValueError, match=f"supports.*{PLAN_VERSION}"):
+        deserialize_plan({"version": PLAN_VERSION + 1, "screws": []})
+    assert deserialize_plan({"version": 1, "screws": []})["version"] == 1
+
+
+@pytest.mark.parametrize("entry", [None, 5, "x", [1, 2]])
+def test_non_dict_measurement_entry_raises_value_error(entry):
+    with pytest.raises(ValueError):
+        deserialize_plan({"measurements": [entry]})
+
+
+def test_save_plan_json_keeps_old_file_when_write_fails(tmp_path):
+    path = tmp_path / "plan.json"
+    save_plan_json(str(path), {"version": 3, "screws": []})
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(TypeError):
+        save_plan_json(str(path), {"bad": object()})
+    assert path.read_text(encoding="utf-8") == before
+    assert [p.name for p in tmp_path.iterdir()] == ["plan.json"]
+
+
+def test_csv_neutralises_formula_text_but_keeps_numbers_numeric(tmp_path):
+    screw = Screw(entry_point=(-1.0, -2.0, -3.0), target_point=(-1.0, -2.0, -33.0))
+    screw.vertebra_level = "=HYPERLINK(\"x\")"
+    screw.side = "@left"
+    screw.warnings = ["+cmd|' /C calc'!A0", "-2+3"]
+    path = tmp_path / "screws.csv"
+    export_screws_csv(str(path), [screw])
+    with path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["vertebra_level"] == "'=HYPERLINK(\"x\")"
+    assert row["side"] == "'@left"
+    assert row["warnings"].startswith("'+cmd")
+    assert row["entry_x"] == "-1.000"
+    assert float(row["target_z"]) == -33.0
