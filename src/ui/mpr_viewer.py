@@ -286,18 +286,6 @@ class MPRViewer(QWidget):
     def is_thumbnail(self) -> bool:
         return self._thumbnail
 
-    def attach_overlay(self, widget: QWidget, alignment: Qt.AlignmentFlag) -> None:
-        """Float ``widget`` over the image in this pane's viewport cell.
-
-        Only the overlay moves; ``vtk_widget`` is never reparented.
-        """
-        old = widget.parentWidget()
-        if old is not None and old.layout() is not None:
-            old.layout().removeWidget(widget)
-        self.viewport_container.layout().addWidget(widget, 0, 0, alignment)
-        widget.show()
-        widget.raise_()
-
     def resizeEvent(self, event):
         """Keep the orientation letters pinned to the viewport edges."""
         super().resizeEvent(event)

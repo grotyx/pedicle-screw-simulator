@@ -76,7 +76,7 @@ The Planning workspace contains:
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
 - **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
-- **Tool dock:** a small floating palette over the main view with Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Tool dock:** a small tool bar directly below the main view with Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
 - **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
 ### Step rail
@@ -117,11 +117,11 @@ Click a chip to select that screw; the screw list, the views, and the map's high
 
 In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
 
-Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D.
+Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
 
 ### Tool dock
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a floating dock at the bottom centre of the main view, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). They are the same tools that used to sit in the top toolbar and behave the same; a highlighted button is the active tool. The dock follows the main view: it moves onto whichever view you swap in, onto a maximised pane, and onto the 3D pane in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). They are the same tools that used to sit in the top toolbar and behave the same; a highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
 
 ### Study chip and research-use badge
 
@@ -129,7 +129,7 @@ The right end of the top toolbar shows a chip with the loaded CT's voxel spacing
 
 ### Layouts
 
-Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits on the 3D pane.
+Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
 
 ### Orientation markers
 
@@ -143,7 +143,7 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 
 ### Themes
 
-The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the floating controls over the views (tool dock, zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool dock and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
 
 ## 5. Standard Planning Workflow
 
@@ -413,7 +413,7 @@ Select a screw and use **Delete Screw** or the `Delete` key.
 
 ## 7. Manual Tools
 
-Add Screw, Distance, and Angle are buttons in the tool dock over the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
+Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
 
 ### Add Screw
 

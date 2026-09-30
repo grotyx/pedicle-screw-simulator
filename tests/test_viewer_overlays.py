@@ -1,5 +1,5 @@
 """Overlay hooks shared by MPRViewer and Viewer3D: promote button, thumbnail
-mode, attach_overlay and theme-driven (colour-free) overlay styling."""
+mode and theme-driven (colour-free) overlay styling."""
 
 import inspect
 import os
@@ -12,8 +12,7 @@ import pytest
 
 pytest.importorskip("pytestqt")
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QFrame, QWidget
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from src.ui import mpr_viewer, viewer_3d
 
@@ -72,30 +71,6 @@ def test_thumbnail_hides_floating_controls_and_restores_them(viewer):
     assert not any(w.isVisible() for w in overlays)
     v.set_thumbnail(False)
     assert {w: w.isVisible() for w in overlays} == before
-
-
-def test_attach_overlay_places_widget_over_vtk_without_moving_vtk(viewer):
-    v, _ = viewer
-    vtk_parent = v.vtk_widget.parent()
-    dock = QFrame()
-    v.attach_overlay(dock, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter)
-    assert dock.parent() is v.viewport_container
-    assert v.vtk_widget.parent() is vtk_parent
-    assert dock.isVisible()
-
-
-def test_attach_overlay_moves_widget_out_of_the_previous_layout(viewer, qtbot):
-    v, _ = viewer
-    other = QWidget()
-    qtbot.addWidget(other)
-    from PyQt6.QtWidgets import QGridLayout
-
-    grid = QGridLayout(other)
-    dock = QFrame(other)
-    grid.addWidget(dock, 0, 0)
-    v.attach_overlay(dock, Qt.AlignmentFlag.AlignBottom)
-    assert grid.indexOf(dock) == -1
-    assert v.viewport_container.layout().indexOf(dock) != -1
 
 
 def test_overlay_code_has_no_literal_colours():

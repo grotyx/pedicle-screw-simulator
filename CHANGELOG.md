@@ -32,11 +32,11 @@ current version; every other place the version appears is derived from it.
   double-click still maximises. Turning Screw MPR on makes the axial view the
   main view. MPR Focus (2x2) is unchanged.
 - The tool buttons (Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR,
-  Fit 3D) moved from the top toolbar into a floating tool dock over the main
+  Fit 3D) moved from the top toolbar into a tool dock on its own row below the main
   view. The 3D zoom in/out and fit commands are also in the View menu.
 - The top toolbar keeps Open DICOM and adds a study chip (voxel spacing only,
   for example "CT · 0.39 × 0.39 × 1.00 mm") and a RESEARCH USE ONLY badge.
-- The floating controls over the views (tool dock, MPR zoom buttons, 3D
+- The tool dock and the floating controls over the views (MPR zoom buttons, 3D
   overlays) share one flat, theme-driven style in all three themes.
 
 ### Fixed

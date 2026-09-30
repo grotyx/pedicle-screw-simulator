@@ -55,14 +55,6 @@ class _ViewerOverlayHooks:
     def is_thumbnail(self):
         return self._thumbnail
 
-    def attach_overlay(self, widget, alignment):
-        old = widget.parentWidget()
-        if old is not None and old.layout() is not None:
-            old.layout().removeWidget(widget)
-        self.viewport_container.layout().addWidget(widget, 0, 0, alignment)
-        widget.show()
-        widget.raise_()
-
 
 class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     """Lightweight MPR test double for UI workflow tests."""
@@ -417,9 +409,9 @@ def test_planning_layout_with_a_3d_main_view_is_default(ui_main_window):
 
     assert window._view_layout_mode == "planning"
     assert _view_grid_position(window, window.viewer_3d) == (0, 0, 1, 3)
-    assert _view_grid_position(window, window.axial_viewer) == (1, 0, 1, 1)
-    assert _view_grid_position(window, window.sagittal_viewer) == (1, 1, 1, 1)
-    assert _view_grid_position(window, window.coronal_viewer) == (1, 2, 1, 1)
+    assert _view_grid_position(window, window.axial_viewer) == (2, 0, 1, 1)
+    assert _view_grid_position(window, window.sagittal_viewer) == (2, 1, 1, 1)
+    assert _view_grid_position(window, window.coronal_viewer) == (2, 2, 1, 1)
 
 
 def test_default_window_size_is_screen_aware_and_compact(ui_main_window):

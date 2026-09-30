@@ -388,6 +388,7 @@ class MainWindow(QMainWindow):
             for name, pane in panes.items():
                 pane.setVisible(name == maximized)
             self._view_layout.addWidget(panes[maximized], 0, 0)
+            self._place_dock(1, 1)
             self._view_layout.setRowStretch(0, 1)
             self._view_layout.setColumnStretch(0, 1)
             self._maximized_view = maximized
@@ -399,15 +400,16 @@ class MainWindow(QMainWindow):
                 # One grid throughout: panes only change cells, never parents,
                 # so no native VTK window is ever reparented.
                 self._view_layout.addWidget(panes[self._hero_view], 0, 0, 1, 3)
+                self._place_dock(1, 3)
                 thumbnails = [
                     pane for name, pane in panes.items() if name != self._hero_view
                 ]
                 for column, pane in enumerate(thumbnails):
-                    self._view_layout.addWidget(pane, 1, column)
+                    self._view_layout.addWidget(pane, 2, column)
                 self._view_layout.setRowStretch(0, 3)
-                self._view_layout.setRowStretch(1, 1)
+                self._view_layout.setRowStretch(2, 1)
                 self._view_layout.setRowMinimumHeight(0, 320)
-                self._view_layout.setRowMinimumHeight(1, 150)
+                self._view_layout.setRowMinimumHeight(2, 150)
                 for column in range(3):
                     self._view_layout.setColumnStretch(column, 1)
             else:
@@ -415,6 +417,7 @@ class MainWindow(QMainWindow):
                 self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
                 self._view_layout.addWidget(self.coronal_viewer, 1, 0)
                 self._view_layout.addWidget(self.viewer_3d, 1, 1)
+                self._place_dock(2, 2)
                 self._view_layout.setRowStretch(0, 1)
                 self._view_layout.setRowStretch(1, 1)
                 self._view_layout.setColumnStretch(0, 1)
@@ -425,7 +428,6 @@ class MainWindow(QMainWindow):
         planning = maximized is None and self._view_layout_mode == "planning"
         for name, pane in panes.items():
             pane.set_thumbnail(planning and name != self._hero_view)
-        self._attach_dock()
 
         self._render_shown_panes(panes, maximized)
 
@@ -495,21 +497,16 @@ class MainWindow(QMainWindow):
         if self._maximized_view is None and self._view_layout_mode == "planning":
             self.set_view_layout("planning")
 
-    def _attach_dock(self) -> None:
-        """Float the tool dock over the maximised pane, the main view, or 3D."""
+    def _place_dock(self, row: int, column_span: int) -> None:
+        """Put the tool dock on its own grid row, centred under the big view.
+
+        Not over the image: floating there it covered the A/P and S/I
+        orientation letters and, on narrow windows, the 3D overlays.
+        """
         dock = self.__dict__.get("tool_dock")
-        if dock is None:
-            return
-        panes = self._panes()
-        if self._maximized_view is not None:
-            host = panes[self._maximized_view]
-        elif self._view_layout_mode == "planning":
-            host = panes[self._hero_view]
-        else:
-            host = self.viewer_3d
-        if dock.parentWidget() is not host.viewport_container:
-            host.attach_overlay(
-                dock, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter
+        if dock is not None:
+            self._view_layout.addWidget(
+                dock, row, 0, 1, column_span, Qt.AlignmentFlag.AlignHCenter
             )
 
     def toggle_maximized_view(self, view_name: str) -> None:
@@ -2307,6 +2304,7 @@ class MainWindow(QMainWindow):
         self._register_themed_icon(self._screw_mpr_action, "screw_mpr")
 
         spacer = QWidget(toolbar)
+        spacer.setObjectName("toolbarSpacer")
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
         # Voxel spacing only: nothing that could identify the patient.
@@ -2343,7 +2341,8 @@ class MainWindow(QMainWindow):
                 self._fit_3d_action,
             ]
         )
-        self._attach_dock()
+        # The views were laid out before the dock existed; lay them out again.
+        self.set_view_layout(self._view_layout_mode)
 
         self._refresh_themed_icons()
         self.refresh_mode_indicators()
@@ -3239,8 +3238,11 @@ class MainWindow(QMainWindow):
         # new study with step 2 already ticked. This is where the bar is
         # redrawn, now that the study is actually a fresh one.
         self._refresh_workflow_bar()
-        # A new study opens on the 3D main view with an empty construct.
-        self.set_hero_view("3d")
+        # A new study opens on the 3D main view with an empty construct and
+        # no pane left maximised from the old one; the chosen base layout
+        # (Planning or MPR Focus) stays.
+        self._hero_view = "3d"
+        self.set_view_layout(self._restore_layout_mode)
         self._refresh_construct_map()
         self.update_study_chip()
         # A study just loaded: point the panel at what comes next.

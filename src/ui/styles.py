@@ -341,6 +341,10 @@ QComboBox#workspaceMode {{
 QComboBox#themeSelector {{
     min-width: 100px;
 }}
+QWidget#toolbarSpacer {{
+    background: transparent;
+}}
+
 QToolBar QPushButton {{
     min-width: 72px;
     border-radius: 3px;

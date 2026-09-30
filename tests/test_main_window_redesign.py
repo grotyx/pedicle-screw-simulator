@@ -95,11 +95,11 @@ def test_default_layout_is_a_3d_main_view_with_three_thumbnails(ui_main_window):
     assert _position(window, window.viewer_3d) == (0, 0, 1, 3)
     thumbnails = [window.axial_viewer, window.sagittal_viewer, window.coronal_viewer]
     assert sorted(_position(window, pane)[1] for pane in thumbnails) == [0, 1, 2]
-    assert all(_position(window, pane)[0] == 1 for pane in thumbnails)
+    assert all(_position(window, pane)[0] == 2 for pane in thumbnails)
     assert all(pane.is_thumbnail() for pane in thumbnails)
     assert not window.viewer_3d.is_thumbnail()
     assert window._view_layout.rowMinimumHeight(0) >= 320
-    assert window._view_layout.rowMinimumHeight(1) >= 150
+    assert window._view_layout.rowMinimumHeight(2) >= 150
 
 
 def test_promote_swaps_the_main_view_without_reparenting_any_pane(ui_main_window):
@@ -123,19 +123,24 @@ def test_promoting_the_current_main_view_is_a_no_op(ui_main_window):
         window.set_hero_view("oblique")
 
 
-def test_dock_follows_the_main_view_maximise_and_mpr_focus(ui_main_window):
+def test_dock_sits_on_its_own_row_under_the_big_view(ui_main_window):
     window = ui_main_window
     dock = window.tool_dock
 
-    assert dock.parentWidget() is window.viewer_3d.viewport_container
+    view_container = window.axial_viewer.parentWidget()
+    assert dock.parentWidget() is view_container
+    assert _position(window, dock) == (1, 0, 1, 3)
     window.set_hero_view("sagittal")
-    assert dock.parentWidget() is window.sagittal_viewer.viewport_container
+    assert _position(window, dock) == (1, 0, 1, 3)
     window.set_view_layout("maximize:coronal")
-    assert dock.parentWidget() is window.coronal_viewer.viewport_container
+    assert _position(window, dock) == (1, 0, 1, 1)
     window.set_view_layout(window._restore_layout_mode)
-    assert dock.parentWidget() is window.sagittal_viewer.viewport_container
+    assert _position(window, dock) == (1, 0, 1, 3)
     window.set_view_layout("mpr_focus")
-    assert dock.parentWidget() is window.viewer_3d.viewport_container
+    assert _position(window, dock) == (2, 0, 1, 2)
+    # The dock never sits inside a viewer, so it can never cover the image.
+    for pane in _pane_map(window).values():
+        assert not pane.isAncestorOf(dock)
     assert not any(pane.is_thumbnail() for pane in _pane_map(window).values())
 
 
@@ -145,7 +150,7 @@ def test_swapping_while_maximised_keeps_the_maximise_then_restores_to_it(ui_main
     window.set_view_layout("maximize:axial")
     window.set_hero_view("coronal")
     assert window._maximized_view == "axial"
-    assert window.tool_dock.parentWidget() is window.axial_viewer.viewport_container
+    assert _position(window, window.tool_dock) == (1, 0, 1, 1)
 
     window.toggle_maximized_view("axial")
 
@@ -282,7 +287,34 @@ def test_new_study_resets_the_main_view_and_the_map(ui_main_window):
 
     assert window.hero_view == "3d"
     assert window.construct_map.rows() == []
-    assert window.tool_dock.parentWidget() is window.viewer_3d.viewport_container
+    assert _position(window, window.tool_dock) == (1, 0, 1, 3)
+
+
+def test_new_study_leaves_no_pane_maximised(ui_main_window):
+    window = ui_main_window
+    window.set_hero_view("sagittal")
+    window.set_view_layout("maximize:axial")
+
+    window.reset_workspace()
+
+    assert window._maximized_view is None
+    assert window.hero_view == "3d"
+    assert _position(window, window.viewer_3d) == (0, 0, 1, 3)
+    assert all(pane.isVisible() or not window.isVisible() for pane in _pane_map(window).values())
+    assert _position(window, window.tool_dock) == (1, 0, 1, 3)
+
+
+def test_new_study_keeps_the_chosen_mpr_focus_layout(ui_main_window):
+    window = ui_main_window
+    window.set_view_layout("mpr_focus")
+    window.set_view_layout("maximize:coronal")
+
+    window.reset_workspace()
+
+    assert window._maximized_view is None
+    assert window._view_layout_mode == "mpr_focus"
+    assert _position(window, window.viewer_3d) == (1, 1, 1, 1)
+    assert _position(window, window.tool_dock) == (2, 0, 1, 2)
 
 
 def test_dock_keeps_working_after_moves_and_a_theme_change(ui_main_window):
@@ -295,7 +327,7 @@ def test_dock_keeps_working_after_moves_and_a_theme_change(ui_main_window):
     _flush()
 
     dock = window.tool_dock
-    assert dock.parentWidget() is window.axial_viewer.viewport_container
+    assert _position(window, dock) == (1, 0, 1, 3)
     assert dock.isVisible()
     assert dock.property("viewerOverlay") == "true"
     assert 'QWidget[viewerOverlay="true"]' in QApplication.instance().styleSheet()
