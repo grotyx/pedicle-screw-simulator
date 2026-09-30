@@ -1244,6 +1244,71 @@ def test_deleting_first_screw_reindexes_remaining_visual_and_selects_it(
     assert window.screw_list_widget.currentRow() == 0
 
 
+def test_remove_screws_drops_several_rows_and_reindexes_views(ui_main_window):
+    window = ui_main_window
+    screws = [
+        Screw((float(i), 2.0, 3.0), (float(i), 2.0, 33.0),
+              vertebra_level=f"L{i + 1}", side="left")
+        for i in range(4)
+    ]
+    for screw in screws:
+        window._tool_ctrl.add_existing_screw(screw)
+    window.screw_list_widget.setCurrentRow(1)
+
+    window._tool_ctrl.remove_screws([1, 3, 1, 99])
+
+    assert window.screw_tool.get_screws() == [screws[0], screws[2]]
+    assert window.screw_list_widget.count() == 2
+    assert [a.screw_id for a in window.viewer_3d.screws] == [0, 1]
+
+
+def test_replacing_a_selected_auto_screw_leaves_a_valid_selection(
+    ui_main_window,
+):
+    """A finished re-plan removes the old auto screw even while it is selected."""
+    window = ui_main_window
+    ctrl = window._auto_placement_ctrl
+    window._tool_ctrl.add_existing_screw(
+        Screw((1.0, 2.0, 3.0), (1.0, 2.0, 33.0), vertebra_level="L4",
+              side="left", source="auto"),
+        select=True,
+    )
+    manual = Screw((4.0, 5.0, 6.0), (4.0, 5.0, 36.0), vertebra_level="L4",
+                   side="right", source="manual")
+    window._tool_ctrl.add_existing_screw(manual)
+    window.screw_list_widget.setCurrentRow(0)
+
+    class _Thread:
+        generation = ctrl._run_generation
+        cancelled = False
+        replace_levels = ("L4",)
+
+    ctrl._thread = _Thread
+    ctrl._on_finished(_Thread, [_planned_l4()])
+
+    screws = window.screw_tool.get_screws()
+    assert [(s.side, s.source) for s in screws] == [
+        ("right", "manual"), ("left", "auto"),
+    ]
+    assert window.screw_list_widget.count() == 2
+    assert window.screw_list_widget.currentRow() == 1
+
+
+def _planned_l4():
+    import numpy as np
+
+    from src.core.auto_screw_planner import PlannedScrew
+
+    return PlannedScrew(
+        vertebra_name="L4", side="left",
+        entry_lps=np.array([0.0, 10.0, 0.0]),
+        target_lps=np.array([0.0, -20.0, 0.0]),
+        length_mm=30.0, diameter_mm=6.0, convergence_angle=10.0,
+        craniocaudal_angle=5.0, mean_bone_density=400.0,
+        min_bone_density=200.0, gertzbein_grade="A", confidence=0.8,
+    )
+
+
 def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
     window = ui_main_window
     image = _create_test_image()

@@ -26,6 +26,11 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Running Plan Screws again asks before replacing the automatically planned
+  screws on the levels being planned. After Replace, the earlier screws are
+  removed only when the new plan succeeds, so the rod-fit figures no longer
+  mix two runs; hand-placed screws and planned screws on other levels are
+  kept.
 - Automatic planning no longer places a narrow-pedicle screw from the legacy
   fallback when its best trajectory is not contained (Gertzbein grade C or
   worse, or any medial breach); the side is left unplanned and the reason is
