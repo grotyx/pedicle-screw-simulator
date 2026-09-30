@@ -1,9 +1,12 @@
 """Tests for selectable application theme palettes."""
 
+import pytest
+
 from src.ui.styles import (
     DEFAULT_THEME,
     THEME_LABELS,
     THEMES,
+    _rgba,
     get_theme,
     load_stylesheet,
 )
@@ -164,3 +167,34 @@ def test_a_disabled_current_workflow_step_does_not_look_pressable_in_every_theme
         assert rule["background-color"] != palette["accent"]
         assert rule["color"] != enabled["color"]
         assert rule != _rule(stylesheet, "QPushButton:disabled")
+
+
+NEW_SELECTORS = [
+    'QWidget[viewerOverlay="true"]',
+    "#stepRail",
+    "#stepHeaderTitle",
+    "#constructMap",
+    'QLabel#constructChip[grade="A"]',
+    "QLabel#studyChip",
+    "QLabel#ruoBadge",
+    "QToolButton#promoteViewButton",
+    "QFrame#toolDock",
+]
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_redesign_selectors_exist_in_every_theme(theme):
+    qss = load_stylesheet(theme)
+    for selector in NEW_SELECTORS:
+        assert selector in qss, (theme, selector)
+
+
+def test_rgba_helper():
+    assert _rgba("#15181C", 0.86) == "rgba(21, 24, 28, 219)"
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_grade_chips_use_theme_grade_tokens(theme):
+    qss = load_stylesheet(theme)
+    block = qss.split('QLabel#constructChip[grade="A"]', 1)[1].split("}", 1)[0]
+    assert THEMES[theme]["grade_a"].lower() in block.lower()
