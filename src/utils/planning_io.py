@@ -5,6 +5,8 @@ Planning I/O helpers for saving/loading simulation plans.
 import csv
 import json
 import math
+import os
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,13 +16,31 @@ from src.models.screw import Screw
 
 PLAN_VERSION = 3
 VALID_PLANES = {"axial", "sagittal", "coronal"}
+_FORMULA_LEAD = ("=", "+", "-", "@", chr(9), chr(13))
+
+
+def _finite(value: Any, field_name: str) -> float:
+    """``float(value)``, rejecting NaN/Infinity (``json`` accepts both)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid {field_name}: expected a finite number") from None
+    if not math.isfinite(number):
+        raise ValueError(f"Invalid {field_name}: expected a finite number")
+    return number
 
 
 def _parse_point3(value: Any, field_name: str) -> Tuple[float, float, float]:
-    """Parse a 3-element numeric point tuple."""
+    """Parse a 3-element finite numeric point tuple."""
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError(f"Invalid {field_name}: expected 3 numeric values")
-    return (float(value[0]), float(value[1]), float(value[2]))
+    return tuple(_finite(v, field_name) for v in value)  # type: ignore[return-value]
+
+
+def _csv_text(value: Any) -> str:
+    """Text cell for CSV; a leading formula character gets a ``'`` prefix."""
+    text = str(value)
+    return "'" + text if text.startswith(_FORMULA_LEAD) else text
 
 
 def _jsonable_metric(value: Any) -> Any:
@@ -128,19 +148,19 @@ def screw_from_dict(data: Dict[str, Any]) -> Screw:
     screw = Screw(
         entry_point=entry_point,
         target_point=target_point,
-        diameter=float(data.get("diameter", 6.0)),
+        diameter=_finite(data.get("diameter", 6.0), "diameter"),
     )
     screw.vertebra_level = str(data.get("vertebra_level", ""))
     screw.side = str(data.get("side", ""))
     screw.grade = str(data.get("grade", screw.grade))
-    screw.breach_distance = float(
-        data.get("breach_distance", screw.breach_distance)
+    screw.breach_distance = _finite(
+        data.get("breach_distance", screw.breach_distance), "breach_distance"
     )
 
     mean_hu = data.get("mean_hu")
     min_hu = data.get("min_hu")
-    screw.mean_hu = None if mean_hu is None else float(mean_hu)
-    screw.min_hu = None if min_hu is None else float(min_hu)
+    screw.mean_hu = None if mean_hu is None else _finite(mean_hu, "mean_hu")
+    screw.min_hu = None if min_hu is None else _finite(min_hu, "min_hu")
     raw_warnings = data.get("warnings", [])
     screw.warnings = [str(w) for w in raw_warnings] if isinstance(raw_warnings, list) else []
     screw.source = str(data.get("source", "manual"))
@@ -182,9 +202,9 @@ def measurement_from_dict(data: Dict[str, Any]) -> Measurement:
 
     return Measurement(
         points=points,
-        distance=float(data.get("distance", 0.0)),
+        distance=_finite(data.get("distance", 0.0), "distance"),
         mode=mode,
-        angle=None if data.get("angle") is None else float(data["angle"]),
+        angle=None if data.get("angle") is None else _finite(data["angle"], "angle"),
         label=str(data.get("label", "")),
     )
 
@@ -233,6 +253,16 @@ def deserialize_plan(
     if not isinstance(payload, dict):
         raise ValueError("Invalid plan payload")
 
+    try:
+        version = int(payload.get("version", PLAN_VERSION))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid plan payload: version must be an integer") from None
+    if version > PLAN_VERSION:
+        raise ValueError(
+            f"Plan file version {version} is newer than this app supports "
+            f"(up to version {PLAN_VERSION}); update the app to open it"
+        )
+
     screw_items = payload.get("screws", [])
     measurement_items = payload.get("measurements", [])
     if not isinstance(screw_items, list) or not isinstance(measurement_items, list):
@@ -247,6 +277,8 @@ def deserialize_plan(
     planes: List[Optional[str]] = []
 
     for item in measurement_items:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid measurement payload: expected object")
         plane = item.get("plane")
         if plane is not None and plane not in VALID_PLANES:
             raise ValueError(f"Invalid measurement plane: {plane}")
@@ -254,7 +286,7 @@ def deserialize_plan(
         planes.append(plane)
 
     return {
-        "version": int(payload.get("version", PLAN_VERSION)),
+        "version": version,
         "series_id": payload.get("series_id"),
         "screws": screws,
         "measurements": measurements,
@@ -267,8 +299,17 @@ def save_plan_json(path: str, payload: Dict[str, Any]) -> None:
     """Write plan payload to JSON file."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    # Temp file + os.replace: a crash or full disk never truncates the old plan.
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=target.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def load_plan_json(path: str) -> Dict[str, Any]:
@@ -314,12 +355,12 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             metrics = screw.metrics if isinstance(screw.metrics, dict) else {}
             writer.writerow([
                 index,
-                screw.vertebra_level,
-                screw.side,
-                screw.source,
+                _csv_text(screw.vertebra_level),
+                _csv_text(screw.side),
+                _csv_text(screw.source),
                 f"{screw.length:.3f}",
                 f"{screw.diameter:.3f}",
-                screw.grade,
+                _csv_text(screw.grade),
                 f"{screw.breach_distance:.3f}",
                 "" if screw.mean_hu is None else f"{screw.mean_hu:.3f}",
                 "" if screw.min_hu is None else f"{screw.min_hu:.3f}",
@@ -336,19 +377,19 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "body_mean_hu"),
                 _metric_number(metrics, "trajectory_body_ratio"),
                 _metric_number(metrics, "min_wall_mm"),
-                "" if metrics.get("heary_direction") is None else str(metrics["heary_direction"]),
+                "" if metrics.get("heary_direction") is None else _csv_text(metrics["heary_direction"]),
                 _metric_number(metrics, "facet_grade", "d"),
                 # CBT and traditional screws are graded on the same scale but
                 # are not clinically interchangeable, so the export names the
                 # family; a manually placed screw belongs to neither and the
                 # cell stays empty rather than guessing "traditional".
-                "" if metrics.get("trajectory_type") is None else str(metrics["trajectory_type"]),
-                "|".join(screw.warnings),
+                "" if metrics.get("trajectory_type") is None else _csv_text(metrics["trajectory_type"]),
+                _csv_text("|".join(screw.warnings)),
                 _metric_number(metrics, "pedicle_width_mm"),
                 _metric_flag(metrics, "narrow_pedicle"),
                 _metric_number(metrics, "medial_breach_mm"),
                 _metric_number(metrics, "lateral_breach_mm"),
                 _metric_number(metrics, "endplate_angle_deg"),
                 _metric_flag(metrics, "width_uncertain"),
-                str(metrics.get("endplate_reference") or ""),
+                _csv_text(metrics.get("endplate_reference") or ""),
             ])
