@@ -163,6 +163,13 @@ def theme_rgb_float(theme_name: str, key: str) -> tuple[float, float, float]:
     )
 
 
+def _rgba(hex_color: str, alpha: float) -> str:
+    """``#RRGGBB`` plus a 0..1 alpha as a QSS ``rgba()`` (alpha 0-255)."""
+    value = hex_color.lstrip("#")
+    r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
+
+
 def load_stylesheet(theme_name: str = DEFAULT_THEME) -> str:
     """Return the application stylesheet for one named palette."""
     t = get_theme(theme_name)
@@ -668,6 +675,163 @@ QLabel#viewerReadout {{
     color: #98A3AE;
     padding: 4px 8px;
     font-size: 11px;
+}}
+
+/* ===== Viewer overlays (flat, translucent) ===== */
+QWidget[viewerOverlay="true"], QToolButton[viewerOverlay="true"] {{
+    background: {_rgba(t["bg_secondary"], 0.86)};
+    border: 1px solid {_rgba(t["border_light"], 0.7)};
+    border-radius: 8px;
+    color: {t["viewer_foreground"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton {{
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: {t["viewer_foreground"]};
+    min-width: 26px;
+    min-height: 26px;
+    padding: 2px 4px;
+    font-weight: 600;
+}}
+QWidget[viewerOverlay="true"] QToolButton:hover,
+QToolButton[viewerOverlay="true"]:hover {{
+    background: {t["accent_dim"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton:checked,
+QToolButton[viewerOverlay="true"]:checked {{
+    background: {t["accent"]};
+    color: {t["button_text"]};
+}}
+QWidget[viewerOverlay="true"] QToolButton:disabled {{
+    color: {t["text_disabled"]};
+}}
+QFrame#toolDock {{
+    border-radius: 12px;
+    padding: 4px;
+}}
+QFrame#toolDock QToolButton {{
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 8px;
+}}
+QFrame#toolDockSeparator {{
+    background: {t["border"]};
+    min-width: 1px;
+    max-width: 1px;
+    margin: 6px 3px;
+}}
+
+/* ===== Step rail and step headers ===== */
+#stepRail {{
+    background: {t["bg_secondary"]};
+    border-right: 1px solid {t["border"]};
+}}
+#stepRail QPushButton#workflowStep {{
+    min-width: 64px;
+    max-width: 64px;
+    min-height: 56px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
+#stepRail QPushButton#workflowStep[active="true"] {{
+    background: {t["accent_dim"]};
+    color: {t["text_primary"]};
+}}
+#stepRail QPushButton#workflowStep[role="primary"] {{
+    color: {t["accent"]};
+    font-weight: 600;
+}}
+#stepRail QPushButton#workflowStep[role="secondary"] {{
+    color: {t["success"]};
+}}
+#stepHeader {{
+    border-bottom: 1px solid {t["border"]};
+    padding: 10px 12px 8px 12px;
+}}
+#stepHeaderEyebrow {{
+    color: {t["accent"]};
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}}
+#stepHeaderTitle {{
+    color: {t["text_primary"]};
+    font-size: 15px;
+    font-weight: 600;
+}}
+#stepHeaderSubtitle {{
+    color: {t["text_secondary"]};
+    font-size: 11px;
+}}
+
+/* ===== Construct map ===== */
+#constructMap {{
+    background: transparent;
+}}
+QLabel#constructLevel {{
+    color: {t["text_secondary"]};
+    font-family: Consolas, monospace;
+}}
+QFrame#constructBar {{
+    background: {t["bg_tertiary"]};
+    border: 1px solid {t["border_light"]};
+    border-radius: 4px;
+    min-height: 16px;
+}}
+QLabel#constructChip {{
+    border-radius: 4px;
+    padding: 0 5px;
+    color: {t["grade_text"]};
+    font-weight: 600;
+}}
+QLabel#constructChip[grade="A"] {{ background: {t["grade_a"]}; }}
+QLabel#constructChip[grade="B"] {{ background: {t["grade_b"]}; }}
+QLabel#constructChip[grade="C"] {{ background: {t["grade_c"]}; }}
+QLabel#constructChip[grade="D"], QLabel#constructChip[grade="E"] {{
+    background: {t["grade_d"]};
+}}
+QLabel#constructChip[grade="NA"] {{ background: {t["grade_na"]}; }}
+QLabel#constructChip[selected="true"] {{
+    border: 2px solid {t["accent"]};
+}}
+QLabel#constructEmpty {{
+    border: 1px dashed {t["border_light"]};
+    border-radius: 4px;
+    min-width: 14px;
+    min-height: 14px;
+}}
+
+/* ===== Study chip, research-use badge, promote button ===== */
+QLabel#studyChip {{
+    color: {t["text_secondary"]};
+    background: {t["bg_tertiary"]};
+    border: 1px solid {t["border"]};
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-family: Consolas, monospace;
+}}
+QLabel#ruoBadge {{
+    color: {t["warning_text"]};
+    background: {t["warning_bg"]};
+    border: 1px solid {t["warning"]};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}}
+QToolButton#promoteViewButton {{
+    background: transparent;
+    border: none;
+    color: {t["text_secondary"]};
+    padding: 0 4px;
+}}
+QToolButton#promoteViewButton:hover {{
+    color: {t["text_primary"]};
 }}
 
 /* ===== Tables ===== */
