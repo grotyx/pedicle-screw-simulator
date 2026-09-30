@@ -6,6 +6,7 @@ and coordinated initial rendering after volume load.
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -20,6 +21,20 @@ from PyQt6.QtWidgets import (
 from src.core.dicom_loader import DicomLoader
 
 logger = logging.getLogger(__name__)
+
+# Drive/UNC paths and multi-segment POSIX paths (PACS export folders are often
+# named after the patient, so paths must not reach app.log or dialogs).
+_PATH_RE = re.compile(r"(?:[A-Za-z]:|\\\\)[\\/][^\s'\"]*|/(?:[\w.\-]+/)+[\w.\-]*")
+
+
+def redact_paths(text, *folders) -> str:
+    """Replace the given folders, then any remaining file path, in ``text``."""
+    text = str(text)
+    for folder in folders:
+        if folder:
+            for variant in (folder, folder.replace("\\", "/"), folder.replace("/", "\\")):
+                text = text.replace(variant, "<folder>")
+    return _PATH_RE.sub("<path>", text)
 
 
 class DicomLoadThread(QThread):
@@ -68,9 +83,12 @@ class DicomLoadThread(QThread):
 
         except Exception as e:
             import traceback
-            logger.error("DICOM load failed: %s", e)
-            logger.debug("Traceback:\n%s", traceback.format_exc())
-            self.error.emit(str(e))
+            message = redact_paths(e, self.directory)
+            logger.error("DICOM load failed: %s: %s", type(e).__name__, message)
+            logger.debug(
+                "Traceback:\n%s", redact_paths(traceback.format_exc(), self.directory)
+            )
+            self.error.emit(message)
 
 
 class DicomController:
@@ -115,7 +133,7 @@ class DicomController:
             series_ids = scan_loader.scan_directory(folder)
         except Exception as e:
             QMessageBox.critical(
-                self._window, "Error", f"Failed to scan DICOM folder: {e}"
+                self._window, "Error", f"Failed to scan DICOM folder: {redact_paths(e, folder)}"
             )
             self._window.statusbar.showMessage("Scan failed")
             return
@@ -134,7 +152,10 @@ class DicomController:
             try:
                 summaries = scan_loader.get_series_summaries(folder)
             except Exception as exc:
-                logger.warning("Failed to read DICOM series summaries: %s", exc)
+                logger.warning(
+                    "Failed to read DICOM series summaries: %s: %s",
+                    type(exc).__name__, redact_paths(exc, folder),
+                )
                 summaries = []
             selected_series_id = self._select_series_id(series_ids, summaries)
             if selected_series_id is None:
@@ -232,16 +253,17 @@ class DicomController:
                 info_text += "\nOrientation: normalised to LPS"
                 if metadata.get("resampled"):
                     info_text += " (oblique volume resampled)"
+            # Geometry problems never block the load; they are only shown.
+            warnings = metadata.get("geometry_warnings") or []
+            for warning in warnings:
+                logger.warning("DICOM geometry: %s", warning)
+                info_text += f"\nWarning: {warning}"
             self._window.info_label.setText(info_text)
 
-            self._window.statusbar.showMessage(
-                f"Loaded {metadata.get('num_slices', 0)} slices"
-            )
-
-            # Schedule coordinated initial render for all viewers.
-            # Individual per-viewer QTimers cause Cocoa drawRect busy-loops
-            # on macOS -- see _coordinated_initial_render() docstring.
-            QTimer.singleShot(100, self._coordinated_initial_render)
+            status = f"Loaded {metadata.get('num_slices', 0)} slices"
+            if warnings:
+                status += " — Warning: " + "; ".join(warnings)
+            self._window.statusbar.showMessage(status)
 
             logger.info("_on_loaded: COMPLETE (%.3fs total)", time.perf_counter() - t0)
         except Exception as e:
@@ -254,6 +276,11 @@ class DicomController:
                 f"Failed to process volume: {str(e)}",
             )
         finally:
+            # update_volume() freezes every pane behind a render guard that only
+            # this callback releases, so schedule it even if a step above raised.
+            # Individual per-viewer QTimers cause Cocoa drawRect busy-loops
+            # on macOS -- see _coordinated_initial_render() docstring.
+            QTimer.singleShot(100, self._coordinated_initial_render)
             self._release_load_thread()
 
     def _on_error(self, error, progress):

@@ -155,6 +155,7 @@ The step rail's four pages (see section 4) roughly follow this section's order: 
 2. Select a directory containing a DICOM series.
 3. If multiple series are present, choose the intended CT series.
 4. Confirm the anatomy and orientation in all MPR views and 3D.
+5. If the status bar and the **Study** info show a **Warning** (uneven slice spacing, which usually means missing slices, or a gantry tilt), the load still succeeds but lengths along the scan axis may be wrong or the volume sheared; check the series before relying on measurements.
 
 ### 5.2 Run Segmentation
 

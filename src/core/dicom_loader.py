@@ -80,6 +80,11 @@ def normalize_orientation(image: sitk.Image) -> Tuple[sitk.Image, Dict[str, Any]
         out_spacing[dominant_world_axis[j]] = float(spacing[j])
 
     new_size = [int(np.ceil((hi[a] - lo[a]) / out_spacing[a])) + 1 for a in range(3)]
+    # The -1000 (air) background wraps to a large positive value in unsigned
+    # types, so resample unsigned series as signed 32-bit.
+    if image.GetPixelID() in (sitk.sitkUInt8, sitk.sitkUInt16, sitk.sitkUInt32,
+                              sitk.sitkUInt64):
+        image = sitk.Cast(image, sitk.sitkInt32)
     resampled = sitk.Resample(
         image, new_size, sitk.Transform(), sitk.sitkLinear,
         tuple(float(v) for v in lo), tuple(out_spacing), _IDENTITY,
@@ -89,6 +94,55 @@ def normalize_orientation(image: sitk.Image) -> Tuple[sitk.Image, Dict[str, Any]
     info["resampled"] = True
     logger.warning("Oblique direction %s resampled to LPS identity grid", direction)
     return resampled, info
+
+
+def _optional_float(ds, name: str) -> float:
+    """Parse an optional numeric tag; empty or malformed values become 0.0."""
+    try:
+        return float(getattr(ds, name, None))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def check_slice_geometry(positions, orientation) -> List[str]:
+    """Return warnings for uneven slice spacing (missing slices) and gantry tilt.
+
+    ``positions`` are the per-slice ImagePositionPatient values in slice order
+    and ``orientation`` is ImageOrientationPatient (row and column cosines).
+    Spacing is "not uniform" when it varies by more than 1% of the median
+    step (floor 0.01 mm, to ignore header rounding); tilt is reported when the
+    scan axis is more than 0.5 degrees off the slice-plane normal.
+    """
+    try:
+        pos = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
+        row, col = np.asarray(orientation, dtype=np.float64).reshape(2, 3)
+    except (TypeError, ValueError):
+        return []
+    normal = np.cross(row, col)
+    norm = np.linalg.norm(normal)
+    if len(pos) < 2 or norm < 1e-6 or not np.all(np.isfinite(pos)):
+        return []
+    normal /= norm
+
+    warnings: List[str] = []
+    steps = np.abs(np.diff(pos @ normal))
+    median = float(np.median(steps))
+    if steps.max() - steps.min() > max(0.01 * median, 0.01):
+        warnings.append(
+            f"Slice spacing is not uniform (min {steps.min():.2f} mm, "
+            f"max {steps.max():.2f} mm) — lengths along the scan axis may be wrong"
+        )
+
+    axis = pos[-1] - pos[0]
+    length = np.linalg.norm(axis)
+    if length > 1e-6:
+        cos = min(1.0, abs(float(axis @ normal)) / length)
+        tilt = float(np.degrees(np.arccos(cos)))
+        if tilt > 0.5:
+            warnings.append(
+                f"Gantry tilt of {tilt:.1f}° detected — the volume may be sheared"
+            )
+    return warnings
 
 
 class DicomLoader:
@@ -196,7 +250,7 @@ class DicomLoader:
         # Get all series IDs
         series_ids = reader.GetGDCMSeriesIDs(directory)
         if not series_ids:
-            raise ValueError(f"No DICOM series found in: {directory}")
+            raise ValueError("No DICOM series found in the selected folder")
 
         # Select series
         if series_id is None:
@@ -232,8 +286,25 @@ class DicomLoader:
         # Extract metadata
         self._extract_metadata(reader)
         self._metadata.update(orientation_info)
+        self._metadata["geometry_warnings"] = self._geometry_warnings()
 
         return self._image
+
+    def _geometry_warnings(self) -> List[str]:
+        """Read per-slice positions (header only) and check the slice geometry."""
+        try:
+            positions, orientation = [], None
+            for name in self._file_names:
+                ds = pydicom.dcmread(
+                    name, stop_before_pixels=True,
+                    specific_tags=["ImagePositionPatient", "ImageOrientationPatient"],
+                )
+                positions.append([float(v) for v in ds.ImagePositionPatient])
+                if orientation is None:
+                    orientation = [float(v) for v in ds.ImageOrientationPatient]
+            return check_slice_geometry(positions, orientation)
+        except Exception:  # multi-frame or missing tags: nothing to check
+            return []
 
     def _extract_metadata(self, reader: sitk.ImageSeriesReader) -> None:
         """Extract relevant metadata from DICOM headers."""
@@ -250,8 +321,8 @@ class DicomLoader:
                 "study_date": getattr(ds, "StudyDate", "Unknown"),
                 "modality": getattr(ds, "Modality", "Unknown"),
                 "manufacturer": getattr(ds, "Manufacturer", "Unknown"),
-                "slice_thickness": float(getattr(ds, "SliceThickness", 0)),
-                "kvp": float(getattr(ds, "KVP", 0)),
+                "slice_thickness": _optional_float(ds, "SliceThickness"),
+                "kvp": _optional_float(ds, "KVP"),
                 "body_part": getattr(ds, "BodyPartExamined", "Unknown"),
                 "num_slices": len(self._file_names),
             }
