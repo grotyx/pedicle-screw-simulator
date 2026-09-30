@@ -20,9 +20,11 @@ from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QGridLayout,
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QToolButton,
     QWidget,
 )
 
@@ -33,15 +35,43 @@ from src.core.totalseg_integration import SegmentationRunResult
 from src.models.screw import Screw
 
 
-class DummyMPRViewer(QWidget):
+class _ViewerOverlayHooks:
+    """The overlay/thumbnail API of the real viewers, for the test doubles."""
+
+    def _init_overlay_hooks(self):
+        self.promote_button = QToolButton(self)
+        self.promote_button.hide()
+        self.viewport_container = QWidget(self)
+        QGridLayout(self.viewport_container)
+        self._thumbnail = False
+
+    def set_thumbnail(self, on):
+        self._thumbnail = bool(on)
+        self.promote_button.setVisible(self._thumbnail)
+
+    def is_thumbnail(self):
+        return self._thumbnail
+
+    def attach_overlay(self, widget, alignment):
+        old = widget.parentWidget()
+        if old is not None and old.layout() is not None:
+            old.layout().removeWidget(widget)
+        self.viewport_container.layout().addWidget(widget, 0, 0, alignment)
+        widget.show()
+        widget.raise_()
+
+
+class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     """Lightweight MPR test double for UI workflow tests."""
 
     slice_changed = pyqtSignal(str, float)
     crosshair_moved = pyqtSignal(str, float, float, float)
     header_double_clicked = pyqtSignal(str)
+    promote_requested = pyqtSignal(str)
 
     def __init__(self, plane, volume_manager, parent=None):
         super().__init__(parent)
+        self._init_overlay_hooks()
         self.plane = plane
         self.volume_manager = volume_manager
         self.visible = True
@@ -165,14 +195,16 @@ class DummyMPRViewer(QWidget):
         return
 
 
-class DummyViewer3D(QWidget):
+class DummyViewer3D(_ViewerOverlayHooks, QWidget):
     """Lightweight 3D viewer test double for UI workflow tests."""
 
     header_double_clicked = pyqtSignal(str)
     isolation_requested = pyqtSignal(bool)
+    promote_requested = pyqtSignal(str)
 
     def __init__(self, volume_manager, parent=None):
         super().__init__(parent)
+        self._init_overlay_hooks()
         self.visible = True
         self.seg_label_value = 0
         self.seg_mask = None

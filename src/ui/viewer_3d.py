@@ -115,6 +115,10 @@ SCREW_MPR_DEFAULT_WINDOW_LEVEL = (1500.0, 400.0)
 #: other than the screw's own is ever touched.
 VOLUME_CROP_OUTSIDE_BOX = 0x7FFFFFF & ~vtk.VTK_CROP_SUBVOLUME
 
+# Overlay button sizing only; colours come from the app stylesheet's
+# viewerOverlay rule so every theme gets matching floating controls.
+_OVERLAY_BUTTON_SIZING = "font-size: 11px; font-weight: 600; padding: 5px 9px;"
+
 #: Distance (mm) the "Cut View" camera sits back from the cross-section
 #: centre, on the entry side, looking down the screw at the open cut face.
 SCREW_MPR_CUT_VIEW_DISTANCE_MM = 250.0
@@ -425,6 +429,7 @@ class Viewer3D(QWidget):
     #: (True = Vertebrae requested); never from set_isolation_state, which
     #: blocks signals while it reflects the controller's actual state.
     isolation_requested = pyqtSignal(bool)
+    promote_requested = pyqtSignal(str)  # ("3d") -- show in the main view
 
     # Render state: GUARD blocks renders during pipeline setup, NORMAL allows them.
     _RS_GUARD = 0
@@ -554,6 +559,7 @@ class Viewer3D(QWidget):
         self._vertebral_mesh_actor: Optional[vtk.vtkActor] = None
         self._vertebral_mesh_default_opacity: float = 0.86
 
+        self._thumbnail = False
         self._setup_ui()
         self._setup_vtk_pipeline()
 
@@ -605,6 +611,18 @@ class Viewer3D(QWidget):
         header_bar_layout.addWidget(self.show_vertebrae_btn)
         header_bar_layout.addWidget(self.show_full_ct_btn)
 
+        # Shown only while this pane is a thumbnail (see set_thumbnail).
+        self.promote_button = QToolButton(self.header_bar)
+        self.promote_button.setObjectName("promoteViewButton")
+        self.promote_button.setText("⤢")
+        self.promote_button.setToolTip("Show in the main view")
+        self.promote_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.promote_button.clicked.connect(
+            lambda: self.promote_requested.emit("3d")
+        )
+        self.promote_button.hide()
+        header_bar_layout.addWidget(self.promote_button)
+
         self.viewport_container = QWidget(self)
         viewport_layout = QGridLayout(self.viewport_container)
         viewport_layout.setContentsMargins(0, 0, 0, 0)
@@ -622,17 +640,8 @@ class Viewer3D(QWidget):
         self.plane_visibility_toggle.setCheckable(True)
         self.plane_visibility_toggle.setChecked(True)
         self.plane_visibility_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.plane_visibility_toggle.setStyleSheet(
-            "QToolButton#planeVisibilityToggle {"
-            "background: rgba(24, 29, 35, 210); color: #e8eef4;"
-            "border: 1px solid rgba(205, 218, 228, 90);"
-            "border-radius: 7px; padding: 5px 9px;"
-            "font-size: 11px; font-weight: 600; }"
-            "QToolButton#planeVisibilityToggle:hover {"
-            "background: rgba(45, 54, 64, 225); }"
-            "QToolButton#planeVisibilityToggle:checked {"
-            "border-color: rgba(168, 225, 235, 165); }"
-        )
+        self.plane_visibility_toggle.setProperty("viewerOverlay", "true")
+        self.plane_visibility_toggle.setStyleSheet(_OVERLAY_BUTTON_SIZING)
         self.plane_visibility_toggle.toggled.connect(
             self.set_plane_indicators_visible
         )
@@ -650,15 +659,7 @@ class Viewer3D(QWidget):
             "Restore the initial 3D orientation and fit all visible objects"
         )
         self.reset_view_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.reset_view_button.setStyleSheet(
-            "QToolButton#resetViewButton {"
-            "background: rgba(24, 29, 35, 210); color: #e8eef4;"
-            "border: 1px solid rgba(205, 218, 228, 90);"
-            "border-radius: 7px; padding: 5px 9px;"
-            "font-size: 11px; font-weight: 600; }"
-            "QToolButton#resetViewButton:hover {"
-            "background: rgba(45, 54, 64, 225); }"
-        )
+        self.reset_view_button.setStyleSheet(_OVERLAY_BUTTON_SIZING)
         self.reset_view_button.clicked.connect(self.reset_to_initial_view)
 
         self.screw_mpr_view_button = QToolButton(self.viewport_container)
@@ -668,15 +669,7 @@ class Viewer3D(QWidget):
             "Look down the screw at the cross-section from the entry side"
         )
         self.screw_mpr_view_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.screw_mpr_view_button.setStyleSheet(
-            "QToolButton#screwMprViewButton {"
-            "background: rgba(24, 29, 35, 210); color: #e8eef4;"
-            "border: 1px solid rgba(205, 218, 228, 90);"
-            "border-radius: 7px; padding: 5px 9px;"
-            "font-size: 11px; font-weight: 600; }"
-            "QToolButton#screwMprViewButton:hover {"
-            "background: rgba(45, 54, 64, 225); }"
-        )
+        self.screw_mpr_view_button.setStyleSheet(_OVERLAY_BUTTON_SIZING)
         self.screw_mpr_view_button.clicked.connect(self.focus_screw_mpr_cut)
         # Only meaningful while Screw MPR is active -- see show_screw_mpr /
         # clear_screw_mpr.
@@ -685,6 +678,7 @@ class Viewer3D(QWidget):
         # Reset View and Cut View share the top-left corner as one row so
         # neither button overlaps the plane toggle beneath it.
         self.top_left_controls = QWidget(self.viewport_container)
+        self.top_left_controls.setProperty("viewerOverlay", "true")
         top_left_layout = QHBoxLayout(self.top_left_controls)
         top_left_layout.setContentsMargins(0, 0, 0, 0)
         top_left_layout.setSpacing(5)
@@ -707,18 +701,8 @@ class Viewer3D(QWidget):
         self.pan_mode_toggle.setCheckable(True)
         self.pan_mode_toggle.setChecked(False)
         self.pan_mode_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.pan_mode_toggle.setStyleSheet(
-            "QToolButton#panModeToggle {"
-            "background: rgba(24, 29, 35, 210); color: #e8eef4;"
-            "border: 1px solid rgba(205, 218, 228, 90);"
-            "border-radius: 7px; padding: 5px 9px;"
-            "font-size: 11px; font-weight: 600; }"
-            "QToolButton#panModeToggle:hover {"
-            "background: rgba(45, 54, 64, 225); }"
-            "QToolButton#panModeToggle:checked {"
-            "background: rgba(42, 112, 124, 225);"
-            "border-color: rgba(113, 210, 222, 200); }"
-        )
+        self.pan_mode_toggle.setProperty("viewerOverlay", "true")
+        self.pan_mode_toggle.setStyleSheet(_OVERLAY_BUTTON_SIZING)
         self.pan_mode_toggle.toggled.connect(self.set_pan_mode)
         viewport_layout.addWidget(
             self.pan_mode_toggle,
@@ -729,6 +713,7 @@ class Viewer3D(QWidget):
 
         self.model_opacity_controls = QWidget(self.viewport_container)
         self.model_opacity_controls.setObjectName("modelOpacityControls")
+        self.model_opacity_controls.setProperty("viewerOverlay", "true")
         opacity_layout = QHBoxLayout(self.model_opacity_controls)
         opacity_layout.setContentsMargins(7, 3, 7, 3)
         opacity_layout.setSpacing(5)
@@ -747,11 +732,7 @@ class Viewer3D(QWidget):
         opacity_layout.addWidget(self.model_opacity_label)
         opacity_layout.addWidget(self.model_opacity_slider)
         self.model_opacity_controls.setStyleSheet(
-            "QWidget#modelOpacityControls {"
-            "background: rgba(24, 29, 35, 210);"
-            "border: 1px solid rgba(205, 218, 228, 90);"
-            "border-radius: 7px; }"
-            "QLabel { color: #e8eef4; font-size: 11px; font-weight: 600; }"
+            "QLabel { font-size: 11px; font-weight: 600; }"
         )
         self.model_opacity_slider.valueChanged.connect(
             lambda value: self.set_vertebral_transparency(value / 100.0)
@@ -765,6 +746,36 @@ class Viewer3D(QWidget):
 
         layout.addWidget(self.header_bar)
         layout.addWidget(self.viewport_container, stretch=1)
+
+    def _floating_controls(self):
+        return (
+            self.plane_visibility_toggle,
+            self.top_left_controls,
+            self.pan_mode_toggle,
+            self.model_opacity_controls,
+        )
+
+    def set_thumbnail(self, on: bool) -> None:
+        """Thumbnail panes offer a promote button and hide floating controls."""
+        self._thumbnail = bool(on)
+        self.promote_button.setVisible(self._thumbnail)
+        for control in self._floating_controls():
+            control.setVisible(not self._thumbnail)
+
+    def is_thumbnail(self) -> bool:
+        return self._thumbnail
+
+    def attach_overlay(self, widget: QWidget, alignment: Qt.AlignmentFlag) -> None:
+        """Float ``widget`` over the 3D scene in this pane's viewport cell.
+
+        Only the overlay moves; ``vtk_widget`` is never reparented.
+        """
+        old = widget.parentWidget()
+        if old is not None and old.layout() is not None:
+            old.layout().removeWidget(widget)
+        self.viewport_container.layout().addWidget(widget, 0, 0, alignment)
+        widget.show()
+        widget.raise_()
 
     def _on_isolation_toggle_clicked(self, checked: bool) -> None:
         """Emit a user request only -- never fired by set_isolation_state."""
