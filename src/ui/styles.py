@@ -677,16 +677,19 @@ QLabel#viewerReadout {{
     font-size: 11px;
 }}
 
-/* ===== Viewer overlays (flat, translucent) ===== */
+/* ===== Viewer overlays (flat) =====
+   Opaque on purpose: Qt cannot blend alpha over a native VTK/GL window, so a
+   translucent overlay leaves ghost copies of itself. Viewer tokens, because
+   the viewports stay dark in every theme. */
 QWidget[viewerOverlay="true"], QToolButton[viewerOverlay="true"] {{
-    background: {_rgba(t["bg_secondary"], 0.86)};
-    border: 1px solid {_rgba(t["border_light"], 0.7)};
+    background: {t["viewer_header"]};
+    border: 1px solid {t["viewer_separator"]};
     border-radius: 8px;
     color: {t["viewer_foreground"]};
 }}
 QWidget[viewerOverlay="true"] QToolButton {{
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 6px;
     color: {t["viewer_foreground"]};
     min-width: 26px;
@@ -694,13 +697,23 @@ QWidget[viewerOverlay="true"] QToolButton {{
     padding: 2px 4px;
     font-weight: 600;
 }}
-QWidget[viewerOverlay="true"] QToolButton:hover,
-QToolButton[viewerOverlay="true"]:hover {{
-    background: {t["accent_dim"]};
+QWidget[viewerOverlay="true"] QLabel {{
+    background: transparent;
+    color: {t["viewer_foreground"]};
 }}
-QWidget[viewerOverlay="true"] QToolButton:checked,
+QWidget[viewerOverlay="true"] QToolButton:hover {{
+    background: {_rgba(t["viewer_foreground"], 0.12)};
+}}
+QWidget[viewerOverlay="true"] QToolButton:checked {{
+    background: {_rgba(t["accent"], 0.30)};
+    border-color: {t["accent"]};
+}}
+QToolButton[viewerOverlay="true"]:hover {{
+    background: {t["viewer_readout"]};
+}}
 QToolButton[viewerOverlay="true"]:checked {{
     background: {t["accent"]};
+    border-color: {t["accent"]};
     color: {t["button_text"]};
 }}
 QWidget[viewerOverlay="true"] QToolButton:disabled {{
@@ -716,7 +729,7 @@ QFrame#toolDock QToolButton {{
     border-radius: 8px;
 }}
 QFrame#toolDockSeparator {{
-    background: {t["border"]};
+    background: {t["viewer_separator"]};
     min-width: 1px;
     max-width: 1px;
     margin: 6px 3px;
@@ -769,6 +782,11 @@ QFrame#toolDockSeparator {{
 }}
 
 /* ===== Construct map ===== */
+QLabel#constructTitle {{
+    color: {t["text_primary"]};
+    font-weight: 600;
+    padding: 4px 2px 0 2px;
+}}
 #constructMap {{
     background: transparent;
 }}

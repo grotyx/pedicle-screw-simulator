@@ -143,7 +143,7 @@ Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 메인 뷰 아
 
 ### 테마
 
-**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다. 세 테마 모두 평면(flat) 색을 사용하며, 화면 위에 떠 있는 조절(도구 독, 확대·축소 조절, 3D 오버레이)은 테마를 따르는 하나의 반투명 스타일을 공유합니다.
+**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다. 세 테마 모두 평면(flat) 색을 사용하며, 화면 위에 떠 있는 조절(도구 독, 확대·축소 조절, 3D 오버레이)은 테마를 따르는 하나의 불투명 평면 스타일을 공유합니다.
 
 ## 5. 기본 계획 과정
 

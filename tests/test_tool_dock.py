@@ -58,3 +58,14 @@ def test_dock_survives_reparenting(qtbot):
     dock.setParent(host2)
     dock.buttons()[1].click()
     assert b.isChecked()
+
+
+def test_separator_is_a_flat_one_pixel_rule(qtbot):
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    a, b, c = _actions(owner)
+    dock = ToolDock([a, None, b])
+    qtbot.addWidget(dock)
+    separator = dock.findChildren(QFrame, "toolDockSeparator")[0]
+    assert separator.frameShape() == QFrame.Shape.NoFrame
+    assert separator.maximumWidth() == 1

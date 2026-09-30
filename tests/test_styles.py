@@ -198,3 +198,22 @@ def test_grade_chips_use_theme_grade_tokens(theme):
     qss = load_stylesheet(theme)
     block = qss.split('QLabel#constructChip[grade="A"]', 1)[1].split("}", 1)[0]
     assert THEMES[theme]["grade_a"].lower() in block.lower()
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_viewer_overlays_are_opaque_and_follow_the_dark_viewport(theme):
+    # Alpha over a native VTK window leaves ghost copies, and the viewports
+    # are dark in every theme, so the overlay uses the solid viewer header.
+    qss = load_stylesheet(theme)
+    selector = 'QWidget[viewerOverlay="true"], QToolButton[viewerOverlay="true"] {'
+    block = qss.split(selector, 1)[1].split("}", 1)[0]
+    assert "rgba(" not in block
+    assert THEMES[theme]["viewer_header"].lower() in block.lower()
+    assert THEMES[theme]["viewer_foreground"].lower() in block.lower()
+
+
+@pytest.mark.parametrize("theme", sorted(THEMES))
+def test_labels_inside_viewer_overlays_use_the_viewer_foreground(theme):
+    qss = load_stylesheet(theme)
+    block = qss.split('QWidget[viewerOverlay="true"] QLabel {', 1)[1].split("}", 1)[0]
+    assert THEMES[theme]["viewer_foreground"].lower() in block.lower()

@@ -145,7 +145,7 @@ class ConstructMap(QWidget):
             grade = str(getattr(screw, "grade", "") or "").strip().upper()
             grade = grade if grade in _GRADES else "NA"
             shown = grade if grade != "NA" else "N/A"
-            text = f"{shown}  {float(screw.diameter):g}×{float(screw.length):g}"
+            text = f"{shown}  {float(screw.diameter):g}×{float(screw.length):.0f}"
             chip = _Chip(index, text, grade, cell)
             chip.clicked.connect(self.screw_clicked)
             self._chips.append(chip)

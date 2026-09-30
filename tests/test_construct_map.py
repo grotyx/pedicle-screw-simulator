@@ -96,3 +96,10 @@ def test_unknown_grade_uses_na(qtbot):
     qtbot.addWidget(m)
     m.set_screws([screw("L3", "left", "N/A")])
     assert m.findChildren(QLabel, "constructChip")[0].property("grade") == "NA"
+
+
+def test_chip_length_is_rounded_to_whole_millimetres(qtbot):
+    m = ConstructMap()
+    qtbot.addWidget(m)
+    m.set_screws([screw("L3", "left", "A", 6.5, 51.923)])
+    assert m.findChildren(QLabel, "constructChip")[0].text() == "A  6.5×52"

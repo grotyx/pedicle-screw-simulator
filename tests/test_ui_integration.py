@@ -41,6 +41,9 @@ class _ViewerOverlayHooks:
     def _init_overlay_hooks(self):
         self.promote_button = QToolButton(self)
         self.promote_button.hide()
+        self.promote_button.clicked.connect(
+            lambda: self.promote_requested.emit(getattr(self, "plane", "3d"))
+        )
         self.viewport_container = QWidget(self)
         QGridLayout(self.viewport_container)
         self._thumbnail = False
@@ -409,14 +412,14 @@ def _view_grid_position(window, widget):
     return window._view_layout.getItemPosition(index)
 
 
-def test_vworks_planning_layout_is_default(ui_main_window):
+def test_planning_layout_with_a_3d_main_view_is_default(ui_main_window):
     window = ui_main_window
 
     assert window._view_layout_mode == "planning"
-    assert _view_grid_position(window, window.axial_viewer) == (0, 0, 1, 1)
-    assert _view_grid_position(window, window.sagittal_viewer) == (1, 0, 1, 1)
-    assert _view_grid_position(window, window.coronal_viewer) == (2, 0, 1, 1)
-    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (0, 0, 1, 3)
+    assert _view_grid_position(window, window.axial_viewer) == (1, 0, 1, 1)
+    assert _view_grid_position(window, window.sagittal_viewer) == (1, 1, 1, 1)
+    assert _view_grid_position(window, window.coronal_viewer) == (1, 2, 1, 1)
 
 
 def test_default_window_size_is_screen_aware_and_compact(ui_main_window):
@@ -480,7 +483,7 @@ def test_layout_can_switch_to_mpr_focus_and_back(ui_main_window):
 
     window.set_view_layout("planning")
 
-    assert _view_grid_position(window, window.viewer_3d) == (0, 1, 3, 1)
+    assert _view_grid_position(window, window.viewer_3d) == (0, 0, 1, 3)
     assert window.layout_combo.currentData() == "planning"
 
 
@@ -2452,17 +2455,18 @@ def _add_screw(window, source):
     window._tool_ctrl._add_screw_to_list(screw)
 
 
-def test_workflow_bar_sits_above_the_views_and_starts_at_study(ui_main_window):
+def test_step_rail_sits_left_of_the_views_and_starts_at_study(ui_main_window):
     window = ui_main_window
     bar = window.workflow_bar
     b = bar.buttons
 
     layout = bar.parentWidget().layout()
     assert layout.indexOf(bar) == 0
+    assert layout.indexOf(window.main_splitter) == 1
 
     assert all(button.isEnabled() for button in b)
     assert b[0].property("role") == "primary"
-    assert b[0].text() == "①  Study"
+    assert b[0].text() == "①\nStudy"
     assert b[1].toolTip() == "Open a DICOM series first"
 
 
@@ -2471,7 +2475,7 @@ def test_workflow_bar_advances_to_segment_after_a_study_loads(ui_main_window):
     _load_study(window, "WF-STUDY-1")
     b = window.workflow_bar.buttons
 
-    assert b[0].text() == "✓ Study"
+    assert b[0].text() == "✓\nStudy"
     assert b[0].property("role") == "secondary"
     assert b[1].property("role") == "primary"
     assert b[1].toolTip() == "Run TotalSegmentator on the loaded study"
@@ -2487,7 +2491,7 @@ def test_workflow_bar_finishes_segment_for_a_totalsegmentator_mask(
     _finish_segmentation(window, tmp_path, monkeypatch)
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "✓ Segment"
+    assert b[1].text() == "✓\nSegment"
     assert b[2].property("role") == "primary"
     assert b[2].toolTip() == "Select vertebral levels in the Plan step"
 
@@ -2500,7 +2504,7 @@ def test_workflow_bar_keeps_segment_open_after_a_threshold_fallback(
     _finish_segmentation(window, tmp_path, monkeypatch, method="threshold_fallback")
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "②  Segment"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
 
 
@@ -2530,16 +2534,16 @@ def test_workflow_bar_finishes_plan_for_auto_screws_but_not_manual_ones(
     b = window.workflow_bar.buttons
 
     _add_screw(window, "manual")
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
 
     _add_screw(window, "auto")
-    assert b[2].text() == "✓ Plan"
+    assert b[2].text() == "✓\nPlan"
     assert b[3].property("role") == "primary"
 
     window.screw_list_widget.setCurrentRow(1)
     window._tool_ctrl.remove_selected_screw()
 
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
     assert b[2].property("role") == "primary"
 
 
@@ -2557,14 +2561,14 @@ def test_workflow_bar_resets_when_a_new_study_is_loaded(
     _finish_segmentation(window, tmp_path, monkeypatch)
     _add_screw(window, "auto")
     b = window.workflow_bar.buttons
-    assert b[2].text() == "✓ Plan"
+    assert b[2].text() == "✓\nPlan"
 
     _load_study(window, "WF-STUDY-SECOND")
 
-    assert b[0].text() == "✓ Study"
-    assert b[1].text() == "②  Segment"
+    assert b[0].text() == "✓\nStudy"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
-    assert b[2].text() == "③  Plan"
+    assert b[2].text() == "③\nPlan"
 
 
 def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
@@ -2577,7 +2581,7 @@ def test_workflow_bar_reopens_segment_when_the_segmentation_is_cleared(
     window._seg_ctrl.clear_overlay()
     b = window.workflow_bar.buttons
 
-    assert b[1].text() == "②  Segment"
+    assert b[1].text() == "②\nSegment"
     assert b[1].property("role") == "primary"
 
 

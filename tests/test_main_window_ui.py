@@ -10,7 +10,7 @@ pytest.importorskip("pytestqt")
 
 from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QApplication, QWidgetAction
+from PyQt6.QtWidgets import QApplication
 
 import src.ui.main_window as main_window_module
 from src.ui.styles import THEMES
@@ -92,11 +92,16 @@ def _pane_map(window):
     }
 
 
-def _toolbar_entries(window):
-    return [
-        "|" if action.isSeparator() else action.text()
-        for action in window.main_toolbar.actions()
-    ]
+def _dock_entries(window):
+    layout = window.tool_dock.layout()
+    entries = []
+    for index in range(layout.count()):
+        widget = layout.itemAt(index).widget()
+        if widget.objectName() == "toolDockSeparator":
+            entries.append("|")
+        else:
+            entries.append(widget.defaultAction().text())
+    return entries
 
 
 def test_icon_factory_draws_every_kind_in_every_theme(qtbot):
@@ -113,29 +118,34 @@ def test_icon_factory_rejects_an_unknown_kind():
         create_tool_icon("not-a-glyph")
 
 
-def test_toolbar_order_matches_the_clinical_grouping(ui_main_window):
-    assert _toolbar_entries(ui_main_window) == [
-        "Open DICOM",
-        "|",
+def test_tool_dock_order_matches_the_clinical_grouping(ui_main_window):
+    assert _dock_entries(ui_main_window) == [
         "Select",
         "Add Screw",
+        "|",
         "Distance",
         "Angle",
         "|",
-        "Fit MPR",
-        "3D -",
-        "3D +",
-        "Fit 3D",
-        "|",
         "Screw MPR",
+        "|",
+        "Fit MPR",
+        "Fit 3D",
     ]
+    toolbar_texts = [
+        action.text()
+        for action in ui_main_window.main_toolbar.actions()
+        if action.text()
+    ]
+    assert toolbar_texts == ["Open DICOM"]
 
 
-def test_every_toolbar_action_carries_an_icon(ui_main_window):
-    for action in ui_main_window.main_toolbar.actions():
-        if action.isSeparator():
-            continue
-        assert not action.icon().isNull()
+def test_every_tool_action_carries_an_icon(ui_main_window):
+    window = ui_main_window
+    actions = [window._open_toolbar_action] + [
+        button.defaultAction() for button in window.tool_dock.buttons()
+    ]
+    for action in actions:
+        assert not action.icon().isNull(), action.text()
 
 
 def test_theme_and_layout_combos_moved_into_the_view_menu(ui_main_window):
@@ -153,12 +163,8 @@ def test_theme_and_layout_combos_moved_into_the_view_menu(ui_main_window):
 
     assert window.theme_combo in hosted
     assert window.layout_combo in hosted
-    # Qt6 auto-creates a QToolButton for every plain QAction, so the toolbar is
-    # checked for hosted widgets instead: no QWidgetAction, and neither combo.
-    assert not any(
-        isinstance(action, QWidgetAction)
-        for action in window.main_toolbar.actions()
-    )
+    # The toolbar hosts the study chip and badge as widgets, so check the
+    # combos themselves are not inside it.
     assert not window.main_toolbar.isAncestorOf(window.theme_combo)
     assert not window.main_toolbar.isAncestorOf(window.layout_combo)
 

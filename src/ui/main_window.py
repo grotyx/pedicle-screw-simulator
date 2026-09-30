@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -71,6 +72,7 @@ from ..utils.constants import (
     TRANSFER_FUNCTION_PRESETS,
 )
 from .collapsible_group import CollapsibleGroupBox
+from .construct_map import ConstructMap
 from .mpr_viewer import MPRViewer
 from .screw_plan_table import ScrewPlanTable
 from .spin_boxes import DiameterSpinBox
@@ -81,6 +83,7 @@ from .styles import (
     THEMES,
     load_stylesheet,
 )
+from .tool_dock import ToolDock
 from .tool_icons import create_tool_icon
 from .viewer_3d import Viewer3D
 from .workflow_bar import STEP_NAMES, WorkflowBar, WorkflowStep, workflow_states
@@ -290,13 +293,14 @@ class MainWindow(QMainWindow):
 
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Splitter: quad-view (left) | controls (right), user-resizable
+        # Splitter: views (left) | controls (right), user-resizable
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left panel: the workflow bar above the reconfigurable MPR/3D view.
-        # Each step runs the existing action it names, looked up at click time
-        # so the buttons it presses need not exist yet.
+        # The step rail runs down the left edge. Each step runs the existing
+        # action it names, looked up at click time so the buttons it presses
+        # need not exist yet.
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -311,9 +315,10 @@ class MainWindow(QMainWindow):
                 # finished, not the value at the iteration that built it.
                 WorkflowStep(name, functools.partial(self.show_step, name))
                 for name in STEP_NAMES
-            ]
+            ],
+            orientation=Qt.Orientation.Vertical,
         )
-        left_layout.addWidget(self.workflow_bar)
+        main_layout.addWidget(self.workflow_bar)
 
         view_container = QWidget()
         left_layout.addWidget(view_container, 1)
@@ -324,6 +329,8 @@ class MainWindow(QMainWindow):
         self._maximized_view: Optional[str] = None
         self._restore_layout_mode = "planning"
         self._focused_view_name = "axial"
+        #: The pane shown large in the planning layout; the rest are thumbnails.
+        self._hero_view = "3d"
 
         # Create viewers
         self.axial_viewer = MPRViewer("axial", self.volume_manager)
@@ -368,17 +375,12 @@ class MainWindow(QMainWindow):
         while self._view_layout.count():
             self._view_layout.takeAt(0)
 
-        for row in range(3):
-            self._view_layout.setRowStretch(row, 0)
-        for column in range(2):
-            self._view_layout.setColumnStretch(column, 0)
+        for index in range(3):
+            self._view_layout.setRowStretch(index, 0)
+            self._view_layout.setRowMinimumHeight(index, 0)
+            self._view_layout.setColumnStretch(index, 0)
 
-        panes = {
-            "axial": self.axial_viewer,
-            "sagittal": self.sagittal_viewer,
-            "coronal": self.coronal_viewer,
-            "3d": self.viewer_3d,
-        }
+        panes = self._panes()
 
         if maximized is not None:
             if self._maximized_view is None:
@@ -394,14 +396,20 @@ class MainWindow(QMainWindow):
                 pane.setVisible(True)
             self._maximized_view = None
             if mode == "planning":
-                self._view_layout.addWidget(self.axial_viewer, 0, 0)
-                self._view_layout.addWidget(self.sagittal_viewer, 1, 0)
-                self._view_layout.addWidget(self.coronal_viewer, 2, 0)
-                self._view_layout.addWidget(self.viewer_3d, 0, 1, 3, 1)
-                for row in range(3):
-                    self._view_layout.setRowStretch(row, 1)
-                self._view_layout.setColumnStretch(0, 3)
-                self._view_layout.setColumnStretch(1, 5)
+                # One grid throughout: panes only change cells, never parents,
+                # so no native VTK window is ever reparented.
+                self._view_layout.addWidget(panes[self._hero_view], 0, 0, 1, 3)
+                thumbnails = [
+                    pane for name, pane in panes.items() if name != self._hero_view
+                ]
+                for column, pane in enumerate(thumbnails):
+                    self._view_layout.addWidget(pane, 1, column)
+                self._view_layout.setRowStretch(0, 3)
+                self._view_layout.setRowStretch(1, 1)
+                self._view_layout.setRowMinimumHeight(0, 320)
+                self._view_layout.setRowMinimumHeight(1, 150)
+                for column in range(3):
+                    self._view_layout.setColumnStretch(column, 1)
             else:
                 self._view_layout.addWidget(self.axial_viewer, 0, 0)
                 self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
@@ -413,6 +421,11 @@ class MainWindow(QMainWindow):
                 self._view_layout.setColumnStretch(1, 1)
             self._view_layout_mode = mode
             self._restore_layout_mode = mode
+
+        planning = maximized is None and self._view_layout_mode == "planning"
+        for name, pane in panes.items():
+            pane.set_thumbnail(planning and name != self._hero_view)
+        self._attach_dock()
 
         self._render_shown_panes(panes, maximized)
 
@@ -452,6 +465,52 @@ class MainWindow(QMainWindow):
                 if callable(hook):
                     hook()
                     break
+
+    def _panes(self) -> dict:
+        """The four panes by view name."""
+        return {
+            "axial": self.axial_viewer,
+            "sagittal": self.sagittal_viewer,
+            "coronal": self.coronal_viewer,
+            "3d": self.viewer_3d,
+        }
+
+    @property
+    def hero_view(self) -> str:
+        """Name of the pane shown large in the planning layout."""
+        return self._hero_view
+
+    def set_hero_view(self, view_name: str) -> None:
+        """Make one pane the planning layout's main view.
+
+        While a pane is maximised (or in MPR Focus) only the choice is
+        recorded; the planning layout picks it up when it is shown again.
+        """
+        name = str(view_name)
+        if name not in self.MAXIMIZABLE_VIEWS:
+            raise ValueError(f"Unknown view: {name}")
+        if name == self._hero_view:
+            return
+        self._hero_view = name
+        if self._maximized_view is None and self._view_layout_mode == "planning":
+            self.set_view_layout("planning")
+
+    def _attach_dock(self) -> None:
+        """Float the tool dock over the maximised pane, the main view, or 3D."""
+        dock = self.__dict__.get("tool_dock")
+        if dock is None:
+            return
+        panes = self._panes()
+        if self._maximized_view is not None:
+            host = panes[self._maximized_view]
+        elif self._view_layout_mode == "planning":
+            host = panes[self._hero_view]
+        else:
+            host = self.viewer_3d
+        if dock.parentWidget() is not host.viewport_container:
+            host.attach_overlay(
+                dock, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter
+            )
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -743,7 +802,12 @@ class MainWindow(QMainWindow):
         study_layout.addWidget(view_group)
         study_layout.addStretch()
 
-        self.step_panel.add_page("Study", study_page)
+        self.step_panel.add_page(
+            "Study",
+            study_page,
+            title="Load a study",
+            subtitle="Open a DICOM series and set the window.",
+        )
 
         # ── SEGMENT PAGE ──
         segment_page = QWidget()
@@ -925,7 +989,12 @@ class MainWindow(QMainWindow):
         segment_layout.addWidget(self.seg_advanced_panel)
         segment_layout.addStretch()
 
-        self.step_panel.add_page("Segment", segment_page)
+        self.step_panel.add_page(
+            "Segment",
+            segment_page,
+            title="Segment vertebrae",
+            subtitle="Run TotalSegmentator, then choose levels to show.",
+        )
 
         # ── PLAN PAGE ──
         plan_page = QWidget()
@@ -1199,7 +1268,12 @@ class MainWindow(QMainWindow):
         plan_layout.addWidget(screw_defaults_group)
         plan_layout.addStretch()
 
-        self.step_panel.add_page("Plan", plan_page)
+        self.step_panel.add_page(
+            "Plan",
+            plan_page,
+            title="Plan screws",
+            subtitle="Auto plan the selected levels or add screws by hand.",
+        )
 
         # ── REVIEW PAGE ──
         # A plain widget, not a collapsible group: this step is centred on
@@ -1222,6 +1296,22 @@ class MainWindow(QMainWindow):
         )
         header_row.addWidget(self.selected_screw_counter, 1)
         review_layout.addLayout(header_row)
+
+        # Level-by-level summary of the whole construct; it reads the same
+        # screws the table shows and selects through the table.  A plain
+        # heading, not a CollapsibleGroupBox: that caps its content at the
+        # height it had when built, and this map grows with every level.
+        construct_title = QLabel("Construct")
+        construct_title.setObjectName("constructTitle")
+        review_layout.addWidget(construct_title)
+        self.construct_map = ConstructMap()
+        review_layout.addWidget(self.construct_map)
+        # Rows arrive cell by cell (insert + one dataChanged per column), so
+        # redraw the map once per event-loop turn, not once per signal.
+        self._construct_map_timer = QTimer(self)
+        self._construct_map_timer.setSingleShot(True)
+        self._construct_map_timer.setInterval(0)
+        self._construct_map_timer.timeout.connect(self._refresh_construct_map)
 
         # Key numbers: only what a surgeon glances at while flipping between
         # screws -- level/side, diameter, length, grade, and a one-line
@@ -1542,7 +1632,13 @@ class MainWindow(QMainWindow):
         measurements_group.set_content_layout(measurements_layout)
         review_layout.addWidget(measurements_group)
 
-        self.step_panel.add_page("Review", review_page, scrollable=True)
+        self.step_panel.add_page(
+            "Review",
+            review_page,
+            scrollable=True,
+            title="Review screws",
+            subtitle="Check each screw's grade and adjust it in the views.",
+        )
 
         self.secondary_control_groups = (
             wl_group,
@@ -1837,10 +1933,42 @@ class MainWindow(QMainWindow):
         # and raise ``wrapped C/C++ object ... has been deleted``.
         for signal in (table_model.rowsInserted, table_model.rowsRemoved, table_model.modelReset):
             signal.connect(self._on_screw_rows_changed)
+        for signal in (
+            table_model.rowsInserted,
+            table_model.rowsRemoved,
+            table_model.modelReset,
+            table_model.dataChanged,
+        ):
+            signal.connect(self._schedule_construct_map_refresh)
+        self.screw_list_widget.currentRowChanged.connect(
+            self.construct_map.set_selected
+        )
+        self.construct_map.screw_clicked.connect(self._select_screw_from_view)
+        for pane in self._panes().values():
+            pane.promote_requested.connect(self.set_hero_view)
         self._refresh_workflow_bar()
         self.screw_list_widget.currentRowChanged.connect(
             lambda *_unused: self.refresh_mode_indicators()
         )
+
+    def _schedule_construct_map_refresh(self, *_args) -> None:
+        timer = self.__dict__.get("_construct_map_timer")
+        if timer is not None and not sip.isdeleted(timer):
+            timer.start()
+
+    def _refresh_construct_map(self) -> None:
+        """Redraw the construct map from the screws the table shows."""
+        construct_map = self.__dict__.get("construct_map")
+        widget = self.__dict__.get("screw_list_widget")
+        if (
+            construct_map is None
+            or widget is None
+            or sip.isdeleted(construct_map)
+            or sip.isdeleted(widget)
+        ):
+            return
+        construct_map.set_screws(self._tool_ctrl.screw_tool.get_screws())
+        construct_map.set_selected(widget.currentRow())
 
     def _select_screw_from_view(self, screw_id: int) -> None:
         """Synchronize a screw picked in MPR/3D with the selection list."""
@@ -1968,6 +2096,7 @@ class MainWindow(QMainWindow):
 
         # View menu
         view_menu = menubar.addMenu("View")
+        self._view_menu = view_menu
 
         reset_view = QAction("Reset Camera", self)
         reset_view.setShortcut("R")
@@ -2024,7 +2153,7 @@ class MainWindow(QMainWindow):
         )
 
         self.layout_combo = QComboBox()
-        self.layout_combo.addItem("Planning (3D Large)", "planning")
+        self.layout_combo.addItem("Planning (Main View)", "planning")
         self.layout_combo.addItem("MPR Focus (2 x 2)", "mpr_focus")
         self.layout_combo.setCurrentIndex(
             self.layout_combo.findData(self._view_layout_mode)
@@ -2093,8 +2222,6 @@ class MainWindow(QMainWindow):
         toolbar.addAction(open_action)
         self._open_toolbar_action = open_action
 
-        toolbar.addSeparator()
-
         # Unified tool palette (mutually exclusive)
         self._tool_group = QActionGroup(self)
         self._tool_group.setExclusive(True)
@@ -2108,7 +2235,6 @@ class MainWindow(QMainWindow):
         )
         self._register_themed_icon(self._select_tool_action, "select")
         self._tool_group.addAction(self._select_tool_action)
-        toolbar.addAction(self._select_tool_action)
 
         self._add_screw_tool_action = QAction("Add Screw", self)
         self._add_screw_tool_action.setToolTip(
@@ -2120,7 +2246,6 @@ class MainWindow(QMainWindow):
         )
         self._register_themed_icon(self._add_screw_tool_action, "screw")
         self._tool_group.addAction(self._add_screw_tool_action)
-        toolbar.addAction(self._add_screw_tool_action)
 
         self._distance_tool_action = QAction("Distance", self)
         self._distance_tool_action.setToolTip(
@@ -2132,7 +2257,6 @@ class MainWindow(QMainWindow):
         )
         self._register_themed_icon(self._distance_tool_action, "distance")
         self._tool_group.addAction(self._distance_tool_action)
-        toolbar.addAction(self._distance_tool_action)
 
         self._angle_tool_action = QAction("Angle", self)
         self._angle_tool_action.setToolTip(
@@ -2144,19 +2268,15 @@ class MainWindow(QMainWindow):
         )
         self._register_themed_icon(self._angle_tool_action, "angle")
         self._tool_group.addAction(self._angle_tool_action)
-        toolbar.addAction(self._angle_tool_action)
 
         self._nav_action = self._select_tool_action
         self._screw_action = self._add_screw_tool_action
         self._measure_action = self._distance_tool_action
 
-        toolbar.addSeparator()
-
         self._fit_mpr_action = QAction("Fit MPR", self)
         self._fit_mpr_action.setToolTip("Fit CT images tightly in all MPR views")
         self._fit_mpr_action.triggered.connect(self.fit_mpr_views)
         self._register_themed_icon(self._fit_mpr_action, "fit")
-        toolbar.addAction(self._fit_mpr_action)
 
         self._zoom_out_3d_action = QAction("3D -", self)
         self._zoom_out_3d_action.setToolTip("Zoom out the 3D view")
@@ -2164,7 +2284,6 @@ class MainWindow(QMainWindow):
             lambda: self.viewer_3d.zoom_camera(1.0 / 1.2)
         )
         self._register_themed_icon(self._zoom_out_3d_action, "zoom_out")
-        toolbar.addAction(self._zoom_out_3d_action)
 
         self._zoom_in_3d_action = QAction("3D +", self)
         self._zoom_in_3d_action.setToolTip("Zoom in the 3D view")
@@ -2172,15 +2291,11 @@ class MainWindow(QMainWindow):
             lambda: self.viewer_3d.zoom_camera(1.2)
         )
         self._register_themed_icon(self._zoom_in_3d_action, "zoom_in")
-        toolbar.addAction(self._zoom_in_3d_action)
 
         self._fit_3d_action = QAction("Fit 3D", self)
         self._fit_3d_action.setToolTip("Fit all visible objects in the 3D view")
         self._fit_3d_action.triggered.connect(self.viewer_3d.fit_to_view)
         self._register_themed_icon(self._fit_3d_action, "reset")
-        toolbar.addAction(self._fit_3d_action)
-
-        toolbar.addSeparator()
 
         self._screw_mpr_action = QAction("Screw MPR", self)
         self._screw_mpr_action.setToolTip(
@@ -2190,10 +2305,60 @@ class MainWindow(QMainWindow):
         self._screw_mpr_action.setEnabled(False)
         self._screw_mpr_action.triggered.connect(self._toggle_screw_mpr)
         self._register_themed_icon(self._screw_mpr_action, "screw_mpr")
-        toolbar.addAction(self._screw_mpr_action)
+
+        spacer = QWidget(toolbar)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        # Voxel spacing only: nothing that could identify the patient.
+        self.study_chip = QLabel("No study loaded", toolbar)
+        self.study_chip.setObjectName("studyChip")
+        toolbar.addWidget(self.study_chip)
+        self.ruo_badge = QLabel("RESEARCH USE ONLY", toolbar)
+        self.ruo_badge.setObjectName("ruoBadge")
+        self.ruo_badge.setToolTip(
+            "Research and education software — not a certified medical device"
+        )
+        toolbar.addWidget(self.ruo_badge)
+
+        self._view_menu.addSeparator()
+        for action in (
+            self._fit_mpr_action,
+            self._zoom_in_3d_action,
+            self._zoom_out_3d_action,
+            self._fit_3d_action,
+        ):
+            self._view_menu.addAction(action)
+
+        self.tool_dock = ToolDock(
+            [
+                self._select_tool_action,
+                self._add_screw_tool_action,
+                None,
+                self._distance_tool_action,
+                self._angle_tool_action,
+                None,
+                self._screw_mpr_action,
+                None,
+                self._fit_mpr_action,
+                self._fit_3d_action,
+            ]
+        )
+        self._attach_dock()
 
         self._refresh_themed_icons()
         self.refresh_mode_indicators()
+
+    def update_study_chip(self) -> None:
+        """Show the loaded CT's voxel spacing, or that no study is loaded."""
+        chip = self.__dict__.get("study_chip")
+        if chip is None:
+            return
+        image = self.volume_manager.get_sitk_image()
+        if image is None:
+            chip.setText("No study loaded")
+            return
+        sx, sy, sz = image.GetSpacing()
+        chip.setText(f"CT · {sx:.2f} × {sy:.2f} × {sz:.2f} mm")
 
     def _toggle_screw_mpr(self, checked: bool) -> None:
         """Enter or leave Screw MPR from the toolbar toggle.
@@ -3074,6 +3239,10 @@ class MainWindow(QMainWindow):
         # new study with step 2 already ticked. This is where the bar is
         # redrawn, now that the study is actually a fresh one.
         self._refresh_workflow_bar()
+        # A new study opens on the 3D main view with an empty construct.
+        self.set_hero_view("3d")
+        self._refresh_construct_map()
+        self.update_study_chip()
         # A study just loaded: point the panel at what comes next.
         self.show_step("Segment")
 

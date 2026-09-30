@@ -143,7 +143,7 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 
 ### Themes
 
-The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the floating controls over the views (tool dock, zoom controls, 3D overlays) share one translucent style that follows the theme.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the floating controls over the views (tool dock, zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
 
 ## 5. Standard Planning Workflow
 

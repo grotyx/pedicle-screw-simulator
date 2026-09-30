@@ -218,6 +218,9 @@ class _Window:
     def set_view_layout(self, mode):
         self.layout_mode = mode
 
+    def set_hero_view(self, name):
+        self.hero_view = name
+
     def _get_mpr_viewers(self):
         return [self.axial_viewer, self.sagittal_viewer, self.coronal_viewer]
 
@@ -268,6 +271,7 @@ def test_valid_screw_applies_two_long_axes_and_midpoint_cross_section():
 
     assert controller.is_active is True
     assert window.layout_mode == "planning"
+    assert window.hero_view == "axial"
     assert window.axial_viewer.title == "Oblique Axial · Screw #1"
     assert window.sagittal_viewer.title == "Oblique Sagittal · Screw #1"
     assert window.coronal_viewer.title == "Cross-section · 50%"

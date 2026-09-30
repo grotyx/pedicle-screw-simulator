@@ -29,7 +29,9 @@ class ToolDock(QFrame):
             if action is None:
                 separator = QFrame(self)
                 separator.setObjectName("toolDockSeparator")
-                separator.setFrameShape(QFrame.Shape.VLine)
+                # A plain 1 px fill from the stylesheet; a VLine frame
+                # draws its own shaded bar on top of that.
+                separator.setFixedWidth(1)
                 layout.addWidget(separator)
                 continue
             button = QToolButton(self)
