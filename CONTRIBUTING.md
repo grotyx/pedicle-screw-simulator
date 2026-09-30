@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for considering a contribution to Pedicle Screw Fixation Simulator.
+Thank you for considering a contribution to Pedicle Screw Simulator.
 
 ## Before contributing
 
@@ -20,13 +20,12 @@ Contributions are accepted under the project's MIT License. By submitting a cont
 5. Run:
 
 ```bash
-./scripts/run_app.sh --check
-./scripts/run_app.sh --test
-venv/bin/python -m compileall -q src tests
+python -m pytest tests -p no:cacheprovider
+python -m ruff check src tests scripts main.py
 git diff --check
 ```
 
-On Windows, use `powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --check` and `--test` in place of the `run_app.sh` commands above.
+These are the checks listed in [AGENTS.md](AGENTS.md). `pyproject.toml` already passes `-q` to pytest, so do not add another. `./scripts/run_app.sh --test` (on Windows, `powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test`) runs the same test suite.
 
 6. Lint with [ruff](https://docs.astral.sh/ruff/) before committing:
 

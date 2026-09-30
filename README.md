@@ -97,7 +97,7 @@ For exact reproduction of the validated macOS/Python 3.12 environment:
 python -m pip install -r requirements-lock.txt
 ```
 
-`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment used for v0.2.3 verification. `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
+`requirements.txt` provides compatible minimum versions. `requirements-lock.txt` records the exact core runtime and test environment last validated on macOS arm64 with Python 3.12 (see the file header; not re-verified for every release). `requirements-desktop.txt` pins the additional TotalSegmentator and PyTorch runtime used in standalone builds.
 
 ## Standalone Desktop Packages
 

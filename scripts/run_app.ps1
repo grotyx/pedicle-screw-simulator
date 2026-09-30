@@ -25,5 +25,5 @@ if ($WithTotalseg) {
     if ($LASTEXITCODE -ne 0) { Write-Error "TotalSegmentator install failed"; exit $LASTEXITCODE }
 }
 if ($Check) { & $python -c "import vtk, PyQt6, SimpleITK, pydicom, numpy, scipy; print('Dependencies OK')"; exit $LASTEXITCODE }
-if ($Test) { $env:QT_QPA_PLATFORM = "offscreen"; & $python -m pytest (Join-Path $root "tests") -q; exit $LASTEXITCODE }
+if ($Test) { $env:QT_QPA_PLATFORM = "offscreen"; & $python -m pytest (Join-Path $root "tests"); exit $LASTEXITCODE }
 & $python (Join-Path $root "main.py")

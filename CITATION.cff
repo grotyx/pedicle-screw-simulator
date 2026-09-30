@@ -3,7 +3,7 @@ message: "If you use this software in research, please cite it using these metad
 title: "Pedicle Screw Simulator"
 type: software
 version: "0.2.3"
-date-released: 2026-07-12
+date-released: 2026-09-13
 license: "MIT"
 authors:
   - family-names: "Park"
