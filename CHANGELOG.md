@@ -87,6 +87,14 @@ current version; every other place the version appears is derived from it.
   line was hidden), and CI now runs git diff --check. The CITATION release
   date matches 0.2.3, and CONTRIBUTING names the project and its checks
   correctly.
+- MPR reference lines now follow the current slice positions after
+  scrolling or clicking in any view, after loading a study and on entering or
+  leaving Screw MPR, and each line uses the colour of the plane it marks (all
+  three views had them swapped).
+- The Angle tool no longer gets stuck when two of its points coincide, and
+  changing the measure mode while editing a measurement keeps its plane.
+- The Side column of the screw table no longer truncates.
+
 
 ## [0.2.3] - 2026-09-13
 
