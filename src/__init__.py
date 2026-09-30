@@ -1,5 +1,5 @@
 """
-Pedicle Screw Fixation Simulator
+Pedicle Screw Simulator
 ================================
 
 A VTK-based medical imaging application for pedicle screw placement planning.

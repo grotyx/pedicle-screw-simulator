@@ -1,4 +1,4 @@
-"""Controllers for the Pedicle Screw Fixation Simulator."""
+"""Controllers for the Pedicle Screw Simulator."""
 from src.controllers.auto_placement_controller import AutoPlacementController
 from src.controllers.dicom_controller import DicomController
 from src.controllers.plan_controller import PlanController

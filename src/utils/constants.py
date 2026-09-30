@@ -1,5 +1,5 @@
 """
-Constants and configuration for the Screw Fixation Simulator
+Constants and configuration for the Pedicle Screw Simulator
 """
 
 import numpy as np
