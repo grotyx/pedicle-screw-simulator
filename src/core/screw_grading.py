@@ -137,7 +137,6 @@ class GradeResult:
     #: The cylinder sample that breached furthest, and the centreline point it
     #: belongs to (LPS mm). Both ``None`` when the screw is contained.
     breach_point_lps: Optional[Tuple[float, float, float]] = None
-    breach_centre_lps: Optional[Tuple[float, float, float]] = None
     #: The vertebra's nearest point to ``breach_point_lps``, so the offset
     #: between them is the direction the screw left the bone in -- along the
     #: axis for a tip breach, which the centreline point can never show.
@@ -407,7 +406,6 @@ class ScrewGrader:
             mean_hu=float(np.mean(hu_samples)) if hu_samples.size else None,
             min_hu=float(np.min(hu_samples)) if hu_samples.size else None,
             breach_point_lps=breach_point,
-            breach_centre_lps=breach_centre,
             breach_surface_lps=breach_surface,
             medial_breach_mm=medial,
             lateral_breach_mm=lateral,

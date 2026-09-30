@@ -143,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     out_base = Path(args.out)
     out_base.parent.mkdir(parents=True, exist_ok=True)
 
-    csv_path = out_base.with_suffix(".csv")
+    # Only a trailing .csv/.json is a report extension; "report.v2" keeps its dot.
+    if out_base.suffix.lower() in (".csv", ".json"):
+        out_base = out_base.with_suffix("")
+    csv_path = out_base.with_name(out_base.name + ".csv")
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(SCREW_FIELDS)
@@ -151,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             row = asdict(comparison)
             writer.writerow([row[field] for field in SCREW_FIELDS])
 
-    json_path = out_base.with_suffix(".json")
+    json_path = out_base.with_name(out_base.name + ".json")
     with json_path.open("w", encoding="utf-8") as handle:
         json.dump(asdict(summary), handle, indent=2)
 

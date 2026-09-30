@@ -52,6 +52,11 @@ for arg in "$@"; do
 done
 
 if [[ ! -x "${PYTHON_BIN}" ]]; then
+  if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' 2>/dev/null; then
+    echo "[error] Python 3.12 or newer is required; 'python3' is $(python3 -V 2>&1 || echo 'not found')." >&2
+    echo "        Install Python 3.12+ and put it first on PATH as 'python3', then re-run." >&2
+    exit 1
+  fi
   echo "[setup] Creating virtual environment at ${VENV_DIR}"
   python3 -m venv "${VENV_DIR}"
 fi
