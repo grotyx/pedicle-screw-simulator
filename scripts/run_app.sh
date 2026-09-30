@@ -149,7 +149,7 @@ fi
 if [[ "${RUN_MODE}" == "test" ]]; then
   echo "[test] Running automated test suite"
   cd "${ROOT_DIR}"
-  "${PYTHON_BIN}" -m pytest -q tests/
+  "${PYTHON_BIN}" -m pytest tests/
   echo "[done] Tests complete"
   exit 0
 fi
