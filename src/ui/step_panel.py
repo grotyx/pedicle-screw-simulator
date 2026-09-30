@@ -100,7 +100,8 @@ class StepPanel(QWidget):
         # QWidget subclasses ignore stylesheet borders/backgrounds without this.
         header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(header)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # A plain QWidget's layout ignores QSS padding, so the inset lives here.
+        layout.setContentsMargins(12, 10, 12, 8)
         layout.setSpacing(2)
         eyebrow = (
             f"Step {STEP_NAMES.index(name) + 1} of {len(STEP_NAMES)}"
