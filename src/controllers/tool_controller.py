@@ -442,10 +442,18 @@ class ToolController:
                 "This measurement cannot be edited on an MPR cut"
             )
             return
-        if bool(entry.get("screw_aligned")) != self._screw_mpr_active():
+        if entry.get("screw_aligned"):
+            # Its plane belongs to whichever screw/slider was active when it
+            # was taken, and that is not recorded: re-picking under another
+            # screw's view would land the points on an unrelated plane.
             self._window.statusbar.showMessage(
-                "Edit this measurement in "
-                + ("Screw MPR" if entry.get("screw_aligned") else "Standard MPR")
+                "A screw-view measurement cannot be edited: delete it and "
+                "re-measure in Screw MPR"
+            )
+            return
+        if self._screw_mpr_active():
+            self._window.statusbar.showMessage(
+                "Edit this measurement in Standard MPR"
             )
             return
         measurement = measurements[row]

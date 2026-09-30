@@ -2,6 +2,7 @@
 TotalSegmentator integration helpers with safe fallback behavior.
 """
 
+import atexit
 import importlib.util
 import logging
 import os
@@ -64,29 +65,55 @@ NEW_PROCESS_GROUP = (
 
 
 def _kill_process_tree(proc: subprocess.Popen) -> None:
-    """Kill `proc` and every process it spawned.
+    """Kill `proc` and every process it spawned, without waiting.
 
     Killing the parent alone is not enough: nnU-Net workers inherit its stdout
     and stderr pipes, so ``communicate()`` keeps blocking while they live, and
     they go on writing into a workspace that is about to be removed.
+
+    Cancel calls this on the UI thread, so nothing here may block.
     """
     try:
         if os.name == "nt":
             # Windows has no process-group kill; taskkill /T walks the tree.
-            subprocess.run(
+            # Fire and forget: it kills the parent too, and killing the parent
+            # first would make taskkill's PID lookup (and the walk) fail.
+            subprocess.Popen(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                capture_output=True,
-                timeout=10,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-        else:
-            # Only a child started with NEW_PROCESS_GROUP leads a group of
-            # its own PID; for any other the call fails and kills nothing.
-            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        # Only a child started with NEW_PROCESS_GROUP leads a group of
+        # its own PID; for any other the call fails and kills nothing.
+        os.killpg(proc.pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         pass
     # The parent itself, in case the tree kill could not reach it.
     proc.kill()
+
+
+#: Every subprocess handed to a ProcessHolder; see ``_kill_tracked_processes``.
+_TRACKED_PROCESSES: set = set()
+
+
+def _kill_tracked_processes() -> None:
+    """Best effort at exit: kill any tracked segmentation still running.
+
+    NEW_PROCESS_GROUP detaches the child from the terminal's Ctrl-C, so an
+    app that exits mid-run would otherwise leave TotalSegmentator behind.
+    """
+    for proc in list(_TRACKED_PROCESSES):
+        try:
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+        except Exception:  # noqa: BLE001 - never raise from an exit hook
+            pass
+
+
+atexit.register(_kill_tracked_processes)
 
 
 class ProcessHolder:
@@ -97,8 +124,20 @@ class ProcessHolder:
     """
 
     def __init__(self) -> None:
-        self.process: Optional[subprocess.Popen] = None
+        self._process: Optional[subprocess.Popen] = None
         self.cancelled: bool = False
+
+    @property
+    def process(self) -> Optional[subprocess.Popen]:
+        return self._process
+
+    @process.setter
+    def process(self, proc: Optional[subprocess.Popen]) -> None:
+        self._process = proc
+        if proc is not None:
+            _TRACKED_PROCESSES.add(proc)
+        for old in [p for p in _TRACKED_PROCESSES if p.poll() is not None]:
+            _TRACKED_PROCESSES.discard(old)
 
     def terminate(self) -> None:
         """Mark the run as cancelled and kill the process tree if running."""

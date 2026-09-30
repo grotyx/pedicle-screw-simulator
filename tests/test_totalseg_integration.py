@@ -1405,3 +1405,68 @@ def test_a_result_read_failure_after_a_gpu_run_is_not_retried_on_cpu(
         )
 
     assert devices == ["gpu"]
+
+
+# ---------------------------------------------------------------------------
+# Cancel must not block the UI thread; exit must not orphan the process tree
+# ---------------------------------------------------------------------------
+
+
+def test_kill_process_tree_does_not_wait_for_taskkill(monkeypatch):
+    launched = []
+
+    class _NoWait:
+        def __init__(self, *args, **kwargs):
+            launched.append(args[0])
+
+        def communicate(self, *a, **k):
+            raise AssertionError("the UI thread must not wait on taskkill")
+
+        def wait(self, *a, **k):
+            raise AssertionError("the UI thread must not wait on taskkill")
+
+    def _no_run(*a, **k):
+        raise AssertionError("taskkill must not run synchronously")
+
+    monkeypatch.setattr(totalseg.os, "name", "nt")
+    monkeypatch.setattr(totalseg.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _NoWait)
+    monkeypatch.setattr(totalseg.subprocess, "run", _no_run)
+    proc = types.SimpleNamespace(pid=4242, kill=lambda: launched.append("kill"))
+
+    totalseg._kill_process_tree(proc)
+
+    assert launched and launched[0][:3] == ["taskkill", "/PID", "4242"]
+
+
+def test_kill_process_tree_kills_the_parent_when_taskkill_cannot_start(monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("no taskkill")
+
+    killed = []
+    monkeypatch.setattr(totalseg.os, "name", "nt")
+    monkeypatch.setattr(totalseg.subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(totalseg.subprocess, "Popen", _boom)
+    totalseg._kill_process_tree(
+        types.SimpleNamespace(pid=1, kill=lambda: killed.append(1))
+    )
+    assert killed == [1]
+
+
+def test_exit_hook_kills_a_tracked_live_process():
+    import subprocess as sp
+    import sys
+
+    child = sp.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        **totalseg.NEW_PROCESS_GROUP,
+    )
+    holder = totalseg.ProcessHolder()
+    holder.process = child
+    try:
+        totalseg._kill_tracked_processes()
+        assert child.wait(timeout=15) is not None
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()

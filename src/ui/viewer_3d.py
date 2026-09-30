@@ -554,6 +554,7 @@ class Viewer3D(QWidget):
 
         # Segmentation overlay
         self._segmentation_actor: Optional[vtk.vtkActor] = None
+        self._segmentation_visible: bool = True
         self._segmentation_mask_image: Optional[vtk.vtkImageData] = None
         self._segmentation_label_value: int = 0
         self._segmentation_surface_cache: Dict[Tuple[int, int], Optional[vtk.vtkPolyData]] = {}
@@ -1964,6 +1965,9 @@ class Viewer3D(QWidget):
 
     def set_segmentation_visible(self, visible: bool) -> None:
         """Toggle visibility of segmentation overlay actor."""
+        # Remembered even with no actor (an empty label), so the next actor
+        # built for a populated label honours the checkbox.
+        self._segmentation_visible = bool(visible)
         if self._segmentation_actor is None:
             return
         self._segmentation_actor.SetVisibility(visible)
@@ -1972,14 +1976,12 @@ class Viewer3D(QWidget):
     def _render_segmentation_actor(self, keep_visibility: bool = False) -> None:
         """Build or rebuild segmentation actor with current label filter.
 
-        ``keep_visibility`` carries the old actor's show/hide state over to
-        the new one (a label change, unlike a new mask, must not un-hide it).
+        ``keep_visibility`` carries the requested show/hide state over to
+        the new actor (a label change, unlike a new mask, must not un-hide it).
         """
-        visible = (
-            self._segmentation_actor is None
-            or self._segmentation_actor.GetVisibility()
-            or not keep_visibility
-        )
+        if not keep_visibility:
+            self._segmentation_visible = True
+        visible = self.__dict__.get("_segmentation_visible", True)
         self.clear_segmentation_actor_only()
         if self._segmentation_mask_image is None:
             return
