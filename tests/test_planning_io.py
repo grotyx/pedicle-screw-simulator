@@ -656,3 +656,37 @@ def test_csv_neutralises_formula_text_but_keeps_numbers_numeric(tmp_path):
     assert row["warnings"].startswith("'+cmd")
     assert row["entry_x"] == "-1.000"
     assert float(row["target_z"]) == -33.0
+
+
+def test_screw_view_measurements_keep_their_flag_through_a_round_trip():
+    """A measurement taken in Screw MPR must not come back as a standard slice."""
+    from src.utils.planning_io import deserialize_plan, serialize_plan
+
+    measurements = [
+        Measurement(points=[(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)], distance=10.0),
+        Measurement(points=[(0.0, 0.0, 5.0), (0.0, 10.0, 5.0)], distance=10.0),
+    ]
+    payload = serialize_plan(
+        series_id=None,
+        screws=[],
+        measurements=measurements,
+        measurement_planes=["axial", "axial"],
+        measurement_screw_aligned=[True, False],
+    )
+    assert payload["measurements"][0]["screw_aligned"] is True
+    assert "screw_aligned" not in payload["measurements"][1]
+
+    parsed = deserialize_plan(json.loads(json.dumps(payload)))
+    assert parsed["measurement_screw_aligned"] == [True, False]
+
+
+def test_plans_without_the_flag_load_as_standard_measurements():
+    from src.utils.planning_io import deserialize_plan, serialize_plan
+
+    payload = serialize_plan(
+        series_id=None,
+        screws=[],
+        measurements=[Measurement(points=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], distance=1.0)],
+        measurement_planes=["sagittal"],
+    )
+    assert deserialize_plan(payload)["measurement_screw_aligned"] == [False]

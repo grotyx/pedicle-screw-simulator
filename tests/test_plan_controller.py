@@ -373,3 +373,36 @@ def test_legacy_plan_with_raw_series_id_still_checks_and_is_not_re_emitted(
     _capture_dialog_dirs(monkeypatch, saved)
     window._plan_ctrl.save_dialog()
     assert "SERIES-V1" not in saved.read_text(encoding="utf-8")
+
+
+def test_a_screw_view_measurement_survives_save_and_load(ui_main_window, monkeypatch, tmp_path):
+    """Reloaded, it must still read "(screw view)", not a standard axial slice."""
+    from src.models.measurement import Measurement
+
+    window = ui_main_window
+    _load_volume(window)
+    window._plan_ctrl._apply_loaded_plan(
+        screws=[],
+        measurements=[Measurement(points=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)], distance=5.0)],
+        planes=["axial"],
+        screw_aligned=[True],
+    )
+    assert window._tool_ctrl._measurement_entries[0]["screw_aligned"] is True
+
+    path = tmp_path / "plan.json"
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(path), "JSON Files (*.json)")),
+    )
+    window._plan_ctrl.save_dialog()
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(path), "JSON Files (*.json)")),
+    )
+    window._plan_ctrl.load_dialog()
+
+    entries = window._tool_ctrl._measurement_entries
+    assert len(entries) == 1
+    assert entries[0]["screw_aligned"] is True

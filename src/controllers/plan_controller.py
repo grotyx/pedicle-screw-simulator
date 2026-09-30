@@ -77,6 +77,10 @@ class PlanController:
                 screws=screws,
                 measurements=measurements,
                 measurement_planes=planes,
+                measurement_screw_aligned=[
+                    bool(entry.get("screw_aligned"))
+                    for entry in tool_ctrl._measurement_entries[: len(measurements)]
+                ],
                 metadata={
                     "mask_refinement": (
                         self._window._seg_ctrl.mask_refinement_metadata()
@@ -136,6 +140,7 @@ class PlanController:
                 screws=parsed["screws"],
                 measurements=parsed["measurements"],
                 planes=parsed["measurement_planes"],
+                screw_aligned=parsed["measurement_screw_aligned"],
             )
             self._window.statusbar.showMessage(
                 f"Plan loaded ({len(parsed['screws'])} screws, "
@@ -204,7 +209,7 @@ class PlanController:
                 self._window, "Export Error", f"Failed to export STL: {e}"
             )
 
-    def _apply_loaded_plan(self, screws, measurements, planes):
+    def _apply_loaded_plan(self, screws, measurements, planes, screw_aligned=None):
         """Replace current tool data with loaded plan contents."""
         tool_ctrl = self._window._tool_ctrl
         tool_ctrl.clear_screws()
@@ -226,7 +231,10 @@ class PlanController:
             tool_ctrl._add_screw_to_list(screw)
             tool_ctrl._add_screw_to_mpr(screw_index, screw)
 
-        for measurement, plane in zip(measurements, planes, strict=True):
+        aligned = screw_aligned or [False] * len(measurements)
+        for measurement, plane, is_aligned in zip(
+            measurements, planes, aligned, strict=True
+        ):
             tool_ctrl.measurement_tool.add_measurement(measurement)
             measurement_id = tool_ctrl._next_measurement_id
             tool_ctrl._next_measurement_id += 1
@@ -240,6 +248,7 @@ class PlanController:
                     "plane": plane,
                     "mode": measurement.mode,
                     "label": label,
+                    "screw_aligned": bool(is_aligned),
                 }
             )
             viewer = tool_ctrl._get_viewer_by_plane(plane)

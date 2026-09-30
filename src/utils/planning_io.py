@@ -228,6 +228,7 @@ def serialize_plan(
     measurements: List[Measurement],
     measurement_planes: Optional[List[Optional[str]]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    measurement_screw_aligned: Optional[List[bool]] = None,
 ) -> Dict[str, Any]:
     """Build plan payload dictionary for JSON persistence.
 
@@ -245,12 +246,20 @@ def serialize_plan(
     if len(planes) != len(measurements):
         raise ValueError("Measurement plane count must match measurements")
 
+    aligned = measurement_screw_aligned or [False] * len(measurements)
+    if len(aligned) != len(measurements):
+        raise ValueError("Screw-view flag count must match measurements")
+
     measurement_items = []
-    for measurement, plane in zip(measurements, planes, strict=True):
+    for measurement, plane, screw_aligned in zip(measurements, planes, aligned, strict=True):
         item = measurement_to_dict(measurement)
         if plane is not None and plane not in VALID_PLANES:
             raise ValueError(f"Invalid measurement plane: {plane}")
         item["plane"] = plane
+        if screw_aligned:
+            # Taken on the oblique Screw MPR view: ``plane`` names the pane,
+            # not a standard slice the points lie on.
+            item["screw_aligned"] = True
         measurement_items.append(item)
 
     return {
@@ -291,6 +300,7 @@ def deserialize_plan(
     screws = [screw_from_dict(item) for item in screw_items]
     measurements: List[Measurement] = []
     planes: List[Optional[str]] = []
+    screw_aligned: List[bool] = []
 
     for item in measurement_items:
         if not isinstance(item, dict):
@@ -300,6 +310,7 @@ def deserialize_plan(
             raise ValueError(f"Invalid measurement plane: {plane}")
         measurements.append(measurement_from_dict(item))
         planes.append(plane)
+        screw_aligned.append(item.get("screw_aligned") is True)
 
     return {
         "version": version,
@@ -310,6 +321,7 @@ def deserialize_plan(
         "screws": screws,
         "measurements": measurements,
         "measurement_planes": planes,
+        "measurement_screw_aligned": screw_aligned,
         "metadata": dict(raw_metadata or {}),
     }
 
