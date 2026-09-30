@@ -27,6 +27,11 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Measurements taken in Screw MPR can no longer be edited or dragged; delete
+  and re-measure them (their oblique plane is not recorded).
+- The legacy fallback for a narrow pedicle applies the optimizer's narrow
+  rule: no medial or craniocaudal breach, lateral breach within the Lateral
+  breach cap. The skip reason names the figure that failed.
 - Plan Save, Load and Export dialogs open in the last plan folder (or
   Documents), never the application folder, and root-level plan exports are
   git-ignored. Plans store only a SHA-256 digest of the series UID; older
@@ -134,6 +139,20 @@ current version; every other place the version appears is derived from it.
   of entering at the anterior cortex.
 - validate_plans --out no longer truncates dotted names, and run_app.sh stops
   with a clear message when python3 is older than 3.12.
+- DICOM load and scan errors no longer write exception text, which can hold
+  patient-named folder paths, to app.log or dialogs; only the error type and
+  code locations are logged. Loading no longer re-reads every slice to check
+  its geometry.
+- Re-planning replaces earlier automatic screws per level and side, so a side
+  the new plan skipped keeps its screw, and the confirmation says adjusted
+  automatic screws are replaced too. Saving a plan no longer fails when a
+  measurement has no screw-view entry.
+- Trajectory HU in Details and CSV mean_hu/min_hu samples only inside the
+  screw's vertebra, matching trajectory_mean_hu.
+- Stepping the 3D segmentation label through an empty label no longer
+  re-shows a hidden overlay. Cancelling a segmentation no longer freezes the
+  window while the process tree is killed, and quitting the app no longer
+  leaves TotalSegmentator running.
 
 
 ## [0.2.3] - 2026-09-13
