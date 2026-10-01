@@ -26,6 +26,12 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ### 변경
 
+- 자동 계획은 기본적으로 피질 천공을 전혀 허용하지 않습니다(Gertzbein 등급 A).
+  "Lateral breach cap (mm)" 대신 새 "Accepted breach" 설정("A only — no breach",
+  "Up to B (< 2 mm)", "Up to C (< 4 mm)")을 쓰며, 예전에 저장한 한도 값은
+  무시합니다. 좁은 척추경은 lateral 쪽으로만 천공할 수 있고, 내측(척추관 쪽)
+  천공은 어떤 경우에도 허용하지 않습니다. 예전에는 일반 폭 legacy 스크류가
+  척추관 쪽으로 뚫린 등급 B 스크류를 받아들였는데, 이제는 이것도 막습니다.
 - Screw MPR에서 한 측정은 더 이상 편집하거나 끌 수 없습니다. 비스듬한 평면이
   기록되지 않기 때문이며, 삭제 후 다시 측정해야 합니다.
 - 좁은 척추경의 legacy 대체 경로가 optimizer의 narrow 규칙(내측·두미측 천공

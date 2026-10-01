@@ -847,7 +847,10 @@ class TestCoronalIsthmus:
 
     def test_phantom_yields_two_planned_screws_through_pedicles(self):
         from src.core.auto_screw_planner import AutoScrewPlanner
-        mask = _make_anatomical_phantom()
+        # Without the arch: on the arch phantom the only screws were legacy
+        # fallbacks breaching 1.4 mm into the canal, which no accepted-breach
+        # setting places any more.
+        mask = _make_anatomical_phantom(with_arch=False)
         arr = sitk.GetArrayFromImage(mask)
         ct = sitk.GetImageFromArray(np.where(arr > 0, 400, -50).astype(np.int16))
         ct.CopyInformation(mask)

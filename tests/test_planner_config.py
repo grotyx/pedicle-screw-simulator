@@ -37,12 +37,62 @@ def test_roundtrip_mapping_ignores_unknown_keys():
 @pytest.mark.parametrize("field,value", [("pedicle_fill_ratio", 1.2), ("pedicle_fill_ratio", 0.2),
                                          ("wall_clearance_mm", -1.0), ("anterior_margin_mm", 30.0),
                                          ("max_convergence_deg", 91.0),
-                                         ("narrow_pedicle_mm", 2.5), ("narrow_pedicle_mm", 8.5),
-                                         ("narrow_lateral_breach_mm", -0.1),
-                                         ("narrow_lateral_breach_mm", 6.5)])
+                                         ("narrow_pedicle_mm", 2.5), ("narrow_pedicle_mm", 8.5)])
 def test_validate_rejects_out_of_range(field, value):
     with pytest.raises(ValueError):
         PlannerConfig(**{field: value}).validate()
+
+
+class TestAcceptedBreachGrade:
+    """Owner policy: no breach unless the user explicitly picks how far."""
+
+    def test_default_accepts_no_breach(self):
+        config = PlannerConfig()
+        assert config.accepted_breach_grade == "A"
+        assert config.accepted_grades == ("A",)
+        assert not hasattr(config, "narrow_lateral_breach_mm")
+
+    @pytest.mark.parametrize("grade,accepted", [
+        ("A", ("A",)), ("B", ("A", "B")), ("C", ("A", "B", "C")),
+    ])
+    def test_accepted_grades_run_from_a_to_the_choice(self, grade, accepted):
+        assert PlannerConfig(accepted_breach_grade=grade).accepted_grades == accepted
+
+    @pytest.mark.parametrize("value", ["D", "E", "a", "", "2.0"])
+    def test_validate_rejects_anything_but_a_b_or_c(self, value):
+        with pytest.raises(ValueError, match="accepted_breach_grade"):
+            PlannerConfig(accepted_breach_grade=value).validate()
+
+    @pytest.mark.parametrize("grade", ["A", "B", "C"])
+    @pytest.mark.parametrize(
+        "breach", [0.0, 1e-6, 1.5, 1.999, 2.0, 2.5, 3.0, 3.999, 4.0, 4.5, 6.0]
+    )
+    def test_accepts_breach_matches_the_grading_boundaries(self, grade, breach):
+        """"Up to B" is exactly the range graded B, strict and inclusive edges alike."""
+        import numpy as np
+
+        from src.core.screw_grading import ScrewGrader
+
+        config = PlannerConfig(accepted_breach_grade=grade)
+        expected = ScrewGrader.grade_from_breach(breach) in config.accepted_grades
+        assert bool(config.accepts_breach(breach)) is expected
+        # Vectorised for the optimiser's batches, with the same answer.
+        assert config.accepts_breach(np.array([breach, breach])).tolist() == [expected] * 2
+
+    def test_the_lateral_limit_is_the_upper_edge_of_the_grade(self):
+        assert PlannerConfig().lateral_breach_limit_mm == 0.0
+        assert PlannerConfig(accepted_breach_grade="B").lateral_breach_limit_mm == 2.0
+        assert PlannerConfig(accepted_breach_grade="C").lateral_breach_limit_mm == 4.0
+
+    def test_round_trips_through_to_mapping(self):
+        config = PlannerConfig(accepted_breach_grade="C")
+        assert PlannerConfig.from_mapping(config.to_mapping()) == config
+
+    def test_an_old_lateral_cap_setting_is_ignored(self):
+        """A saved 2.0 mm cap must not silently keep breach acceptance."""
+        restored = PlannerConfig.from_mapping({"narrow_lateral_breach_mm": 2.0})
+        assert restored.accepted_breach_grade == "A"
+        assert restored == PlannerConfig()
 
 
 def test_optimizer_defaults_and_weight_roundtrip():

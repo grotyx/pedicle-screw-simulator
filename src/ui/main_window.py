@@ -1171,20 +1171,25 @@ class MainWindow(QMainWindow):
         params_layout.addWidget(QLabel("Narrow pedicle"), 7, 0)
         params_layout.addWidget(self.plan_narrow_pedicle_spin, 7, 1, 1, 2)
 
-        self.plan_narrow_lateral_spin = QDoubleSpinBox()
-        self.plan_narrow_lateral_spin.setRange(0.0, 6.0)
-        self.plan_narrow_lateral_spin.setSingleStep(0.5)
-        self.plan_narrow_lateral_spin.setDecimals(1)
-        self.plan_narrow_lateral_spin.setSuffix(" mm")
-        self.plan_narrow_lateral_spin.setValue(
-            planner_defaults.narrow_lateral_breach_mm
+        self.plan_accepted_breach_combo = QComboBox()
+        self.plan_accepted_breach_combo.addItem("A only — no breach", "A")
+        self.plan_accepted_breach_combo.addItem("Up to B (< 2 mm)", "B")
+        self.plan_accepted_breach_combo.addItem("Up to C (< 4 mm)", "C")
+        self.plan_accepted_breach_combo.setCurrentIndex(
+            self.plan_accepted_breach_combo.findData(
+                planner_defaults.accepted_breach_grade
+            )
         )
-        self.plan_narrow_lateral_spin.setToolTip(
-            "Lateral (in-out-in) breach a narrow pedicle may accept; the medial "
-            "wall is never breached"
+        self.plan_accepted_breach_combo.setToolTip(
+            "Worst Gertzbein grade automatic planning may accept.\n"
+            "A only: no cortical breach at all (default).\n"
+            "Up to B: a breach under 2 mm.  Up to C: a breach under 4 mm.\n"
+            "A narrow pedicle may only breach laterally (in-out-in); a medial "
+            "(canal-side) or craniocaudal breach is never accepted for it, and "
+            "a medial breach is never accepted on any pedicle."
         )
-        params_layout.addWidget(QLabel("Lateral breach cap"), 8, 0)
-        params_layout.addWidget(self.plan_narrow_lateral_spin, 8, 1, 1, 2)
+        params_layout.addWidget(QLabel("Accepted breach"), 8, 0)
+        params_layout.addWidget(self.plan_accepted_breach_combo, 8, 1, 1, 2)
 
         self.plan_uncontained_narrow_check = QCheckBox(
             "Place narrow screws even if not contained"
@@ -1193,8 +1198,9 @@ class MainWindow(QMainWindow):
             planner_defaults.place_uncontained_narrow
         )
         self.plan_uncontained_narrow_check.setToolTip(
-            "Off: a narrow pedicle whose best trajectory still breaches (grade C "
-            "or worse, or any medial breach) is left unplanned and reported.\n"
+            "Off: a narrow pedicle whose best trajectory still breaches (beyond "
+            "the accepted breach, or any medial or craniocaudal breach) is left "
+            "unplanned and reported.\n"
             "On: the smallest screw is placed anyway, with a warning."
         )
         params_layout.addWidget(self.plan_uncontained_narrow_check, 9, 0, 1, 3)
@@ -2539,7 +2545,6 @@ class MainWindow(QMainWindow):
         "max_convergence_deg",
         "trajectory_hu_threshold",
         "narrow_pedicle_mm",
-        "narrow_lateral_breach_mm",
         "endplate_tolerance_deg",
     )
 
@@ -2637,15 +2642,20 @@ class MainWindow(QMainWindow):
             "max_convergence_deg": self.plan_max_convergence_spin,
             "trajectory_hu_threshold": self.plan_hu_threshold_spin,
             "narrow_pedicle_mm": self.plan_narrow_pedicle_spin,
-            "narrow_lateral_breach_mm": self.plan_narrow_lateral_spin,
             "endplate_tolerance_deg": self.plan_endplate_tolerance_spin,
         }
 
     def _planner_choice_combos(self) -> dict:
-        """Map PlannerConfig enum field names to their combo boxes."""
+        """Map PlannerConfig enum field names to their combo boxes.
+
+        ``accepted_breach_grade`` replaced the old ``narrow_lateral_breach_mm``
+        spin box under a new settings key, so a cap saved by an older build is
+        never read back and cannot keep breach acceptance switched on.
+        """
         return {
             "mode": self.plan_mode_combo,
             "trajectory": self.plan_trajectory_combo,
+            "accepted_breach_grade": self.plan_accepted_breach_combo,
         }
 
     def _planner_check_boxes(self) -> dict:

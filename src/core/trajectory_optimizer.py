@@ -737,7 +737,8 @@ def score_candidates(
 
     ``narrow`` swaps the feasibility rule and the objective for a pedicle the
     planner flagged: containment is required medially and craniocaudally only,
-    a lateral breach up to ``config.narrow_lateral_breach_mm`` is accepted, the
+    a lateral breach only within ``config.accepted_breach_grade`` (none at all
+    by default, see :meth:`PlannerConfig.accepts_breach`) is accepted, the
     safety term measures the *medial* wall rather than the thinnest one, and a
     new ``lateral`` term (sharing the safety weight) pays for keeping that
     breach small.  Centering is dropped -- on a narrow side it would pull the
@@ -794,7 +795,7 @@ def score_candidates(
         feasible = (
             (batch.medial_breach_mm <= 0.0)
             & (batch.craniocaudal_breach_mm <= 0.0)
-            & (batch.lateral_breach_mm <= config.narrow_lateral_breach_mm + 1e-9)
+            & config.accepts_breach(batch.lateral_breach_mm)
             & (sampled_hu | without_ct)
             & movable
             & (convergence >= config.min_convergence_deg - 1e-6)
@@ -858,7 +859,7 @@ def score_candidates(
         "endplate": endplate,
     }
     if narrow:
-        cap = max(float(config.narrow_lateral_breach_mm), 1e-9)
+        cap = max(config.lateral_breach_limit_mm, 1e-9)
         component_arrays["lateral"] = np.clip(
             1.0 - batch.lateral_breach_mm / cap, 0.0, 1.0
         )
