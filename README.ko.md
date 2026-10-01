@@ -4,7 +4,7 @@
 
 DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
 
-**버전:** 0.2.3
+**버전:** 0.2.4
 
 **주요 검증 환경:** macOS, Python 3.12
 
@@ -18,21 +18,22 @@ DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR
 
 ## 주요 기능
 
-- 여러 시리즈를 포함한 DICOM CT 불러오기
+- 여러 시리즈를 포함한 DICOM CT 불러오기, 슬라이스 간격 불균일·갠트리 기울기 경고
+- 단계 안내형 작업화면: 왼쪽 단계 레일(Study, Segment, Plan, Review), 큰 메인 뷰 하나와 썸네일 세 개, 메인 뷰 아래의 도구 독, study의 voxel 간격 옆에 표시되는 **RESEARCH USE ONLY** 배지
 - Axial, Sagittal, Coronal MPR 동기화. anterior가 위로 오며 A/P/L/R 방향 표시 제공
 - GPU를 활용하는 VTK 볼륨 렌더링(macOS는 CPU 레이캐스팅) 및 척추별 3D 메시 표시
 - GPU 우선 TotalSegmentator 연동 및 CPU 재시도, 업샘플링 계단 현상을 없애는 CT 기반 마스크 정제
 - 로컬에 설치한 척추경 세부영역(subregion) nnU-Net 모델을 이용한 선택적 isthmus 라벨 정밀화(소스 설치 전용)
 - 여러 척추 레벨 선택과 자동 스크류 제안
 - 다목적 궤적 최적화기(기본값)와 legacy 플래너 대체, 그리고 피질골 궤적(cortical bone trajectory, CBT) 계획 모드
-- 좁은 척추경 정책: 측면을 건너뛰는 대신 가장 작은 임플란트를 쓰고 medial 벽을 보호하며 해당 레벨을 표시
+- 보수적인 계획 기본값: B 또는 C 등급을 직접 허용하지 않는 한 피질골 천공을 받아들이지 않고, medial 천공은 어떤 경우에도 받아들이지 않으며, 골내 궤적이 없는 좁은 척추경은 억지로 배치하지 않고 계획하지 않은 채 알림
 - 상부 종판에 평행한 궤적, 그리고 construct 단위의 로드 직선·수렴각 조정
 - medial/lateral/두미 방향으로 나눈 Gertzbein-Robbins 등급, 골질 HU 지표, Heary 방향, facet 침범 등급
 - 기본 MPR 및 스크류 방향에 정렬된 oblique MPR. Screw MPR 평면은 회전·평행이동 가능
 - MPR과 3D에서 entry, tip, 전체 스크류 직접 수정
 - 수동 스크류 추가, 거리 측정, 각도 측정
 - JSON 계획 저장·불러오기 및 지원되는 CSV/STL 내보내기
-- 편집 가능한 계획 파라미터, 나사별 검토 표와 검사창, 세 가지 UI 테마(밝은 테마 1, 어두운 테마 2), MPR 이동·확대, 창 최대화, 3D 탐색 기능
+- 편집 가능한 계획 파라미터, Review 페이지의 구성 지도(construct map)와 나사별 검토 표, 세 가지 UI 테마(밝은 테마 1, 어두운 테마 2), MPR 이동·확대, 창 최대화, 3D 탐색 기능
 
 ## 빠른 시작
 
@@ -112,14 +113,14 @@ Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함
 
 ## 기본 사용 순서
 
-1. DICOM CT 폴더를 엽니다.
-2. 기본 MPR과 3D에서 올바른 영상인지 확인합니다.
-3. 자동 분할을 실행합니다.
-4. 표시하고 계획할 척추 레벨을 선택합니다.
-5. **Plan Screws**를 눌러 수정 가능한 스크류 제안을 만듭니다.
-6. 스크류를 선택하고 **Screw MPR**에서 궤적 방향 영상을 확인합니다.
-7. 필요에 따라 entry, tip, 전체 위치, 직경과 길이를 수정합니다.
-8. 측정을 추가하고 계획 파일을 저장합니다.
+왼쪽의 단계 레일도 같은 순서를 따릅니다.
+
+1. **Study:** DICOM CT 폴더를 열고 기본 MPR과 3D에서 올바른 영상인지 확인합니다. 슬라이스 간격이나 갠트리 기울기 경고가 나오면 주의합니다.
+2. **Segment:** 자동 분할을 실행하고 척추 경계를 확인합니다.
+3. **Plan:** 계획할 척추 레벨을 체크하고 계획 파라미터를 확인한 뒤(**Accepted breach** 기본값은 천공 없음) **Plan Screws**를 눌러 수정 가능한 스크류 제안을 만듭니다.
+4. **Review:** 구성 지도나 목록에서 스크류를 선택하고 **Screw MPR**에서 궤적 방향 영상을 확인합니다.
+5. 필요에 따라 entry, tip, 전체 위치, 직경과 길이를 수정합니다.
+6. 측정을 추가하고 계획 파일을 저장합니다.
 
 ## 주요 조작법
 
@@ -199,7 +200,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 연구에 이 프로그램을 사용했다면 GitHub의 **Cite this repository** 기능이나 [`CITATION.cff`](CITATION.cff)를 사용하십시오.
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.3) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.4) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
 

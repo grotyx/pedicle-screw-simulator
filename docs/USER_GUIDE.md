@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**Version:** 0.2.3
+**Version:** 0.2.4
 
 ## 1. Purpose and Safety
 
@@ -76,7 +76,7 @@ The Planning workspace contains:
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
 - **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
-- **Tool dock:** a small tool bar directly below the main view with Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Tool dock:** a row of tool buttons on its own row between the main view and the thumbnails: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
 - **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
 ### Step rail
@@ -100,7 +100,7 @@ Every page opens with a header: a small "Step N of 4" line, the page title, and 
 
 - **Study:** the **Open DICOM…** button, the **Study** info section, then the collapsed **Window/Level** (window/level sliders and Bone/Soft Tissue presets) and **3D Rendering** (transfer-function preset and opacity) sections.
 - **Segment:** the **Segmentation** group (**Run Auto Segmentation**, **Refine boundaries against CT**, the status line, and the isolate/restore button — see 5.2) and a hint about the automatic isolation and the 3D header toggle.
-- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, formerly in the Study tab's Segmentation section — see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
+- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
 - **Review:** starts with the **Construct** map (see "The construct map" below), then the per-level screw list, which takes most of the page (see 5.9/5.10 for its layout, and 6 for editing); **Measurements** are collapsed at the bottom (see 7).
 
 ### 3D header: Vertebrae / Full CT
@@ -121,7 +121,7 @@ Turning **Screw MPR** on makes the axial view the main view, because the oblique
 
 ### Tool dock
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). They are the same tools that used to sit in the top toolbar and behave the same; a highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view (above the thumbnail row), separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
 
 ### Study chip and research-use badge
 
@@ -129,7 +129,7 @@ The right end of the top toolbar shows a chip with the loaded CT's voxel spacing
 
 ### Layouts
 
-Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
+Choose a layout from the **View** menu (**Planning Layout** / **MPR Focus Layout**, or the **Layout** selector). Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
 
 ### Orientation markers
 
@@ -156,6 +156,8 @@ The step rail's four pages (see section 4) roughly follow this section's order: 
 3. If multiple series are present, choose the intended CT series.
 4. Confirm the anatomy and orientation in all MPR views and 3D.
 5. If the status bar and the **Study** info show a **Warning** (uneven slice spacing, which usually means missing slices, or a gantry tilt), the load still succeeds but lengths along the scan axis may be wrong or the volume sheared; check the series before relying on measurements.
+
+Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
 
 ### 5.2 Run Segmentation
 
@@ -188,9 +190,9 @@ Turn the option off when you want the model output exactly as produced, for exam
 
 ### 5.3 Select Vertebral Levels
 
-Use the **Levels to plan** checkboxes on the **Plan** page (moved there from the Study tab's Segmentation section, since level selection is a planning decision).
+Use the **Levels to plan** checkboxes on the **Plan** page.
 
-- Checked levels are visible in 3D — but, since the 3D header toggle now owns CT visibility (5.2), unchecking a level no longer hides the CT itself in Full CT mode.
+- Checked levels are visible in 3D; since the 3D header toggle owns CT visibility (5.2), unchecking a level does not hide the CT itself in Full CT mode.
 - **Plan Screws** uses the same checked levels.
 - **All** / **Clear** check or uncheck every detected level at once.
 
@@ -216,9 +218,9 @@ Once the head is seated, length is the longest catalogue length whose tip still 
 
 The **Legacy** planner and the automatic per-side legacy fallback (5.6) move the head and tip only after their own search has chosen and validated a trajectory (entry, target and diameter). They then use the first of three options that breaches no more than that validated screw. The first is the head re-seated on the dorsal cortex along the screw's own axis, considered only if it passes the same 15 mm dorsal-approach test, with the tip extended to the longest catalogue length that still keeps the Anterior margin ahead of it. The second is the original head with the tip extended the same way. The third is the validated screw unchanged. "No more" means less medial breach than the unchanged screw, or the same medial breach and no more breach in total. The unchanged screw always qualifies, so a legacy screw is never made less safe to make it longer or to move its head. **Cortical bone trajectory (CBT)** mode is unaffected: it keeps its own entry landmark (5.7) and selects candidates with its own full-length feasibility test.
 
-On the project's sample study, with the refined mask and default settings, this moved screw count from 12 to 13 (S1-left is now planned), legacy fallbacks from 1 to 0, grades from A 10 / B 2 to A 13, the L5-right medial breach from 1.41 mm to 0 everywhere, and head burial from 5–21 mm to 0–0.2 mm. Lengths (left / right) became L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm, where most sides had been 25 mm before (L1, L2, and L4 on the left among them).
+On the project's sample study, with the refined mask and the default settings of that release (measured before 0.2.4; its no-breach default can lower these counts), this moved screw count from 12 to 13 (S1-left is now planned), legacy fallbacks from 1 to 0, grades from A 10 / B 2 to A 13, the L5-right medial breach from 1.41 mm to 0 everywhere, and head burial from 5–21 mm to 0–0.2 mm. Lengths (left / right) became L1 35/35, L2 50/45, L3 35/40, L4 40/35, L5 45/35, T12 35/25 mm, where most sides had been 25 mm before (L1, L2, and L4 on the left among them).
 
-### 5.5 Planning Parameters
+### 5.5 Planning parameters
 
 The collapsed **Planning parameters** section on the **Plan** page exposes the settings the automatic planner uses to size and place screws (the collapsed **Manual Screw Defaults** section next to it holds the length/diameter defaults for manually added screws). Each field is validated and saved immediately (Qt `QSettings`), so a value survives an application restart.
 
@@ -236,7 +238,7 @@ The collapsed **Planning parameters** section on the **Plan** page exposes the s
 | Endplate band | 10° | How far from the endplate direction the optimizer may angle the screw while the option above is on, measured as the true 3-D angle between the screw and the endplate plane (so a coronally tilted endplate is judged the same on both sides) |
 | Construct alignment | 0.30 | Weight given to lining screw heads up for the rod and agreeing on convergence across levels (see 5.6) |
 
-Select **Reset Defaults** to restore these ten built-in values, along with the planner mode, trajectory family, and the Safety and Density objective weights described below, and save them all immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
+Select **Reset Defaults** to restore every value in this table, along with the planner mode, trajectory family, and the Safety and Density objective weights described below, and save them all immediately. The lateral-divergence limit (−5°, the most lateral angle the planner may still choose) is fixed in this version and is not exposed in the panel.
 
 #### Endplate reference for a rough fit
 
@@ -252,7 +254,7 @@ Whichever reference was actually used, the planner reports the endplate angle ag
 
 ### 5.6 Trajectory Optimizer
 
-The **Planner** combo in Planning Parameters selects between two back-ends for **Plan Screws**:
+The **Planner** combo in Planning parameters selects between two back-ends for **Plan Screws**:
 
 - **Optimizer** (default) — enumerates a dense grid of straight candidate trajectories per pedicle (entry offset × convergence angle × craniocaudal angle × catalogue length), grades every candidate in a single pass, discards infeasible ones, and ranks the rest by a weighted sum of five normalised objectives (each 0–1):
   - **Safety** — minimum cortical wall clearance, saturating at 3 mm.
@@ -264,7 +266,7 @@ The **Planner** combo in Planning Parameters selects between two back-ends for *
 
 Default weights (shown as a percentage of the nominal weight, 0–300%, in the panel): Safety 100% (1.0), Density 50% (0.5), Length 20% (0.2), Endplate 30% (0.3), Centering 30% (0.3). A sixth weight, **Construct alignment** (default 30% / 0.3, internally the `rod` weight), does not affect single-screw scoring; it only governs how much a multi-screw plan may trade an individual screw's score to line up the screw heads on the same side and to bring converging levels' angles into agreement (see below). Only the Safety, Density, and Construct alignment weights are exposed as sliders in the panel; Length, Endplate, and Centering stay at their defaults in this version.
 
-A candidate is feasible only when it keeps at least the configured wall clearance, keeps its convergence angle within the configured range, and keeps the configured Anterior margin of bone ahead of its tip, measured along the screw's own axis to the anterior vertebral-body cortex — the distal shaft, like the rest of the shaft, otherwise only needs to stay contained and keep the configured Wall clearance (see 5.4, "Entry point and screw length"). For a normal-width pedicle it must also have zero cortical breach; for a narrow pedicle -- narrower than the "Narrow pedicle (mm)" threshold, 5.0 mm by default -- the optimizer instead places the smallest catalogue screw (4.0 mm, drawn red on the Review page) and keeps the medial, canal-side wall and the craniocaudal walls intact. By default it accepts no breach there either, so a narrow pedicle with no fully contained 4.0 mm trajectory gets no optimizer screw; only when "Accepted breach" is set to "Up to B (< 2 mm)" or "Up to C (< 4 mm)" does it accept a lateral, in-out-in breach within that grade. Both controls sit in Planning Parameters next to Wall clearance. The head itself is seated on the dorsal cortex along the screw's own axis (see 5.4) and rejected as unreachable when the same vertebra's bone still lies within 15 mm behind it along that axis, since a real drill would have to pass through that bone first. Only the longest feasible length on each trajectory is ranked, so the Length weight above compares trajectories against each other rather than lengths on the same trajectory. If no diameter within two catalogue steps below the pedicle's recommended diameter admits a feasible trajectory, the pedicle is planned by the legacy method instead and the screw's warnings include "Optimizer found no feasible trajectory; legacy planner used." For a normal-width pedicle the legacy method steps the diameter down the catalogue until the screw has no breach -- or, under "Up to B" or "Up to C", a breach within that grade that is not medial -- and skips the side with "no contained _side_ screw diameter in the catalogue" when no diameter qualifies. For a narrow pedicle specifically, that legacy fallback first slides the entry laterally and keeps whichever entry leaves the least screw in the canal. It then places the screw only if the result passes the optimizer's narrow rule — no medial (canal-side) or craniocaudal breach, and a lateral breach within the "Accepted breach" grade (none at all by default). Otherwise, by default, the side is left unplanned: it is named in the "No screw planned" status note, and the log records the reason naming each figure that failed (for example "narrow left pedicle: no contained trajectory (grade C, medial breach 1.2 mm) — not placed" or "… (grade B, lateral breach 1.5 mm beyond the accepted grade A) — not placed"). Tick "Place narrow screws even if not contained" in Planning Parameters to place the smallest screw anyway; it then carries its "Medial breach _x_.x mm — canal side" and breach warnings plus a note that the option let it through. In testing, Optimizer-mode screws never score a worse Gertzbein grade or meaningfully less wall clearance than the same case planned in Legacy mode.
+A candidate is feasible only when it keeps at least the configured wall clearance, keeps its convergence angle within the configured range, and keeps the configured Anterior margin of bone ahead of its tip, measured along the screw's own axis to the anterior vertebral-body cortex — the distal shaft, like the rest of the shaft, otherwise only needs to stay contained and keep the configured Wall clearance (see 5.4, "Entry point and screw length"). For a normal-width pedicle it must also have zero cortical breach; for a narrow pedicle -- narrower than the "Narrow pedicle" threshold, 5.0 mm by default -- the optimizer instead places the smallest catalogue screw (4.0 mm; its pedicle width is shown in red on the Review page, 5.9) and keeps the medial, canal-side wall and the craniocaudal walls intact. By default it accepts no breach there either, so a narrow pedicle with no fully contained 4.0 mm trajectory gets no optimizer screw; only when "Accepted breach" is set to "Up to B (< 2 mm)" or "Up to C (< 4 mm)" does it accept a lateral, in-out-in breach within that grade. Both settings are in Planning parameters (5.5). The head itself is seated on the dorsal cortex along the screw's own axis (see 5.4) and rejected as unreachable when the same vertebra's bone still lies within 15 mm behind it along that axis, since a real drill would have to pass through that bone first. Only the longest feasible length on each trajectory is ranked, so the Length weight above compares trajectories against each other rather than lengths on the same trajectory. If no diameter within two catalogue steps below the pedicle's recommended diameter admits a feasible trajectory, the pedicle is planned by the legacy method instead and the screw's warnings include "Optimizer found no feasible trajectory; legacy planner used." For a normal-width pedicle the legacy method steps the diameter down the catalogue until the screw has no breach -- or, under "Up to B" or "Up to C", a breach within that grade that is not medial -- and skips the side with "no contained _side_ screw diameter in the catalogue" when no diameter qualifies. For a narrow pedicle specifically, that legacy fallback first slides the entry laterally and keeps whichever entry leaves the least screw in the canal. It then places the screw only if the result passes the optimizer's narrow rule — no medial (canal-side) or craniocaudal breach, and a lateral breach within the "Accepted breach" grade (none at all by default). Otherwise, by default, the side is left unplanned: it is named in the "No screw planned" status note, and the log records the reason naming each figure that failed (for example "narrow left pedicle: no contained trajectory (grade C, medial breach 1.2 mm) — not placed" or "… (grade B, lateral breach 1.5 mm beyond the accepted grade A) — not placed"). Tick "Place narrow screws even if not contained" in Planning parameters to place the smallest screw anyway; it then carries its "Medial breach _x_.x mm — canal side" and breach warnings plus a note that the option let it through. In testing, Optimizer-mode screws never score a worse Gertzbein grade or meaningfully less wall clearance than the same case planned in Legacy mode.
 
 When more than one screw is planned on the same side, the optimizer re-ranks each pedicle's top candidates so the screw heads line up along a common line and neighbouring levels' convergence angles agree — a proxy for how much the rod has to be bent and twisted. It may trade away at most 10% of a screw's own best score to reduce this misalignment, weighted by the Construct alignment slider. After planning, the status bar and the auto-screw status line report the result as "Construct: rod fit *x* mm (L), *y* mm (R) · convergence spread *a*° (L), *b*° (R)," and each screw's metrics carry `score`, `score_components`, `rod_misalignment_mm`, and `convergence_deviation_deg`. Legacy planning places each screw on its own, so there is nothing to harmonise: the status line instead reads "Construct alignment needs Optimizer mode."
 
@@ -272,7 +274,7 @@ Runtime is approximately 2–3 seconds per pedicle on a typical CT; multi-level 
 
 ### 5.7 Cortical Bone Trajectory (CBT) Mode
 
-The **Trajectory** combo in Planning Parameters selects the trajectory family **Plan Screws** aims for:
+The **Trajectory** combo in Planning parameters selects the trajectory family **Plan Screws** aims for:
 
 - **Traditional** (default) — a convergent pedicle screw following the pedicle axis, planned by either back-end above.
 - **Cortical bone trajectory** — a short, narrow screw that starts at the pars/lamina junction, just inferior and medial to the pedicle isthmus, and runs cranially and laterally into the vertebral body: the mirror image of a traditional screw. It gains its pull-out strength from cortical bone contact along the way rather than from filling the pedicle, which is the technique's advantage in osteoporotic bone. Selecting CBT replaces the trajectory search entirely — neither the optimizer's candidate grid nor the legacy planner's medial search is used — regardless of the Planner mode selected.
@@ -323,9 +325,9 @@ Only the vertebra the selected screw is graded against — the same one its Gert
 
 #### The Review page layout
 
-The **Review** page is built around the per-level screw list (formerly a small table squeezed under a fixed "Planning Cockpit" summary), which now takes most of the page. At the very top sits the **Construct** map (see 4). Above the list, the key numbers for the selected screw are shown large: level and side, diameter (editable in place), length, and a coloured Gertzbein-Robbins grade chip. Just below that sits a single collapsed line, "⚠ _N_ warnings" (or "✓ No warnings"), that expands on click to the full warning text — the same text every warning list in the app already used, just collapsed by default so it does not compete with the numbers above it. The action buttons — ‹ › previous/next navigation, **Screw MPR** / **Std MPR**, **Edit** (a menu, see section 6), and, alone on a second row, **Delete Screw** — sit in a fixed two-row block right under the list. While Screw MPR is active, a **Position** slider, **Rotation** spin box, and **Reset view** button appear in two rows under the action buttons, Position on the first and Rotation with Reset view on the second (5.8).
+The **Review** page is built around the per-level screw list, which takes most of the page. At the very top sits the **Construct** map (see 4). Above the list, the key numbers for the selected screw are shown large: level and side, diameter (editable in place), length, and a coloured Gertzbein-Robbins grade chip. Just below that sits a single collapsed line, "⚠ _N_ warnings" (or "✓ No warnings"), that expands on click to the full warning text — the same text every warning list in the app already used, just collapsed by default so it does not compete with the numbers above it. The action buttons — ‹ › previous/next navigation, **Screw MPR** / **Std MPR**, **Edit** (a menu, see section 6), and, alone on a second row, **Delete Screw** — sit in a fixed two-row block right under the list. While Screw MPR is active, a **Position** slider, **Rotation** spin box, and **Reset view** button appear in two rows under the action buttons, Position on the first and Rotation with Reset view on the second (5.8).
 
-The list itself carries a **⚠** column at its right in place of the old **Source** column: a plain count of that screw's warnings (blank at zero), so which screws deserve a second look is visible at a glance without opening each row — auto/manual provenance moved to the collapsed Details section below (it stays in the CSV export, section 9, where it already lived), since a screw's warning count matters more for a quick scan than how it was placed.
+The list's columns are **#**, **Level**, **Side** (**L** or **R**, `--` when unknown), **Pedicle**, **Ø**, **Len**, **Grade**, and **⚠**. The **⚠** column is a plain count of that screw's warnings (blank at zero), so which screws deserve a second look is visible at a glance without opening each row. Auto/manual provenance is in the collapsed Details section below (**Source**) and in the CSV export (section 9).
 
 Below the action row, the remaining per-screw metrics (Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle) sit in a collapsed **Details** section, described in full below — the Gertzbein-Robbins grade itself is not repeated there, since it is already the chip shown large above the list. **Measurements** (section 7) are collapsed at the bottom of the same page.
 
@@ -340,9 +342,7 @@ The **Review** page reports:
 
 **Entry cortex.** Grading starts 3 mm past the point where the screw's axis first enters the vertebra, not at the head. A head seated on the dorsal cortex (5.4) straddles the surface it enters, so grading it from the head would read every screw as a breach of up to its own radius before it ever reaches the pedicle — on the project's sample study, 11 of the 12 re-seated screws graded B or C for nothing but the entry cortex. Gertzbein-Robbins grades the pedicle wall, not the entry cortex, so this 3 mm entry zone is excluded from the check. It is measured from where the axis enters bone rather than from the head itself: a head placed proud of the bone also skips its own stretch in air before the axis enters the vertebra, and a head buried in bone gets only its first 3 mm treated leniently — far short of the isthmus, where a medial breach actually matters. A screw whose axis never enters the vertebra is graded from its head, so it still reads as the breach it is. The same 3 mm is excluded from every figure taken from grading — the grade itself, breach distance and direction split, the Wall margin, and the mean/min HU in the Trajectory HU row (CSV `mean_hu` / `min_hu`). This applies to every graded screw: automatic proposals from the Optimizer and Legacy planners and the displayed grade of CBT screws, manually placed screws, screws you drag or otherwise edit, and screws re-graded after segmentation or on plan load — so dragging a planned screw never re-grades it by a stricter rule than the one it was planned under. One consequence: a plan saved by an earlier build may show better grades when it is re-graded now — on load while a segmentation is available, or after running segmentation again — because the entry cortex is no longer graded (see also section 9).
 
-Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width, keeps the tip at least 4 mm behind the anterior cortex measured along the screw's own axis, and selects lengths from the 25-55 mm catalogue in 5 mm steps. Wall clearance now defaults to 0 mm; raise it in Planning parameters if you want a buffer beyond the zero-breach requirement described above. A clearance of exactly 1.0 mm saved by an older build is reset to 0 mm once, with a note in the status bar, because that value was the old default rather than a choice; any other saved value (0.5 mm, 1.5 mm) is respected and stays visible in that spin box, as is a 1.0 mm you set yourself afterwards. The "Parallel to upper endplate" checkbox and its tolerance spin box (the endplate band, 10° by default) aim the trajectory at the upper endplate instead of horizontally; both live in Planning parameters alongside the sizing fields. These values are workflow presets, not universal clinical recommendations.
-
-Loaded volumes are reoriented to LPS (identity direction) before display. An oblique acquisition is resampled onto an identity-direction grid, and the info panel notes "(oblique volume resampled)" when this occurs.
+Automatic sizing keeps the diameter at or below 80% of the measured pedicle isthmus width, keeps the tip at least 4 mm behind the anterior cortex measured along the screw's own axis, and selects lengths from the 25-55 mm catalogue in 5 mm steps. Wall clearance now defaults to 0 mm; raise it in Planning parameters if you want a buffer beyond the zero-breach requirement (5.6). A clearance of exactly 1.0 mm saved by an older build is reset to 0 mm once, with a note in the status bar, because that value was the old default rather than a choice; any other saved value (0.5 mm, 1.5 mm) is respected and stays visible in that spin box, as is a 1.0 mm you set yourself afterwards. The "Parallel to upper endplate" checkbox and its tolerance spin box (the endplate band, 10° by default) aim the trajectory at the upper endplate instead of horizontally; both live in Planning parameters alongside the sizing fields. These values are workflow presets, not universal clinical recommendations.
 
 ### 5.10 Screw Quality Metrics
 
@@ -432,11 +432,11 @@ Add Screw, Distance, and Angle are buttons in the tool dock below the main view 
 Measurements belong to the cut where they were created. They hide on another cut and reappear when the original cut is restored.
 
 - Select **Show Cut** to return to the source cut.
-- Select **Show Cut** to return to the source cut. A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane rather than a standard slice; **Show Cut** does not jump for it, and **Edit** is not available for it, because the screw-aligned plane is not stored with the measurement: delete it and measure again in Screw MPR.
 - Click a measurement to select it and display yellow handles.
 - Drag a handle to correct one point.
 - Select **Edit** to re-measure the item.
 - Select **Delete** or press `Delete` to remove it.
+- A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane that is not stored with the measurement. **Show Cut** does not jump for it, and it can be neither edited nor moved by its handles: delete it and measure again in Screw MPR.
 
 ## 8. Display Controls
 
@@ -518,7 +518,7 @@ Volume rendering falls back to CPU ray casting when no usable GPU context is ava
 
 ### A Planned Screw Is Missing
 
-The planner may skip a side when it cannot find an allowed contained trajectory. Check segmentation and place or edit the screw manually.
+The planner skips a side when it finds no acceptable trajectory — most often none within the **Accepted breach** grade (no breach at all by default) — for a narrow pedicle, also when the screw would breach medially or craniocaudally (5.6). The auto-screw status line names every skipped side after "No screw planned:", and the log records the reason. Check the segmentation, then place or edit the screw manually; loosening **Accepted breach** or ticking **Place narrow screws even if not contained** (5.5) is a deliberate safety trade-off, not a fix.
 
 ### Screws Are Not Parallel to a Fractured Endplate
 

@@ -4,7 +4,7 @@
 
 Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
 
-**Version:** 0.2.3
+**Version:** 0.2.4
 
 **Primary tested environment:** macOS, Python 3.12
 
@@ -18,21 +18,22 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 
 ## Highlights
 
-- Multi-series DICOM CT loading
+- Multi-series DICOM CT loading, with warnings for uneven slice spacing and gantry tilt
+- Step-guided workstation: a left step rail (Study, Segment, Plan, Review), one large main view with three thumbnails, a tool dock under the main view, and a **RESEARCH USE ONLY** badge beside the study's voxel spacing
 - Synchronized axial, sagittal, and coronal MPR, anterior-up with A/P/L/R orientation markers
 - GPU-capable VTK volume rendering (CPU ray casting on macOS) and selectable vertebral meshes
 - Optional GPU-first TotalSegmentator integration with CPU retry, and CT-guided mask refinement that removes upsampling stair-steps
 - Optional locally installed pedicle subregion nnU-Net for label-based isthmus refinement (source installs only)
 - Multi-level vertebra selection and automatic screw proposals
 - Multi-objective trajectory optimizer (default) with a legacy planner fallback, plus a cortical bone trajectory (CBT) planning mode
-- Narrow-pedicle policy: the smallest implant, the medial wall protected, and the level marked, instead of skipping the side
+- Conservative planning defaults: no cortical breach accepted unless you opt into grade B or C, never a medial breach, and a narrow pedicle without a contained trajectory left unplanned and reported rather than forced
 - Trajectories aimed parallel to the upper endplate, and construct-level rod-line and convergence harmonisation
 - Gertzbein-Robbins grading with medial/lateral/craniocaudal breach split, bone-quality HU metrics, Heary direction, and facet violation grade
 - Standard and screw-aligned oblique MPR review, with rotatable and offsettable screw MPR planes
 - Direct entry, tip, and whole-screw editing in MPR and 3D
 - Manual screw placement, distance measurement, and angle measurement
 - JSON plan save/load and supported CSV/STL export
-- Editable planning parameters, a per-screw review table and inspector, three UI themes (one light, two dark), MPR pan/zoom, pane maximise, and 3D navigation controls
+- Editable planning parameters, a construct map and per-screw review table on the Review page, three UI themes (one light, two dark), MPR pan/zoom, pane maximise, and 3D navigation controls
 
 ## Quick Start
 
@@ -112,14 +113,14 @@ Standalone packages include TotalSegmentator 2.12.0, PyTorch, and nnU-Net. No se
 
 ## Typical Workflow
 
-1. Open a DICOM CT folder.
-2. Verify the study in standard MPR and 3D.
-3. Run automatic segmentation.
-4. Select the vertebral levels to display and plan.
-5. Select **Plan Screws** to generate editable proposals.
-6. Select a screw and enter **Screw MPR** for trajectory-aligned review.
-7. Edit the entry, tip, shaft, diameter, or length as needed.
-8. Add measurements and save the planning file.
+The step rail on the left walks through the same order.
+
+1. **Study:** open a DICOM CT folder and verify it in standard MPR and 3D, heeding any slice-spacing or gantry-tilt warning.
+2. **Segment:** run automatic segmentation and review the vertebral boundaries.
+3. **Plan:** check the vertebral levels to plan, review the planning parameters (**Accepted breach** defaults to no breach), and select **Plan Screws** to generate editable proposals.
+4. **Review:** select a screw in the construct map or the list and enter **Screw MPR** for trajectory-aligned review.
+5. Edit the entry, tip, shaft, diameter, or length as needed.
+6. Add measurements and save the planning file.
 
 ## Main Interactions
 
@@ -199,7 +200,7 @@ data/README.md   local-data privacy instructions; no clinical data
 
 If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.3) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.4) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 
