@@ -497,6 +497,8 @@ Plan files use schema version 3, which adds a `metrics` field per screw carrying
 
 The Save, Load and Export dialogs open in the folder you last used for a plan (or your Documents folder the first time), never in the application folder. A plan records the DICOM Series Instance UID only as a one-way SHA-256 digest (`series_uid_sha256`), which is enough to warn you when a plan is loaded against a different series but cannot be looked up in PACS. Older plans that hold the raw UID still load and are checked the same way; saving them again writes the digest only.
 
+**File > Export Report...** (enabled once a CT is loaded) writes one self-contained HTML file: the application version and date, the research-use banner, the voxel spacing and image size, the planner settings that shaped the plan (planner mode, trajectory, accepted breach grade, narrow-pedicle threshold, and whether narrow screws are placed even if not contained), a table with one row per screw (level, side, source, diameter x length, grade, breach, medial breach, trajectory HU, warnings), the construct map, and screenshots of the four panes. Open it in any browser; it is HTML only, there is no PDF export. A pane that cannot be captured shows "image unavailable" instead. The report contains no patient name, ID, dates, series UID or file paths, but the screenshots show the CT and the plan, so handle the file as clinical-adjacent data under [SECURITY.md](../SECURITY.md) and review it before sharing.
+
 Planning files, screenshots, and meshes may still be identifiable derivatives. Review them before sharing.
 
 ## 10. Troubleshooting

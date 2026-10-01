@@ -2074,6 +2074,16 @@ class MainWindow(QMainWindow):
         export_csv_action.triggered.connect(self._plan_ctrl.export_csv_dialog)
         file_menu.addAction(export_csv_action)
 
+        export_report_action = QAction("Export Report...", self)
+        export_report_action.setEnabled(False)
+        export_report_action.triggered.connect(self._plan_ctrl.export_report_dialog)
+        file_menu.addAction(export_report_action)
+        file_menu.aboutToShow.connect(
+            lambda: export_report_action.setEnabled(
+                self.volume_manager.get_vtk_image() is not None
+            )
+        )
+
         export_stl_action = QAction("Export Bone STL...", self)
         export_stl_action.triggered.connect(self._plan_ctrl.export_stl_dialog)
         file_menu.addAction(export_stl_action)

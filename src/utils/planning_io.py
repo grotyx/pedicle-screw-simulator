@@ -326,21 +326,26 @@ def deserialize_plan(
     }
 
 
-def save_plan_json(path: str, payload: Dict[str, Any]) -> None:
-    """Write plan payload to JSON file."""
+def write_text_atomic(path: str, text: str) -> None:
+    """Write ``text`` to ``path`` through a temp file, never truncating on failure."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Temp file + os.replace: a crash or full disk never truncates the old plan.
+    # Temp file + os.replace: a crash or full disk never truncates the old file.
     fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=target.name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_name, target)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
+
+
+def save_plan_json(path: str, payload: Dict[str, Any]) -> None:
+    """Write plan payload to JSON file."""
+    write_text_atomic(path, json.dumps(payload, indent=2))
 
 
 def load_plan_json(path: str) -> Dict[str, Any]:

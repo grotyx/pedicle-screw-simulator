@@ -20,7 +20,9 @@ from src.utils.planning_io import (
     save_plan_json,
     serialize_plan,
     series_uid_digest,
+    write_text_atomic,
 )
+from src.utils.report_export import ReportContext, build_report_html, capture_png
 from src.utils.stl_export import export_bone_stl
 
 logger = logging.getLogger(__name__)
@@ -175,6 +177,56 @@ class PlanController:
         except Exception as e:
             QMessageBox.critical(
                 self._window, "Export Error", f"Failed to export CSV: {e}"
+            )
+
+    def export_report_dialog(self):
+        """Write a self-contained HTML planning report (no patient identifiers)."""
+        vtk_image = self._vm.get_vtk_image()
+        if vtk_image is None:
+            QMessageBox.warning(
+                self._window,
+                "No Volume Loaded",
+                "Load a DICOM volume before exporting a report.",
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self._window,
+            "Export Planning Report",
+            self._start_dir(),
+            "HTML Files (*.html)",
+        )
+        if not path:
+            return
+        self._remember_dir(path)
+
+        win = self._window
+        images = {}
+        for title, viewer in (
+            ("Axial", win.axial_viewer),
+            ("Sagittal", win.sagittal_viewer),
+            ("Coronal", win.coronal_viewer),
+            ("3D", win.viewer_3d),
+        ):
+            widget = getattr(viewer, "vtk_widget", None)
+            images[title] = (
+                capture_png(widget.GetRenderWindow()) if widget is not None else None
+            )
+        try:
+            html = build_report_html(
+                ReportContext(
+                    screws=win._tool_ctrl.screw_tool.get_screws(),
+                    planner=win.planner_config(),
+                    spacing=tuple(vtk_image.GetSpacing()),
+                    size=tuple(vtk_image.GetDimensions()),
+                    images=images,
+                )
+            )
+            write_text_atomic(path, html)
+            win.statusbar.showMessage(f"Exported planning report: {path}")
+        except Exception as e:
+            QMessageBox.critical(
+                win, "Export Error", f"Failed to export report: {e}"
             )
 
     def export_stl_dialog(self):
