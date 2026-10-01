@@ -11,7 +11,7 @@ screw list rather than around a fixed-height inspector card.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .screw_plan_table import WARNING_CATEGORIES, grouped_warning_text, worst_warning_category
 
 #: The four workflow steps, in panel order.
 STEP_NAMES = ("Study", "Segment", "Plan", "Review")
@@ -149,14 +151,14 @@ class StepPanel(QWidget):
         return self._scroll_areas.get(name)
 
 
-def warning_summary_text(count: int) -> str:
-    """One-line summary text for a warning count."""
-    count = int(count)
-    if count <= 0:
-        return "✓ No warnings"
-    if count == 1:
-        return "⚠ 1 warning"
-    return f"⚠ {count} warnings"
+def warning_summary_text(counts: Mapping[str, int]) -> str:
+    """One-line summary for per-category warning counts, e.g. "⚠ 1 safety · 2 image"."""
+    parts = [
+        f"{counts[category]} {category}"
+        for category in WARNING_CATEGORIES
+        if counts.get(category, 0) > 0
+    ]
+    return "⚠ " + " · ".join(parts) if parts else "✓ No warnings"
 
 
 class WarningSummary(QWidget):
@@ -187,8 +189,7 @@ class WarningSummary(QWidget):
         self.label.hide()
         layout.addWidget(self.label)
 
-        self._count = 0
-        self.set_lines(["Select a screw to inspect its trajectory."], 0)
+        self.set_lines(["Select a screw to inspect its trajectory."], {})
 
     def _on_toggled(self, checked: bool) -> None:
         self.toggle.setArrowType(
@@ -196,16 +197,23 @@ class WarningSummary(QWidget):
         )
         self.label.setVisible(checked)
 
-    def set_lines(self, lines: Sequence[str], count: int) -> None:
-        """Set the toggle's one-line summary and the full expandable text."""
-        self._count = int(count)
+    def set_lines(self, lines: Sequence[str], counts: Mapping[str, int]) -> None:
+        """Set the one-line per-category summary and the grouped expandable text."""
         self.toggle.setEnabled(True)
-        self.toggle.setText(warning_summary_text(self._count))
+        self.toggle.setText(warning_summary_text(counts))
+        self._set_category(worst_warning_category(counts) or "none")
         # Clear the placeholder's tooltip: without this, a screw selected
         # after the "no screw selected" placeholder was shown would keep
         # showing that stale placeholder text on hover.
         self.toggle.setToolTip("")
-        self.label.setText("\n".join(lines))
+        self.label.setText(grouped_warning_text(lines))
+
+    def _set_category(self, category: str) -> None:
+        """Expose the worst category as a QSS property and repolish the toggle."""
+        self.toggle.setProperty("warningCategory", category)
+        style = self.toggle.style()
+        style.unpolish(self.toggle)
+        style.polish(self.toggle)
 
     def set_placeholder(self, text: str) -> None:
         """Show a fixed disabled caption (used when nothing is selected).
@@ -220,4 +228,5 @@ class WarningSummary(QWidget):
         self.toggle.setToolTip(text)
         self.toggle.setEnabled(False)
         self.toggle.setChecked(False)
+        self._set_category("none")
         self.label.setText(text)

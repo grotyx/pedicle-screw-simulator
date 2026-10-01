@@ -52,3 +52,31 @@ def test_unscrollable_page_with_header_keeps_page_and_no_scroll_area(qtbot):
     assert panel.page("Review") is page
     eyebrow = panel.header("Review").findChild(QLabel, "stepHeaderEyebrow")
     assert eyebrow.text() == "Step 4 of 4"
+
+
+def test_warning_summary_shows_per_category_counts_and_groups_lines(qtbot):
+    from src.ui.step_panel import WarningSummary
+
+    summary = WarningSummary()
+    qtbot.addWidget(summary)
+    lines = [
+        "Estimated breach 1.2 mm — verify on CT.",
+        "PCA axis unreliable; used anatomical fallback direction",
+        "Pedicle width uncertain – verify diameter",
+    ]
+    summary.set_lines(lines, {"safety": 1, "image": 2, "info": 0})
+    assert summary.toggle.text() == "⚠ 1 safety · 2 image"
+    assert summary.toggle.property("warningCategory") == "safety"
+    assert summary.label.text().splitlines()[0] == "Safety"
+    assert "Image" in summary.label.text().splitlines()
+
+    summary.set_lines(
+        ["No estimated breach — CT review is still required."],
+        {"safety": 0, "image": 0, "info": 0},
+    )
+    assert summary.toggle.text() == "✓ No warnings"
+    assert summary.toggle.property("warningCategory") == "none"
+
+    summary.set_lines(["x"], {"safety": 0, "image": 0, "info": 1})
+    assert summary.toggle.text() == "⚠ 1 info"
+    assert summary.toggle.property("warningCategory") == "info"

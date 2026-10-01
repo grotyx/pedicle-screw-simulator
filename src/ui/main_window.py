@@ -3096,10 +3096,10 @@ class MainWindow(QMainWindow):
         )
         self._update_screw_metric_rows(getattr(screw, "metrics", None) or {})
 
-        from src.ui.screw_plan_table import screw_warning_count, screw_warning_lines
+        from src.ui.screw_plan_table import screw_warning_counts, screw_warning_lines
 
         self.screw_warnings_summary.set_lines(
-            screw_warning_lines(screw), screw_warning_count(screw)
+            screw_warning_lines(screw), screw_warning_counts(screw)
         )
 
     def update_vertebra_level_checks(self, detected_labels: list) -> None:
