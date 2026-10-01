@@ -577,3 +577,15 @@ python scripts/validate_plans.py --pred pred_plan.json --ref ref_plan.json --out
 두 계획의 나사못은 척추 레벨과 방향(side)으로 매칭됩니다. Dice 계산에 사용하는 래스터화 격자 크기는 `--voxel-mm`으로 조절할 수 있으며(기본값 `0.5` mm), 격자를 성기게 하면 계산은 빨라지지만 길거나 가는 나사못에서는 중첩도가 약간 과소평가될 수 있습니다.
 
 **수치 해석.** 절대적인 합격/불합격 기준은 없으며, 사람 평가자들 사이의 편차 범위와 비교해 판단해야 합니다. 평가자 간 일치도 문헌(Scherer 2022)에 따르면, 동일 증례를 독립적으로 계획한 전문가들 사이에서도 진입점은 평균 약 4.9 mm, 팁점은 평균 약 4.4 mm 차이가 나며, 축 각도 차이는 평균 약 5.3°입니다. 예측 계획이 기준 계획과 대략 이 범위 내에서 차이 난다면 평가자 간 변동성과 부합하는 수준이며, 이를 크게 벗어나는 편차는 플래너 결과나 기준 계획 자체를 다시 검토할 필요가 있음을 시사합니다.
+
+### 12.1 계획 기본값 비교
+
+`scripts/compare_planning_defaults.py`는 0.2.4의 계획 기본값이 본인의 증례에서 무엇을 바꾸는지 보여 줍니다. 척추경 분석을 한 번 하고, 같은 분석 결과로 자동 플래너를 두 번 실행합니다. **previous**(B등급 이탈 허용, 격리되지 않아도 좁은 쪽 배치 허용; 0.2.3에 가장 가까운 설정)와 **current**(배포 기본값)입니다. 검증이 아니라 보고서이므로 결과와 상관없이 종료 코드 0을 반환하며, 척추 레벨과 숫자만 출력합니다(경로·DICOM 메타데이터 없음).
+
+```bash
+python scripts/compare_planning_defaults.py --ct <ct> --mask <vertebra mask> [--pedicle-mask <pedicle mask>] [--levels L3,L4] [--csv out.csv]
+```
+
+한 행은 한 레벨의 한쪽입니다. `PREVIOUS`와 `CURRENT`는 `placed <직경>x<길이> <등급> med <mm> lat <mm>`(내측·외측 이탈) 또는 `skipped: <사유>`로 표시됩니다. `CHANGE`는 `same`, `smaller screw`, `now skipped`, `now placed`, `different trajectory` 중 하나입니다. 요약에는 각 설정에서 배치된 나사 수와, 새로 건너뛴 쪽을 사유별로 묶은 결과가 나옵니다.
+
+"previous"는 근사입니다. 0.2.3은 레거시 플래너가 배치한 정상 폭 나사에서 척추관 쪽(내측) 이탈도 허용했는데, 이는 더 이상 켤 수 없으므로 그런 쪽은 건너뜀 또는 위치 이동으로 나타날 수 있습니다.
