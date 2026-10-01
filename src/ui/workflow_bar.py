@@ -149,19 +149,21 @@ def workflow_states(
     plan_available: bool,
     has_plan: bool,
     has_screws: bool = False,
+    all_reviewed: bool = False,
 ) -> List[StepState]:
     """The four steps' states from what the session has done so far.
 
     Kept free of Qt so the rule can be tested directly. Every step is always
     ``enabled``: the bar only navigates, and every page is reachable whatever
     the study's state. ``current`` is the first step not yet done, so once a
-    plan exists the Review step is the one highlighted.
+    plan exists the Review step is the one highlighted. Review is done once
+    there is at least one screw and the surgeon has marked every screw reviewed.
     """
     done = [
         has_volume,
         has_volume and has_mask,
         has_volume and has_mask and has_plan,
-        False,
+        has_screws and all_reviewed,
     ]
     hints = [
         (

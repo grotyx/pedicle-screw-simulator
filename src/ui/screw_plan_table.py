@@ -139,7 +139,7 @@ def screw_row_cells(index: int, screw) -> tuple[str, ...]:
     side = {"left": "L", "right": "R"}.get(str(side_value or "").lower(), "--")
     warning_count = screw_warning_count(screw)
     return (
-        str(index + 1),
+        f"{index + 1} ✓" if getattr(screw, "reviewed", False) else str(index + 1),
         str(level),
         side,
         pedicle_cell_text(screw_metrics(screw)),

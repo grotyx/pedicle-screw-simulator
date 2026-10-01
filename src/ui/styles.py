@@ -818,6 +818,9 @@ QLabel#constructChip[grade="D"], QLabel#constructChip[grade="E"] {{
     background: {t["grade_d"]};
 }}
 QLabel#constructChip[grade="NA"] {{ background: {t["grade_na"]}; }}
+QLabel#constructChip[reviewed="true"] {{
+    border: 1px solid {t["grade_text"]};
+}}
 QLabel#constructChip[selected="true"] {{
     border: 2px solid {t["accent"]};
 }}

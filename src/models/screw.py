@@ -33,6 +33,8 @@ class Screw:
         mean_hu / min_hu: Trajectory HU statistics when a CT was available.
         warnings: Planner or grader notes shown in the inspector.
         source: "manual" or "auto".
+        reviewed: The surgeon has checked this screw on the Review page. Any
+            change to its geometry, size or grade clears it (see ScrewTool).
         metrics: Clinical metric bundle for this trajectory. Keys, when
             measurable: ``trajectory_mean_hu``, ``trajectory_min_hu``,
             ``pedicle_mean_hu``, ``body_mean_hu``, ``trajectory_body_ratio``,
@@ -56,6 +58,7 @@ class Screw:
     warnings: List[str] = field(default_factory=list)
     source: str = "manual"
     metrics: Dict[str, Any] = field(default_factory=dict)
+    reviewed: bool = False
 
     def __post_init__(self):
         self.entry_point = tuple(float(v) for v in self.entry_point)

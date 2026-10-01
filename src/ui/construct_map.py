@@ -26,12 +26,15 @@ def level_order_key(level: str) -> tuple:
 class _Chip(QLabel):
     clicked = pyqtSignal(int)
 
-    def __init__(self, index: int, text: str, grade: str, parent=None):
+    def __init__(
+        self, index: int, text: str, grade: str, parent=None, reviewed: bool = False
+    ):
         super().__init__(text, parent)
         self.setObjectName("constructChip")
         self.setProperty("screwIndex", index)
         self.setProperty("grade", grade)
         self.setProperty("selected", "false")
+        self.setProperty("reviewed", "true" if reviewed else "false")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mousePressEvent(self, event):
@@ -146,7 +149,10 @@ class ConstructMap(QWidget):
             grade = grade if grade in _GRADES else "NA"
             shown = grade if grade != "NA" else "N/A"
             text = f"{shown}  {float(screw.diameter):g}×{float(screw.length):.0f}"
-            chip = _Chip(index, text, grade, cell)
+            reviewed = bool(getattr(screw, "reviewed", False))
+            if reviewed:
+                text += " ✓"
+            chip = _Chip(index, text, grade, cell, reviewed)
             chip.clicked.connect(self.screw_clicked)
             self._chips.append(chip)
             layout.addWidget(chip, 0, align)
