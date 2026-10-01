@@ -502,7 +502,7 @@ class Viewer3D(QWidget):
         self._screw_mpr_slice_reslice: Optional[vtk.vtkImageReslice] = None
         self._screw_mpr_slice_mask_reslice: Optional[vtk.vtkImageReslice] = None
         self._screw_mpr_slice_color_map: Optional[vtk.vtkImageMapToWindowLevelColors] = None
-        self._screw_mpr_slice_alpha_filter: Optional[vtk.vtkImageThreshold] = None
+        self._screw_mpr_slice_alpha_filter: Optional[vtk.vtkImageAlgorithm] = None
         # The local cut: the screw's own vertebra split out of the combined
         # mesh (cut_actor) and out of the volume (cut_volume), each carrying
         # _screw_mpr_clip as its only clipping plane. Every other level is
@@ -2519,10 +2519,21 @@ class Viewer3D(QWidget):
         context_alpha = round(SCREW_MPR_SLICE_CONTEXT_ALPHA * 255)
         alpha_filter = self._screw_mpr_slice_alpha_filter
         if alpha_filter is None:
-            alpha_filter = vtk.vtkImageThreshold()
+            # vtkImageBinaryThreshold replaces the deprecated vtkImageThreshold
+            # (see _build_segmentation_surface); older VTK lacks it.
+            use_binary = hasattr(vtk, "vtkImageBinaryThreshold")
+            alpha_filter = (
+                vtk.vtkImageBinaryThreshold() if use_binary else vtk.vtkImageThreshold()
+            )
             self._screw_mpr_slice_alpha_filter = alpha_filter
         alpha_filter.SetInputConnection(mask_reslice.GetOutputPort())
-        alpha_filter.ThresholdBetween(float(resolved_label), float(resolved_label))
+        if isinstance(alpha_filter, vtk.vtkImageThreshold):
+            alpha_filter.ThresholdBetween(float(resolved_label), float(resolved_label))
+        else:
+            alpha_filter.SetLowerThreshold(float(resolved_label))
+            alpha_filter.SetUpperThreshold(float(resolved_label))
+            alpha_filter.SetReplaceIn(True)
+            alpha_filter.SetReplaceOut(True)
         alpha_filter.SetInValue(255)
         alpha_filter.SetOutValue(context_alpha)
         alpha_filter.SetOutputScalarTypeToUnsignedChar()
