@@ -4,7 +4,7 @@
 
 Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
 
-**Version:** 0.2.4
+**Version:** 0.2.5
 
 **Primary tested environment:** macOS, Python 3.12
 
@@ -28,11 +28,15 @@ Research desktop software for DICOM CT visualization, vertebral segmentation, an
 - Multi-objective trajectory optimizer (default) with a legacy planner fallback, plus a cortical bone trajectory (CBT) planning mode
 - Conservative planning defaults: no cortical breach accepted unless you opt into grade B or C, never a medial breach, and a narrow pedicle without a contained trajectory left unplanned and reported rather than forced
 - Trajectories aimed parallel to the upper endplate, and construct-level rod-line and convergence harmonisation
+- Optional **Rod Line** in 3D (dashed on the sagittal and coronal views): a straight line through each side's screw heads for judging alignment, not a rod-bending plan
 - Gertzbein-Robbins grading with medial/lateral/craniocaudal breach split, bone-quality HU metrics, Heary direction, and facet violation grade
+- Warnings sorted into Safety, Image, and Info: the ⚠ chip is coloured by the worst category, and the tooltip and Review summary group the lines
+- A per-screw **✓ Reviewed** mark, saved in the plan and cleared by any position, size, or grade change; the Review step completes when every screw is reviewed
 - Standard and screw-aligned oblique MPR review, with rotatable and offsettable screw MPR planes
 - Direct entry, tip, and whole-screw editing in MPR and 3D
 - Manual screw placement, distance measurement, and angle measurement
 - JSON plan save/load and supported CSV/STL export
+- **File > Export Report...**: one self-contained HTML report (settings, per-screw table, construct map, pane screenshots) without patient identifiers
 - Editable planning parameters, a construct map and per-screw review table on the Review page, three UI themes (one light, two dark), MPR pan/zoom, pane maximise, and 3D navigation controls
 
 ## Quick Start
@@ -144,6 +148,7 @@ The step rail on the left walks through the same order.
 | Focus | Double-click anatomy |
 | Restore orientation | `Reset View` |
 | Show internal screws | Increase `Vertebra Transparency` |
+| Show each side's rod line | `Rod Line` |
 
 ### Screw Editing
 
@@ -200,7 +205,7 @@ data/README.md   local-data privacy instructions; no clinical data
 
 If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.4) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.5) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 

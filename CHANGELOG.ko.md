@@ -13,6 +13,13 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-02
+
+0.2.4의 더 안전한 계획 위에 검토 도구를 더했습니다. 스크류마다 검토 완료를
+표시하고, 경고를 종류별로 나눠 보고, rod 선을 표시하고, 계획 보고서를 한
+파일로 내보낼 수 있습니다. 스크립트로 이전 기본값과 새 기본값의 계획 결과를
+직접 검사에서 비교할 수 있습니다.
+
 ### 추가
 
 - Review 페이지: "✓ Reviewed" 버튼으로 선택한 스크류를 검토 완료로 표시합니다.
@@ -535,7 +542,8 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2

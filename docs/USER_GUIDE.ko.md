@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**버전:** 0.2.4
+**버전:** 0.2.5
 
 ## 1. 목적과 안전 범위
 
@@ -101,7 +101,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 - **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
 - **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 화면 머리글 토글에 대한 안내문.
 - **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
-- **Review:** **Construct** 지도(아래 "구성 지도" 참고)로 시작하고, 이어서 페이지 대부분을 차지하는 레벨별 스크류 목록이 있습니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
+- **Review:** **Construct** 지도(아래 "구성 지도" 참고)로 시작하고, 선택한 스크류의 핵심 수치와 **✓ Reviewed** 버튼·경고 줄이 이어지며, 그다음 페이지 대부분을 차지하는 레벨별 스크류 목록이 있습니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
 
 ### 3D 화면 머리글: Vertebrae / Full CT
 
@@ -481,7 +481,7 @@ Screw MPR에서는 휠과 가운데 버튼 드래그가 스크류 정렬 단면�
 
 Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지는 5.8절을 참고하십시오.
 
-**Rod Line**(왼쪽 위, Reset View 옆)은 스크류가 두 개 이상인 쪽마다 스크류 head를 지나는 최적 직선을 첫 head와 마지막 head보다 몇 mm 더 길게 그립니다. Alignment 수치가 기준으로 삼는 바로 그 선이며(5.9절 Alignment 참고), 스크류를 추가·이동·크기 변경·삭제할 때마다 다시 맞추고 새 study를 열면 지워집니다. 3D에서는 가늘고 반투명한 튜브로, sagittal과 coronal plane에서는 선이 단면 안에 놓이는 일이 드물기 때문에 점선 투영으로 그립니다. Axial과 Screw MPR plane에는 표시하지 않습니다. 정렬을 판단하기 위한 이상화된 직선일 뿐 로드 벤딩 계획이 아닙니다. 토글 상태는 세션 사이에 저장되지 않습니다.
+**Rod Line**(왼쪽 위, Reset View 옆)은 스크류가 두 개 이상인 쪽마다 스크류 head를 지나는 최적 직선을 첫 head와 마지막 head보다 5 mm씩 더 길게 그립니다. Alignment 수치가 기준으로 삼는 바로 그 선이며(5.9절 Alignment 참고), 스크류를 추가·이동·크기 변경·삭제할 때마다 다시 맞추고 새 study를 열면 지워집니다. 3D에서는 가늘고 반투명한 튜브로, sagittal과 coronal plane에서는 선이 단면 안에 놓이는 일이 드물기 때문에 점선 투영으로 그립니다. Axial과 Screw MPR plane에는 표시하지 않습니다. 정렬을 판단하기 위한 이상화된 직선일 뿐 로드 벤딩 계획이 아닙니다. 토글 상태는 세션 사이에 저장되지 않습니다.
 
 볼륨 렌더링은 Windows와 Linux에서 GPU를, macOS에서는 CPU 레이캐스터를 사용합니다. macOS는 OpenGL→Metal 변환 계층이 3D 텍스처 업로드에서 멈추기 때문입니다. 선택은 자동이며 로그에 기록됩니다.
 
@@ -503,8 +503,9 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 - 계획을 JSON 형식으로 저장하고 불러옵니다.
 - 지원되는 계획 표를 CSV로 내보냅니다.
 - 지원되는 골 표면을 STL로 내보냅니다.
+- 계획을 단일 HTML 보고서 파일로 내보냅니다(아래 참고).
 
-계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 각 스크류에는 **✓ Reviewed** 표시를 담는 `reviewed` 값도 저장됩니다(5.9절). schema version 3 안에서 추가된 키이므로, 이 값 없이 저장된 계획을 불러오면 모든 스크류가 검토하지 않은 상태가 됩니다.
 
 저장·불러오기·내보내기 대화상자는 마지막으로 계획에 사용한 폴더(처음에는 문서 폴더)에서 열리며, 응용 프로그램 폴더에서는 열리지 않습니다. 계획 파일은 DICOM Series Instance UID를 일방향 SHA-256 해시(`series_uid_sha256`)로만 기록합니다. 다른 series에 계획을 불러올 때 경고하기에는 충분하지만 PACS에서 조회할 수는 없습니다. 원본 UID가 들어 있는 이전 계획도 그대로 불러오며 같은 방식으로 검사하고, 다시 저장하면 해시만 기록됩니다.
 
@@ -535,7 +536,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 
 ### 골절된 종판과 스크류가 평행하지 않음
 
-어떤 레벨의 상연(上緣)이 압박골절이나 Schmorl node로 손상되어 있으면, 플래너가 그 레벨의 스크류를 자체 종판이 아니라 이웃 레벨의 종판을 따라 정렬할 수 있습니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. Review 페이지의 "⚠ N warnings" 줄을 펼쳐 "Endplate reference: …" 경고나 "Upper endplate unavailable; …" 경고(Legacy 플래너는 "used horizontal sagittal trajectory", Optimizer는 "sagittal angle searched around the pedicle axis")가 있는지 확인하십시오. Details 섹션의 Endplate 행 자체에는 `own`/`neighbours`/`none`이라는 글자가 그대로 나오지 않습니다 — `own`이면 그냥 각도("+2.3°")만 표시되고, `neighbours`이면 각도 뒤에 빌려온 레벨이 붙어("+2.3° vs T12, L3") tooltip에도 표시되며, `none`이면 비교할 기준 자체가 없어 "--"로 표시됩니다. 기준값 자체(`own`/`neighbours`/`none`)는 CSV 내보내기의 `endplate_reference` 열에서만 문자 그대로 확인할 수 있습니다(9절 참고). 이는 자체 적합을 신뢰할 수 없는 레벨에서 나타나는 정상적인 동작이며 버그가 아닙니다 — 어느 경우든 sagittal 화면에서 궤적을 직접 확인하십시오.
+어떤 레벨의 상연(上緣)이 압박골절이나 Schmorl node로 손상되어 있으면, 플래너가 그 레벨의 스크류를 자체 종판이 아니라 이웃 레벨의 종판을 따라 정렬할 수 있습니다 — 5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고. Review 페이지의 경고 줄(예: "⚠ 1 safety · 2 image", 5.9절)을 펼쳐 **Image** 아래에 "Endplate reference: …" 경고나 "Upper endplate unavailable; …" 경고(Legacy 플래너는 "used horizontal sagittal trajectory", Optimizer는 "sagittal angle searched around the pedicle axis")가 있는지 확인하십시오. Details 섹션의 Endplate 행 자체에는 `own`/`neighbours`/`none`이라는 글자가 그대로 나오지 않습니다 — `own`이면 그냥 각도("+2.3°")만 표시되고, `neighbours`이면 각도 뒤에 빌려온 레벨이 붙어("+2.3° vs T12, L3") tooltip에도 표시되며, `none`이면 비교할 기준 자체가 없어 "--"로 표시됩니다. 기준값 자체(`own`/`neighbours`/`none`)는 CSV 내보내기의 `endplate_reference` 열에서만 문자 그대로 확인할 수 있습니다(9절 참고). 이는 자체 적합을 신뢰할 수 없는 레벨에서 나타나는 정상적인 동작이며 버그가 아닙니다 — 어느 경우든 sagittal 화면에서 궤적을 직접 확인하십시오.
 
 ### 실행 문제
 
@@ -593,12 +594,12 @@ python scripts/validate_plans.py --pred pred_plan.json --ref ref_plan.json --out
 
 ### 12.1 계획 기본값 비교
 
-`scripts/compare_planning_defaults.py`는 0.2.4의 계획 기본값이 본인의 증례에서 무엇을 바꾸는지 보여 줍니다. 척추경 분석을 한 번 하고, 같은 분석 결과로 자동 플래너를 두 번 실행합니다. **previous**(B등급 이탈 허용, 격리되지 않아도 좁은 쪽 배치 허용; 0.2.3에 가장 가까운 설정)와 **current**(배포 기본값)입니다. 검증이 아니라 보고서이므로 결과와 상관없이 종료 코드 0을 반환하며, 척추 레벨과 숫자만 출력합니다(경로·DICOM 메타데이터 없음).
+`scripts/compare_planning_defaults.py`는 0.2.4의 계획 기본값이 본인의 증례에서 무엇을 바꾸는지 보여 줍니다. 척추경 분석을 한 번 하고, 같은 분석 결과로 자동 플래너를 두 번 실행합니다. **previous**(B등급 천공 허용, 척추경 안에 포함되지 않아도 좁은 쪽 배치 허용; 0.2.3에 가장 가까운 설정)와 **current**(배포 기본값)입니다. 검증이 아니라 보고서이므로 결과와 상관없이 종료 코드 0을 반환하며, 척추 레벨과 숫자만 출력합니다(경로·DICOM 메타데이터 없음).
 
 ```bash
 python scripts/compare_planning_defaults.py --ct <ct> --mask <vertebra mask> [--pedicle-mask <pedicle mask>] [--levels L3,L4] [--csv out.csv]
 ```
 
-한 행은 한 레벨의 한쪽입니다. `PREVIOUS`와 `CURRENT`는 `placed <직경>x<길이> <등급> med <mm> lat <mm>`(내측·외측 이탈) 또는 `skipped: <사유>`로 표시됩니다. `CHANGE`는 `same`, `smaller screw`, `now skipped`, `now placed`, `different trajectory` 중 하나입니다. 요약에는 각 설정에서 배치된 나사 수와, 새로 건너뛴 쪽을 사유별로 묶은 결과가 나옵니다.
+한 행은 한 레벨의 한쪽입니다. `PREVIOUS`와 `CURRENT`는 `placed <직경>x<길이> <등급> med <mm> lat <mm>`(내측·외측 천공) 또는 `skipped: <사유>`로 표시됩니다. `CHANGE`는 `same`, `smaller screw`, `now skipped`, `now placed`, `different trajectory` 중 하나입니다. 요약에는 각 설정에서 배치된 나사못 수와, 새로 건너뛴 쪽을 사유별로 묶은 결과가 나옵니다.
 
-"previous"는 근사입니다. 0.2.3은 레거시 플래너가 배치한 정상 폭 나사에서 척추관 쪽(내측) 이탈도 허용했는데, 이는 더 이상 켤 수 없으므로 그런 쪽은 건너뜀 또는 위치 이동으로 나타날 수 있습니다.
+"previous"는 근사입니다. 0.2.3은 레거시 플래너가 배치한 정상 폭 나사못에서 척추관 쪽(내측) 천공도 허용했는데, 이는 더 이상 켤 수 없으므로 그런 쪽은 건너뜀 또는 위치 이동으로 나타날 수 있습니다.

@@ -13,6 +13,13 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-02
+
+Review tools on top of 0.2.4's safer planning: mark each screw as
+reviewed, read warnings sorted by kind, show the rod line, and export a
+one-file planning report. A script compares the old and new planning
+defaults on your own study.
+
 ### Added
 
 - Review page: a "✓ Reviewed" button marks the selected screw as checked.
@@ -574,7 +581,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
