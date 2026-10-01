@@ -1182,3 +1182,89 @@ def test_a_manual_screw_does_not_bend_the_planned_rod_line():
     assert all(
         s.metrics["rod_misalignment_mm"] == pytest.approx(0.0) for s in planned
     )
+
+
+# --------------------------------------------------------------------------
+# The rod line drawn in the views is the same fit the Alignment figure uses
+# --------------------------------------------------------------------------
+
+
+def _distance_to_line(point, start, end):
+    point, start, end = (np.asarray(v, dtype=float) for v in (point, start, end))
+    direction = (end - start) / np.linalg.norm(end - start)
+    offset = point - start
+    return float(np.linalg.norm(offset - (offset @ direction) * direction))
+
+
+def test_the_drawn_rod_is_the_construct_alignment_fit():
+    """RMS distance of the heads from the drawn line is the Alignment number."""
+    from src.core.construct_alignment import ROD_OVERHANG_MM
+
+    tool = _construct_tool()
+    for level, z, x in (("L3", 20.0, 34.0), ("L4", 30.0, 40.0), ("L5", 40.0, 34.0)):
+        tool.add_screw(_construct_screw(level, z, x=x))
+    tool.regrade_all()
+
+    lines = tool.rod_lines()
+
+    assert set(lines) == {"left"}
+    start, end = lines["left"]
+    heads = [s.entry_point for s in tool.get_screws()]
+    rms = math.sqrt(
+        np.mean([_distance_to_line(head, start, end) ** 2 for head in heads])
+    )
+    assert rms == pytest.approx(tool.get_screws()[0].metrics["rod_misalignment_mm"])
+    # Spans the heads (cranio-caudal here) plus the overhang at both ends.
+    assert sorted((start[2], end[2])) == pytest.approx(
+        [20.0 - ROD_OVERHANG_MM, 40.0 + ROD_OVERHANG_MM], abs=0.5
+    )
+
+
+def test_a_side_with_fewer_than_two_screws_gets_no_rod():
+    tool = _construct_tool()
+    tool.add_screw(_construct_screw("L4", 30.0))
+    right = _construct_screw("L4", 30.0, x=20.0)
+    right.side = "right"
+    tool.add_screw(right)
+
+    assert tool.rod_lines() == {}
+
+
+def test_two_hand_placed_screws_get_the_line_through_both_heads():
+    tool = _construct_tool()
+    tool.add_screw(_construct_screw("L4", 30.0, planned=False))
+    tool.add_screw(_construct_screw("L5", 40.0, planned=False))
+
+    start, end = tool.rod_lines()["left"]
+
+    for head in ((34.0, 38.0, 30.0), (34.0, 38.0, 40.0)):
+        assert _distance_to_line(head, start, end) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_moving_a_head_moves_the_rod():
+    tool = _construct_tool()
+    for level, z in (("L4", 30.0), ("L5", 40.0)):
+        tool.add_screw(_construct_screw(level, z))
+    before = tool.rod_lines()["left"]
+
+    tool.replace_screw(
+        1, entry_point=(44.0, 38.0, 40.0), target_point=(44.0, 22.0, 40.0)
+    )
+
+    start, end = tool.rod_lines()["left"]
+    assert (start, end) != before
+    assert _distance_to_line((44.0, 38.0, 40.0), start, end) == pytest.approx(
+        0.0, abs=1e-9
+    )
+
+
+def test_a_manual_screw_does_not_bend_the_drawn_rod_either():
+    """The drawn line uses the same screws as the Alignment figure: the carriers."""
+    tool = _construct_tool()
+    for level, z in (("L3", 20.0), ("L4", 30.0), ("L5", 40.0)):
+        tool.add_screw(_construct_screw(level, z))
+    before = tool.rod_lines()
+
+    tool.add_screw(_construct_screw("L4", 30.0, x=48.0, planned=False))
+
+    assert tool.rod_lines() == before

@@ -878,6 +878,21 @@ class ScrewTool:
             metrics_of=lambda s: s.metrics,
         )
 
+    def rod_lines(self):
+        """Each side's rod line (start, end) in LPS, for the views to draw.
+
+        The fit :meth:`_restamp_construct_alignment` measures against; see
+        :func:`src.core.construct_alignment.rod_lines`.
+        """
+        from ..core.construct_alignment import rod_lines
+
+        return rod_lines(
+            self._screws,
+            side_of=lambda s: s.side,
+            entry_of=lambda s: s.entry_point,
+            metrics_of=lambda s: s.metrics,
+        )
+
     def replace_screw(
         self,
         index: int,

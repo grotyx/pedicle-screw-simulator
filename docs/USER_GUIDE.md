@@ -468,9 +468,12 @@ In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; se
 | `Reset View` | Restore sagittal startup orientation |
 | `Vertebra Transparency` | Reveal or obscure internal screws |
 | `Planes On / Off` | Show or hide the MPR planes — the screw-aligned ones while Screw MPR is active |
+| `Rod Line` | Show or hide each side's rod line in 3D and, dashed, on the sagittal and coronal planes (off by default; see below) |
 | Double-click header, or `Ctrl+M` | Maximise the 3D pane; repeat to restore |
 
 See 5.8 for how Screw MPR changes what these planes show and cut.
+
+**Rod Line** (top-left, next to Reset View) draws, for each side with at least two screws, the best-fit straight line through the screw heads, running a few millimetres past the first and last head. It is the same line the Alignment figure measures against (Alignment in 5.9), refitted whenever a screw is added, moved, resized or removed and cleared with a new study. In 3D it is a thin translucent tube; on the sagittal and coronal planes it is a dashed projection, because the line rarely lies in the slice; axial and Screw MPR planes do not show it. It is an idealised straight line for judging alignment, not a rod-bending plan. The toggle is not remembered between sessions.
 
 Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
 

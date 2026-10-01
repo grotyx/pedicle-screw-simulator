@@ -468,9 +468,12 @@ Screw MPR에서는 휠과 가운데 버튼 드래그가 스크류 정렬 단면�
 | `Reset View` | 초기 sagittal 방향 복원 |
 | `Vertebra Transparency` | 내부 스크류 표시 정도 조절 |
 | `Planes On / Off` | MPR plane 표시·숨김 — Screw MPR이 활성화되어 있으면 스크류 정렬 plane |
+| `Rod Line` | 각 쪽 로드 선을 3D와 sagittal·coronal plane(점선)에 표시·숨김 (기본값 꺼짐, 아래 참고) |
 | 머리글 더블클릭 또는 `Ctrl+M` | 3D 창을 최대화, 다시 누르면 복원 |
 
 Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지는 5.8절을 참고하십시오.
+
+**Rod Line**(왼쪽 위, Reset View 옆)은 스크류가 두 개 이상인 쪽마다 스크류 head를 지나는 최적 직선을 첫 head와 마지막 head보다 몇 mm 더 길게 그립니다. Alignment 수치가 기준으로 삼는 바로 그 선이며(5.9절 Alignment 참고), 스크류를 추가·이동·크기 변경·삭제할 때마다 다시 맞추고 새 study를 열면 지워집니다. 3D에서는 가늘고 반투명한 튜브로, sagittal과 coronal plane에서는 선이 단면 안에 놓이는 일이 드물기 때문에 점선 투영으로 그립니다. Axial과 Screw MPR plane에는 표시하지 않습니다. 정렬을 판단하기 위한 이상화된 직선일 뿐 로드 벤딩 계획이 아닙니다. 토글 상태는 세션 사이에 저장되지 않습니다.
 
 볼륨 렌더링은 Windows와 Linux에서 GPU를, macOS에서는 CPU 레이캐스터를 사용합니다. macOS는 OpenGL→Metal 변환 계층이 3D 텍스처 업로드에서 멈추기 때문입니다. 선택은 자동이며 로그에 기록됩니다.
 

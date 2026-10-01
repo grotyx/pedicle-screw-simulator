@@ -124,6 +124,11 @@ VOLUME_CROP_OUTSIDE_BOX = 0x7FFFFFF & ~vtk.VTK_CROP_SUBVOLUME
 # viewerOverlay rule so every theme gets matching floating controls.
 _OVERLAY_BUTTON_SIZING = "font-size: 11px; font-weight: 600; padding: 5px 9px;"
 
+#: The rod line is thinner than any screw (radius 1 mm vs >= 2 mm) and
+#: translucent, so it threads the heads without hiding them.
+ROD_LINE_RADIUS_MM = 1.0
+ROD_LINE_OPACITY = 0.55
+
 #: Distance (mm) the "Cut View" camera sits back from the cross-section
 #: centre, on the entry side, looking down the screw at the open cut face.
 SCREW_MPR_CUT_VIEW_DISTANCE_MM = 250.0
@@ -549,6 +554,11 @@ class Viewer3D(QWidget):
         self._vertebral_transparency = 0.50
         self._vertebral_surface_opacity = 0.50
 
+        # Rod lines: side -> (start, end) in LPS, drawn only while toggled on.
+        self._rod_lines: Dict[str, Tuple[Sequence[float], Sequence[float]]] = {}
+        self._rod_lines_visible = False
+        self._rod_actors: List[vtk.vtkActor] = []
+
         # Measurement visualization
         self._measurement_props: Dict[int, List[vtk.vtkProp]] = {}
 
@@ -682,8 +692,23 @@ class Viewer3D(QWidget):
         # clear_screw_mpr.
         self.screw_mpr_view_button.setVisible(False)
 
-        # Reset View and Cut View share the top-left corner as one row so
-        # neither button overlaps the plane toggle beneath it.
+        # Off by default: two extra lines across every plan is clutter until
+        # the surgeon asks for them. Drives the sagittal/coronal lines too
+        # (MainWindow forwards it).
+        self.rod_line_toggle = QToolButton(self.viewport_container)
+        self.rod_line_toggle.setObjectName("rodLineToggle")
+        self.rod_line_toggle.setText("Rod Line")
+        self.rod_line_toggle.setToolTip(
+            "Show each side's best-fit straight line through the screw heads "
+            "(the line the Alignment figure measures against)"
+        )
+        self.rod_line_toggle.setCheckable(True)
+        self.rod_line_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.rod_line_toggle.setStyleSheet(_OVERLAY_BUTTON_SIZING)
+        self.rod_line_toggle.toggled.connect(self.set_rod_lines_visible)
+
+        # Reset View, Cut View and Rod Line share the top-left corner as one
+        # row so no button overlaps the plane toggle beneath it.
         self.top_left_controls = QWidget(self.viewport_container)
         self.top_left_controls.setProperty("viewerOverlay", "true")
         top_left_layout = QHBoxLayout(self.top_left_controls)
@@ -691,6 +716,7 @@ class Viewer3D(QWidget):
         top_left_layout.setSpacing(5)
         top_left_layout.addWidget(self.reset_view_button)
         top_left_layout.addWidget(self.screw_mpr_view_button)
+        top_left_layout.addWidget(self.rod_line_toggle)
         viewport_layout.addWidget(
             self.top_left_controls,
             0,
@@ -1534,6 +1560,42 @@ class Viewer3D(QWidget):
         self._apply_screw_focus()
         if not self._render_guard_active:
             self._request_render()
+
+    def set_rod_lines(self, lines) -> None:
+        """Replace the rod lines (side -> (start, end) in LPS) and redraw."""
+        self._rod_lines = dict(lines)
+        self._rebuild_rod_actors()
+
+    def set_rod_lines_visible(self, visible: bool) -> None:
+        self._rod_lines_visible = bool(visible)
+        self._rebuild_rod_actors()
+
+    def _rebuild_rod_actors(self) -> None:
+        """Draw each rod as a thin translucent tube that never takes a pick."""
+        if self._renderer is None:
+            return
+        for actor in self._rod_actors:
+            self._renderer.RemoveActor(actor)
+        self._rod_actors = []
+        if self._rod_lines_visible:
+            for start, end in self._rod_lines.values():
+                line = vtk.vtkLineSource()
+                line.SetPoint1(*start)
+                line.SetPoint2(*end)
+                tube = vtk.vtkTubeFilter()
+                tube.SetInputConnection(line.GetOutputPort())
+                tube.SetRadius(ROD_LINE_RADIUS_MM)
+                tube.SetNumberOfSides(16)
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(tube.GetOutputPort())
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                actor.PickableOff()
+                actor.GetProperty().SetColor(*(c / 255.0 for c in COLOR_SCREW))
+                actor.GetProperty().SetOpacity(ROD_LINE_OPACITY)
+                self._renderer.AddActor(actor)
+                self._rod_actors.append(actor)
+        self._request_render()
 
     def set_screw_interaction_callbacks(
         self,

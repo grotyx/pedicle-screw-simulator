@@ -1966,6 +1966,7 @@ class MainWindow(QMainWindow):
             self.construct_map.set_selected
         )
         self.construct_map.screw_clicked.connect(self._select_screw_from_view)
+        self.viewer_3d.rod_line_toggle.toggled.connect(self._on_rod_line_toggled)
         for pane in self._panes().values():
             pane.promote_requested.connect(self.set_hero_view)
         self._refresh_workflow_bar()
@@ -1991,6 +1992,15 @@ class MainWindow(QMainWindow):
             return
         construct_map.set_screws(self._tool_ctrl.screw_tool.get_screws())
         construct_map.set_selected(widget.currentRow())
+        # Same route, so the rod lines can never lag the construct they draw.
+        rod_lines = self._tool_ctrl.screw_tool.rod_lines()
+        for viewer in (self.viewer_3d, *self._get_mpr_viewers()):
+            viewer.set_rod_lines(rod_lines)
+
+    def _on_rod_line_toggled(self, visible: bool) -> None:
+        """The 3D view's Rod Line toggle also drives the MPR projections."""
+        for viewer in self._get_mpr_viewers():
+            viewer.set_rod_lines_visible(visible)
 
     def _select_screw_from_view(self, screw_id: int) -> None:
         """Synchronize a screw picked in MPR/3D with the selection list."""

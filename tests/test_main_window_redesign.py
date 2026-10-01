@@ -403,3 +403,46 @@ def test_startup_lays_out_the_views_once(monkeypatch, qtbot, isolated_qsettings)
 
     assert calls == ["planning"]
     assert _position(window, window.tool_dock) == (1, 0, 1, 3)
+
+
+def test_rod_lines_follow_the_screws_and_the_3d_toggle(ui_main_window):
+    window = ui_main_window
+    first = _add_levelled_screw(window, "L4", "left")
+    _flush()
+    # One screw on the side: nothing to draw.
+    assert window.viewer_3d.rod_lines == {}
+
+    second = Screw(
+        entry_point=(2.0, 13.0, 34.0),
+        target_point=(8.0, 19.0, 54.0),
+        diameter=6.5,
+        vertebra_level="L5",
+        side="left",
+        source="auto",
+    )
+    window._tool_ctrl.add_existing_screw(second)
+    _flush()
+    expected = window._tool_ctrl.screw_tool.rod_lines()
+    assert set(expected) == {"left"}
+    for viewer in (window.viewer_3d, *window._get_mpr_viewers()):
+        assert viewer.rod_lines == expected
+
+    # The one toggle on the 3D view drives the MPR lines too.
+    assert not window.viewer_3d.rod_line_toggle.isChecked()
+    window.viewer_3d.rod_line_toggle.setChecked(True)
+    assert all(v.rod_lines_visible for v in window._get_mpr_viewers())
+    window.viewer_3d.rod_line_toggle.setChecked(False)
+    assert not any(v.rod_lines_visible for v in window._get_mpr_viewers())
+
+    # Moving a head refits the line in every view.
+    first.entry_point = (12.0, 3.0, 4.0)
+    window._tool_ctrl.refresh_screw(0, first)
+    _flush()
+    moved = window._tool_ctrl.screw_tool.rod_lines()
+    assert moved != expected
+    assert window.sagittal_viewer.rod_lines == moved
+
+    window.reset_workspace()
+    _flush()
+    for viewer in (window.viewer_3d, *window._get_mpr_viewers()):
+        assert viewer.rod_lines == {}

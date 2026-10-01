@@ -94,3 +94,17 @@ def test_overlay_code_has_no_literal_colours():
                 mod.__name__,
                 name,
             )
+
+
+def test_rod_line_toggle_sits_in_the_overlay_row_and_hides_on_a_thumbnail(viewer):
+    v, name = viewer
+    if name != "3d":
+        pytest.skip("the rod line toggle lives on the 3D view")
+    toggle = v.rod_line_toggle
+    assert toggle.parent() is v.top_left_controls          # viewerOverlay row
+    assert toggle.isCheckable() and not toggle.isChecked()  # off by default
+    assert toggle.isVisible()
+    v.set_thumbnail(True)
+    assert not toggle.isVisible()
+    v.set_thumbnail(False)
+    assert toggle.isVisible()

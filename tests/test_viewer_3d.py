@@ -2085,3 +2085,37 @@ class TestVolumeVisibilityLeavesTheOverlayAlone:
 
         assert viewer._volume.GetVisibility() == 0
         assert viewer._segmentation_actor.GetVisibility() == 1
+
+
+def test_rod_line_toggle_shows_and_hides_the_3d_rods(qtbot, monkeypatch):
+    import vtk
+    from PyQt6.QtWidgets import QWidget
+
+    from src.ui import viewer_3d
+
+    monkeypatch.setattr(viewer_3d, "create_vtk_widget", lambda parent: QWidget(parent))
+    monkeypatch.setattr(viewer_3d.Viewer3D, "_setup_vtk_pipeline", lambda self: None)
+    monkeypatch.setattr(viewer_3d.Viewer3D, "_request_render", lambda self: None)
+    viewer = viewer_3d.Viewer3D(SimpleNamespace(add_observer=lambda *_args: None))
+    qtbot.addWidget(viewer)
+    viewer._renderer = vtk.vtkRenderer()
+    lines = {
+        "left": ((20.0, 40.0, -30.0), (20.0, 46.0, 30.0)),
+        "right": ((-20.0, 40.0, -30.0), (-20.0, 46.0, 30.0)),
+    }
+
+    viewer.set_rod_lines(lines)
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 0   # off by default
+
+    viewer.rod_line_toggle.setChecked(True)
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 2
+    for actor in viewer._rod_actors:
+        assert not actor.GetPickable()       # never steals a screw pick
+        assert actor.GetProperty().GetOpacity() < 1.0
+
+    viewer.set_rod_lines({})                 # a new study / cleared plan
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 0
+
+    viewer.set_rod_lines(lines)
+    viewer.rod_line_toggle.setChecked(False)
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 0
