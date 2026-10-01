@@ -577,3 +577,15 @@ This prints the cohort summary (`key: value` lines) to the console and writes:
 Screws are matched between the two plans by vertebra level and side; use `--voxel-mm` to change the rasterisation grid used for the Dice computation (default `0.5` mm; coarser grids run faster but slightly underestimate overlap for very long or thin screws).
 
 **Interpreting the numbers.** There is no universal pass/fail threshold — read the summary against the spread reported for human raters. In the inter-rater agreement literature (Scherer 2022), independent expert planners on the same cases differ by a mean of about 4.9 mm at the entry point and 4.4 mm at the tip, with a mean axis-angle difference of about 5.3°. A predicted plan that falls within roughly this range of a reference plan is consistent with inter-observer variability; deviations well beyond it warrant closer review of the planner output or the reference plan itself.
+
+### 12.1 Comparing the Planning Defaults
+
+`scripts/compare_planning_defaults.py` shows, on your own study, what the 0.2.4 planning defaults change. It analyses the pedicles once and runs the automatic planner twice on the same analyses: **previous** (grade-B breaches accepted, narrow sides placed even when not contained; the closest setting to 0.2.3) and **current** (the shipped defaults). It is a report, not a validation: it exits with 0 whatever it finds, and prints vertebra levels and numbers only (no path or DICOM metadata).
+
+```bash
+python scripts/compare_planning_defaults.py --ct <ct> --mask <vertebra mask> [--pedicle-mask <pedicle mask>] [--levels L3,L4] [--csv out.csv]
+```
+
+Each row is one level and side. `PREVIOUS` and `CURRENT` read `placed <diameter>x<length> <grade> med <mm> lat <mm>` (medial and lateral breach) or `skipped: <reason>`. `CHANGE` is `same`, `smaller screw`, `now skipped`, `now placed` or `different trajectory`. The summary gives the screws placed under each setting and groups newly skipped sides by reason.
+
+"Previous" is an approximation: 0.2.3 also accepted a canal-side (medial) breach on normal-width screws placed by the legacy planner, which can no longer be switched on, so such a side may appear as skipped or moved.
