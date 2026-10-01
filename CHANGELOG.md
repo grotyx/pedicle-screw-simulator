@@ -13,9 +13,18 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-01
+
+Safer automatic planning and a new workstation layout. By default automatic
+planning now places no screw with a cortical breach and never one that
+breaches into the canal; a narrow pedicle that cannot hold a contained
+screw is left unplanned with a reason unless you opt in; and re-running
+Plan Screws asks before it replaces earlier automatic screws. The views
+are rearranged around one large main view with a vertical step rail, a
+tool dock and a level-by-level construct map.
+
 ### Added
 
-- The user guide lists every keyboard shortcut.
 - A Construct map at the top of the Review page summarizes the plan level by
   level, cranial to caudal, as Right | vertebra | Left grade chips with
   diameter x length. Screws without a level are listed under Manual, screws
@@ -24,62 +33,67 @@ current version; every other place the version appears is derived from it.
 - Loading a study warns (without blocking) when slice spacing is not
   uniform, which usually means missing slices, or when the series has a
   gantry tilt; either can distort lengths along the scan axis.
+- The user guide lists every keyboard shortcut.
 
 ### Changed
 
-- The planner's density objective (optimizer and CBT) averages HU only over
-  screw-cylinder voxels inside the planned vertebra, matching the per-screw HU
-  figures; soft tissue, fat or CSF outside the bone no longer lowers a
-  candidate's density, and a candidate with no sample in the vertebra scores
-  the worst density.
 - Automatic planning accepts no cortical breach by default (Gertzbein grade
-  A). The new "Accepted breach" setting ("A only — no breach", "Up to B
-  (< 2 mm)", "Up to C (< 4 mm)") replaces "Lateral breach cap (mm)"; a
-  previously saved cap is ignored. Narrow pedicles may breach only laterally,
-  and a medial (canal-side) breach is never accepted, now also on legacy
-  normal-width screws, which used to accept a grade-B screw breaching into the
-  canal.
-- Measurements taken in Screw MPR can no longer be edited or dragged; delete
-  and re-measure them (their oblique plane is not recorded).
-- The legacy fallback for a narrow pedicle applies the optimizer's narrow
-  rule: no medial or craniocaudal breach, lateral breach within the Lateral
-  breach cap. The skip reason names the figure that failed.
-- Plan Save, Load and Export dialogs open in the last plan folder (or
-  Documents), never the application folder, and root-level plan exports are
-  git-ignored. Plans store only a SHA-256 digest of the series UID; older
-  plans with the raw UID still load and are not re-saved with it.
+  A). The new Planning Parameters setting "Accepted breach" ("A only — no
+  breach", "Up to B (< 2 mm)", "Up to C (< 4 mm)") replaces "Lateral breach
+  cap", which used to let a narrow pedicle breach laterally by up to 2 mm;
+  a previously saved cap is ignored. A narrow pedicle may only breach
+  laterally, within the accepted grade. A medial (canal-side) breach is
+  never accepted on any pedicle; before, a normal-width screw from the
+  legacy fallback could be kept with a grade-B breach into the canal.
+- A narrow pedicle whose best trajectory is not contained (a breach beyond
+  the accepted grade, or any medial or craniocaudal breach) is left
+  unplanned, and the skip reason names the figure that failed. Before, the
+  legacy fallback placed its smallest screw anyway. The new option "Place
+  narrow screws even if not contained" (off by default) restores that
+  placement, and such a screw carries a warning naming the option.
+- Running Plan Screws again asks before replacing the automatic screws on
+  the levels being planned, including ones you adjusted. A new screw
+  replaces the automatic screw on the same level and side, and only after
+  the new plan succeeds, so the rod-fit figures no longer mix two runs.
+  Automatic screws on a level or side the new plan skips, hand-placed
+  screws and screws on other levels are kept. Before, a second run added a
+  second set of screws.
 - CBT holds its anterior margin along the screw like the optimizer and keeps
   the longest feasible length per direction (zero breach and wall clearance
   still required), so it no longer drops or over-shortens screws the
   optimizer's rule accepts. The chosen CBT screw can differ from before.
+- The planner's density objective (optimizer and CBT) averages HU only over
+  screw-cylinder voxels inside the planned vertebra, matching the per-screw
+  HU figures. Soft tissue, fat or CSF outside the bone no longer lowers a
+  candidate's density, and a candidate with no sample in the vertebra scores
+  the worst density. The chosen screw can differ from before.
 - Implant catalogues are sorted on load and the automatic diameter is always
   a catalogue size.
-- Running Plan Screws again asks before replacing the automatically planned
-  screws on the levels being planned. After Replace, the earlier screws are
-  removed only when the new plan succeeds, so the rod-fit figures no longer
-  mix two runs; hand-placed screws and planned screws on other levels are
-  kept.
-- Automatic planning no longer places a narrow-pedicle screw from the legacy
-  fallback when its best trajectory is not contained (Gertzbein grade C or
-  worse, or any medial breach); the side is left unplanned and the reason is
-  shown. The new Planning Parameters option "Place narrow screws even if not
-  contained" (off by default) restores the old placement, and such a screw
-  carries a warning naming the option.
-- The four workflow steps now run down a vertical step rail at the left edge
+- The four workflow steps run down a vertical step rail at the left edge
   instead of a bar above the views. Each right-hand page opens with a header
   ("Step N of 4", title, one-line hint).
-- The Planning layout shows one large main view (3D by default) with the other
-  three views as thumbnails underneath. The enlarge button (tooltip "Show in
-  the main view") on a thumbnail swaps it into the main view; header
-  double-click still maximises. Turning Screw MPR on makes the axial view the
-  main view. MPR Focus (2x2) is unchanged.
+- The Planning layout shows one large main view (3D by default) with the
+  other three views as thumbnails underneath. The enlarge button (tooltip
+  "Show in the main view") on a thumbnail swaps it into the main view;
+  header double-click still maximises. Turning Screw MPR on makes the axial
+  view the main view. MPR Focus (2x2) is unchanged.
 - The tool buttons (Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR,
-  Fit 3D) moved from the top toolbar into a tool dock on its own row below the main
-  view. The 3D zoom in/out and fit commands are also in the View menu.
-- The top toolbar keeps Open DICOM and adds a study chip (voxel spacing only,
-  for example "CT · 0.39 × 0.39 × 1.00 mm") and a RESEARCH USE ONLY badge.
-- The tool dock and the floating controls over the views (MPR zoom buttons, 3D
-  overlays) share one flat, theme-driven style in all three themes.
+  Fit 3D) moved from the top toolbar into a tool dock on its own row below
+  the main view. The 3D zoom in/out and fit commands are also in the View
+  menu.
+- The top toolbar keeps Open DICOM and adds a study chip (voxel spacing
+  only, for example "CT · 0.39 × 0.39 × 1.00 mm") and a RESEARCH USE ONLY
+  badge.
+- The tool dock and the floating controls over the views (MPR zoom buttons,
+  3D overlays) share one flat, theme-driven style in all three themes.
+- Plan Save, Load and Export dialogs open in the last plan folder (or
+  Documents), never the application folder, and root-level plan exports are
+  git-ignored. Plans store only a SHA-256 digest of the series UID; older
+  plans with the raw UID still load and are not re-saved with it.
+- Measurements taken in Screw MPR are marked "(screw view)" and keep that
+  mark in saved plans. They can no longer be edited or dragged, because
+  their oblique plane is not recorded; delete and re-measure them. They no
+  longer jump to a standard slice they do not lie on.
 
 ### Fixed
 
@@ -90,82 +104,72 @@ current version; every other place the version appears is derived from it.
   direction reported as "none". The direction is now read from the nearest
   point of the vertebra rather than from the screw's own centreline, so tip
   breaches read "anterior".
-- Opening a new study left the previous study's screw projections drawn on
-  the axial, sagittal and coronal views.
-- Typing a diameter with a decimal point ("7.5", "5,5") entered the wrong
-  value (5.0). Typed values are now taken as written; the digit-only
-  shorthand ("65" → 6.5 mm) still works.
-- DICOM load errors no longer write the folder path (often named after the
-  patient) to the log file or the error dialog.
-- An empty SliceThickness or KVP tag no longer discards all study metadata
-  ("Loaded 0 slices").
-- Unsigned oblique series no longer turn the -1000 background into bone
-  values after reorientation.
-- The views no longer stay frozen and black when a step of a study load
-  fails.
-- Finishing or cancelling a segmentation run could crash the app ("QThread:
-  Destroyed while thread is still running"). Worker threads are now kept
-  until they stop, and planning threads are freed promptly.
-- Cancel now stops TotalSegmentator's and the subregion model's worker
-  processes too, not just the parent process.
-- Earlier segmentation runs' temporary CT copies are deleted after a
-  successful run, and startup survives another instance cleaning up at the
-  same time.
-- A failure reading a GPU segmentation result is reported instead of
-  silently rerunning the whole segmentation on the CPU.
-- Plan loading rejects NaN/Infinity values, malformed measurement entries
-  and plans from a newer version with a clear error. Saving a plan is
-  atomic, so a crash cannot truncate the existing file. CSV export
-  neutralises text cells that start with =, +, - or @.
-- Trajectory and pedicle HU are sampled only inside the screw's own vertebra
+- Trajectory and pedicle HU (Details, CSV mean_hu/min_hu and
+  trajectory_mean_hu) are sampled only inside the screw's own vertebra
   label, so soft tissue, fat and the spinal canal no longer lower the mean
-  or set the minimum; a screw with no samples inside the vertebra shows N/A
-  instead of a false loosening-risk warning. The vertebral-body HU region no
-  longer copies the whole CT and mask for every screw.
-- CI and the run scripts no longer pass a second -q to pytest (the summary
-  line was hidden), and CI now runs git diff --check. The CITATION release
-  date matches 0.2.3, and CONTRIBUTING names the project and its checks
-  correctly.
-- MPR reference lines now follow the current slice positions after
-  scrolling or clicking in any view, after loading a study and on entering or
-  leaving Screw MPR, and each line uses the colour of the plane it marks (all
-  three views had them swapped).
-- The Angle tool no longer gets stuck when two of its points coincide, and
-  changing the measure mode while editing a measurement keeps its plane.
-- The Side column of the screw table shows L or R, so it no longer
-  truncates to "L…" at the default panel width.
-- Stepping the segmentation label no longer freezes the window: changes are
-  coalesced and recently built surfaces are cached.
-- 3D and MPR panes repaint after the window is minimised and restored.
-- The Screw MPR 2D mask overlay no longer clips on oblique planes.
-- Loading a new study clears the previous vertebral-only volume.
-- Measurements taken in Screw MPR are marked "(screw view)", keep that mark in
-  saved plans, and no longer jump to a standard slice they do not lie on.
-- Starting a screw drag in one view releases any other view's drag lock, so
-  one screw cannot be moved by two views at once.
+  or set the minimum. A screw with no samples inside the vertebra shows N/A
+  instead of a false loosening-risk warning. The vertebral-body HU region
+  no longer copies the whole CT and mask for every screw.
 - The endplate band uses the true 3-D angle to the endplate, so a coronally
   tilted endplate is judged the same on both sides.
 - Optimizer warnings for a level without an endplate reference no longer
   claim a horizontal trajectory.
 - The legacy planner skips a side whose posterior surface is cut off instead
   of entering at the anterior cortex.
-- validate_plans --out no longer truncates dotted names, and run_app.sh stops
-  with a clear message when python3 is older than 3.12.
-- DICOM load and scan errors no longer write exception text, which can hold
-  patient-named folder paths, to app.log or dialogs; only the error type and
-  code locations are logged. Loading no longer re-reads every slice to check
-  its geometry.
-- Re-planning replaces earlier automatic screws per level and side, so a side
-  the new plan skipped keeps its screw, and the confirmation says adjusted
-  automatic screws are replaced too. Saving a plan no longer fails when a
-  measurement has no screw-view entry.
-- Trajectory HU in Details and CSV mean_hu/min_hu samples only inside the
-  screw's vertebra, matching trajectory_mean_hu.
-- Stepping the 3D segmentation label through an empty label no longer
-  re-shows a hidden overlay. Cancelling a segmentation no longer freezes the
-  window while the process tree is killed, and quitting the app no longer
-  leaves TotalSegmentator running.
-
+- Typing a diameter with a decimal point ("7.5", "5,5") entered the wrong
+  value (5.0). Typed values are now taken as written; the digit-only
+  shorthand ("65" → 6.5 mm) still works.
+- DICOM load and scan errors no longer write the folder path (often named
+  after the patient) or any exception text that may contain it to app.log
+  or the error dialog. The log records only the error type, with code
+  locations at debug level, and the dialog shows a fixed message. Loading
+  no longer re-reads every slice to check its geometry.
+- An empty SliceThickness or KVP tag no longer discards all study metadata
+  ("Loaded 0 slices").
+- Unsigned oblique series no longer turn the -1000 background into bone
+  values after reorientation.
+- The views no longer stay frozen and black when a step of a study load
+  fails.
+- Opening a new study left the previous study's screw projections drawn on
+  the axial, sagittal and coronal views, and kept its vertebral-only volume.
+- Plan loading rejects NaN/Infinity values, malformed measurement entries
+  and plans from a newer version with a clear error. Saving a plan is
+  atomic, so a crash cannot truncate the existing file, and no longer fails
+  when a measurement has no screw-view entry. CSV export neutralises text
+  cells that start with =, +, - or @.
+- Finishing or cancelling a segmentation run could crash the app ("QThread:
+  Destroyed while thread is still running"). Worker threads are now kept
+  until they stop, and planning threads are freed promptly.
+- Cancel now stops TotalSegmentator's and the subregion model's worker
+  processes too, not just the parent process, without freezing the window
+  while they are stopped. Quitting the app no longer leaves
+  TotalSegmentator running.
+- Earlier segmentation runs' temporary CT copies are deleted after a
+  successful run, and startup survives another instance cleaning up at the
+  same time.
+- A failure reading a GPU segmentation result is reported instead of
+  silently rerunning the whole segmentation on the CPU.
+- MPR reference lines now follow the current slice positions after
+  scrolling or clicking in any view, after loading a study and on entering
+  or leaving Screw MPR, and each line uses the colour of the plane it marks
+  (all three views had them swapped).
+- The Angle tool no longer gets stuck when two of its points coincide, and
+  changing the measure mode while editing a measurement keeps its plane.
+- Starting a screw drag in one view releases any other view's drag lock, so
+  one screw cannot be moved by two views at once.
+- The Side column of the screw table shows L or R, so it no longer
+  truncates to "L…" at the default panel width.
+- Stepping the segmentation label no longer freezes the window: changes are
+  coalesced and recently built surfaces are cached. Stepping the 3D label
+  through an empty label no longer re-shows a hidden overlay.
+- 3D and MPR panes repaint after the window is minimised and restored.
+- The Screw MPR 2D mask overlay no longer clips on oblique planes.
+- CI and the run scripts no longer pass a second -q to pytest (the summary
+  line was hidden), and CI now runs git diff --check. validate_plans --out
+  no longer truncates dotted names, and run_app.sh stops with a clear
+  message when python3 is older than 3.12. The CITATION release date
+  matches 0.2.3, and CONTRIBUTING names the project and its checks
+  correctly.
 
 ## [0.2.3] - 2026-09-13
 
@@ -536,6 +540,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.0...v0.2.1
