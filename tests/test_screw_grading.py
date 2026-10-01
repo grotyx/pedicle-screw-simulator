@@ -814,11 +814,38 @@ class TestEvaluateBatch:
         entries = np.array([[30.0, 37.3, 30.0], [30.0, 45.0, 30.0]])
         targets = np.array([[30.0, 22.1, 30.0], [30.0, 15.0, 30.0]])
         batch = grader.evaluate_batch(entries, targets, 6.0, 28)
-        # Only the first candidate lies wholly inside the label: grade() now
-        # samples label voxels only, while the batch still averages every
-        # in-volume sample, so the second (which leaves the label) differs.
-        single = grader.grade(entries[0], targets[0], 6.0, label=28)
-        assert batch.mean_hu[0] == pytest.approx(single.mean_hu, rel=0.01)
+        # The second candidate leaves the label at both ends: both paths take
+        # HU from label voxels only, so it must agree too.
+        for i in range(2):
+            single = grader.grade(entries[i], targets[i], 6.0, label=28)
+            assert batch.mean_hu[i] == pytest.approx(single.mean_hu, rel=0.01)
+            assert batch.min_hu[i] == pytest.approx(single.min_hu, abs=10.0)
+
+    def test_soft_tissue_outside_the_label_does_not_lower_the_density(self):
+        mask = _cube_mask()                                  # label spans y 20..39 mm
+        grader = ScrewGrader(mask, _ct_like(mask, inside_hu=350, outside_hu=-50))
+        # Same shaft in bone; the second also runs 6 mm through -50 HU tissue.
+        entries = np.array([[30.0, 37.0, 30.0], [30.0, 45.0, 30.0]])
+        targets = np.array([[30.0, 22.0, 30.0], [30.0, 22.0, 30.0]])
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        assert batch.mean_hu[1] == pytest.approx(batch.mean_hu[0])
+        assert batch.min_hu[1] == pytest.approx(batch.min_hu[0])
+
+    def test_a_candidate_with_no_bone_sample_ranks_worst_on_density(self):
+        from src.core.screw_grading import NO_BONE_HU
+        from src.core.trajectory_optimizer import DENSITY_LOW_HU
+
+        mask = _cube_mask()
+        grader = ScrewGrader(mask, _ct_like(mask))
+        entries = np.array([[30.0, 37.0, 30.0], [5.0, 5.0, 30.0]])
+        targets = np.array([[30.0, 22.0, 30.0], [5.0, 50.0, 30.0]])  # second never enters
+        batch = grader.evaluate_batch(entries, targets, 6.0, 28)
+        # Finite, so it never reads as "no CT", and below every normalisation
+        # floor, so its density term is the worst possible.
+        assert batch.mean_hu[1] == NO_BONE_HU
+        assert batch.min_hu[1] == NO_BONE_HU
+        assert NO_BONE_HU <= DENSITY_LOW_HU
+        assert batch.mean_hu[1] < batch.mean_hu[0]
 
 
 class TestCorticalEntryZone:

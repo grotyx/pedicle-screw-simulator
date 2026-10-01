@@ -256,7 +256,7 @@ The **Planner** combo in Planning Parameters selects between two back-ends for *
 
 - **Optimizer** (default) — enumerates a dense grid of straight candidate trajectories per pedicle (entry offset × convergence angle × craniocaudal angle × catalogue length), grades every candidate in a single pass, discards infeasible ones, and ranks the rest by a weighted sum of five normalised objectives (each 0–1):
   - **Safety** — minimum cortical wall clearance, saturating at 3 mm.
-  - **Density** — mean trajectory HU, normalised over 100–600 HU.
+  - **Density** — mean trajectory HU, normalised over 100–600 HU. Only the screw-cylinder voxels inside the planned vertebra count, so soft tissue, fat, or CSF the cylinder passes through outside the bone does not lower it, and a candidate with no sample inside the vertebra scores the worst density. The CBT planner (below) uses the same figure.
   - **Length** — screw length as a fraction of the longest catalogue length.
   - **Endplate** — how parallel the trajectory is to the upper endplate, within a 15° tolerance.
   - **Centering** — how close the trajectory passes to the pedicle isthmus centre, relative to the isthmus half-width.
