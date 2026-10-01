@@ -26,6 +26,10 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ### 변경
 
+- 플래너의 밀도 목적함수(optimizer와 CBT)가 스크류 원통 가운데 계획한 척추 안의
+  복셀만으로 HU 평균을 내어 스크류별 HU 수치와 일치합니다. 뼈 밖의 연부조직·지방·
+  뇌척수액이 후보의 밀도를 낮추지 않으며, 척추 안에 샘플이 없는 후보는 가장 낮은
+  밀도 점수를 받습니다.
 - 자동 계획은 기본적으로 피질 천공을 전혀 허용하지 않습니다(Gertzbein 등급 A).
   "Lateral breach cap (mm)" 대신 새 "Accepted breach" 설정("A only — no breach",
   "Up to B (< 2 mm)", "Up to C (< 4 mm)")을 쓰며, 예전에 저장한 한도 값은

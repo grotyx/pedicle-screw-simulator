@@ -66,6 +66,12 @@ MEDIAL_CONE_COS = 0.5
 #: all, B is ``0 < breach < 2``, C ``2 <= breach < 4``, D ``4 <= breach < 6``.
 BREACH_GRADE_LIMITS_MM = {"B": 2.0, "C": 4.0, "D": 6.0}
 
+#: HU ``evaluate_batch`` reports for a candidate that has CT samples but none
+#: inside the graded vertebra.  Air: finite, so a batch of them never reads as
+#: "no CT loaded", and below every density normalisation's floor, so such a
+#: candidate ranks worst on density rather than looking dense or vanishing.
+NO_BONE_HU = -1000.0
+
 #: Grid-equality tolerances used by :meth:`ScrewGrader.grids_match`.
 #:
 #: An origin is compared against a *fraction of a voxel* rather than an absolute
@@ -102,9 +108,10 @@ class BatchResult:
     """Per-candidate measurements from :meth:`ScrewGrader.evaluate_batch`.
 
     Every array is ``(C,)`` and indexed by candidate. ``min_wall_mm`` is 0 for a
-    candidate that breaches, and the HU arrays are ``NaN`` for a candidate with
-    no sample inside the CT (including every candidate when there is no CT) and
-    for a candidate too short to rank.
+    candidate that breaches.  The HU arrays come from the samples inside the
+    graded label only, exactly as :meth:`ScrewGrader.grade` takes them; they
+    are :data:`NO_BONE_HU` for a candidate with no such sample, and ``NaN`` for
+    every candidate when there is no CT and for a candidate too short to rank.
 
     The four directional arrays split that single ``breach_mm`` by where the
     screw left the vertebra: toward the midline, away from it, or above/below.
@@ -301,6 +308,24 @@ class ScrewGrader:
         values[inside] = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]]
         return values
 
+    def _hu_in_label(self, idx_zyx: np.ndarray, inside: np.ndarray, label: int) -> np.ndarray:
+        """HU at each indexed point that lies in ``label``; ``NaN`` everywhere else.
+
+        The one rule :meth:`grade` and :meth:`evaluate_batch` both take HU by --
+        voxels of the graded vertebra only, like ``bone_quality``'s trajectory
+        figure -- so soft tissue and CSF drag neither down and the two cannot
+        drift apart.  All ``NaN`` without a CT.
+        """
+        values = np.full(inside.shape[0], np.nan, dtype=np.float64)
+        if self._ct_array is None:
+            return values
+        rows = np.flatnonzero(inside)
+        sel = idx_zyx[rows]
+        rows = rows[self._mask_array[sel[:, 0], sel[:, 1], sel[:, 2]] == label]
+        sel = idx_zyx[rows]
+        values[rows] = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]]
+        return values
+
     def distances_at_points(self, points: np.ndarray, label: int) -> Tuple[np.ndarray, np.ndarray]:
         """Distances (mm) from each ``(N, 3)`` LPS point to ``label``.
 
@@ -390,14 +415,8 @@ class ScrewGrader:
         on_surface = d_out == 0.0
         min_wall = float(d_in[on_surface].min()) if on_surface.any() else math.inf
 
-        if self._ct_array is None:
-            hu_samples = np.empty(0, dtype=np.float64)
-        else:
-            # Only voxels of the graded vertebra, like bone_quality's
-            # trajectory figure, so soft tissue and CSF do not drag it down.
-            sel = idx_zyx[inside]
-            sel = sel[self._mask_array[sel[:, 0], sel[:, 1], sel[:, 2]] == label]
-            hu_samples = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]].astype(np.float64)
+        hu_samples = self._hu_in_label(idx_zyx, inside, label)
+        hu_samples = hu_samples[np.isfinite(hu_samples)]
 
         if breach > 0.0:
             min_wall = 0.0
@@ -500,6 +519,12 @@ class ScrewGrader:
         within roughly the sampling step. Unlike :meth:`grade` this never
         returns ``None``: a candidate whose samples all miss the label's cropped
         neighbourhood simply scores ``crop_margin_mm`` of breach.
+
+        Mean and min HU are taken from the samples inside ``label`` only, as in
+        :meth:`grade`, so soft tissue, fat or CSF along a cylinder never lowers a
+        candidate's density.  A candidate with none of its samples inside the
+        label reports :data:`NO_BONE_HU` for both -- the worst density, never
+        ``NaN`` -- since there is a CT and it measured no bone.
 
         A candidate shorter than ``MIN_BATCH_CANDIDATE_LENGTH_MM`` is unrankable
         and is reported as the worst possible screw — ``crop_margin_mm`` of
@@ -770,15 +795,16 @@ class ScrewGrader:
         min_wall = wall_per_offset.min(axis=1)
         min_wall = np.where(np.isfinite(min_wall) & (breach <= 0.0), min_wall, 0.0)
 
-        hu = self.hu_at_points(flat).reshape(count, -1)
+        hu = self._hu_in_label(*self._indices(flat), label).reshape(count, -1)
         sampled = np.isfinite(hu)
         counts = sampled.sum(axis=1)
-        mean_hu = np.full(count, np.nan, dtype=np.float64)
+        no_bone = np.nan if self._ct_array is None else NO_BONE_HU
+        mean_hu = np.full(count, no_bone, dtype=np.float64)
         np.divide(
             np.where(sampled, hu, 0.0).sum(axis=1), counts, out=mean_hu, where=counts > 0
         )
         min_hu = np.where(
-            counts > 0, np.where(sampled, hu, np.inf).min(axis=1), np.nan
+            counts > 0, np.where(sampled, hu, np.inf).min(axis=1), no_bone
         )
         directional = self._directional_reductions(
             breach_per_offset, wall_per_offset, breach, min_wall, membership, degenerate

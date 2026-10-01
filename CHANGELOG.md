@@ -27,6 +27,11 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- The planner's density objective (optimizer and CBT) averages HU only over
+  screw-cylinder voxels inside the planned vertebra, matching the per-screw HU
+  figures; soft tissue, fat or CSF outside the bone no longer lowers a
+  candidate's density, and a candidate with no sample in the vertebra scores
+  the worst density.
 - Automatic planning accepts no cortical breach by default (Gertzbein grade
   A). The new "Accepted breach" setting ("A only — no breach", "Up to B
   (< 2 mm)", "Up to C (< 4 mm)") replaces "Lateral breach cap (mm)"; a
