@@ -4,7 +4,7 @@
 
 DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
 
-**버전:** 0.2.4
+**버전:** 0.2.5
 
 **주요 검증 환경:** macOS, Python 3.12
 
@@ -28,11 +28,15 @@ DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR
 - 다목적 궤적 최적화기(기본값)와 legacy 플래너 대체, 그리고 피질골 궤적(cortical bone trajectory, CBT) 계획 모드
 - 보수적인 계획 기본값: B 또는 C 등급을 직접 허용하지 않는 한 피질골 천공을 받아들이지 않고, medial 천공은 어떤 경우에도 받아들이지 않으며, 골내 궤적이 없는 좁은 척추경은 억지로 배치하지 않고 계획하지 않은 채 알림
 - 상부 종판에 평행한 궤적, 그리고 construct 단위의 로드 직선·수렴각 조정
+- 3D의 선택적 **Rod Line**(sagittal·coronal 화면에는 점선): 각 쪽 스크류 head를 지나는 직선으로 정렬을 판단하는 용도이며 로드 벤딩 계획이 아님
 - medial/lateral/두미 방향으로 나눈 Gertzbein-Robbins 등급, 골질 HU 지표, Heary 방향, facet 침범 등급
+- Safety, Image, Info로 나눈 경고: ⚠ chip은 가장 심각한 category의 색으로 표시되고, tooltip과 Review 요약은 경고를 category별로 묶어 보여 줌
+- 스크류별 **✓ Reviewed** 표시: 계획에 저장되며 위치·크기·등급이 바뀌면 해제되고, 모든 스크류를 검토하면 Review 단계가 완료됨
 - 기본 MPR 및 스크류 방향에 정렬된 oblique MPR. Screw MPR 평면은 회전·평행이동 가능
 - MPR과 3D에서 entry, tip, 전체 스크류 직접 수정
 - 수동 스크류 추가, 거리 측정, 각도 측정
 - JSON 계획 저장·불러오기 및 지원되는 CSV/STL 내보내기
+- **File > Export Report...**: 환자 식별정보 없이 설정, 스크류별 표, 구성 지도, 화면 스크린샷을 담은 단일 HTML 보고서
 - 편집 가능한 계획 파라미터, Review 페이지의 구성 지도(construct map)와 나사별 검토 표, 세 가지 UI 테마(밝은 테마 1, 어두운 테마 2), MPR 이동·확대, 창 최대화, 3D 탐색 기능
 
 ## 빠른 시작
@@ -144,6 +148,7 @@ Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함
 | 특정 위치 확대 | 해부학 구조 더블클릭 |
 | 초기 방향 복원 | `Reset View` |
 | 내부 스크류 확인 | `Vertebra Transparency` 증가 |
+| 각 쪽 로드 선 표시 | `Rod Line` |
 
 ### 스크류 수정
 
@@ -200,7 +205,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 
 연구에 이 프로그램을 사용했다면 GitHub의 **Cite this repository** 기능이나 [`CITATION.cff`](CITATION.cff)를 사용하십시오.
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.4) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.5) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 소프트웨어 논문이 출판되면 버전별 소프트웨어 인용을 유지하면서 논문 DOI를 preferred citation으로 추가할 수 있습니다.
 
