@@ -1770,7 +1770,8 @@ def replan(controller_with_window, monkeypatch, tmp_path):
 def _answer(monkeypatch, choice):
     """Drive the confirmation box: ``choice`` is "Replace" or "Cancel".
 
-    Returns what the box showed: (title, text, button texts, default button).
+    Returns what the box showed: (text, informative text, button texts,
+    default button). The window title is not captured: macOS ignores it.
     """
     from PyQt6.QtWidgets import QMessageBox
 
@@ -1779,8 +1780,8 @@ def _answer(monkeypatch, choice):
     def exec_(box):
         shown.append(
             (
-                box.windowTitle(),
                 box.text(),
+                box.informativeText(),
                 [b.text().replace("&", "") for b in box.buttons()],
                 box.defaultButton().text().replace("&", ""),
             )
@@ -1852,8 +1853,9 @@ def test_replan_dialog_names_levels_and_count_only(replan, monkeypatch):
 
     ctrl.run_planning()
 
-    title, text, buttons, default = shown[0]
-    assert title == "Replace planned screws?"
+    question, text, buttons, default = shown[0]
+    # The question is the bold main text: macOS shows no window title.
+    assert question == "Replace planned screws?"
     assert sorted(buttons) == ["Cancel", "Replace"]
     assert default == "Replace"
     assert "2 automatically planned screws on L4, L5" in text

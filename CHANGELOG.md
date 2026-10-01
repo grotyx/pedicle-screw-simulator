@@ -170,6 +170,8 @@ tool dock and a level-by-level construct map.
   message when python3 is older than 3.12. The CITATION release date
   matches 0.2.3, and CONTRIBUTING names the project and its checks
   correctly.
+- The re-plan confirmation shows its question in the dialog body, so it is
+  visible on macOS, which hides message-box titles.
 
 ## [0.2.3] - 2026-09-13
 
