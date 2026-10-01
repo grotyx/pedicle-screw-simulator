@@ -13,6 +13,30 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### 추가
+
+- Review 페이지: "✓ Reviewed" 버튼으로 선택한 스크류를 검토 완료로 표시합니다.
+  표시는 Construct 지도와 스크류 표에 나타나고 계획 파일에 저장되며, 스크류의
+  위치·크기·등급이 바뀌면 자동으로 해제됩니다. 모든 스크류를 검토하면 Review
+  단계가 완료로 표시됩니다.
+- Review 경고를 Safety·Image·Info로 나눕니다. 표의 ⚠ 열은 가장 심각한
+  category 색의 chip으로 표시되고, tooltip과 Review 경고 줄은 category별로 묶어
+  보여 줍니다("⚠ 1 safety · 2 image"). 이 분류는 읽기 쉽게 정리할 뿐 위험도
+  평가가 아닙니다.
+- 3D 화면의 "Rod Line" 토글(기본 꺼짐)이 각 쪽 스크류 head를 지나는 직선,
+  즉 Alignment 수치의 기준선을 3D에, sagittal·coronal에는 점선 투영으로
+  그립니다. rod 벤딩 계획이 아닙니다.
+- File > Export Report...가 계획 설정, 스크류별 표, Construct 지도, 화면
+  스크린샷을 담은 HTML 보고서 한 파일을 연구용 고지와 함께, 환자 식별 정보 없이
+  저장합니다.
+- scripts/compare_planning_defaults.py가 한 검사에서 이전 동작(등급 B 천공 허용,
+  좁은 쪽 항상 배치)과 현재 기본값의 계획 결과를 레벨별로 비교합니다.
+
+### 수정
+
+- Screw MPR 3D 단면이 설치된 VTK에 vtkImageBinaryThreshold가 있으면 그것을
+  써서, 최신 VTK에서 더 이상 사용 중단 경고가 나오지 않습니다.
+
 ## [0.2.4] - 2026-10-01
 
 더 안전해진 자동 계획과 새 작업 화면 배치가 포함됩니다. 자동 계획은 이제

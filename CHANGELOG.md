@@ -13,6 +13,33 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Added
+
+- Review page: a "✓ Reviewed" button marks the selected screw as checked.
+  The mark shows in the Construct map and the screw table, is saved in the
+  plan file, and is cleared by any change to the screw's position, size or
+  grade; the Review step shows done once every screw is reviewed.
+- Review warnings are sorted into Safety, Image and Info: the table's ⚠
+  column shows a chip coloured by the worst category, and the tooltip and
+  the Review warning line group the lines by category ("⚠ 1 safety ·
+  2 image"). The categories sort lines for reading; they are not a risk
+  rating.
+- A "Rod Line" toggle in the 3D view (off by default) draws each side's
+  straight line through the screw heads, the line the Alignment figure is
+  measured against, in 3D and as a dashed projection on the sagittal and
+  coronal views. It is not a rod-bending plan.
+- File > Export Report... writes one self-contained HTML planning report
+  (planner settings, per-screw table, construct map, pane screenshots)
+  under a research-use banner and without patient identifiers.
+- scripts/compare_planning_defaults.py compares, on one study, the planning
+  result of the previous behaviour (grade-B breaches accepted, narrow sides
+  always placed) with the current defaults, level by level.
+
+### Fixed
+
+- The Screw MPR 3D slice uses vtkImageBinaryThreshold when the installed
+  VTK has it, so newer VTK no longer warns about a deprecated class.
+
 ## [0.2.4] - 2026-10-01
 
 Safer automatic planning and a new workstation layout. By default automatic
