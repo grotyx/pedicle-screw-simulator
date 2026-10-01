@@ -157,7 +157,7 @@ construct 지도로 다시 배치되었습니다.
 - CI와 실행 스크립트가 pytest에 -q를 중복 전달하지 않아 요약 줄이 다시
   보이며, CI가 git diff --check를 실행합니다. validate_plans --out이 점이
   들어간 이름을 자르지 않고, run_app.sh는 python3가 3.12 미만이면 명확한
-  안내와 함께 멈춥니다. CITATION 릴리스 날짜를 0.2.3에 맞추고,
+  안내와 함께 멈춥니다. CITATION 릴리스 날짜가 changelog를 따르도록 맞추고(테스트로 확인),
   CONTRIBUTING의 프로젝트 이름과 점검 항목을 바로잡았습니다.
 - 재계획 확인 창의 질문을 본문에 표시해, 메시지 창 제목을 숨기는 macOS에서도
   보입니다.
