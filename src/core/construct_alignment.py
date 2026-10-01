@@ -27,6 +27,7 @@ import numpy as np
 from .trajectory_optimizer import (
     convergence_deviations_deg,
     convergence_spread_deg,
+    rod_line_fit,
     rod_misalignment_mm,
 )
 
@@ -39,6 +40,9 @@ SPREAD_KEY = "convergence_spread_deg"
 #: Signed offset of this screw's convergence from its neighbours', in degrees.
 #: Absent on a screw the term excludes (sacral), which was never asked to agree.
 DEVIATION_KEY = "convergence_deviation_deg"
+
+#: How far the drawn rod line runs past the first and last head, in millimetres.
+ROD_OVERHANG_MM = 5.0
 
 #: Every metric this module owns, so a caller can strip them in one place.
 ALIGNMENT_KEYS: Tuple[str, ...] = (ROD_KEY, SPREAD_KEY, DEVIATION_KEY)
@@ -119,6 +123,40 @@ def restamp_carriers(
         level_of=level_of,
         metrics_of=metrics_of,
     )
+
+
+def rod_lines(
+    screws: Iterable[Any],
+    *,
+    side_of: Callable[[Any], str],
+    entry_of: Callable[[Any], Sequence[float]],
+    metrics_of: Callable[[Any], Dict[str, Any]],
+) -> Dict[str, Tuple[Tuple[float, float, float], Tuple[float, float, float]]]:
+    """Each side's rod line as a (start, end) segment through the heads.
+
+    The same straight-line fit :data:`ROD_KEY` measures against, over the same
+    screws: the carriers when the side has them (see :func:`restamp_carriers`),
+    otherwise every screw on the side.  The segment spans the heads and runs
+    :data:`ROD_OVERHANG_MM` past the first and last.  A side with fewer than two
+    heads, or with all its heads at one point, has no line and is left out.
+    """
+    lines = {}
+    for side, members in _group_by_side(screws, side_of).items():
+        fitted = [s for s in members if ROD_KEY in metrics_of(s)] or members
+        if len(fitted) < 2:
+            continue
+        heads = np.asarray(
+            [[float(v) for v in entry_of(s)] for s in fitted], dtype=np.float64
+        )
+        centroid, direction = rod_line_fit(heads)
+        along = (heads - centroid) @ direction
+        if float(np.ptp(along)) < 1e-6:
+            continue
+        lines[side] = tuple(
+            tuple(float(v) for v in centroid + direction * t)
+            for t in (along.min() - ROD_OVERHANG_MM, along.max() + ROD_OVERHANG_MM)
+        )
+    return lines
 
 
 def _group_by_side(

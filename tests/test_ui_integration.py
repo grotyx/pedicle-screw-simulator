@@ -163,6 +163,15 @@ class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     def set_review_screw(self, screw_id):
         self.review_screw_id = screw_id
 
+    rod_lines = {}
+    rod_lines_visible = False
+
+    def set_rod_lines(self, lines):
+        self.rod_lines = dict(lines)
+
+    def set_rod_lines_visible(self, visible):
+        self.rod_lines_visible = bool(visible)
+
     def set_screw_interaction_callbacks(self, **callbacks):
         self.screw_interaction_callbacks = callbacks
 
@@ -217,6 +226,12 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
         self.screw_mpr_window_level = None
         # (isolated, available) as last reported by set_isolation_state.
         self.isolation_state = (False, False)
+        self.rod_lines = {}
+        self.rod_line_toggle = QToolButton(self)
+        self.rod_line_toggle.setCheckable(True)
+
+    def set_rod_lines(self, lines):
+        self.rod_lines = dict(lines)
 
     def set_isolation_state(self, isolated: bool, available: bool) -> None:
         self.isolation_state = (bool(isolated), bool(available))

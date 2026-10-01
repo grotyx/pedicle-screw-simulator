@@ -1063,11 +1063,23 @@ def rod_misalignment_mm(head_points: np.ndarray) -> float:
     heads = np.asarray(head_points, dtype=np.float64).reshape(-1, 3)
     if heads.shape[0] < 3:
         return 0.0
-    centred = heads - heads.mean(axis=0)
-    # First right-singular vector = principal axis = direction of the best-fit line.
-    direction = np.linalg.svd(centred, full_matrices=False)[2][0]
+    centroid, direction = rod_line_fit(heads)
+    centred = heads - centroid
     residuals = centred - np.outer(centred @ direction, direction)
     return float(np.sqrt(np.mean(np.sum(residuals**2, axis=1))))
+
+
+def rod_line_fit(head_points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Best-fit 3-D line through one side's heads, as (centroid, unit direction).
+
+    The one fit both :func:`rod_misalignment_mm` and the drawn rod line use, so
+    the line on screen is the line the Alignment figure measures against.
+    """
+    heads = np.asarray(head_points, dtype=np.float64).reshape(-1, 3)
+    centroid = heads.mean(axis=0)
+    # First right-singular vector = principal axis = direction of the best-fit line.
+    direction = np.linalg.svd(heads - centroid, full_matrices=False)[2][0]
+    return centroid, direction
 
 
 def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:

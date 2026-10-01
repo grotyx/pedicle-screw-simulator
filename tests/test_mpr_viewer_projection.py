@@ -896,3 +896,64 @@ def test_mask_overlay_grid_follows_the_main_reslice_on_oblique_axes():
     viewer._custom_reslice_axes = None
     viewer._update_reslice_position()
     assert mask.GetOutput().GetExtent() == main.GetOutput().GetExtent()
+
+
+def _rod_viewer(plane):
+    viewer = _make_viewer(center=(0.0, 0.0, 0.0), position=0.0)
+    axes = create_reslice_axes(plane, (0.0, 0.0, 0.0))
+    viewer.plane = plane
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._render_guard_active = True
+    viewer._rod_lines = {}
+    viewer._rod_lines_visible = False
+    viewer._rod_line_props = []
+    return viewer
+
+
+_ROD = {"left": ((20.0, 40.0, -30.0), (20.0, 46.0, 30.0))}
+
+
+@pytest.mark.parametrize("plane", ["sagittal", "coronal"])
+def test_rod_line_is_drawn_as_a_dashed_projection_when_shown(plane):
+    viewer = _rod_viewer(plane)
+    viewer.set_rod_lines(_ROD)
+    assert viewer._rod_line_props == []            # off by default
+
+    viewer.set_rod_lines_visible(True)
+
+    (actor,) = viewer._rod_line_props
+    assert actor.GetObjectName() == "rod-line"
+    polydata = actor.GetMapper().GetInput()
+    # Dashes, not one solid segment: it is a projection, not in the slice.
+    assert polydata.GetNumberOfLines() > 1
+    bounds = actor.GetBounds()
+    # Flattened into the slice: every point sits on the overlay depth.
+    assert bounds[4] == pytest.approx(bounds[5])
+    # Spans the whole rod: 60 mm cranio-caudal shows as 60 mm in-plane.
+    assert max(bounds[1] - bounds[0], bounds[3] - bounds[2]) == pytest.approx(
+        60.0, abs=1.0
+    )
+
+    viewer.set_rod_lines_visible(False)
+    assert viewer._rod_line_props == []
+    assert viewer._renderer.GetViewProps().GetNumberOfItems() == 0
+
+
+def test_axial_view_never_draws_the_rod_line():
+    viewer = _rod_viewer("axial")
+    viewer.set_rod_lines(_ROD)
+    viewer.set_rod_lines_visible(True)
+
+    assert viewer._rod_line_props == []
+
+
+def test_clearing_the_rod_lines_removes_the_projection():
+    viewer = _rod_viewer("sagittal")
+    viewer.set_rod_lines_visible(True)
+    viewer.set_rod_lines(_ROD)
+    assert viewer._rod_line_props
+
+    viewer.set_rod_lines({})
+
+    assert viewer._rod_line_props == []
+    assert viewer._renderer.GetViewProps().GetNumberOfItems() == 0

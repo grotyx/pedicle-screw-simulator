@@ -37,6 +37,7 @@ from ..utils.constants import (
     COLOR_AXIAL,
     COLOR_CORONAL,
     COLOR_SAGITTAL,
+    COLOR_SCREW,
     DEFAULT_WINDOW_CENTER,
     DEFAULT_WINDOW_WIDTH,
 )
@@ -52,6 +53,47 @@ logger = logging.getLogger(__name__)
 ORIENTATION_MARKER_FONT_SIZE = 14
 ORIENTATION_MARKER_MARGIN_PX = 6
 ORIENTATION_MARKER_SIDES = ("top", "bottom", "left", "right")
+
+# Rod line projection: the planes that show it, and its dash pattern (mm).
+ROD_LINE_PLANES = ("sagittal", "coronal")
+ROD_DASH_MM = 4.0
+ROD_GAP_MM = 3.0
+
+
+def _dashed_line_actor(p1, p2) -> vtk.vtkActor:
+    """A dashed in-plane line from ``p1`` to ``p2`` (slice-local x, y).
+
+    Drawn just under the screw overlays (z 0.1 vs 0.2) so a screw that
+    crosses it stays on top.
+    """
+    (x1, y1), (x2, y2) = p1, p2
+    length = math.hypot(x2 - x1, y2 - y1)
+    points = vtk.vtkPoints()
+    cells = vtk.vtkCellArray()
+    position = 0.0
+    while position < length:
+        for distance in (position, min(position + ROD_DASH_MM, length)):
+            fraction = distance / length
+            points.InsertNextPoint(
+                x1 + (x2 - x1) * fraction, y1 + (y2 - y1) * fraction, 0.1
+            )
+        cells.InsertNextCell(2)
+        cells.InsertCellPoint(points.GetNumberOfPoints() - 2)
+        cells.InsertCellPoint(points.GetNumberOfPoints() - 1)
+        position += ROD_DASH_MM + ROD_GAP_MM
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(points)
+    polydata.SetLines(cells)
+    mapper = vtk.vtkPolyDataMapper()
+    mapper.SetInputData(polydata)
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    actor.SetObjectName("rod-line")
+    actor.PickableOff()
+    actor.GetProperty().SetLineWidth(2.0)
+    actor.GetProperty().SetOpacity(0.85)
+    actor.GetProperty().SetLighting(False)
+    return actor
 
 
 class MPRViewer(QWidget):
@@ -138,6 +180,10 @@ class MPRViewer(QWidget):
         self._screw_overlays: Dict[int, List[vtk.vtkProp]] = {}
         self._screw_data: Dict[int, dict] = {}  # id -> {entry, target, color, diameter}
         self._review_screw_id: Optional[int] = None
+        # Rod lines: side -> (start, end) in LPS; see _draw_rod_lines.
+        self._rod_lines: Dict[str, tuple] = {}
+        self._rod_lines_visible = False
+        self._rod_line_props: List[vtk.vtkProp] = []
         self._screw_prop_parts: Dict[str, Tuple[int, str]] = {}
         self._screw_drag_active = False
         self._screw_drag_begin_callback: Optional[Callable] = None
@@ -649,6 +695,10 @@ class MPRViewer(QWidget):
         # Update screw projections for new slice position
         if self._screw_data:
             self._update_screw_projections()
+        # The slice-local origin follows the crosshair, so the projection
+        # has to be re-placed with it.
+        if self.__dict__.get("_rod_lines_visible"):
+            self._draw_rod_lines()
         self._update_measurement_visibility()
 
     def _sync_mask_reslice_grid(self) -> None:
@@ -1614,6 +1664,45 @@ class MPRViewer(QWidget):
             self._register_screw_prop(intersection_actor, screw_id, "shaft")
 
         self._screw_overlays[screw_id] = props
+
+    def set_rod_lines(self, lines) -> None:
+        """Replace the rod lines (side -> (start, end) in LPS) and redraw."""
+        self._rod_lines = dict(lines)
+        self._draw_rod_lines()
+
+    def set_rod_lines_visible(self, visible: bool) -> None:
+        self._rod_lines_visible = bool(visible)
+        self._draw_rod_lines()
+
+    def _draw_rod_lines(self) -> None:
+        """Draw each rod flattened into this plane, dashed.
+
+        The rod almost never lies in the slice, so it is drawn as a reference
+        projection -- dashed, so it never reads as anatomy cut by the slice.
+        Only the standard sagittal and coronal planes show it: on axial it
+        would collapse to a stub, and a Screw MPR plane is about one screw.
+        """
+        if self._renderer is None:
+            return
+        for prop in self._rod_line_props:
+            self._renderer.RemoveViewProp(prop)
+        self._rod_line_props = []
+        axes = self._active_reslice_axes()
+        if (
+            self._rod_lines_visible
+            and self.plane in ROD_LINE_PLANES
+            and self._custom_reslice_axes is None
+            and axes is not None
+        ):
+            for start, end in self._rod_lines.values():
+                actor = _dashed_line_actor(
+                    world_to_slice(start, axes)[:2], world_to_slice(end, axes)[:2]
+                )
+                actor.GetProperty().SetColor(*(c / 255.0 for c in COLOR_SCREW))
+                self._renderer.AddViewProp(actor)
+                self._rod_line_props.append(actor)
+        if not self._render_guard_active:
+            self._request_render()
 
     def _register_screw_prop(self, prop, screw_id: int, part: str) -> None:
         """Associate one pickable MPR prop with a model screw and part."""
