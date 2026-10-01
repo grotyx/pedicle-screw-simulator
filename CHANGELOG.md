@@ -35,6 +35,11 @@ current version; every other place the version appears is derived from it.
   result of the previous behaviour (grade-B breaches accepted, narrow sides
   always placed) with the current defaults, level by level.
 
+### Changed
+
+- The screw table's pedicle-width column header reads "Ped." (its tooltip
+  is unchanged) so Level stays readable next to the reviewed marks.
+
 ### Fixed
 
 - The Screw MPR 3D slice uses vtkImageBinaryThreshold when the installed

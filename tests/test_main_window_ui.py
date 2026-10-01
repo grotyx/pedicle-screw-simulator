@@ -990,7 +990,7 @@ def test_screw_plan_table_headers_stay_short_with_units_in_the_tooltips(
         table.horizontalHeaderItem(column).text()
         for column in range(table.columnCount())
     ]
-    assert titles == ["#", "Level", "Side", "Pedicle", "Ø", "Len", "Grade", "⚠"]
+    assert titles == ["#", "Level", "Side", "Ped.", "Ø", "Len", "Grade", "⚠"]
 
     assert table.horizontalHeaderItem(3).toolTip() == "Measured pedicle width (mm)"
     assert table.horizontalHeaderItem(4).toolTip() == "Screw diameter (mm)"

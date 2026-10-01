@@ -149,7 +149,7 @@ COLUMN_TITLES = (
     "#",
     "Level",
     "Side",
-    "Pedicle",
+    "Ped.",
     "Ø",
     "Len",
     "Grade",

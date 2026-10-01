@@ -32,6 +32,11 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 - scripts/compare_planning_defaults.py가 한 검사에서 이전 동작(등급 B 천공 허용,
   좁은 쪽 항상 배치)과 현재 기본값의 계획 결과를 레벨별로 비교합니다.
 
+### 변경
+
+- 스크류 표의 척추경 폭 열 제목을 "Ped."로 줄여(tooltip은 그대로), 검토 표시가
+  붙어도 Level 열이 잘리지 않습니다.
+
 ### 수정
 
 - Screw MPR 3D 단면이 설치된 VTK에 vtkImageBinaryThreshold가 있으면 그것을
