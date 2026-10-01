@@ -61,6 +61,11 @@ ENTRY_ZONE_MM = 3.0
 #: counted twice.
 MEDIAL_CONE_COS = 0.5
 
+#: Exclusive upper breach (mm) of each Gertzbein-Robbins grade past A, as
+#: :meth:`ScrewGrader.grade_from_breach` applies them: grade A is no breach at
+#: all, B is ``0 < breach < 2``, C ``2 <= breach < 4``, D ``4 <= breach < 6``.
+BREACH_GRADE_LIMITS_MM = {"B": 2.0, "C": 4.0, "D": 6.0}
+
 #: Grid-equality tolerances used by :meth:`ScrewGrader.grids_match`.
 #:
 #: An origin is compared against a *fraction of a voxel* rather than an absolute
@@ -784,12 +789,9 @@ class ScrewGrader:
     def grade_from_breach(breach_mm: float) -> str:
         if breach_mm <= 0.0:
             return "A"
-        if breach_mm < 2.0:
-            return "B"
-        if breach_mm < 4.0:
-            return "C"
-        if breach_mm < 6.0:
-            return "D"
+        for grade in ("B", "C", "D"):
+            if breach_mm < BREACH_GRADE_LIMITS_MM[grade]:
+                return grade
         return "E"
 
     # ------------------------------------------------------------------ helpers

@@ -489,7 +489,9 @@ class AutoScrewPlanner:
         # smallest implant -- and stepping down would only shrink the screw
         # without buying containment, so it is graded as it stands and the
         # containment gate after _finalise_screw decides whether it is placed.
-        while not narrow and grade not in {"A", "B"}:
+        while not narrow and not self._legacy_breach_accepted(
+            grade, entry, target, diameter, vertebra.label, side
+        ):
             smaller = self._next_smaller_diameter(diameter)
             if smaller is None:
                 logger.info(
@@ -550,18 +552,20 @@ class AutoScrewPlanner:
         )
         # Judged on the final graded screw by the optimiser's narrow rule
         # (trajectory_optimizer.score_candidates): no medial or craniocaudal
-        # breach, and a lateral (in-out-in) breach within the configured cap.
+        # breach, and a lateral (in-out-in) breach within the accepted grade.
         medial = float(planned.metrics.get("medial_breach_mm") or 0.0)
         lateral = float(planned.metrics.get("lateral_breach_mm") or 0.0)
         craniocaudal = float(planned.metrics.get("craniocaudal_breach_mm") or 0.0)
-        cap = float(self.config.narrow_lateral_breach_mm)
         failures = []
         if medial > 0.0:
             failures.append(f"medial breach {medial:.1f} mm")
         if craniocaudal > 0.0:
             failures.append(f"craniocaudal breach {craniocaudal:.1f} mm")
-        if lateral > cap + 1e-9:
-            failures.append(f"lateral breach {lateral:.1f} mm over the {cap:.1f} mm cap")
+        if not self.config.accepts_breach(lateral):
+            failures.append(
+                f"lateral breach {lateral:.1f} mm beyond the accepted grade "
+                f"{self.config.accepted_breach_grade}"
+            )
         if narrow and failures:
             if not self.config.place_uncontained_narrow:
                 logger.info(
@@ -743,6 +747,34 @@ class AutoScrewPlanner:
                 best_key = key
                 best = (shifted_entry, shifted_target, float(shift))
         return best
+
+    def _legacy_breach_accepted(
+        self,
+        grade: str,
+        entry: np.ndarray,
+        target: np.ndarray,
+        diameter: float,
+        vertebra_label: int,
+        side: str,
+    ) -> bool:
+        """Whether a normal-width legacy screw of ``grade`` may be kept.
+
+        Grade A always may.  A breach is kept only when the user accepted its
+        grade and it does not reach into the canal: an undirected grade says
+        nothing about *where* the screw left the bone, so a grade-B screw is
+        re-graded with ``side`` and refused on any medial breach.  The
+        re-seat in :meth:`_seat_head_and_extend` never raises the medial
+        breach or the breach of a screw this accepted, so the final screw
+        stays within both.
+        """
+        if grade == "A":
+            return True
+        if grade not in self.config.accepted_grades:
+            return False
+        medial, _breach = self._medial_breach_key(
+            entry, target, diameter, vertebra_label, side
+        )
+        return medial <= 0.0
 
     def _medial_breach_key(
         self,

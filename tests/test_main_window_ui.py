@@ -303,7 +303,7 @@ def test_every_existing_control_lives_on_its_step_page(ui_main_window):
         "plan_max_convergence_spin": plan,
         "plan_hu_threshold_spin": plan,
         "plan_narrow_pedicle_spin": plan,
-        "plan_narrow_lateral_spin": plan,
+        "plan_accepted_breach_combo": plan,
         "plan_uncontained_narrow_check": plan,
         "plan_endplate_parallel_check": plan,
         "plan_endplate_tolerance_spin": plan,

@@ -410,9 +410,23 @@ def test_a_narrow_pedicle_has_no_contained_trajectory(side):
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
+def test_the_default_accepts_no_narrow_breach(side):
+    """Owner policy: a narrow side gets no in-out-in screw unless the user opts in.
+
+    Every 4.0 mm trajectory through this phantom breaches laterally by 1.5 mm,
+    so under the default "A only" there is nothing to rank.
+    """
+    ct, mask, analysis = _narrow_setup()
+
+    assert optimize_screw(
+        ScrewGrader(mask, ct), analysis, side, PlannerConfig(), narrow=True
+    ) == []
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
 def test_the_narrow_mode_protects_the_medial_wall(side):
     ct, mask, analysis = _narrow_setup()
-    config = PlannerConfig()
+    config = PlannerConfig(accepted_breach_grade="B")
 
     ranked = optimize_screw(
         ScrewGrader(mask, ct), analysis, side, config, narrow=True
@@ -423,7 +437,7 @@ def test_the_narrow_mode_protects_the_medial_wall(side):
     assert best.diameter == pytest.approx(4.0)          # no step-down for a narrow side
     assert best.medial_breach_mm == 0.0
     assert best.craniocaudal_breach_mm == 0.0
-    assert 0.0 < best.lateral_breach_mm <= config.narrow_lateral_breach_mm
+    assert 0.0 < best.lateral_breach_mm < config.lateral_breach_limit_mm
     # The corridor was pushed away from the canal, so the head sits lateral of
     # the isthmus centre.
     centre = (
@@ -452,33 +466,81 @@ def _stepped_narrow_setup():
     return _narrow_setup(half_height_mm=6.0, lateral_relief_mm=1.0)
 
 
-@pytest.mark.parametrize("cap, expected", [(1.0, {0.0, 0.5, 1.0}), (2.0, {1.5, 2.0})])
-def test_every_narrow_candidate_respects_the_lateral_cap(cap, expected):
-    """The cap is a hard bound, and it is load-bearing: it removes candidates."""
+def test_every_narrow_candidate_respects_the_accepted_grade():
+    """The grade is a hard bound, and it is load-bearing: it removes candidates."""
     ct, mask, analysis = _stepped_narrow_setup()
     grader = ScrewGrader(mask, ct)
 
-    def ranked_at(limit):
-        return optimize_screw(
+    ranked = {
+        grade: optimize_screw(
             grader,
             analysis,
             "left",
-            PlannerConfig(narrow_lateral_breach_mm=limit),
+            PlannerConfig(accepted_breach_grade=grade),
             narrow=True,
             top_k=100000,
         )
+        for grade in ("A", "B", "C")
+    }
 
-    ranked = ranked_at(cap)
+    for grade, candidates in ranked.items():
+        assert candidates, "the grade test must not pass over an empty candidate list"
+        assert all(c.medial_breach_mm == 0.0 for c in candidates)
+        assert all(c.craniocaudal_breach_mm == 0.0 for c in candidates)
+        accepted = PlannerConfig(accepted_breach_grade=grade).accepted_grades
+        assert all(
+            ScrewGrader.grade_from_breach(c.lateral_breach_mm) in accepted
+            for c in candidates
+        )
+    assert {c.lateral_breach_mm for c in ranked["A"]} == {0.0}
+    assert 1.5 in {round(c.lateral_breach_mm, 2) for c in ranked["B"]}
+    assert any(c.lateral_breach_mm >= 2.0 for c in ranked["C"])
+    # Each step really does admit more, rather than the bound being satisfied
+    # vacuously by geometry that could never exceed it.
+    assert len(ranked["A"]) < len(ranked["B"]) < len(ranked["C"])
 
-    assert ranked, "the cap test must not pass over an empty candidate list"
+
+@pytest.mark.parametrize("grade, survivors", [
+    ("A", [0.0]),
+    ("B", [0.0, 1.5]),
+    ("C", [0.0, 1.5, 2.0, 2.5, 3.0]),
+])
+def test_the_narrow_lateral_bound_follows_the_grade_edges(grade, survivors):
+    """Exactly 2.0 mm is grade C and exactly 4.0 mm grade D, as in grade_from_breach.
+
+    The last two rows breach medially and craniocaudally with no lateral breach
+    at all; no setting accepts either on a narrow side.
+    """
+    _ct, _mask, analysis = _setup()
+    lateral = np.array([0.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 0.0, 0.0])
+    medial = np.zeros(lateral.size)
+    medial[-2] = 0.5
+    craniocaudal = np.zeros(lateral.size)
+    craniocaudal[-1] = 0.5
+    count = lateral.size
+    batch = BatchResult(
+        breach_mm=np.maximum(lateral, np.maximum(medial, craniocaudal)),
+        min_wall_mm=np.zeros(count),
+        mean_hu=np.full(count, 300.0),
+        min_hu=np.full(count, 300.0),
+        medial_breach_mm=medial,
+        lateral_breach_mm=lateral,
+        craniocaudal_breach_mm=craniocaudal,
+        medial_wall_mm=np.ones(count),
+    )
+
+    ranked = score_candidates(
+        batch,
+        np.tile([60.0, 58.0, 32.0], (count, 1)),
+        np.tile([60.0, 28.0, 32.0], (count, 1)),
+        np.full(count, 30.0),
+        4.0, analysis, "left",
+        PlannerConfig(accepted_breach_grade=grade), DEFAULT_WEIGHTS, narrow=True,
+    )
+
+    assert sorted(c.lateral_breach_mm for c in ranked) == survivors
     assert all(c.medial_breach_mm == 0.0 for c in ranked)
     assert all(c.craniocaudal_breach_mm == 0.0 for c in ranked)
-    assert all(c.lateral_breach_mm <= cap + 1e-9 for c in ranked)
-    breaches = {round(c.lateral_breach_mm, 2) for c in ranked}
-    assert breaches >= expected, "the phantom must offer a spread of lateral breaches"
-    # Tightening the cap really does cut the survivors, rather than the cap
-    # being satisfied vacuously by geometry that could never exceed it.
-    assert 0 < len(ranked_at(cap - 0.5)) < len(ranked)
 
 
 def test_the_lateral_term_prefers_the_smaller_breach():
@@ -500,7 +562,7 @@ def test_the_lateral_term_prefers_the_smaller_breach():
 
     ranked = score_candidates(
         batch, entries, targets, lengths, 4.0, analysis, "left",
-        PlannerConfig(narrow_lateral_breach_mm=2.0), DEFAULT_WEIGHTS, narrow=True,
+        PlannerConfig(accepted_breach_grade="B"), DEFAULT_WEIGHTS, narrow=True,
     )
 
     assert [c.lateral_breach_mm for c in ranked] == [0.5, 1.5]

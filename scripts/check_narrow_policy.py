@@ -6,7 +6,7 @@ segmentation, runs the pedicle analysis and the auto planner with the shipped
 ``(level, side)``::
 
     LEVEL SIDE   WIDTH  NARROW    DIA   MEDIAL  LATERAL  GRADE
-    L2    right   4.6   yes       4.0     0.00     1.25  B
+    L2    right   4.6   yes       4.0     0.00     0.00  A
 
 then exits non-zero when any of W7's acceptance items fails:
 

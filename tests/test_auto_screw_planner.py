@@ -894,14 +894,26 @@ class TestPlanScrew:
         assert not np.allclose(result.entry_lps, result.target_lps)
 
     def test_screw_diameter_respects_pedicle_width(self):
-        """Diameter follows the fill ratio once the clearance default is 0 mm."""
-        ct, mask = _make_bone_cylinder()
-        planner = AutoScrewPlanner(ct, mask)
-        analysis = _make_analysis(left_width=6.0)
+        """Diameter follows the fill ratio once the clearance default is 0 mm.
 
-        result = planner.plan_screw(analysis, "left")
-        assert result is not None
-        assert result.diameter_mm == pytest.approx(4.5)
+        On this phantom the 4.5 mm legacy screw breaches 1 mm medially (grade
+        B), which no accepted-breach setting keeps, so the planned screw steps
+        down to a contained 4.0 mm even with grade B accepted.
+        """
+        ct, mask = _make_bone_cylinder()
+        analysis = _make_analysis(left_width=6.0)
+        for grade in ("A", "B"):
+            planner = AutoScrewPlanner(
+                ct, mask, config=PlannerConfig(accepted_breach_grade=grade)
+            )
+            assert planner._compute_diameter(6.0, analysis.vertebra.name) == (
+                pytest.approx(4.5)
+            )
+
+            result = planner.plan_screw(analysis, "left")
+            assert result is not None
+            assert result.diameter_mm == pytest.approx(4.0)
+            assert result.metrics["medial_breach_mm"] == 0.0
 
     def test_diameter_is_reduced_until_trajectory_is_grade_a_or_b(
         self,
@@ -923,6 +935,58 @@ class TestPlanScrew:
         assert result.gertzbein_grade in {"A", "B"}
         assert result.diameter_mm == pytest.approx(6.5)
         assert any("Diameter reduced" in warning for warning in result.warnings)
+
+    @staticmethod
+    def _plan_with_legacy_grade(monkeypatch, config, grade, breach, medial=0.0):
+        """Plan a normal-width left side with every legacy grading forced."""
+        ct, mask = _make_bone_cylinder()
+        planner = AutoScrewPlanner(ct, mask, config=config)
+        monkeypatch.setattr(
+            planner, "_evaluate_gertzbein_grade", lambda *_args: (grade, breach)
+        )
+        monkeypatch.setattr(
+            planner, "_medial_breach_key", lambda *_args: (medial, breach)
+        )
+        screws = planner.plan_all([_make_analysis(left_width=8.0)], sides="left")
+        return screws, planner.skipped_sides
+
+    def test_the_default_never_accepts_a_grade_b_legacy_screw(self, monkeypatch):
+        """Owner policy: with nothing contained the side is skipped, not breached."""
+        screws, skipped = self._plan_with_legacy_grade(
+            monkeypatch, PlannerConfig(mode="legacy"), "B", 1.0
+        )
+        assert screws == []
+        assert skipped and skipped[0][1:] == (
+            "left", "no contained left screw diameter in the catalogue"
+        )
+
+    @pytest.mark.parametrize("accepted,grade,breach,placed", [
+        ("B", "B", 1.0, True),
+        ("B", "C", 2.5, False),
+        ("C", "C", 3.0, True),
+        ("C", "D", 4.5, False),
+    ])
+    def test_a_legacy_screw_is_accepted_up_to_the_chosen_grade(
+        self, monkeypatch, accepted, grade, breach, placed
+    ):
+        screws, skipped = self._plan_with_legacy_grade(
+            monkeypatch, PlannerConfig(mode="legacy", accepted_breach_grade=accepted),
+            grade, breach,
+        )
+        assert (len(screws) == 1) is placed
+        if placed:
+            assert skipped == []
+            assert not any("Diameter reduced" in w for w in screws[0].warnings)
+
+    @pytest.mark.parametrize("accepted", ["B", "C"])
+    def test_a_legacy_breach_into_the_canal_is_never_accepted(self, monkeypatch, accepted):
+        """A grade-B screw is only acceptable when its breach is not medial."""
+        screws, skipped = self._plan_with_legacy_grade(
+            monkeypatch, PlannerConfig(mode="legacy", accepted_breach_grade=accepted),
+            "B", 1.0, medial=1.0,
+        )
+        assert screws == []
+        assert skipped and skipped[0][1] == "left"
 
     def test_no_body_center_returns_none(self):
         """Missing vertebral body centre should return None."""
@@ -1481,7 +1545,10 @@ class TestScrewMetrics:
         from src.core.pedicle_analyzer import PedicleAnalyzer
         from tests.test_pedicle_analyzer import _make_anatomical_phantom
 
-        mask = _make_anatomical_phantom()
+        # Without the arch: on the arch phantom the only screws were legacy
+        # fallbacks breaching 1.4 mm into the canal, which no accepted-breach
+        # setting places any more.
+        mask = _make_anatomical_phantom(with_arch=False)
         arr = sitk.GetArrayFromImage(mask)
         ct = sitk.GetImageFromArray(np.where(arr > 0, 300, -50).astype(np.int16))
         ct.CopyInformation(mask)
@@ -2034,26 +2101,49 @@ class TestNarrowPedicle:
         screws = planner.plan_all([analysis], sides="left")
         return screws, planner.skipped_sides
 
-    def test_a_narrow_lateral_breach_within_the_cap_is_placed(self, monkeypatch):
+    @pytest.mark.parametrize("accepted,lateral,placed", [
+        ("A", 0.0, True),
+        ("A", 0.5, False),
+        ("B", 1.5, True),
+        ("B", 2.0, False),          # exactly 2.0 mm grades C
+        ("B", 2.5, False),
+        ("C", 2.0, True),
+        ("C", 3.0, True),
+        ("C", 4.0, False),          # exactly 4.0 mm grades D
+        ("C", 4.5, False),
+    ])
+    def test_a_narrow_lateral_breach_is_placed_only_within_the_accepted_grade(
+        self, monkeypatch, accepted, lateral, placed
+    ):
         """The legacy gate accepts what the optimiser's narrow rule accepts."""
+        from src.core.screw_grading import ScrewGrader
+
         screws, skipped = self._plan_narrow_with_breaches(
             monkeypatch,
-            PlannerConfig(mode="legacy", narrow_lateral_breach_mm=4.0),
-            grade="C", medial=0.0, lateral=3.0, craniocaudal=0.0,
+            PlannerConfig(mode="legacy", accepted_breach_grade=accepted),
+            grade=ScrewGrader.grade_from_breach(lateral),
+            medial=0.0, lateral=lateral, craniocaudal=0.0,
         )
-        assert len(screws) == 1 and skipped == []
+        if placed:
+            assert len(screws) == 1 and skipped == []
+        else:
+            assert screws == []
+            (_, side, reason), = skipped
+            assert side == "left"
+            assert f"lateral breach {lateral:.1f} mm" in reason
+            assert reason.endswith("not placed")
 
+    @pytest.mark.parametrize("accepted", ["A", "B", "C"])
     @pytest.mark.parametrize(
-        "lateral,craniocaudal,figure",
-        [(0.0, 1.0, "craniocaudal breach 1.0 mm"), (3.0, 0.0, "lateral breach 3.0 mm")],
+        "medial,craniocaudal,figure",
+        [(0.5, 0.0, "medial breach 0.5 mm"), (0.0, 1.0, "craniocaudal breach 1.0 mm")],
     )
-    def test_a_narrow_breach_outside_the_optimiser_rule_is_skipped(
-        self, monkeypatch, lateral, craniocaudal, figure
+    def test_a_narrow_medial_or_craniocaudal_breach_is_never_placed(
+        self, monkeypatch, accepted, medial, craniocaudal, figure
     ):
         screws, skipped = self._plan_narrow_with_breaches(
-            monkeypatch, PlannerConfig(mode="legacy"),
-            grade="B" if lateral < 2.0 else "C",
-            medial=0.0, lateral=lateral, craniocaudal=craniocaudal,
+            monkeypatch, PlannerConfig(mode="legacy", accepted_breach_grade=accepted),
+            grade="B", medial=medial, lateral=0.0, craniocaudal=craniocaudal,
         )
         assert screws == []
         (_, side, reason), = skipped

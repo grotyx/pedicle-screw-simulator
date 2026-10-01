@@ -27,6 +27,13 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Automatic planning accepts no cortical breach by default (Gertzbein grade
+  A). The new "Accepted breach" setting ("A only — no breach", "Up to B
+  (< 2 mm)", "Up to C (< 4 mm)") replaces "Lateral breach cap (mm)"; a
+  previously saved cap is ignored. Narrow pedicles may breach only laterally,
+  and a medial (canal-side) breach is never accepted, now also on legacy
+  normal-width screws, which used to accept a grade-B screw breaching into the
+  canal.
 - Measurements taken in Screw MPR can no longer be edited or dragged; delete
   and re-measure them (their oblique plane is not recorded).
 - The legacy fallback for a narrow pedicle applies the optimizer's narrow

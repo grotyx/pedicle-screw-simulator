@@ -2018,31 +2018,66 @@ def test_narrow_pedicle_spin_boxes_reach_the_planner_config(ui_main_window):
     assert (window.plan_narrow_pedicle_spin.minimum(),
             window.plan_narrow_pedicle_spin.maximum()) == (3.0, 8.0)
     assert window.plan_narrow_pedicle_spin.singleStep() == pytest.approx(0.5)
-    assert (window.plan_narrow_lateral_spin.minimum(),
-            window.plan_narrow_lateral_spin.maximum()) == (0.0, 6.0)
-    assert window.plan_narrow_lateral_spin.singleStep() == pytest.approx(0.5)
 
     window.plan_narrow_pedicle_spin.setValue(6.0)
-    window.plan_narrow_lateral_spin.setValue(4.0)
     cfg = window.planner_config()
 
     assert cfg.narrow_pedicle_mm == pytest.approx(6.0)
-    assert cfg.narrow_lateral_breach_mm == pytest.approx(4.0)
+
+
+def test_the_accepted_breach_combo_defaults_to_no_breach_and_feeds_the_config(
+    ui_main_window,
+):
+    window = ui_main_window
+    combo = window.plan_accepted_breach_combo
+
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "A only — no breach", "Up to B (< 2 mm)", "Up to C (< 4 mm)",
+    ]
+    assert [combo.itemData(i) for i in range(combo.count())] == ["A", "B", "C"]
+    assert combo.currentData() == "A"
+    assert window.planner_config().accepted_breach_grade == "A"
+    assert "medial" in combo.toolTip()
+
+    combo.setCurrentIndex(combo.findData("C"))
+    assert window.planner_config().accepted_breach_grade == "C"
 
 
 def test_narrow_settings_persist_into_a_new_window(ui_main_window, isolated_qsettings):
     window = ui_main_window
     window.plan_narrow_pedicle_spin.setValue(6.5)
-    window.plan_narrow_lateral_spin.setValue(3.0)
+    window.plan_accepted_breach_combo.setCurrentIndex(
+        window.plan_accepted_breach_combo.findData("B")
+    )
 
     settings = _planner_settings(isolated_qsettings)
     assert float(settings.value("narrow_pedicle_mm")) == pytest.approx(6.5)
-    assert float(settings.value("narrow_lateral_breach_mm")) == pytest.approx(3.0)
+    assert settings.value("accepted_breach_grade") == "B"
 
     reopened = main_window_module.MainWindow()
     try:
         assert reopened.plan_narrow_pedicle_spin.value() == pytest.approx(6.5)
-        assert reopened.plan_narrow_lateral_spin.value() == pytest.approx(3.0)
+        assert reopened.plan_accepted_breach_combo.currentData() == "B"
+        assert reopened.planner_config().accepted_breach_grade == "B"
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+    window.plan_reset_defaults_btn.click()
+    assert window.plan_accepted_breach_combo.currentData() == "A"
+    assert settings.value("accepted_breach_grade") == "A"
+
+
+def test_an_old_lateral_breach_cap_setting_is_ignored(ui_main_window, isolated_qsettings):
+    """A 2.0 mm cap saved by an older build must not keep breach acceptance on."""
+    settings = _planner_settings(isolated_qsettings)
+    settings.setValue("narrow_lateral_breach_mm", 2.0)
+    settings.sync()
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.plan_accepted_breach_combo.currentData() == "A"
+        assert reopened.planner_config().accepted_breach_grade == "A"
     finally:
         reopened.close()
         reopened.deleteLater()
