@@ -1551,6 +1551,36 @@ class TestScrewMprIn3D:
 
         return build_screw_mpr_axes((0.0, 40.0, 0.0), (0.0, 0.0, 0.0), fraction)
 
+    def test_alpha_source_is_opaque_over_the_cut_vertebra_only(self):
+        import numpy as np
+        import vtk
+        from vtk.util.numpy_support import vtk_to_numpy
+
+        from src.ui.viewer_3d import SCREW_MPR_SLICE_CONTEXT_ALPHA
+
+        viewer = self._viewer()
+        # Slice plane XZ at y=30: output rows run along z, so rows 0-19 fall
+        # in the lower block (label 28) and rows 20-39 in the upper (29).
+        cross_section = vtk.vtkMatrix4x4()
+        for row, values in enumerate(
+            ((1, 0, 0, 0), (0, 0, -1, 30), (0, 1, 0, 0), (0, 0, 0, 1))
+        ):
+            for col, value in enumerate(values):
+                cross_section.SetElement(row, col, value)
+
+        port = viewer._screw_mpr_slice_alpha_source(
+            cross_section, self.LABEL_LOWER, 1.0, (0, 39, 0, 39, 0, 0), (0.0, 0.0, 0.0)
+        )
+        alpha = viewer._screw_mpr_slice_alpha_filter
+        assert alpha.GetOutputPort().GetProducer() is port.GetProducer()
+        out = vtk_to_numpy(alpha.GetOutput().GetPointData().GetScalars()).reshape(40, 40)
+
+        context = round(SCREW_MPR_SLICE_CONTEXT_ALPHA * 255)
+        expected = np.full((40, 40), context, dtype=np.uint8)
+        expected[:20, :] = 255
+        assert out.dtype == np.uint8
+        assert np.array_equal(out, expected)
+
     def test_the_screw_planes_replace_the_standard_ones(self):
         viewer = self._viewer()
         axes = self._axes()
