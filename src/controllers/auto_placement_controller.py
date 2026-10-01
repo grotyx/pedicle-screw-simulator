@@ -565,7 +565,10 @@ class AutoPlacementController:
         box = QMessageBox(self._window)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Replace planned screws?")
-        box.setText(
+        # macOS ignores message-box titles, so the question is the main text
+        # and the explanation the informative text on every platform.
+        box.setText("Replace planned screws?")
+        box.setInformativeText(
             f"Replace the {count} automatically planned "
             f"screw{'s' if count != 1 else ''} on {', '.join(levels)}, "
             "including any you adjusted, with a new plan? The new plan's "

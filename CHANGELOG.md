@@ -167,9 +167,11 @@ tool dock and a level-by-level construct map.
 - CI and the run scripts no longer pass a second -q to pytest (the summary
   line was hidden), and CI now runs git diff --check. validate_plans --out
   no longer truncates dotted names, and run_app.sh stops with a clear
-  message when python3 is older than 3.12. The CITATION release date
-  matches 0.2.3, and CONTRIBUTING names the project and its checks
+  message when python3 is older than 3.12. The CITATION release date now
+  follows the changelog (a test checks it), and CONTRIBUTING names the project and its checks
   correctly.
+- The re-plan confirmation shows its question in the dialog body, so it is
+  visible on macOS, which hides message-box titles.
 
 ## [0.2.3] - 2026-09-13
 
