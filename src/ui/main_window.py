@@ -621,6 +621,7 @@ class MainWindow(QMainWindow):
             for screw in self._tool_ctrl.screw_tool.get_screws()
         )
         has_screws = self.screw_list_widget.count() > 0
+        reviewed, total = self._reviewed_counts()
         bar.set_states(
             workflow_states(
                 has_volume=self.volume_manager.get_sitk_image() is not None,
@@ -629,8 +630,26 @@ class MainWindow(QMainWindow):
                 plan_available=auto_screw_plan_btn.isEnabled(),
                 has_plan=has_plan,
                 has_screws=has_screws,
+                all_reviewed=total > 0 and reviewed == total,
             )
         )
+
+    def _reviewed_counts(self) -> tuple[int, int]:
+        """(screws marked reviewed, screws) from the model; (0, 0) before it exists."""
+        controller = self.__dict__.get("_tool_ctrl")
+        screws = controller.screw_tool.get_screws() if controller is not None else []
+        return sum(1 for screw in screws if screw.reviewed), len(screws)
+
+    def _on_screw_reviewed_toggled(self, checked: bool) -> None:
+        """Mark the selected screw reviewed (or not) and redraw its views."""
+        row = self.screw_list_widget.currentRow()
+        screws = self._tool_ctrl.screw_tool.get_screws()
+        if not 0 <= row < len(screws):
+            return
+        screws[row].reviewed = bool(checked)
+        # Redraws the table row; dataChanged also refreshes the map, the
+        # workflow rail and the counter.
+        self.screw_list_widget.updateScrewRow(row, screws[row])
 
     def show_step(self, name: str) -> None:
         """Show one page of the right-hand step panel and mark it active."""
@@ -672,7 +691,7 @@ class MainWindow(QMainWindow):
         self._refresh_screw_counter()
 
     @staticmethod
-    def _format_screw_counter(current_row: int, count: int) -> str:
+    def _format_screw_counter(current_row: int, count: int, reviewed: int = 0) -> str:
         """Format the Review header's screw counter for one shared spot.
 
         Used both when a screw is selected and when the table's row count
@@ -686,8 +705,10 @@ class MainWindow(QMainWindow):
         if count <= 0:
             return "No screws"
         if current_row < 0:
-            return f"{count} screw" if count == 1 else f"{count} screws"
-        return f"Screw {current_row + 1} of {count}"
+            text = f"{count} screw" if count == 1 else f"{count} screws"
+        else:
+            text = f"Screw {current_row + 1} of {count}"
+        return f"{text} · {reviewed} reviewed" if reviewed > 0 else text
 
     def _refresh_screw_counter(self) -> None:
         """Re-derive the Review header's screw counter from the table.
@@ -707,7 +728,9 @@ class MainWindow(QMainWindow):
         ):
             return
         counter.setText(
-            self._format_screw_counter(widget.currentRow(), widget.count())
+            self._format_screw_counter(
+                widget.currentRow(), widget.count(), self._reviewed_counts()[0]
+            )
         )
 
     def _pane_name_for(self, obj: QObject) -> Optional[str]:
@@ -1359,6 +1382,14 @@ class MainWindow(QMainWindow):
         self.selected_screw_grade.setProperty("grade", "NA")
         self.selected_screw_grade.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_row.addWidget(self.selected_screw_grade)
+        self.screw_reviewed_btn = QPushButton("✓ Reviewed")
+        self.screw_reviewed_btn.setCheckable(True)
+        self.screw_reviewed_btn.setEnabled(False)
+        self.screw_reviewed_btn.setToolTip(
+            "Mark the selected screw as checked. Any change to its position, "
+            "size or grade clears the mark."
+        )
+        self.screw_reviewed_btn.toggled.connect(self._on_screw_reviewed_toggled)
         key_layout.addLayout(title_row)
 
         values_row = QHBoxLayout()
@@ -1955,6 +1986,9 @@ class MainWindow(QMainWindow):
         # and raise ``wrapped C/C++ object ... has been deleted``.
         for signal in (table_model.rowsInserted, table_model.rowsRemoved, table_model.modelReset):
             signal.connect(self._on_screw_rows_changed)
+        # An in-place row edit can clear a reviewed mark, which Review's rail
+        # step and counter depend on.
+        table_model.dataChanged.connect(self._on_screw_rows_changed)
         for signal in (
             table_model.rowsInserted,
             table_model.rowsRemoved,
@@ -3015,6 +3049,14 @@ class MainWindow(QMainWindow):
         if alignment:
             self.selected_screw_alignment.setText(" · ".join(alignment))
 
+    def _sync_reviewed_button(self, screw) -> None:
+        """Show *screw*'s reviewed flag on the button without re-triggering it."""
+        button = self.screw_reviewed_btn
+        previous = button.blockSignals(True)
+        button.setChecked(bool(screw is not None and screw.reviewed))
+        button.blockSignals(previous)
+        button.setEnabled(screw is not None)
+
     def _set_grade_chip(self, grade: str) -> None:
         """Set the Review page's grade chip text and dynamic ``grade`` property."""
         grade = str(grade).strip().upper()
@@ -3042,13 +3084,16 @@ class MainWindow(QMainWindow):
         title_style.polish(self.selected_screw_title)
         if screw is None:
             self.selected_screw_counter.setText(
-                self._format_screw_counter(-1, self.screw_list_widget.count())
+                self._format_screw_counter(
+                    -1, self.screw_list_widget.count(), self._reviewed_counts()[0]
+                )
             )
             self.selected_screw_title.setText("No screw selected")
             previous = self.selected_screw_diameter.blockSignals(True)
             self.selected_screw_diameter.setValue(DEFAULT_SCREW_DIAMETER)
             self.selected_screw_diameter.blockSignals(previous)
             self.selected_screw_diameter.setEnabled(False)
+            self._sync_reviewed_button(None)
             self.selected_screw_length.setText("--")
             self.selected_screw_convergence.setText("--")
             self.selected_screw_craniocaudal.setText("--")
@@ -3065,7 +3110,9 @@ class MainWindow(QMainWindow):
 
         screw_count = self.screw_list_widget.count()
         self.selected_screw_counter.setText(
-            self._format_screw_counter(index, screw_count)
+            self._format_screw_counter(
+                index, screw_count, self._reviewed_counts()[0]
+            )
         )
         self.screw_list_widget.scrollToRow(index)
 
@@ -3084,6 +3131,7 @@ class MainWindow(QMainWindow):
         self.selected_screw_diameter.setValue(float(screw.diameter))
         self.selected_screw_diameter.blockSignals(previous)
         self.selected_screw_diameter.setEnabled(True)
+        self._sync_reviewed_button(screw)
         self.selected_screw_length.setText(f"{screw.length:.1f} mm")
         self.selected_screw_convergence.setText(f"{convergence:+.1f}°")
         self.selected_screw_craniocaudal.setText(f"{craniocaudal:+.1f}°")

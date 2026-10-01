@@ -844,7 +844,11 @@ class ScrewTool:
     def regrade_all(self) -> List[Screw]:
         """Re-evaluate every stored screw against the current grader."""
         for screw in self._screws:
+            grade = screw.grade
             self._evaluate_screw(screw)
+            if screw.grade != grade:
+                # A different grade is new information the reviewer has not seen.
+                screw.reviewed = False
         self._restamp_construct_alignment()
         return self._screws.copy()
 

@@ -147,6 +147,7 @@ def screw_to_dict(screw: Screw) -> Dict[str, Any]:
         "warnings": list(screw.warnings),
         "source": screw.source,
         "metrics": metrics_to_dict(screw.metrics),
+        "reviewed": bool(screw.reviewed),
     }
 
 
@@ -179,6 +180,8 @@ def screw_from_dict(data: Dict[str, Any]) -> Screw:
     screw.source = str(data.get("source", "manual"))
     # Absent in v1/v2 payloads; an empty bundle simply means "not measured".
     screw.metrics = metrics_to_dict(data.get("metrics"))
+    # Additive key: plans saved before it existed load as not reviewed.
+    screw.reviewed = data.get("reviewed") is True
 
     if "trajectory" in data:
         screw.trajectory = _parse_point3(data["trajectory"], "trajectory")

@@ -90,9 +90,9 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 | ① Study | DICOM study를 불러온 상태 | "Study loaded — open another one here", 또는 "Open a DICOM series folder" |
 | ② Segment | TotalSegmentator mask가 존재(threshold fallback은 포함되지 않음) | "Run TotalSegmentator on the loaded study", 또는 "Open a DICOM series first" |
 | ③ Plan | 자동으로 계획된 스크류가 존재 | "Plan screws for the selected vertebral levels", "Select vertebral levels in the Plan step", 또는 "Run segmentation first" |
-| ④ Review | 완료로 표시되는 일이 없음 — 끝내야 할 단계가 아니라 도착지입니다 | "Review the screws level by level", 또는 "Plan or place screws first" |
+| ④ Review | 스크류가 하나 이상 있고 모든 스크류가 **✓ Reviewed**로 표시됨(5.9절 참고) | "Review the screws level by level", 또는 "Plan or place screws first" |
 
-수동으로 배치한 스크류는 ③ 완료 조건에 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 레일 전체가 초기화되고 패널은 Segment 페이지로 전환됩니다. TotalSegmentator 실행이 척추 라벨을 찾으면 패널은 Plan 페이지로 전환됩니다. 목록·MPR·3D에서 스크류를 선택하거나 Screw MPR을 켜면 패널은 Review 페이지로 전환됩니다 — 다만 이렇게 전환되는 것은 Screw MPR을 *켤* 때뿐입니다: 일단 켜진 뒤에는 어느 페이지로 옮겨가든 패널이 그 페이지에 그대로 머무르며, Screw MPR을 다시 끈다고 해서 그 자체로 페이지가 바뀌지는 않습니다.
+스크류를 옮기거나 크기를 바꾸거나 다시 등급을 매기면 표시가 해제되어 ④가 다시 열립니다. 수동으로 배치한 스크류는 ③ 완료 조건에 포함되지 않으며, 자동 스크류를 지우면 이 단계는 다시 열립니다. 앞선 단계가 끝나지 않은 상태에서 나중 단계가 완료로 표시되는 일은 없습니다. 새 study를 불러오면 레일 전체가 초기화되고 패널은 Segment 페이지로 전환됩니다. TotalSegmentator 실행이 척추 라벨을 찾으면 패널은 Plan 페이지로 전환됩니다. 목록·MPR·3D에서 스크류를 선택하거나 Screw MPR을 켜면 패널은 Review 페이지로 전환됩니다 — 다만 이렇게 전환되는 것은 Screw MPR을 *켤* 때뿐입니다: 일단 켜진 뒤에는 어느 페이지로 옮겨가든 패널이 그 페이지에 그대로 머무르며, Screw MPR을 다시 끈다고 해서 그 자체로 페이지가 바뀌지는 않습니다.
 
 ### 오른쪽 패널, 페이지별 안내
 
@@ -109,7 +109,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 
 ### 구성 지도
 
-Review 페이지 맨 위의 **Construct** 그룹은 계획을 레벨별로 요약합니다. 스크류가 있는 척추 레벨마다 한 행이 있으며 cranial에서 caudal 순서로 정렬됩니다. 각 행은 **Right** | 척추 | **Left** 순서로 읽고, 방사선과 MPR 화면과 맞추기 위해 Right가 지도의 왼쪽에 놓입니다. 각 스크류는 등급과 직경 × 길이를 보여주는 작은 chip입니다(예: "B  6.5×45"). 점선으로 된 빈 칸은 그 레벨의 해당 쪽에 스크류가 없다는 뜻입니다. 레벨 없이 수동으로 배치한 스크류는 **Manual** 행에 나열됩니다. 좌우를 알 수 없는 스크류는 Right나 Left 아래가 아니라 가운데 열에 나타납니다. 스크류가 없으면 지도에 "No screws planned yet"이 표시됩니다.
+Review 페이지 맨 위의 **Construct** 그룹은 계획을 레벨별로 요약합니다. 스크류가 있는 척추 레벨마다 한 행이 있으며 cranial에서 caudal 순서로 정렬됩니다. 각 행은 **Right** | 척추 | **Left** 순서로 읽고, 방사선과 MPR 화면과 맞추기 위해 Right가 지도의 왼쪽에 놓입니다. 각 스크류는 등급과 직경 × 길이를 보여주는 작은 chip입니다(예: "B  6.5×45"). 검토를 마친 스크류에는 "✓"와 얇은 윤곽선이 붙습니다(5.9절 참고). 점선으로 된 빈 칸은 그 레벨의 해당 쪽에 스크류가 없다는 뜻입니다. 레벨 없이 수동으로 배치한 스크류는 **Manual** 행에 나열됩니다. 좌우를 알 수 없는 스크류는 Right나 Left 아래가 아니라 가운데 열에 나타납니다. 스크류가 없으면 지도에 "No screws planned yet"이 표시됩니다.
 
 chip을 클릭하면 그 스크류가 선택되고, 스크류 목록·화면·지도의 강조된 chip이 함께 따라갑니다. 지도는 목록과 같은 스크류를 읽으며, 스크류를 추가·수정·삭제하면 갱신됩니다. 요약을 돕는 도구일 뿐 임상 평가가 아닙니다.
 
@@ -325,9 +325,9 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 #### Review 페이지 구성
 
-**Review** 페이지는 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다. 맨 위에는 **Construct** 지도가 있습니다(4절 참고). 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ 1 safety · 2 image"처럼 category별 경고 개수를 보여 주는(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 **Safety**, **Image**, **Info** 제목 아래로 묶인 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 경고 문장이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
+**Review** 페이지는 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다. 맨 위에는 **Construct** 지도가 있습니다(4절 참고). 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip, 그리고 선택한 스크류를 직접 확인했다고 표시하는 토글 버튼 **✓ Reviewed**입니다. 그 바로 아래에는 "⚠ 1 safety · 2 image"처럼 category별 경고 개수를 보여 주는(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 **Safety**, **Image**, **Info** 제목 아래로 묶인 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 경고 문장이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
 
-목록의 열은 **#**, **Level**, **Side**(**L** 또는 **R**, 알 수 없으면 `--`), **Pedicle**, **Ø**, **Len**, **Grade**, **⚠**입니다. **⚠** 열은 해당 스크류의 경고 개수(0이면 빈칸)를 chip으로 표시하며, chip 색은 그 스크류가 가진 가장 심각한 category의 색(빨강 Safety, 주황 Image, 회색 Info)이고 tooltip에는 경고 문장이 category별로 묶여 나오므로, 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다. auto/manual 출처 정보는 아래의 접이식 Details 섹션(**Source**)과 CSV 내보내기(9절)에 있습니다.
+목록의 열은 **#**, **Level**, **Side**(**L** 또는 **R**, 알 수 없으면 `--`), **Pedicle**, **Ø**, **Len**, **Grade**, **⚠**입니다. **⚠** 열은 해당 스크류의 경고 개수(0이면 빈칸)를 chip으로 표시하며, chip 색은 그 스크류가 가진 가장 심각한 category의 색(빨강 Safety, 주황 Image, 회색 Info)이고 tooltip에는 경고 문장이 category별로 묶여 나오므로, 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다. **✓ Reviewed**로 표시한 스크류는 **#** 열에 "1 ✓"로 나타나고, Construct chip에 "✓"와 얇은 윤곽선이 붙으며, 머리글에도 집계됩니다("Screw 2 of 6 · 3 reviewed"). 스크류의 위치·크기·등급이 바뀌면 — MPR/3D에서 끌기, 진입점·끝점 수정, 직경 변경, Screw MPR 수정, 다시 계획, 등급이 달라지는 재채점 — 표시가 자동으로 해제되며, 다른 스크류를 선택하는 것만으로는 해제되지 않습니다. 모든 스크류를 검토하면 레일의 ④ Review 단계가 완료로 표시됩니다. 이 표시는 계획 JSON에 스크류별 `reviewed` 값으로 저장되며, 이전에 저장한 계획은 검토하지 않은 상태로 불러옵니다. 검토자의 기록용 표시일 뿐 임상적 검증이 아닙니다. auto/manual 출처 정보는 아래의 접이식 Details 섹션(**Source**)과 CSV 내보내기(9절)에 있습니다.
 
 경고는 심각한 순서대로 세 category로 나뉘며, 경고 문장의 키워드로 분류합니다(알 수 없는 문장은 Info로 분류):
 
