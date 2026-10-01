@@ -1737,9 +1737,11 @@ def test_segmentation_thread_emits_cancelled_signal(qtbot, tmp_path, monkeypatch
     errors = []
     thread.error.connect(errors.append)
 
-    with qtbot.waitSignal(thread.cancelled, timeout=5000):
+    # waitSignal returns as soon as the signal arrives; the generous ceiling
+    # only matters on a loaded machine, where 5 s timed out twice in 3 runs.
+    with qtbot.waitSignal(thread.cancelled, timeout=30000):
         thread.start()
-    thread.wait(5000)
+    thread.wait(30000)
 
     assert errors == []
 
