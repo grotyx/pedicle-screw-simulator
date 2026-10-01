@@ -445,7 +445,7 @@ def test_warnings_collapse_into_one_line(ui_main_window, qtbot):
     window._tool_ctrl._add_screw_to_list(screw)
     window.screw_list_widget.setCurrentRow(0)
 
-    assert window.screw_warnings_toggle.text() == "⚠ 3 warnings"
+    assert window.screw_warnings_toggle.text() == "⚠ 1 safety · 2 info"
     assert window.selected_screw_warning.isVisible() is False
     full_text = window.selected_screw_warning.text()
     assert "warning one" in full_text
@@ -1184,4 +1184,6 @@ def test_the_narrow_warning_is_listed_first_in_the_cockpit(ui_main_window):
     window.update_selected_screw_inspector(index, screw, False)
 
     lines = window.selected_screw_warning.text().splitlines()
-    assert lines[0].startswith("Narrow pedicle (4.5 mm)")
+    # Grouped under the Safety heading, with the narrow note still first.
+    assert lines[0] == "Safety"
+    assert lines[1].startswith("• Narrow pedicle (4.5 mm)")

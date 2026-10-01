@@ -19,6 +19,62 @@ from ..utils.screw_metrics import (
 )
 from .styles import DEFAULT_THEME, get_theme
 
+#: The always-shown status line of a screw with no breach: displayed, but not
+#: itself something to worry about, so it is never counted.
+NO_BREACH_LINE = "No estimated breach — CT review is still required."
+
+#: Warning categories, most severe first.
+WARNING_CATEGORIES = ("safety", "image", "info")
+
+#: Display heading per category.
+WARNING_CATEGORY_TITLES = {"safety": "Safety", "image": "Image", "info": "Info"}
+
+#: Ordered keyword table for :func:`classify_warning`: the first row with a
+#: keyword in the (lower-cased) text wins, and text matching no row is
+#: "info". Built from the real warning strings in ``src.core`` and
+#: ``src.tools.screw_tool``; ``tests/test_screw_plan_table.py`` runs every one
+#: of them through here, so reword a warning and that test says which bucket
+#: it fell into.
+_WARNING_KEYWORDS = (
+    # The "no breach" status line contains "estimated breach": rule it out first.
+    ("info", ("no estimated breach",)),
+    # A possible injury, or a screw placed against the planner's own rules.
+    (
+        "safety",
+        (
+            "estimated breach",
+            "breach distance",
+            "medial breach",
+            "narrow pedicle",
+            "not contained",
+            "facet violation",
+            "cortical clearance",
+        ),
+    ),
+    # The image or its geometry cannot be trusted, or grading never ran.
+    (
+        "image",
+        (
+            "width uncertain",
+            "endplate",
+            "pca axis",
+            "not graded",
+            "grade n/a",
+            "gantry tilt",
+            "slice spacing",
+        ),
+    ),
+)
+
+
+def classify_warning(text: str) -> str:
+    """Bucket one warning line: ``"safety"``, ``"image"`` or ``"info"``."""
+    lowered = str(text).lower()
+    for category, keywords in _WARNING_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return category
+    return "info"
+
 
 def screw_warning_lines(screw) -> list[str]:
     """Full, human-readable warning text for one screw, most-relevant first.
@@ -41,26 +97,47 @@ def screw_warning_lines(screw) -> list[str]:
             0, f"Estimated breach {breach_distance:.1f} mm — verify on CT."
         )
     else:
-        lines.insert(0, "No estimated breach — CT review is still required.")
+        lines.insert(0, NO_BREACH_LINE)
     lines.sort(key=lambda line: not line.startswith(NARROW_PEDICLE_WARNING_PREFIX))
     return lines
 
 
-def screw_warning_count(screw) -> int:
-    """How many things about this screw are worth a second look.
+def screw_warning_counts(screw) -> dict[str, int]:
+    """How many things about this screw are worth a second look, per category.
 
-    Counts the planner/grader's own ``warnings`` list plus one more for
-    "no grade yet" or "an estimated breach" -- the same always-shown line
-    :func:`screw_warning_lines` inserts ahead of the list, so the plan
-    table's per-row count and the expanded text agree on what "N warnings"
-    means. The "no estimated breach" line does not add to the count: it is
-    shown but is not itself something to worry about.
+    Counts every line :func:`screw_warning_lines` shows except the "no
+    estimated breach" status line, so the plan table's per-row chip and the
+    expanded text agree on what "N warnings" means.
     """
-    warnings = list(getattr(screw, "warnings", []) or [])
-    grade = str(getattr(screw, "grade", "") or "")
-    breach_distance = float(getattr(screw, "breach_distance", 0.0) or 0.0)
-    extra = 1 if grade == "N/A" or breach_distance > 0.0 else 0
-    return len(warnings) + extra
+    counts = dict.fromkeys(WARNING_CATEGORIES, 0)
+    for line in screw_warning_lines(screw):
+        if line != NO_BREACH_LINE:
+            counts[classify_warning(line)] += 1
+    return counts
+
+
+def screw_warning_count(screw) -> int:
+    """Total of :func:`screw_warning_counts`."""
+    return sum(screw_warning_counts(screw).values())
+
+
+def worst_warning_category(counts) -> Optional[str]:
+    """The most severe category with a non-zero count, or None at zero."""
+    return next((c for c in WARNING_CATEGORIES if counts.get(c, 0) > 0), None)
+
+
+def grouped_warning_text(lines) -> str:
+    """Lines grouped under category headings, most severe first (no empty groups)."""
+    groups = {category: [] for category in WARNING_CATEGORIES}
+    for line in lines:
+        groups[classify_warning(line)].append(line)
+    out: list[str] = []
+    for category in WARNING_CATEGORIES:
+        if groups[category]:
+            out.append(WARNING_CATEGORY_TITLES[category])
+            out.extend(f"• {line}" for line in groups[category])
+    return "\n".join(out)
+
 
 #: Column headers, in display order. Kept short so they survive the default
 #: control-panel width; the units live in COLUMN_TOOLTIPS instead. Source
@@ -88,7 +165,7 @@ COLUMN_TOOLTIPS = (
     "Screw diameter (mm)",
     "Screw length (mm)",
     "Gertzbein-Robbins breach grade",
-    "Number of warnings — the Review step lists them",
+    "Number of warnings, coloured by the worst kind (red safety, amber image, grey info) — the Review step lists them",
 )
 
 #: Index of the column that carries the coloured narrow-pedicle chip.
@@ -97,7 +174,11 @@ PEDICLE_COLUMN = 3
 #: Index of the column that carries the coloured grade chip.
 GRADE_COLUMN = 6
 
-#: Index of the column that carries the per-row warning count.
+#: Warning category -> palette token for the count chip. Info is the same muted
+#: grey the "Grade N/A" chip uses.
+WARNING_CHIP_TOKENS = {"safety": "danger", "image": "warning", "info": "grade_na"}
+
+#: Index of the column that carries the per-row warning count chip.
 WARNINGS_COLUMN = 7
 
 #: Columns sized to their content: the number, the three
@@ -308,19 +389,31 @@ class ScrewPlanTable(QTableWidget):
             # Grade N/A or a breach (no planner warnings at all) still gets a
             # tooltip that explains the count instead of "No warnings
             # recorded for this screw".
-            item.setToolTip("\n".join(screw_warning_lines(screw)))
+            item.setToolTip(grouped_warning_text(screw_warning_lines(screw)))
+            item.setData(
+                Qt.ItemDataRole.UserRole,
+                worst_warning_category(screw_warning_counts(screw)),
+            )
         self._paint_warning_cell(row)
 
     def _paint_warning_cell(self, row: int) -> None:
-        """Colour the warning-count cell with the theme's warning colour."""
+        """Chip the count in the colour of the worst warning category.
+
+        The category is stashed on the item (like the narrow-pedicle flag) so
+        :meth:`apply_theme` can repaint without the screw.
+        """
         item = self.item(row, WARNINGS_COLUMN)
         if item is None:
             return
-        text = item.text().strip()
-        if not text or text == "0":
-            item.setForeground(QColor())
+        category = item.data(Qt.ItemDataRole.UserRole)
+        if category not in WARNING_CHIP_TOKENS or not item.text().strip():
+            item.setData(Qt.ItemDataRole.BackgroundRole, None)
+            item.setData(Qt.ItemDataRole.ForegroundRole, None)
             return
-        item.setForeground(QColor(get_theme(self._theme_name)["warning"]))
+        palette = get_theme(self._theme_name)
+        item.setBackground(QColor(palette[WARNING_CHIP_TOKENS[category]]))
+        item.setForeground(QColor(palette["grade_text"]))
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def _paint_pedicle_chip(self, row: int, narrow: bool) -> None:
         """Chip a narrow pedicle in the danger colour; leave the rest plain.

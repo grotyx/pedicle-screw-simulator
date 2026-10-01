@@ -560,6 +560,13 @@ QToolButton#screwWarningsToggle {{
     text-align: left;
     padding: 3px 2px;
 }}
+QToolButton#screwWarningsToggle[warningCategory="safety"] {{
+    color: {t["danger_text"]};
+}}
+QToolButton#screwWarningsToggle[warningCategory="info"],
+QToolButton#screwWarningsToggle[warningCategory="none"] {{
+    color: {t["text_secondary"]};
+}}
 QToolButton#screwWarningsToggle:disabled {{
     color: {t["text_secondary"]};
 }}

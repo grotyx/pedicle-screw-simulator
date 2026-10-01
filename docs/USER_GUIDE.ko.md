@@ -325,9 +325,17 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 #### Review 페이지 구성
 
-**Review** 페이지는 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다. 맨 위에는 **Construct** 지도가 있습니다(4절 참고). 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ _N_ warnings"(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 문구이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
+**Review** 페이지는 페이지 대부분을 차지하는 레벨별 스크류 목록을 중심으로 구성됩니다. 맨 위에는 **Construct** 지도가 있습니다(4절 참고). 목록 위에는 선택한 스크류의 핵심 수치가 크게 표시됩니다: 레벨과 side, 직경(그 자리에서 바로 수정 가능), 길이, 색이 있는 Gertzbein-Robbins 등급 chip입니다. 그 바로 아래에는 "⚠ 1 safety · 2 image"처럼 category별 경고 개수를 보여 주는(또는 "✓ No warnings") 한 줄이 접힌 채로 있다가 클릭하면 **Safety**, **Image**, **Info** 제목 아래로 묶인 전체 경고 문구로 펼쳐집니다 — 앱의 다른 모든 경고 목록과 같은 경고 문장이며, 위쪽의 핵심 수치와 공간을 다투지 않도록 기본적으로 접혀 있을 뿐입니다. ‹ › 이전/다음 이동, **Screw MPR** / **Std MPR**, **Edit**(메뉴, 6절 참고), 그리고 두 번째 줄에 단독으로 놓이는 **Delete Screw** — 이 동작 버튼들은 목록 바로 아래에 고정된 두 줄 구성으로 놓입니다. Screw MPR이 활성화되어 있는 동안에는 이 동작 버튼 아래에 두 줄이 추가로 나타납니다. 첫 줄에는 Position 슬라이더, 둘째 줄에는 Rotation 스핀박스와 Reset view 버튼이 있습니다(5.8절 참고).
 
-목록의 열은 **#**, **Level**, **Side**(**L** 또는 **R**, 알 수 없으면 `--`), **Pedicle**, **Ø**, **Len**, **Grade**, **⚠**입니다. **⚠** 열은 해당 스크류의 경고 개수(0이면 빈칸)이므로, 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다. auto/manual 출처 정보는 아래의 접이식 Details 섹션(**Source**)과 CSV 내보내기(9절)에 있습니다.
+목록의 열은 **#**, **Level**, **Side**(**L** 또는 **R**, 알 수 없으면 `--`), **Pedicle**, **Ø**, **Len**, **Grade**, **⚠**입니다. **⚠** 열은 해당 스크류의 경고 개수(0이면 빈칸)를 chip으로 표시하며, chip 색은 그 스크류가 가진 가장 심각한 category의 색(빨강 Safety, 주황 Image, 회색 Info)이고 tooltip에는 경고 문장이 category별로 묶여 나오므로, 각 행을 열지 않고도 어느 스크류를 다시 살펴봐야 하는지 한눈에 알 수 있습니다. auto/manual 출처 정보는 아래의 접이식 Details 섹션(**Source**)과 CSV 내보내기(9절)에 있습니다.
+
+경고는 심각한 순서대로 세 category로 나뉘며, 경고 문장의 키워드로 분류합니다(알 수 없는 문장은 Info로 분류):
+
+- **Safety** — 손상을 일으킬 수 있거나 계획이 스스로의 규칙에 반해 수용한 경우: 추정 천공 또는 "Breach distance", "Medial breach … canal side", "Narrow pedicle", "Not contained — placed only because …", "Facet violation", "Cortical clearance … below …".
+- **Image** — 계획의 근거가 되는 측정을 신뢰하기 어렵거나 스크류가 등급 판정을 받지 못한 경우: "Pedicle width uncertain", 종판 관련 경고("Upper endplate fit is rough", "Endplate reference: …", "Upper endplate unavailable", "Endplate band relaxed"), "PCA axis unreliable", "Not graded" / "Grade N/A", 그리고 study 단위의 "Gantry tilt", "Slice spacing is not uniform".
+- **Info** — 스크류를 어떻게 골랐는지 또는 알림: "Diameter reduced …", "Entry moved … laterally", CBT consensus 금기사항 안내, "Optimizer found no feasible trajectory; legacy planner used", "High convergence angle", 골질(HU) 경고, 그리고 "No estimated breach" 상태 문장(표시만 하고 개수에는 포함하지 않음).
+
+이 category는 읽기 쉽게 경고를 분류할 뿐 임상적 위험도 평가가 아니며, 모든 계획은 여전히 CT에서 검토해야 합니다.
 
 동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
 
