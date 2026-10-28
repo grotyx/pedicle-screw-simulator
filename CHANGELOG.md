@@ -18,6 +18,9 @@ current version; every other place the version appears is derived from it.
 - Linux (X11): the 3D view and the three MPR views no longer stay black.
   The panes were created without a parent and briefly opened as separate
   windows, so their VTK surfaces never reached the main window.
+- The translucent vertebra surfaces in the 3D view are now depth-sorted,
+  so back faces and the spinal canal walls no longer show through the
+  front as dark scribbles.
 
 ## [0.2.5] - 2026-10-02
 

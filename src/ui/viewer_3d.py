@@ -859,6 +859,10 @@ class Viewer3D(QWidget):
         render_window = self.vtk_widget.GetRenderWindow()
         render_window.AddRenderer(self._renderer)
         render_window.SetMultiSamples(0)  # Disable MSAA
+        # Depth-sort the translucent vertebra surfaces; unsorted, their back
+        # faces and canal walls bleed through the front as dark scribbles.
+        render_window.SetAlphaBitPlanes(1)
+        self._renderer.SetUseDepthPeeling(1)
 
         # VTK-level render guard: abort any render when guard is active.
         render_window.AddObserver("StartEvent", self._render_guard_callback)

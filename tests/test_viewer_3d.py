@@ -2119,3 +2119,30 @@ def test_rod_line_toggle_shows_and_hides_the_3d_rods(qtbot, monkeypatch):
     viewer.set_rod_lines(lines)
     viewer.rod_line_toggle.setChecked(False)
     assert viewer._renderer.GetActors().GetNumberOfItems() == 0
+
+
+def test_translucent_vertebra_surfaces_are_depth_sorted(qtbot, monkeypatch):
+    # Without depth peeling the 50% vertebra surface shows its back faces and
+    # the canal walls through the front as dark scribbles.
+    import vtk
+    from PyQt6.QtWidgets import QWidget
+
+    from src.ui import viewer_3d
+
+    render_window = vtk.vtkRenderWindow()
+    render_window.SetOffScreenRendering(1)
+    vtk.vtkRenderWindowInteractor().SetRenderWindow(render_window)
+
+    class OffscreenWidget(QWidget):
+        def GetRenderWindow(self):
+            return render_window
+
+        def safe_render(self):
+            pass
+
+    monkeypatch.setattr(viewer_3d, "create_vtk_widget", lambda parent: OffscreenWidget(parent))
+    viewer = viewer_3d.Viewer3D(SimpleNamespace(add_observer=lambda *_args: None))
+    qtbot.addWidget(viewer)
+
+    assert viewer._renderer.GetUseDepthPeeling()
+    assert render_window.GetAlphaBitPlanes()
