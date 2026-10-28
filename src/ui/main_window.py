@@ -332,11 +332,13 @@ class MainWindow(QMainWindow):
         #: The pane shown large in the planning layout; the rest are thumbnails.
         self._hero_view = "3d"
 
-        # Create viewers
-        self.axial_viewer = MPRViewer("axial", self.volume_manager)
-        self.sagittal_viewer = MPRViewer("sagittal", self.volume_manager)
-        self.coronal_viewer = MPRViewer("coronal", self.volume_manager)
-        self.viewer_3d = Viewer3D(self.volume_manager)
+        # Create viewers inside the container: the first layout pass shows the
+        # panes, and a parentless pane would open as a top-level window whose
+        # native VTK surface never reaches the main window on X11.
+        self.axial_viewer = MPRViewer("axial", self.volume_manager, view_container)
+        self.sagittal_viewer = MPRViewer("sagittal", self.volume_manager, view_container)
+        self.coronal_viewer = MPRViewer("coronal", self.volume_manager, view_container)
+        self.viewer_3d = Viewer3D(self.volume_manager, view_container)
 
         # The views are laid out once, at the end of _setup_toolbar, when the
         # tool dock they reserve a row for exists.

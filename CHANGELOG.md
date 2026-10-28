@@ -13,6 +13,12 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux (X11): the 3D view and the three MPR views no longer stay black.
+  The panes were created without a parent and briefly opened as separate
+  windows, so their VTK surfaces never reached the main window.
+
 ## [0.2.5] - 2026-10-02
 
 Review tools on top of 0.2.4's safer planning: mark each screw as
