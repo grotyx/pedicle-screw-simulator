@@ -401,6 +401,10 @@ class ScrewMPRController:
         self._window.screw_axis_mpr_btn.setEnabled(can_enter)
         self._window.standard_mpr_btn.setEnabled(self._active)
         self._window.screw_axis_position_slider.setEnabled(self._active)
+        for name in ("insert_left_btn", "insert_right_btn"):
+            button = getattr(self._window, name, None)
+            if button is not None:
+                button.setEnabled(self._has_loaded_volume() and not self._active)
         previous_button = getattr(self._window, "screw_previous_btn", None)
         next_button = getattr(self._window, "screw_next_btn", None)
         if previous_button is not None:

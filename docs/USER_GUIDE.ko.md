@@ -100,7 +100,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 
 - **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
 - **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 화면 머리글 토글에 대한 안내문.
-- **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
+- **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 **Insert at crosshair: Left / Right** 버튼(7절 참고), 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
 - **Review:** **Construct** 지도(아래 "구성 지도" 참고)로 시작하고, 선택한 스크류의 핵심 수치와 **✓ Reviewed** 버튼·경고 줄이 이어지며, 그다음 페이지 대부분을 차지하는 레벨별 스크류 목록이 있습니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
 
 ### 3D 화면 머리글: Vertebrae / Full CT
@@ -397,9 +397,10 @@ Review 페이지의 **Edit** 버튼을 누르면 **Move entry point**, **Move ti
 1. 큰 head를 더블클릭하면 entry point만 이동합니다.
 2. 뾰족한 tip 또는 원위부 shaft를 더블클릭하면 tip만 이동합니다.
 3. 중간 shaft를 더블클릭하면 entry와 tip이 함께 이동합니다.
-4. 마우스 버튼을 누르지 않은 상태로 포인터를 움직입니다.
-5. 다시 더블클릭하면 이동을 종료합니다.
-6. `Esc`를 누르면 마지막 유효 위치를 유지하고 이동 모드를 종료합니다.
+4. 파란 guide 손잡이를 더블클릭하면 entry를 중심으로 스크류가 회전합니다. 손잡이는 head 뒤 60 mm, 뼈 바깥쪽의 초록 guide 선 끝에 있고, 선택한 스크류에만 보입니다. 회전하는 동안 entry와 길이는 고정되고, 상태 표시줄에 convergence와 craniocaudal 각도가 표시됩니다(side가 없는 스크류는 convergence를 부호 없이 표시). guide는 조작용일 뿐이며 채점·저장·내보내기에 포함되지 않습니다.
+5. 마우스 버튼을 누르지 않은 상태로 포인터를 움직입니다.
+6. 다시 더블클릭하면 이동을 종료합니다.
+7. `Esc`를 누르면 마지막 유효 위치를 유지하고 이동 모드를 종료합니다. 되돌리기(undo)는 없습니다.
 
 MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 후 Screw MPR은 변경된 궤적에 다시 정렬됩니다.
 
@@ -431,6 +432,16 @@ Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4�
 2. MPR에서 entry point를 클릭합니다.
 3. 같은 MPR에서 target point를 클릭합니다.
 4. 새 스크류를 확인하고 수정합니다.
+
+### 십자선에 삽입 (Insert at crosshair)
+
+**Manual Screw Defaults**(길이, 직경, convergence, craniocaudal)로 현재 MPR 십자선 위치에 클릭 한 번으로 스크류를 놓습니다.
+
+1. 표준 MPR에서 십자선을 entry point로 옮깁니다.
+2. **Plan** 페이지의 **Insert at crosshair** 옆 **Left** 또는 **Right**를 선택합니다. side는 반드시 골라야 하며, 환자가 영상 안에서 어디에 있든 "내측" 방향을 이 선택으로 정합니다.
+3. 스크류가 만들어지고 채점된 뒤 선택됩니다. convergence 양수는 tip을 내측으로, craniocaudal 양수는 두측으로 향하게 합니다. 둘 다 기본값은 0°이며 −89°~+89° 범위에서 정할 수 있습니다.
+
+tip이 CT 밖으로 나가면 스크류를 놓지 않고 상태 표시줄에 이유를 표시합니다. 검사를 불러오기 전과 Screw MPR 사용 중에는 버튼이 비활성입니다. Screw MPR 단면은 저장된 십자선 위치를 지나지 않기 때문입니다. Manual Screw Defaults의 네 값은 다음 실행에도 기억됩니다.
 
 ### 거리와 각도
 

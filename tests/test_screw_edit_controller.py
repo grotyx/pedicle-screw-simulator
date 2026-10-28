@@ -326,3 +326,67 @@ def test_ending_mpr_drag_realigns_review_to_final_screw_geometry():
     controller.end_drag()
 
     assert window._screw_mpr_ctrl.updated == [0]
+
+
+def _anterior_screw(**overrides):
+    values = dict(
+        entry_point=(10.0, 0.0, 5.0),
+        target_point=(10.0, -45.0, 5.0),
+        diameter=6.0,
+        side="left",
+    )
+    values.update(overrides)
+    return Screw(**values)
+
+
+def test_guide_drag_rotates_about_the_entry_and_keeps_the_length():
+    import math
+
+    from src.core.screw_geometry import guide_handle_point
+
+    controller, window = _make_controller(_anterior_screw())
+    handle = guide_handle_point((10.0, 0.0, 5.0), (10.0, -45.0, 5.0), controller.GUIDE_REACH_MM)
+
+    assert controller.begin_drag(0, "guide", handle) is True
+    assert controller.mode == "rotate"
+    assert controller.update_drag((handle[0] + 15.0, handle[1], handle[2]), source="3D") is True
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == pytest.approx((10.0, 0.0, 5.0))
+    assert math.dist(screw.entry_point, screw.target_point) == pytest.approx(45.0)
+    assert screw.target_point[0] < 10.0  # handle swung to patient left, tip to the right
+    # The crosshair stays on the fixed entry while rotating.
+    assert controller._vm.crosshair_updates[-1] == ((10.0, 0.0, 5.0), "3d_screw_edit")
+    assert "conv" in window.statusbar.message.lower()
+
+
+def test_guide_drag_that_puts_the_tip_outside_the_ct_keeps_the_last_screw():
+    from src.core.screw_geometry import guide_handle_point
+
+    controller, window = _make_controller(_anterior_screw(target_point=(10.0, -95.0, 5.0)))
+    handle = guide_handle_point((10.0, 0.0, 5.0), (10.0, -95.0, 5.0), controller.GUIDE_REACH_MM)
+    controller.begin_drag(0, "guide", handle)
+
+    # Swinging the handle far sideways aims the 95 mm screw out of the 200 mm cube.
+    assert controller.update_drag((handle[0] - 400.0, handle[1], handle[2]), source="3D") is False
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.target_point == (10.0, -95.0, 5.0)
+    assert controller.mode == "rotate"
+    assert window._tool_ctrl.refreshed == []
+
+
+def test_guide_drag_without_movement_does_not_touch_the_screw():
+    from src.core.screw_geometry import guide_handle_point
+
+    screw = _anterior_screw()
+    screw.reviewed = True
+    controller, window = _make_controller(screw)
+    handle = guide_handle_point(screw.entry_point, screw.target_point, controller.GUIDE_REACH_MM)
+    picked = (handle[0] + 2.0, handle[1], handle[2])
+    controller.begin_drag(0, "guide", picked)
+
+    assert controller.update_drag(picked, source="3D") is True
+
+    assert window._tool_ctrl.refreshed == []
+    assert window._tool_ctrl.screw_tool.get_screws()[0].reviewed is True

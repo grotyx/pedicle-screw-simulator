@@ -2,6 +2,7 @@
 
 import functools
 import logging
+import math
 import sys
 from typing import List, Optional
 
@@ -63,6 +64,7 @@ from .. import (
     __website__,
 )
 from ..core.planner_config import PlannerConfig
+from ..core.screw_geometry import MAX_TRAJECTORY_ANGLE_DEG
 from ..core.volume_manager import VolumeManager
 from ..utils.constants import (
     DEFAULT_SCREW_DIAMETER,
@@ -255,6 +257,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self.load_planner_settings()
         self.load_segmentation_settings()
+        self.load_manual_screw_defaults()
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_statusbar()
@@ -1291,6 +1294,19 @@ class MainWindow(QMainWindow):
         plan_params_group.set_content_layout(params_layout)
         plan_layout.addWidget(plan_params_group)
 
+        # ── Insert at crosshair: one click with the manual defaults ──
+        insert_row = QHBoxLayout()
+        insert_row.addWidget(QLabel("Insert at crosshair:"))
+        self.insert_left_btn = QPushButton("Left")
+        self.insert_right_btn = QPushButton("Right")
+        for button, side in ((self.insert_left_btn, "left"), (self.insert_right_btn, "right")):
+            button.setEnabled(False)
+            button.setToolTip(
+                f"Place a {side} screw at the MPR crosshair with the Manual Screw Defaults"
+            )
+            insert_row.addWidget(button)
+        plan_layout.addLayout(insert_row)
+
         # ── Manual Screw Defaults (collapsed) ──
         screw_defaults_group = CollapsibleGroupBox("Manual Screw Defaults")
         self.screw_parameters_group = screw_defaults_group
@@ -1310,6 +1326,23 @@ class MainWindow(QMainWindow):
         self.diameter_spin.setValue(DEFAULT_SCREW_DIAMETER)
         self.diameter_spin.setSuffix(" mm")
         screw_layout.addWidget(self.diameter_spin, 1, 1)
+
+        screw_layout.addWidget(QLabel("Convergence (°):"), 2, 0)
+        self.convergence_spin = QDoubleSpinBox()
+        screw_layout.addWidget(QLabel("Craniocaudal (°):"), 3, 0)
+        self.craniocaudal_spin = QDoubleSpinBox()
+        for row, (spin, tip) in enumerate(
+            (
+                (self.convergence_spin, "Positive aims the tip medially"),
+                (self.craniocaudal_spin, "Positive aims the tip cranially"),
+            ),
+            start=2,
+        ):
+            spin.setRange(-MAX_TRAJECTORY_ANGLE_DEG, MAX_TRAJECTORY_ANGLE_DEG)
+            spin.setDecimals(1)
+            spin.setSingleStep(1.0)
+            spin.setToolTip(tip)
+            screw_layout.addWidget(spin, row, 1)
 
         screw_defaults_group.set_content_layout(screw_layout)
         plan_layout.addWidget(screw_defaults_group)
@@ -1908,6 +1941,14 @@ class MainWindow(QMainWindow):
             slider.valueChanged.connect(self._on_planner_weight_changed)
         self.plan_reset_defaults_btn.clicked.connect(
             self.reset_planner_settings
+        )
+        for spin in self._manual_screw_spin_boxes().values():
+            spin.valueChanged.connect(self.save_manual_screw_defaults)
+        self.insert_left_btn.clicked.connect(
+            lambda: self._tool_ctrl.insert_screw_at_crosshair("left")
+        )
+        self.insert_right_btn.clicked.connect(
+            lambda: self._tool_ctrl.insert_screw_at_crosshair("right")
         )
         # Transfer function preset
         self.tf_preset_combo.currentTextChanged.connect(
@@ -2751,6 +2792,39 @@ class MainWindow(QMainWindow):
             for name, slider in self._planner_weight_sliders().items()
         }
         return PlannerConfig.from_mapping(data)
+
+    def _manual_screw_spin_boxes(self) -> dict:
+        """Settings keys of the Manual Screw Defaults and their spin boxes."""
+        return {
+            "length_mm": self.length_spin,
+            "diameter_mm": self.diameter_spin,
+            "convergence_deg": self.convergence_spin,
+            "craniocaudal_deg": self.craniocaudal_spin,
+        }
+
+    def save_manual_screw_defaults(self, _value=None) -> None:
+        """Persist the Manual Screw Defaults for the next session."""
+        settings = app_settings()
+        settings.beginGroup("manual_screw")
+        for key, spin in self._manual_screw_spin_boxes().items():
+            settings.setValue(key, spin.value())
+
+    def load_manual_screw_defaults(self) -> None:
+        """Restore the Manual Screw Defaults; unreadable values keep the widget default."""
+        settings = app_settings()
+        settings.beginGroup("manual_screw")
+        for key, spin in self._manual_screw_spin_boxes().items():
+            raw = settings.value(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = math.nan
+            if not math.isfinite(value) or not spin.minimum() <= value <= spin.maximum():
+                logger.warning("Ignoring unreadable manual screw setting %s=%r", key, raw)
+                continue
+            spin.setValue(int(round(value)) if isinstance(spin, QSpinBox) else value)
 
     def save_planner_settings(self) -> None:
         """Persist the panel's planner parameters for the next session.

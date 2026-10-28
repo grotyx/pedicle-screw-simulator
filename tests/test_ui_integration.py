@@ -3006,3 +3006,156 @@ def test_isolation_hides_the_3d_overlay_and_full_ct_honours_show_3d(
 
     window.seg_show_3d_check.setChecked(True)
     assert window.viewer_3d.visible is True
+
+
+def _load_large_study(window, series_id):
+    # 60 x 60 x 40 mm with a non-zero origin, so a 20 mm screw fits.
+    image = sitk.Image([60, 60, 40], sitk.sitkInt16) + 250
+    image.SetOrigin((-20.0, 5.0, -10.0))
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": series_id, "num_slices": 40},
+        progress=_ProgressStub(),
+    )
+
+
+def _set_manual_defaults(window, length, convergence, craniocaudal):
+    window.length_spin.setValue(length)
+    window.convergence_spin.setValue(convergence)
+    window.craniocaudal_spin.setValue(craniocaudal)
+
+
+def test_insert_at_crosshair_places_one_screw_with_the_default_angles(ui_main_window):
+    from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT")
+    _set_manual_defaults(window, length=20, convergence=12.0, craniocaudal=-5.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+
+    window.insert_left_btn.click()
+
+    screws = window.screw_tool.get_screws()
+    assert len(screws) == 1
+    screw = screws[0]
+    assert screw.entry_point == pytest.approx((10.0, 50.0, 5.0))
+    assert screw.side == "left"
+    assert screw.source == "manual"
+    assert screw.length == pytest.approx(20.0)
+    assert convergence_angle_deg(screw.entry_point, screw.target_point, "left") == pytest.approx(12.0)
+    assert craniocaudal_angle_deg(screw.entry_point, screw.target_point) == pytest.approx(-5.0)
+    assert window.screw_list_widget.currentRow() == 0
+    assert len(window.viewer_3d.screws) == 1
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == pytest.approx((10.0, 50.0, 5.0))
+    assert window._tool_ctrl.active_tool == "navigate"
+
+
+def test_insert_right_mirrors_the_convergence(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-R")
+    _set_manual_defaults(window, length=20, convergence=20.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(5.0, 50.0, 5.0)
+
+    window.insert_right_btn.click()
+
+    screw = window.screw_tool.get_screws()[0]
+    assert screw.side == "right"
+    assert screw.target_point[0] > screw.entry_point[0]
+
+
+def test_insert_at_crosshair_refuses_a_tip_outside_the_ct(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-OUT")
+    _set_manual_defaults(window, length=70, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+
+    window.insert_left_btn.click()
+
+    assert window.screw_tool.get_screws() == []
+    assert window.viewer_3d.screws == [] or len(window.viewer_3d.screws) == 0
+    assert "inside the ct" in window.statusbar.currentMessage().lower()
+
+
+def test_insert_buttons_wait_for_a_study(ui_main_window):
+    window = ui_main_window
+    assert not window.insert_left_btn.isEnabled()
+    assert not window.insert_right_btn.isEnabled()
+    _load_study(window, "SERIES-INSERT-ENABLE")
+    assert window.insert_left_btn.isEnabled()
+    assert window.insert_right_btn.isEnabled()
+
+
+def test_manual_screw_defaults_persist_into_a_new_window(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    _set_manual_defaults(window, length=38, convergence=14.5, craniocaudal=-3.0)
+    window.diameter_spin.setValue(5.5)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.length_spin.value() == 38
+        assert reopened.diameter_spin.value() == pytest.approx(5.5)
+        assert reopened.convergence_spin.value() == pytest.approx(14.5)
+        assert reopened.craniocaudal_spin.value() == pytest.approx(-3.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_insert_at_crosshair_is_refused_while_screw_mpr_is_active(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-SMPR")
+    _set_manual_defaults(window, length=20, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+    window.insert_left_btn.click()
+    window.screw_axis_mpr_btn.click()
+    assert window._screw_mpr_ctrl.is_active
+
+    assert not window.insert_left_btn.isEnabled()
+    assert not window.insert_right_btn.isEnabled()
+    assert window._tool_ctrl.insert_screw_at_crosshair("left") is False
+    assert len(window.screw_tool.get_screws()) == 1
+    assert "standard mpr" in window.statusbar.currentMessage().lower()
+
+    window.standard_mpr_btn.click()
+    assert window.insert_left_btn.isEnabled()
+
+
+def test_insert_during_direct_editing_releases_the_viewer_lock(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-LOCK")
+    _set_manual_defaults(window, length=20, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+    window.insert_left_btn.click()
+    first = window.screw_tool.get_screws()[0]
+    entry, target = first.entry_point, first.target_point
+    window._screw_edit_ctrl.begin_drag(0, "guide", (10.0, 60.0, 5.0))
+    window.viewer_3d.is_screw_interaction_active = True
+    cancelled_before = window.viewer_3d.screw_interaction_cancelled
+
+    window.volume_manager.set_crosshair_position(-5.0, 50.0, 5.0)
+    window.insert_right_btn.click()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.viewer_3d.screw_interaction_cancelled == cancelled_before + 1
+    assert len(window.screw_tool.get_screws()) == 2
+    assert window.screw_tool.get_screws()[0].entry_point == entry
+    assert window.screw_tool.get_screws()[0].target_point == target
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "1e400", "abc", "100000000000"])
+def test_unreadable_manual_screw_defaults_fall_back_at_startup(ui_main_window, isolated_qsettings, raw):
+    settings = isolated_qsettings("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("manual_screw")
+    for key in ("length_mm", "diameter_mm", "convergence_deg", "craniocaudal_deg"):
+        settings.setValue(key, raw)
+    settings.sync()
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.length_spin.value() == ui_main_window.length_spin.value()
+        assert reopened.convergence_spin.value() == pytest.approx(0.0)
+        assert reopened.craniocaudal_spin.value() == pytest.approx(0.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()

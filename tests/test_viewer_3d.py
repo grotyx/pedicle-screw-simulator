@@ -273,7 +273,77 @@ class TestScrewVisualGeometry:
         picker = viewer._build_screw_only_picker()
 
         assert picker.GetPickFromList() == 1
-        assert picker.GetPickList().GetNumberOfItems() == 3
+        # Head, shaft, tip and the guide handle; the guide line never takes a pick.
+        assert picker.GetPickList().GetNumberOfItems() == 4
+
+    def test_guide_handle_sits_behind_the_entry_outside_the_screw(self):
+        from src.core.screw_geometry import GUIDE_REACH_MM
+        from src.ui.viewer_3d import create_screw_visual
+
+        visual = create_screw_visual(0, (0, 0, 0), (0, -40, 0), 3.0)
+
+        bounds = visual.guide_handle_actor.GetBounds()
+        centre = tuple((bounds[2 * i] + bounds[2 * i + 1]) / 2.0 for i in range(3))
+        assert centre == pytest.approx((0.0, GUIDE_REACH_MM, 0.0), abs=0.05)
+        assert visual.guide_handle_actor.GetPickable() == 1
+        assert visual.guide_line_actor.GetPickable() == 0
+
+    def test_only_the_selected_screw_shows_its_guide(self):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._screw_actors = []
+        viewer._screw_prop_parts = {}
+        viewer._selected_screw_id = None
+        viewer._active_screw_part = None
+        viewer._vertebral_mesh_actor = None
+        viewer._segmentation_actor = None
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._request_render = lambda: None
+        first = viewer.add_screw((0, 0, 0), (0, -40, 0), screw_id=0)
+        second = viewer.add_screw((20, 0, 0), (20, -40, 0), screw_id=1)
+
+        assert viewer._screw_prop_parts[viewer._prop_key(first.guide_handle_actor)] == (0, "guide")
+        assert first.guide_handle_actor.GetVisibility() == 0
+
+        viewer.set_selected_screw(1)
+
+        assert second.guide_handle_actor.GetVisibility() == 1
+        assert second.guide_line_actor.GetVisibility() == 1
+        assert first.guide_handle_actor.GetVisibility() == 0
+
+        viewer.remove_screw(second)
+        assert viewer._prop_key(second.guide_handle_actor) not in viewer._screw_prop_parts
+
+    def test_showing_a_guide_widens_the_camera_clipping_range(self):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._screw_actors = []
+        viewer._screw_prop_parts = {}
+        viewer._selected_screw_id = None
+        viewer._active_screw_part = None
+        viewer._vertebral_mesh_actor = None
+        viewer._segmentation_actor = None
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._request_render = lambda: None
+        visual = viewer.add_screw((0, 0, 0), (0, -40, 0), screw_id=0)
+        camera = viewer._renderer.GetActiveCamera()
+        camera.SetPosition(0.0, -300.0, 0.0)
+        camera.SetFocalPoint(0.0, 0.0, 0.0)
+        viewer._renderer.ResetCameraClippingRange()  # fitted with the guide hidden
+        handle_depth = 300.0 + 60.0
+
+        viewer.set_selected_screw(0)
+
+        assert visual.guide_handle_actor.GetVisibility() == 1
+        assert camera.GetClippingRange()[1] >= handle_depth
 
     def test_distal_quarter_of_3d_shaft_is_selected_as_tip(self):
         from src.ui.viewer_3d import Viewer3D, create_screw_visual

@@ -100,7 +100,7 @@ Every page opens with a header: a small "Step N of 4" line, the page title, and 
 
 - **Study:** the **Open DICOM…** button, the **Study** info section, then the collapsed **Window/Level** (window/level sliders and Bone/Soft Tissue presets) and **3D Rendering** (transfer-function preset and opacity) sections.
 - **Segment:** the **Segmentation** group (**Run Auto Segmentation**, **Refine boundaries against CT**, the status line, and the isolate/restore button — see 5.2) and a hint about the automatic isolation and the 3D header toggle.
-- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
+- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — then the **Insert at crosshair: Left / Right** buttons (see 7), followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
 - **Review:** starts with the **Construct** map (see "The construct map" below), then the selected screw's key numbers with its **✓ Reviewed** button and warning line, then the per-level screw list, which takes most of the page (see 5.9/5.10 for its layout, and 6 for editing); **Measurements** are collapsed at the bottom (see 7).
 
 ### 3D header: Vertebrae / Full CT
@@ -397,9 +397,10 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 1. Double-click the large head to move the entry point only.
 2. Double-click the pointed tip or distal shaft to move the tip only.
 3. Double-click the middle shaft to move entry and tip together.
-4. Move the pointer without holding a button.
-5. Double-click again to finish.
-6. Press `Esc` to leave movement mode while retaining the last valid position.
+4. Double-click the blue guide handle to rotate the screw about its entry. The handle sits 60 mm behind the head, outside the bone, at the end of a green guide line, and appears on the selected screw only. Entry and length stay fixed, and the status bar shows the convergence and craniocaudal angles while you move (unsigned convergence when the screw has no side). The guide is a control only: it is not graded, saved, or exported.
+5. Move the pointer without holding a button.
+6. Double-click again to finish.
+7. Press `Esc` to leave movement mode while retaining the last valid position. There is no undo.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
 
@@ -431,6 +432,16 @@ Add Screw, Distance, and Angle are buttons in the tool dock below the main view 
 2. Click the entry point in an MPR view.
 3. Click the target point in the same MPR view.
 4. Review and adjust the new screw.
+
+### Insert at crosshair
+
+One click places a screw at the current MPR crosshair using the **Manual Screw Defaults** (length, diameter, convergence, craniocaudal):
+
+1. Move the crosshair to the entry point in the standard MPR views.
+2. On the **Plan** page, select **Left** or **Right** next to **Insert at crosshair**. The side is required and decides which way "medial" points, wherever the patient lies in the scan.
+3. The screw is created, graded and selected. Positive convergence aims the tip medially, positive craniocaudal cranially; both default to 0° and can be set from −89° to +89°.
+
+Nothing is placed when the tip would leave the CT; the status bar says why. The buttons stay disabled until a study is loaded and while Screw MPR is active, because its slices do not pass through the stored crosshair. The four Manual Screw Defaults are remembered for the next session.
 
 ### Distance and Angle
 

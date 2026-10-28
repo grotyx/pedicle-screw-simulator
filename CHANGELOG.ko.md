@@ -13,6 +13,15 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### 추가
+
+- Plan 페이지: **Insert at crosshair — Left / Right**로 Manual Screw Defaults를
+  써서 MPR 십자선 위치에 클릭 한 번으로 스크류를 놓습니다. 기본값에
+  convergence와 craniocaudal 각도가 추가되었고, 네 값 모두 기억됩니다.
+- 3D 뷰: 선택한 스크류에 head 뒤 60 mm, 뼈 바깥쪽으로 guide 선과 파란 손잡이가
+  표시됩니다. 손잡이를 더블클릭하면 entry와 길이를 고정한 채 entry를 중심으로
+  회전하고, 움직이는 동안 상태 표시줄에 각도가 표시됩니다.
+
 ### 수정
 
 - Linux(X11): 3D 뷰와 MPR 뷰 세 개가 검은 화면으로 남던 문제를 고쳤습니다.

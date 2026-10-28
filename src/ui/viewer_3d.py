@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
 from ..core.vertebral_mesh import (
     MESH_SMOOTHING_ITERATIONS,
     MESH_SMOOTHING_PASSBAND,
@@ -248,10 +249,20 @@ class ScrewVisual:
     entry_actor: vtk.vtkActor
     shaft_actor: vtk.vtkActor
     tip_actor: vtk.vtkActor
+    # Rotation guide: a line out of the entry and a handle behind it, shown
+    # for the selected screw only; a control, never part of the implant.
+    guide_line_actor: vtk.vtkActor
+    guide_handle_actor: vtk.vtkActor
 
     @property
-    def props(self) -> Tuple[vtk.vtkActor, vtk.vtkActor, vtk.vtkActor]:
-        return (self.entry_actor, self.shaft_actor, self.tip_actor)
+    def props(self) -> Tuple[vtk.vtkActor, ...]:
+        return (
+            self.entry_actor,
+            self.shaft_actor,
+            self.tip_actor,
+            self.guide_line_actor,
+            self.guide_handle_actor,
+        )
 
     def GetProperty(self):
         """Keep actor-like opacity compatibility for legacy callers."""
@@ -325,6 +336,12 @@ def _style_screw_actor(
     actor.PickableOn()
 
 
+GUIDE_LINE_RADIUS_MM = 0.6
+GUIDE_HANDLE_RADIUS_MM = 4.0
+GUIDE_COLOR = (0.35, 0.85, 0.35)
+GUIDE_HANDLE_COLOR = (0.25, 0.45, 1.0)
+
+
 def create_screw_visual(
     screw_id: int,
     entry_point: Tuple[float, float, float],
@@ -386,6 +403,25 @@ def create_screw_visual(
     _style_screw_actor(entry_actor, entry_color)
     _style_screw_actor(shaft_actor, base_color)
     _style_screw_actor(tip_actor, tip_color)
+
+    handle_centre = guide_handle_point(entry, target, GUIDE_REACH_MM)
+    guide_line_actor = _cylinder_actor(entry, handle_centre, GUIDE_LINE_RADIUS_MM)
+    guide_line_actor.SetObjectName("screw-guide-line")
+    _style_screw_actor(guide_line_actor, GUIDE_COLOR)
+    guide_line_actor.PickableOff()
+    handle = vtk.vtkSphereSource()
+    handle.SetCenter(*handle_centre)
+    handle.SetRadius(GUIDE_HANDLE_RADIUS_MM)
+    handle.SetThetaResolution(24)
+    handle.SetPhiResolution(16)
+    handle_mapper = vtk.vtkPolyDataMapper()
+    handle_mapper.SetInputConnection(handle.GetOutputPort())
+    guide_handle_actor = vtk.vtkActor()
+    guide_handle_actor.SetMapper(handle_mapper)
+    guide_handle_actor.SetObjectName("screw-guide-handle")
+    _style_screw_actor(guide_handle_actor, GUIDE_HANDLE_COLOR)
+    for actor in (guide_line_actor, guide_handle_actor):
+        actor.VisibilityOff()
     return ScrewVisual(
         int(screw_id),
         entry,
@@ -393,6 +429,8 @@ def create_screw_visual(
         entry_actor,
         shaft_actor,
         tip_actor,
+        guide_line_actor,
+        guide_handle_actor,
     )
 
 
@@ -1528,11 +1566,14 @@ class Viewer3D(QWidget):
             ("entry", visual.entry_actor),
             ("shaft", visual.shaft_actor),
             ("tip", visual.tip_actor),
+            ("guide", visual.guide_handle_actor),
         ):
             self._renderer.AddActor(actor)
             self._screw_prop_parts[self._prop_key(actor)] = (resolved_id, part)
+        self._renderer.AddActor(visual.guide_line_actor)
         self._screw_actors.append(visual)
         self._apply_screw_selection_style(visual)
+        self._renderer.ResetCameraClippingRange()
         self._request_render()
 
         return visual
@@ -1619,6 +1660,8 @@ class Viewer3D(QWidget):
         self._selected_screw_id = None if screw_id is None else int(screw_id)
         for visual in self._screw_actors:
             self._apply_screw_selection_style(visual)
+        # The guide reaches 60 mm behind the head, possibly past the fitted depth.
+        self._renderer.ResetCameraClippingRange()
         self._apply_screw_focus()
         if self._screw_actors:
             self._request_render()
@@ -1645,7 +1688,8 @@ class Viewer3D(QWidget):
         picker.PickFromListOn()
         for visual in self._screw_actors:
             for prop in visual.props:
-                picker.AddPickList(prop)
+                if prop.GetPickable():
+                    picker.AddPickList(prop)
         return picker
 
     def _screw_visual_by_id(self, screw_id: int) -> Optional[ScrewVisual]:
@@ -1685,6 +1729,8 @@ class Viewer3D(QWidget):
 
     def _apply_screw_selection_style(self, visual: ScrewVisual) -> None:
         selected = visual.screw_id == self._selected_screw_id
+        visual.guide_line_actor.SetVisibility(selected)
+        visual.guide_handle_actor.SetVisibility(selected)
         for part, actor in (
             ("entry", visual.entry_actor),
             ("shaft", visual.shaft_actor),

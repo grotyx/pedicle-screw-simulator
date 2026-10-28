@@ -1268,3 +1268,16 @@ def test_a_manual_screw_does_not_bend_the_drawn_rod_either():
     tool.add_screw(_construct_screw("L4", 30.0, x=48.0, planned=False))
 
     assert tool.rod_lines() == before
+
+
+def test_create_screw_grades_with_the_stated_side():
+    tool = _split_density_tool()
+    seen = []
+    original = tool._screw_side
+    tool._screw_side = lambda screw: seen.append(screw.side) or original(screw)
+
+    screw = tool.create_screw((25.0, 30.0, 30.0), (25.0, 22.0, 30.0), side="left")
+
+    assert screw.side == "left"
+    assert seen and seen[0] == "left"
+    assert tool.get_screws() == [screw]

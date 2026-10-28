@@ -13,6 +13,16 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Added
+
+- Plan page: **Insert at crosshair — Left / Right** places a screw at the MPR
+  crosshair in one click, using the Manual Screw Defaults. The defaults gain
+  convergence and craniocaudal angles, and all four are remembered.
+- 3D view: the selected screw shows a guide line and a blue handle 60 mm
+  behind its head, outside the bone. Double-click the handle to rotate the
+  screw about its entry with entry and length fixed; the status bar shows the
+  angles while you move.
+
 ### Fixed
 
 - Linux (X11): the 3D view and the three MPR views no longer stay black.

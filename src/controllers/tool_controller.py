@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from src.core.screw_geometry import target_from_angles
 from src.models.measurement import Measurement
 from src.tools.measurement_tool import MeasurementTool
 from src.tools.screw_tool import ScrewTool
@@ -159,24 +160,7 @@ class ToolController:
             )
             screw = self.screw_tool.on_click(x, y, z, plane=plane)
             if screw is not None:
-                screw_id = len(self.screw_tool.get_screws()) - 1
-                actor = self._window.viewer_3d.add_screw(
-                    screw.entry_point,
-                    screw.target_point,
-                    radius=screw.diameter / 2.0,
-                    color=screw_display_color(screw),
-                    screw_id=screw_id,
-                )
-                self._screw_actors.append(actor)
-                self._add_screw_to_list(screw)
-                # Add screw projection to all MPR viewers
-                self._add_screw_to_mpr(screw_id, screw)
-                self._window.screw_list_widget.setCurrentRow(screw_id)
-                grade_text = self.screw_tool.get_grade_description(screw.grade)
-                self._window.statusbar.showMessage(
-                    f"Screw placed: {screw.length:.1f} mm, "
-                    f"Grade {screw.grade} ({grade_text})"
-                )
+                self._display_created_screw(screw)
             return
 
         if self._current_tool in self.MEASUREMENT_TOOLS:
@@ -628,6 +612,74 @@ class ToolController:
         """Append one screw row to the screw plan table."""
         index = self._window.screw_list_widget.count()
         self._window.screw_list_widget.addScrewRow(screw, index)
+
+    def _display_created_screw(self, screw) -> None:
+        """Show a screw the tool just created and graded in every linked view."""
+        screw_id = len(self.screw_tool.get_screws()) - 1
+        actor = self._window.viewer_3d.add_screw(
+            screw.entry_point,
+            screw.target_point,
+            radius=screw.diameter / 2.0,
+            color=screw_display_color(screw),
+            screw_id=screw_id,
+        )
+        self._screw_actors.append(actor)
+        self._add_screw_to_list(screw)
+        # Add screw projection to all MPR viewers
+        self._add_screw_to_mpr(screw_id, screw)
+        self._window.screw_list_widget.setCurrentRow(screw_id)
+        grade_text = self.screw_tool.get_grade_description(screw.grade)
+        self._window.statusbar.showMessage(
+            f"Screw placed: {screw.length:.1f} mm, "
+            f"Grade {screw.grade} ({grade_text})"
+        )
+
+    def insert_screw_at_crosshair(self, side: str) -> bool:
+        """Place one screw at the MPR crosshair using the Manual Screw Defaults."""
+        if self._vm.get_vtk_image() is None:
+            self._window.statusbar.showMessage("Load a CT before inserting a screw")
+            return False
+        if self._window._screw_mpr_ctrl.is_active:
+            # Screw MPR slices do not follow the stored crosshair, so the visible
+            # intersection is not where the screw would go.
+            self._window.statusbar.showMessage(
+                "Return to Standard MPR to insert at the crosshair"
+            )
+            return False
+        entry = tuple(float(v) for v in self._vm.get_crosshair_position())
+        length = float(self._window.length_spin.value())
+        try:
+            target = target_from_angles(
+                entry,
+                length,
+                float(self._window.convergence_spin.value()),
+                float(self._window.craniocaudal_spin.value()),
+                side,
+            )
+        except ValueError as exc:
+            self._window.statusbar.showMessage(f"Cannot insert screw: {exc}")
+            return False
+        bounds = self._vm.bounds
+        if len(bounds) != 6 or not all(
+            bounds[2 * axis] <= point[axis] <= bounds[2 * axis + 1]
+            for point in (entry, target)
+            for axis in range(3)
+        ):
+            self._window.statusbar.showMessage(
+                "Screw entry and tip must remain inside the CT volume"
+            )
+            return False
+
+        edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+        if edit_controller is not None:
+            edit_controller.abort()
+        self.set_tool("navigate")
+        self.screw_tool.set_screw_parameters(
+            length=length, diameter=float(self._window.diameter_spin.value())
+        )
+        screw = self.screw_tool.create_screw(entry, target, side=side)
+        self._display_created_screw(screw)
+        return True
 
     def add_existing_screw(self, screw, select: bool = False) -> int:
         """Register an existing screw in the model and every linked view."""

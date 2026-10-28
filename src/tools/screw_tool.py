@@ -411,16 +411,27 @@ class ScrewTool:
         screw = self._create_screw(entry, target)
         return screw
 
+    def create_screw(
+        self,
+        entry: Tuple[float, float, float],
+        target: Tuple[float, float, float],
+        side: str = "",
+    ) -> Screw:
+        """Create, grade and store a manual screw from explicit geometry."""
+        return self._create_screw(entry, target, side=side)
+
     def _create_screw(
         self,
         entry: Tuple[float, float, float],
-        target: Tuple[float, float, float]
+        target: Tuple[float, float, float],
+        side: str = "",
     ) -> Screw:
         """Create a new screw and add to list."""
         screw = Screw(
             entry_point=entry,
             target_point=target,
-            diameter=self._default_diameter
+            diameter=self._default_diameter,
+            side=side,
         )
 
         # Evaluate placement
