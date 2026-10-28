@@ -21,6 +21,11 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 - 3D 뷰: 선택한 스크류에 head 뒤 60 mm, 뼈 바깥쪽으로 guide 선과 파란 손잡이가
   표시됩니다. 손잡이를 더블클릭하면 entry와 길이를 고정한 채 entry를 중심으로
   회전하고, 움직이는 동안 상태 표시줄에 각도가 표시됩니다.
+- Review 페이지: Details에 **Surface HU** 행이 생겼습니다. 스크류 표면의 CT
+  샘플 가운데 130 HU 미만, 130–249 HU, 250 HU 이상의 비율을 보여 줍니다.
+  척추 밖 샘플도 세고, 3 mm 진입 구간은 뺍니다. CSV 내보내기에
+  `surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`,
+  `surface_hu_samples` 열이 끝에 붙고, HTML 보고서에도 세 비율이 나옵니다.
 
 ### 수정
 

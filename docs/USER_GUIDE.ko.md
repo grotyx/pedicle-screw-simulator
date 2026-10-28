@@ -250,7 +250,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 S1과 sacrum은 이웃 레벨 기준 차용에서 양방향 모두 제외됩니다. 요천추각(lumbosacral angle)은 L5 자체의 각도와 15–30° 차이가 나므로, S1은 자신의 적합 상태와 무관하게 L5에 법선(normal)을 빌려주지도, L5로부터 빌리지도 않습니다.
 
-실제로 어떤 기준이 쓰였든, 플래너는 종판각을 그 기준에 대해 보고합니다 — 신뢰하지 않기로 한 자체 적합을 기준으로 보고하는 일은 없습니다 — 그리고 이후 스크류의 재등급(5.9절, ScrewTool)도 같은 기준으로 같은 각도를 측정하므로 두 값이 서로 어긋나지 않습니다. 이 기준은 스크류마다 `endplate_reference`(`own` / `neighbours` / `none`)로 기록되어 Review 페이지의 Details 섹션(5.9절)에 표시되고, CSV의 마지막 열로 내보내집니다(9절 참고).
+실제로 어떤 기준이 쓰였든, 플래너는 종판각을 그 기준에 대해 보고합니다 — 신뢰하지 않기로 한 자체 적합을 기준으로 보고하는 일은 없습니다 — 그리고 이후 스크류의 재등급(5.9절, ScrewTool)도 같은 기준으로 같은 각도를 측정하므로 두 값이 서로 어긋나지 않습니다. 이 기준은 스크류마다 `endplate_reference`(`own` / `neighbours` / `none`)로 기록되어 Review 페이지의 Details 섹션(5.9절)에 표시되고, CSV의 `endplate_reference` 열로 내보내집니다(9절 참고).
 
 ### 5.6 궤적 최적화기(Trajectory Optimizer)
 
@@ -337,7 +337,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 이 category는 읽기 쉽게 경고를 분류할 뿐 임상적 위험도 평가가 아니며, 모든 계획은 여전히 CT에서 검토해야 합니다.
 
-동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
+동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle, Surface HU)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
 
 **Review** 페이지에는 다음 값이 표시됩니다.
 
@@ -363,6 +363,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 - **최소 피질골 여유거리("Wall margin"):** 스크류와 피질골 사이의 가장 가까운 거리(mm)입니다(3 mm 진입 구간 이후, 5.9절 참고).
 - **Heary breach 방향:** 가장 심한 피질골 천공의 해부학적 방향 — medial, lateral, anterior, posterior, superior, inferior 중 하나입니다(Heary 2004). Side 정보가 없는 수동 스크류에서 medial/lateral 방향의 breach가 발생하면 "mediolateral"로, breach가 없으면 "none"으로 표시됩니다.
 - **후관절(facet) 침범 등급(0–3):** Babu(2012) 등급을 근사한 값으로, 스크류 근위부(entry에서 가까운 1/3) 구간과 상위(cephalad) 척추의 segmentation label 사이 관계로 판정합니다 — 0은 접촉 없음, 1은 1 mm 이내로 후관절에 접함, 2는 1 mm 미만으로 침범, 3은 1 mm 이상 침범을 의미합니다.
+- **표면 HU(Details의 "Surface HU" 행, CSV `surface_hu_low_pct` / `surface_hu_mid_pct` / `surface_hu_high_pct` / `surface_hu_samples`):** 스크류 바깥 표면에서 얻은 CT 샘플 가운데 130 HU 미만, 130–249 HU, 250 HU 이상인 샘플의 비율을 "low / mid / high %"로 표시합니다. tooltip에 샘플 수가 나옵니다. 샘플 구간은 축이 척추에 들어간 지점에서 3 mm 지난 곳(5.9절과 같음)부터 tip까지이며, trajectory HU와 달리 척추 label 밖의 샘플도 셉니다 — 나사산에 닿은 연부조직이나 척추관을 보여 주려는 값이기 때문입니다. 샘플마다 가장 가까운 voxel 값을 읽으므로 표면적이 아니라 샘플의 비율입니다. CT 수치일 뿐 조직 분류나 고정력 추정이 아닙니다. CT나 segmentation이 없거나 CT 안에 들어오는 샘플이 하나도 없으면 "--"로 비워 둡니다. 구간 경계는 공개된 3D Slicer 척추경 나사 교육 모듈을 따랐습니다.
 
 측정값이 문헌 기준값을 넘으면 Details와 내보내기에 경고가 함께 표시됩니다.
 
@@ -516,7 +517,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 - 지원되는 골 표면을 STL로 내보냅니다.
 - 계획을 단일 HTML 보고서 파일로 내보냅니다(아래 참고).
 
-계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 각 스크류에는 **✓ Reviewed** 표시를 담는 `reviewed` 값도 저장됩니다(5.9절). schema version 3 안에서 추가된 키이므로, 이 값 없이 저장된 계획을 불러오면 모든 스크류가 검토하지 않은 상태가 됩니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 그 뒤에 표면 HU 열 네 개(`surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`, `surface_hu_samples`, 5.10절 참고)가 붙습니다. 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 각 스크류에는 **✓ Reviewed** 표시를 담는 `reviewed` 값도 저장됩니다(5.9절). schema version 3 안에서 추가된 키이므로, 이 값 없이 저장된 계획을 불러오면 모든 스크류가 검토하지 않은 상태가 됩니다.
 
 저장·불러오기·내보내기 대화상자는 마지막으로 계획에 사용한 폴더(처음에는 문서 폴더)에서 열리며, 응용 프로그램 폴더에서는 열리지 않습니다. 계획 파일은 DICOM Series Instance UID를 일방향 SHA-256 해시(`series_uid_sha256`)로만 기록합니다. 다른 series에 계획을 불러올 때 경고하기에는 충분하지만 PACS에서 조회할 수는 없습니다. 원본 UID가 들어 있는 이전 계획도 그대로 불러오며 같은 방식으로 검사하고, 다시 저장하면 해시만 기록됩니다.
 

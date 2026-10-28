@@ -938,3 +938,88 @@ class TestCorticalEntryZone:
             (30.0, 42.0, 30.0), (30.0, 25.0, 30.0), 6.0, label=28, entry_zone_mm=0.0
         )
         assert with_default.breach_mm == pytest.approx(explicit_off.breach_mm)
+
+
+def _rod_phantom(ct_hu, label_radius_mm=6.0, label_y_max=50, origin=(0.0, 0.0, 0.0)):
+    """A label rod along y (x=z=30, y<=label_y_max) and a CT built by ``ct_hu(x, y, z)``."""
+    z, y, x = np.mgrid[0:60, 0:60, 0:60].astype(float)
+    arr = np.zeros((60, 60, 60), np.uint8)
+    arr[(np.hypot(x - 30, z - 30) <= label_radius_mm) & (y <= label_y_max)] = 28
+    mask = sitk.GetImageFromArray(arr)
+    ct = sitk.GetImageFromArray(ct_hu(x, y, z).astype(np.int16))
+    for image in (mask, ct):
+        image.SetOrigin(origin)
+    return mask, ct
+
+
+ROD_ENTRY = (30.0, 58.0, 30.0)
+ROD_TIP = (30.0, 12.0, 30.0)
+
+
+class TestSurfaceHuDistribution:
+    def test_the_centreline_is_not_a_surface_sample(self):
+        # Hollow core of air inside dense bone: only the ring is sampled.
+        mask, ct = _rod_phantom(
+            lambda x, y, z: np.where(np.hypot(x - 30, z - 30) < 1.5, -500, 300)
+        )
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        assert dist.high_pct == pytest.approx(100.0)
+        assert dist.low_pct == pytest.approx(0.0)
+        assert dist.samples > 0
+
+    def test_samples_outside_the_label_still_count(self):
+        # The label is a 1 mm rod; the 3 mm ring lies wholly outside it.
+        mask, ct = _rod_phantom(lambda x, y, z: np.full_like(x, 40), label_radius_mm=1.0)
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        assert dist is not None
+        assert dist.low_pct == pytest.approx(100.0)
+
+    @pytest.mark.parametrize(
+        ("hu", "bin_name"),
+        [(129, "low_pct"), (130, "mid_pct"), (249, "mid_pct"), (250, "high_pct")],
+    )
+    def test_bin_boundaries(self, hu, bin_name):
+        mask, ct = _rod_phantom(lambda x, y, z: np.full_like(x, hu))
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        assert getattr(dist, bin_name) == pytest.approx(100.0)
+        assert dist.low_pct + dist.mid_pct + dist.high_pct == pytest.approx(100.0)
+
+    def test_the_cortical_entry_zone_is_left_out(self):
+        # Soft tissue up to 1.5 mm past where the axis enters the label (y=50):
+        # inside the 3 mm entry zone, so it must not appear in the distribution.
+        mask, ct = _rod_phantom(lambda x, y, z: np.where(y >= 49, 0, 300))
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        assert dist.high_pct == pytest.approx(100.0)
+
+    def test_mixed_halves_split_the_samples(self):
+        mask, ct = _rod_phantom(lambda x, y, z: np.where(y >= 30, 100, 400))
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        assert 0.0 < dist.low_pct < 100.0
+        assert dist.low_pct + dist.high_pct == pytest.approx(100.0)
+
+    def test_nonzero_origin_samples_in_world_coordinates(self):
+        mask, ct = _rod_phantom(
+            lambda x, y, z: np.where(np.hypot(x - 30, z - 30) < 1.5, -500, 300),
+            origin=(-100.0, 20.0, 5.0),
+        )
+        shift = np.array([-100.0, 20.0, 5.0])
+        dist = ScrewGrader(mask, ct).surface_hu_distribution(
+            tuple(np.add(ROD_ENTRY, shift)), tuple(np.add(ROD_TIP, shift)), 6.0, 28
+        )
+        assert dist.high_pct == pytest.approx(100.0)
+
+    def test_unavailable_without_ct(self):
+        mask, _ct = _rod_phantom(lambda x, y, z: np.full_like(x, 300))
+        assert ScrewGrader(mask).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28) is None
+
+    def test_unavailable_for_a_degenerate_axis_or_diameter(self):
+        mask, ct = _rod_phantom(lambda x, y, z: np.full_like(x, 300))
+        grader = ScrewGrader(mask, ct)
+        assert grader.surface_hu_distribution(ROD_ENTRY, ROD_ENTRY, 6.0, 28) is None
+        assert grader.surface_hu_distribution(ROD_ENTRY, ROD_TIP, 0.0, 28) is None
+        assert grader.surface_hu_distribution(ROD_ENTRY, ROD_TIP, float("nan"), 28) is None
+
+    def test_unavailable_outside_the_ct(self):
+        mask, ct = _rod_phantom(lambda x, y, z: np.full_like(x, 300))
+        grader = ScrewGrader(mask, ct)
+        assert grader.surface_hu_distribution((-90.0, -90.0, -90.0), (-90.0, -70.0, -90.0), 6.0, 28) is None

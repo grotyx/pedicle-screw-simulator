@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from src import __version__
 from src.utils.planning_io import _metric_number
+from src.utils.screw_metrics import UNKNOWN_TEXT, surface_hu_text
 
 TITLE = "Pedicle Screw Simulator — Planning report"
 BANNER = (
@@ -113,7 +114,8 @@ def _screws_html(screws: Sequence[Any]) -> str:
         return "<p>No screws planned.</p>"
     head = (
         "#", "Level", "Side", "Source", "Diameter × length (mm)", "Grade",
-        "Breach (mm)", "Medial breach (mm)", "Trajectory HU mean", "Warnings",
+        "Breach (mm)", "Medial breach (mm)", "Trajectory HU mean",
+        "Surface HU <130 / 130–249 / ≥250", "Warnings",
     )
     out = ["<table><tr>" + "".join(f"<th>{h}</th>" for h in head) + "</tr>"]
     for index, screw in enumerate(screws):
@@ -125,6 +127,7 @@ def _screws_html(screws: Sequence[Any]) -> str:
             f"{screw.breach_distance:.1f}",
             _metric_number(metrics, "medial_breach_mm", ".1f") or "—",
             _metric_number(metrics, "trajectory_mean_hu", ".0f") or "—",
+            surface_hu_text(metrics).replace(UNKNOWN_TEXT, "—"),
         )
         warnings = "<br>".join(escape(line) for line in screw_warning_lines(screw))
         out.append(

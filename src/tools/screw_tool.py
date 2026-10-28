@@ -107,6 +107,10 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "lateral_breach_mm",
     "craniocaudal_breach_mm",
     "medial_wall_mm",
+    "surface_hu_low_pct",
+    "surface_hu_mid_pct",
+    "surface_hu_high_pct",
+    "surface_hu_samples",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold
@@ -655,7 +659,7 @@ class ScrewTool:
         the colour of the screw, so a drag that moves it to another level has
         to move the width with it.
         """
-        from ..core.bone_quality import assess_bone_quality
+        from ..core.bone_quality import assess_bone_quality, surface_hu_metric_items
         from ..core.breach_classification import facet_violation_grade, medial_breach_warning
 
         quality = assess_bone_quality(
@@ -711,6 +715,7 @@ class ScrewTool:
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
+            **surface_hu_metric_items(quality.surface_hu),
         }
         warnings = list(quality.warnings)
         if facet_grade >= 2:

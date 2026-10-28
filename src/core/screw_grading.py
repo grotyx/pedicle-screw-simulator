@@ -72,6 +72,13 @@ BREACH_GRADE_LIMITS_MM = {"B": 2.0, "C": 4.0, "D": 6.0}
 #: candidate ranks worst on density rather than looking dense or vanishing.
 NO_BONE_HU = -1000.0
 
+#: HU bin edges of :meth:`ScrewGrader.surface_hu_distribution`: below the low
+#: edge, from it up to the high edge, and at or above the high edge.  The bins
+#: of the Slicer pedicle-screw training module (soft / low / high density).
+#: They describe sampled CT numbers, not a tissue classification.
+SURFACE_HU_LOW = 130.0
+SURFACE_HU_HIGH = 250.0
+
 #: Grid-equality tolerances used by :meth:`ScrewGrader.grids_match`.
 #:
 #: An origin is compared against a *fraction of a voxel* rather than an absolute
@@ -136,6 +143,17 @@ class BatchResult:
                 setattr(self, name, self.breach_mm)
         if self.medial_wall_mm is None:
             self.medial_wall_mm = self.min_wall_mm
+
+
+@dataclass
+class SurfaceHuDistribution:
+    """Share (%) of screw-surface samples in each :data:`SURFACE_HU_LOW` /
+    :data:`SURFACE_HU_HIGH` bin, and how many CT samples they come from."""
+
+    low_pct: float
+    mid_pct: float
+    high_pct: float
+    samples: int
 
 
 @dataclass
@@ -325,6 +343,44 @@ class ScrewGrader:
         sel = idx_zyx[rows]
         values[rows] = self._ct_array[sel[:, 0], sel[:, 1], sel[:, 2]]
         return values
+
+    def surface_hu_distribution(
+        self, entry: Point3, target: Point3, diameter_mm: float, label: int
+    ) -> Optional[SurfaceHuDistribution]:
+        """Raw CT HU at the screw's surface, binned (see :data:`SURFACE_HU_LOW`).
+
+        Samples are the radial ring of :meth:`cylinder_points` -- the
+        centreline is inside the screw, not against it -- from the graded start
+        (:meth:`graded_starts`: the cortical entry plus :data:`ENTRY_ZONE_MM`)
+        to the tip.  Unlike the trajectory HU, samples outside ``label`` count:
+        soft tissue or canal against the thread is what this is meant to show.
+        Each sample takes its nearest voxel, so the shares are of samples, not
+        of surface area.  ``None`` without a CT, for a degenerate axis or
+        diameter, or when no sample falls inside the CT.
+        """
+        diameter_mm = float(diameter_mm)
+        if self._ct_array is None or not (math.isfinite(diameter_mm) and diameter_mm > 0.0):
+            return None
+        if not np.asarray(unit_trajectory(entry, target), dtype=np.float64).any():
+            return None
+        start = self.graded_starts(
+            np.asarray(entry, dtype=np.float64)[None, :],
+            np.asarray(target, dtype=np.float64)[None, :],
+            label,
+        )[0]
+        points = self.cylinder_points(start, target, diameter_mm)
+        stations = len(self._centreline(start, target))
+        per_station = points.shape[0] // max(stations, 1)
+        if per_station < 2:
+            return None
+        ring = points.reshape(stations, per_station, 3)[:, 1:, :].reshape(-1, 3)
+        hu = self.hu_at_points(ring)
+        hu = hu[np.isfinite(hu)]
+        if hu.size == 0:
+            return None
+        low = float(np.mean(hu < SURFACE_HU_LOW) * 100.0)
+        high = float(np.mean(hu >= SURFACE_HU_HIGH) * 100.0)
+        return SurfaceHuDistribution(low, 100.0 - low - high, high, int(hu.size))
 
     def distances_at_points(self, points: np.ndarray, label: int) -> Tuple[np.ndarray, np.ndarray]:
         """Distances (mm) from each ``(N, 3)`` LPS point to ``label``.

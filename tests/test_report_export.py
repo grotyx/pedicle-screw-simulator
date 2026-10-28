@@ -42,7 +42,14 @@ def _screw(level, side, grade="A", source="auto", breach=0.0, diameter=5.5):
         grade=grade,
         breach_distance=breach,
         source=source,
-        metrics={"medial_breach_mm": 1.5, "trajectory_mean_hu": 321.0},
+        metrics={
+            "medial_breach_mm": 1.5,
+            "trajectory_mean_hu": 321.0,
+            "surface_hu_low_pct": 10.0,
+            "surface_hu_mid_pct": 30.0,
+            "surface_hu_high_pct": 60.0,
+            "surface_hu_samples": 200,
+        },
     )
     screw.warnings = ["synthetic <b>warning</b>"]
     return screw
@@ -89,6 +96,13 @@ def test_report_content():
     assert "synthetic &lt;b&gt;warning&lt;/b&gt;" in screw_table and "<b>warning" not in html
     assert html.count("data:image/png;base64,") == 1
     assert html.count(IMAGE_UNAVAILABLE) == 1  # the 3D pane
+
+
+def test_screw_table_has_the_surface_hu_bins():
+    html = build_report_html(_context())
+    screw_table = html.split("<h2>Screws</h2>")[1].split("<h2>Construct map</h2>")[0]
+    assert "Surface HU" in screw_table
+    assert "10 / 30 / 60 %" in screw_table
 
 
 def test_construct_grid_is_cranial_first_right_then_left():

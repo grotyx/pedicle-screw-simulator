@@ -49,7 +49,12 @@ from src.controllers.screw_mpr_controller import (
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
 from src.controllers.view_controller import ViewController
-from src.utils.screw_metrics import is_narrow_pedicle, pedicle_row_text
+from src.utils.screw_metrics import (
+    is_narrow_pedicle,
+    pedicle_row_text,
+    surface_hu_text,
+    surface_hu_tooltip,
+)
 
 from .. import (
     __academic_affiliation__,
@@ -1663,6 +1668,10 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Pedicle"), 11, 0)
         self.selected_screw_pedicle = QLabel("--")
         selected_screw_details.addWidget(self.selected_screw_pedicle, 11, 1)
+        selected_screw_details.addWidget(QLabel("Surface HU"), 12, 0)
+        self.selected_screw_surface_hu = QLabel("--")
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip({}))
+        selected_screw_details.addWidget(self.selected_screw_surface_hu, 12, 1)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         details_layout.addWidget(self.selected_screw_metrics)
 
@@ -3022,6 +3031,7 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary,
             self.selected_screw_pedicle,
             self.selected_screw_alignment,
+            self.selected_screw_surface_hu,
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
@@ -3107,6 +3117,8 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary.setText(heary)
 
         self.selected_screw_pedicle.setText(pedicle_row_text(metrics))
+        self.selected_screw_surface_hu.setText(surface_hu_text(metrics))
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip(metrics))
         self._pedicle_row_narrow = is_narrow_pedicle(metrics)
         self._repaint_pedicle_row()
 

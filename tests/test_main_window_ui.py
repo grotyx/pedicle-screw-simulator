@@ -472,8 +472,35 @@ def test_details_is_collapsed_and_holds_the_metric_rows(ui_main_window):
         window.selected_screw_heary,
         window.selected_screw_trajectory,
         window.selected_screw_pedicle,
+        window.selected_screw_surface_hu,
     ):
         assert window.details_group.isAncestorOf(widget)
+
+
+def test_details_surface_hu_row_shows_the_three_bins(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    measured = Screw(
+        entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0), side="right",
+        metrics={
+            "surface_hu_low_pct": 12.0,
+            "surface_hu_mid_pct": 38.0,
+            "surface_hu_high_pct": 50.0,
+            "surface_hu_samples": 320,
+        },
+    )
+    unmeasured = Screw(entry_point=(5.0, 0.0, 0.0), target_point=(5.0, -40.0, 0.0))
+    for screw in (measured, unmeasured):
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+    assert window.selected_screw_surface_hu.text() == "12 / 38 / 50 %"
+    assert "320" in window.selected_screw_surface_hu.toolTip()
+
+    window.screw_list_widget.setCurrentRow(1)
+    assert window.selected_screw_surface_hu.text() == "--"
 
 
 def test_details_endplate_row_names_the_neighbour_reference(ui_main_window):

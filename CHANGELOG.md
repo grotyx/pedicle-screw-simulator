@@ -22,6 +22,12 @@ current version; every other place the version appears is derived from it.
   behind its head, outside the bone. Double-click the handle to rotate the
   screw about its entry with entry and length fixed; the status bar shows the
   angles while you move.
+- Review page: a **Surface HU** row in Details shows the share of CT samples
+  on the screw's surface below 130, 130–249 and at least 250 HU. Samples
+  outside the vertebra count too, and the 3 mm entry zone is left out. The
+  CSV export appends `surface_hu_low_pct`, `surface_hu_mid_pct`,
+  `surface_hu_high_pct` and `surface_hu_samples`, and the HTML report shows
+  the three shares.
 
 ### Fixed
 

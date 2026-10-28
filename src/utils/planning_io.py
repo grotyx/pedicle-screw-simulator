@@ -388,6 +388,11 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             # "none") -- without it a reader cannot tell an aligned screw from
             # one that was never measured against an endplate at all.
             "endplate_reference",
+            # Appended last, per the plan-file contract: the share of screw
+            # surface samples below 130, 130-249 and >= 250 HU, and how many
+            # CT samples those shares come from.
+            "surface_hu_low_pct", "surface_hu_mid_pct", "surface_hu_high_pct",
+            "surface_hu_samples",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -431,4 +436,8 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "endplate_angle_deg"),
                 _metric_flag(metrics, "width_uncertain"),
                 _csv_text(metrics.get("endplate_reference") or ""),
+                _metric_number(metrics, "surface_hu_low_pct"),
+                _metric_number(metrics, "surface_hu_mid_pct"),
+                _metric_number(metrics, "surface_hu_high_pct"),
+                _metric_number(metrics, "surface_hu_samples", "d"),
             ])
