@@ -229,6 +229,7 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
         self.rod_lines = {}
         self.reference_segments = []
         self.reference_visible = True
+        self.guides_visible = True
         self.rod_line_toggle = QToolButton(self)
         self.rod_line_toggle.setCheckable(True)
 
@@ -243,6 +244,9 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
 
     def set_reference_screws_visible(self, visible):
         self.reference_visible = bool(visible)
+
+    def set_guides_visible(self, visible):
+        self.guides_visible = bool(visible)
 
     def show_screw_mpr(
         self,
@@ -3294,7 +3298,7 @@ def test_a_new_study_clears_the_reference(ui_main_window, tmp_path, monkeypatch)
     assert not window.reference_compare_action.isEnabled()
 
 
-def test_report_capture_hides_the_reference_ghosts(ui_main_window, tmp_path, monkeypatch):
+def test_report_capture_hides_the_reference_ghosts_and_guides(ui_main_window, tmp_path, monkeypatch):
     import src.controllers.plan_controller as plan_controller_module
 
     window = ui_main_window
@@ -3307,7 +3311,9 @@ def test_report_capture_hides_the_reference_ghosts(ui_main_window, tmp_path, mon
     seen = []
     monkeypatch.setattr(
         plan_controller_module, "capture_png",
-        lambda render_window: seen.append(window.viewer_3d.reference_visible),
+        lambda render_window: seen.append(
+            window.viewer_3d.reference_visible or window.viewer_3d.guides_visible
+        ),
     )
     monkeypatch.setattr(
         plan_controller_module.QFileDialog, "getSaveFileName",
@@ -3318,6 +3324,7 @@ def test_report_capture_hides_the_reference_ghosts(ui_main_window, tmp_path, mon
 
     assert seen and not any(seen)
     assert window.viewer_3d.reference_visible is True
+    assert window.viewer_3d.guides_visible is True
 
 
 def test_replacing_a_hidden_reference_shows_the_new_one_and_ticks_show(

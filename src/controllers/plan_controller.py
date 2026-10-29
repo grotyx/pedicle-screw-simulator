@@ -213,10 +213,11 @@ class PlanController:
         win = self._window
         images = {}
         # The report lists only the working plan, so its 3D image must not
-        # show the reference ghosts either.
+        # show the reference ghosts or the rotation guide (a control) either.
         hide_reference = self._reference is not None and self._reference["visible"]
         if hide_reference:
             win.viewer_3d.set_reference_screws_visible(False)
+        win.viewer_3d.set_guides_visible(False)
         try:
             for title, viewer in (
                 ("Axial", win.axial_viewer),
@@ -229,6 +230,7 @@ class PlanController:
                     capture_png(widget.GetRenderWindow()) if widget is not None else None
                 )
         finally:
+            win.viewer_3d.set_guides_visible(True)
             if hide_reference:
                 win.viewer_3d.set_reference_screws_visible(True)
         try:

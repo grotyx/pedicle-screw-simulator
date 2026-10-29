@@ -318,6 +318,34 @@ class TestScrewVisualGeometry:
         viewer.remove_screw(second)
         assert viewer._prop_key(second.guide_handle_actor) not in viewer._screw_prop_parts
 
+    def test_guides_can_be_hidden_for_a_capture_and_come_back(self):
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._renderer = vtk.vtkRenderer()
+        viewer._screw_actors = []
+        viewer._screw_prop_parts = {}
+        viewer._selected_screw_id = None
+        viewer._active_screw_part = None
+        viewer._vertebral_mesh_actor = None
+        viewer._segmentation_actor = None
+        viewer._render_state = Viewer3D._RS_NORMAL
+        viewer._request_render = lambda: None
+        visual = viewer.add_screw((0, 0, 0), (0, -40, 0), screw_id=0)
+        viewer.set_selected_screw(0)
+
+        viewer.set_guides_visible(False)
+        assert visual.guide_handle_actor.GetVisibility() == 0
+        assert visual.guide_line_actor.GetVisibility() == 0
+        viewer.set_selected_screw(0)                 # reselecting keeps it hidden
+        assert visual.guide_handle_actor.GetVisibility() == 0
+
+        viewer.set_guides_visible(True)
+        assert visual.guide_handle_actor.GetVisibility() == 1
+        assert visual.guide_line_actor.GetVisibility() == 1
+
     def test_showing_a_guide_widens_the_camera_clipping_range(self):
         import vtk
 

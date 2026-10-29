@@ -477,6 +477,9 @@ class Viewer3D(QWidget):
     from vtkImageData with transfer functions.
     """
 
+    # The rotation guide is a control, not part of the plan: report captures hide it.
+    _guides_hidden = False
+
     header_double_clicked = pyqtSignal(str)  # ("3d") — maximise request
     #: Emitted only from a user click on the header Vertebrae/Full CT toggle
     #: (True = Vertebrae requested); never from set_isolation_state, which
@@ -1761,10 +1764,17 @@ class Viewer3D(QWidget):
             return "tip"
         return fallback_part
 
+    def set_guides_visible(self, visible: bool) -> None:
+        """Hide the rotation guides (e.g. for a report capture) or bring them back."""
+        self._guides_hidden = not visible
+        for visual in self._screw_actors:
+            self._apply_screw_selection_style(visual)
+        self._request_render()
+
     def _apply_screw_selection_style(self, visual: ScrewVisual) -> None:
         selected = visual.screw_id == self._selected_screw_id
-        visual.guide_line_actor.SetVisibility(selected)
-        visual.guide_handle_actor.SetVisibility(selected)
+        visual.guide_line_actor.SetVisibility(selected and not self._guides_hidden)
+        visual.guide_handle_actor.SetVisibility(selected and not self._guides_hidden)
         for part, actor in (
             ("entry", visual.entry_actor),
             ("shaft", visual.shaft_actor),
