@@ -456,6 +456,7 @@ class AutoPlacementController:
             self._window.statusbar.showMessage(bar + note)
             return
 
+        before = self._window._tool_ctrl.snapshot_screws()
         replace_levels = getattr(thread, "replace_levels", ())
         if replace_levels:
             if cancelled:
@@ -483,6 +484,7 @@ class AutoPlacementController:
                 select=offset == 0,
             )
         self._window.screw_list_widget.setCurrentRow(first_new_index)
+        self._window._tool_ctrl.record_screw_edit("auto plan", before)
 
         if cancelled:
             # A partial construct: report what was kept, not a success summary.

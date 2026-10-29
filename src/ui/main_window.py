@@ -2211,6 +2211,18 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+        # Edit menu: undo/redo of screw plan edits (ToolController labels them)
+        edit_menu = menubar.addMenu("Edit")
+        self._undo_action = QAction("Undo", self)
+        self._undo_action.setShortcut("Ctrl+Z")
+        self._undo_action.triggered.connect(self._tool_ctrl.undo)
+        edit_menu.addAction(self._undo_action)
+        self._redo_action = QAction("Redo", self)
+        self._redo_action.setShortcuts(["Ctrl+Shift+Z", "Ctrl+Y"])
+        self._redo_action.triggered.connect(self._tool_ctrl.redo)
+        edit_menu.addAction(self._redo_action)
+        self._tool_ctrl._sync_undo_actions()
+
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
 
@@ -3446,6 +3458,7 @@ class MainWindow(QMainWindow):
 
         # Clear tools
         self._tool_ctrl.screw_tool.clear_screws()
+        self._tool_ctrl.clear_history()
         self._tool_ctrl.screw_tool.cancel()
         self._tool_ctrl.measurement_tool.clear_measurements()
         self._tool_ctrl.measurement_tool.cancel()

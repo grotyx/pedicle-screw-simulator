@@ -198,6 +198,12 @@ class _DummyToolCtrl:
         for row in self.removed_rows:
             self.screw_tool.remove_screw(row)
 
+    def snapshot_screws(self):
+        return list(self.screw_tool.get_screws())
+
+    def record_screw_edit(self, label, before):
+        self.recorded = (label, before)
+
 
 class _DummySegCtrl:
     def __init__(self):

@@ -460,6 +460,7 @@ class PlanController:
         # header, inspector and 3D highlight show it instead of "No screws".
         if screws:
             self._window.screw_list_widget.setCurrentRow(0)
+        tool_ctrl.clear_history()
 
     @staticmethod
     def _build_measurement_planes(entries, count: int) -> List[Optional[str]]:

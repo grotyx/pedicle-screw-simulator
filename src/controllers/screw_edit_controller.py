@@ -32,6 +32,8 @@ class ScrewEditController:
         self._drag_entry: Optional[Point3D] = None
         self._drag_target: Optional[Point3D] = None
         self._active_source: Optional[str] = None
+        #: Screw list as it was when the current drag began, for undo.
+        self._drag_before: Optional[list] = None
 
     @property
     def mode(self) -> str:
@@ -40,6 +42,11 @@ class ScrewEditController:
     @property
     def is_active(self) -> bool:
         return self._mode != "idle"
+
+    @property
+    def is_dragging(self) -> bool:
+        """A direct drag is in progress (not a pending one-click edit)."""
+        return self.is_active and self._drag_anchor is not None
 
     @property
     def active_source(self) -> Optional[str]:
@@ -115,6 +122,7 @@ class ScrewEditController:
         self._cancel_active_viewer_locks()
         self._window._tool_ctrl.set_tool("navigate")
         self._window.screw_list_widget.setCurrentRow(index)
+        self._drag_before = self._window._tool_ctrl.snapshot_screws()
         self._selected_index = int(index)
         self._mode = mode
         self._drag_anchor = self._point(world_point)
@@ -223,7 +231,10 @@ class ScrewEditController:
         """Finish direct manipulation while preserving the last valid state."""
         selected_index = self._selected_index
         was_active = self.is_active
+        before, self._drag_before = self._drag_before, None
         self.cancel(show_message=False)
+        if before is not None:
+            self._window._tool_ctrl.record_screw_edit("drag screw", before)
         if was_active and selected_index is not None:
             self._realign_screw_mpr(selected_index)
 
@@ -250,13 +261,17 @@ class ScrewEditController:
         point = (float(x), float(y), float(z))
         entry_point, target_point = self._edited_points(screw, point)
         mode = self._mode
+        before = self._window._tool_ctrl.snapshot_screws()
         if not self._apply_points(entry_point, target_point):
             return True
+        labels = {"entry": "Entry", "tip": "Tip", "move": "Whole screw"}
+        self._window._tool_ctrl.record_screw_edit(
+            f"edit {labels[mode].lower()}", before
+        )
         selected_index = self._selected_index
         self.cancel(show_message=False)
         if selected_index is not None:
             self._realign_screw_mpr(selected_index)
-        labels = {"entry": "Entry", "tip": "Tip", "move": "Whole screw"}
         self._window.statusbar.showMessage(
             f"{labels[mode]} updated from {plane.capitalize()} MPR"
         )

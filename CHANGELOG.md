@@ -41,6 +41,12 @@ current version; every other place the version appears is derived from it.
   of the CT (Ray-sum or MIP) and the planned screws drawn at their diameter,
   so the plan can be checked the way it will look on fluoroscopy. It follows
   screw edits and selection, and warns when the CT axes are oblique.
+- Edit menu: Undo (`Ctrl+Z`) and Redo (`Ctrl+Shift+Z`, `Ctrl+Y`) for
+  screw plan edits — adding (also at the crosshair), deleting, dragging
+  (also with the guide handle) or click-editing a screw,
+  changing its diameter, and accepting an automatic plan (one step per
+  batch). The last 50 steps are kept; a new study or a loaded plan clears
+  them. Measurements and segmentation edits are not included.
 
 ### Fixed
 

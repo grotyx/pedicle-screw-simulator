@@ -69,6 +69,12 @@ class _ToolController:
     def refresh_screw(self, index, screw):
         self.refreshed.append((index, screw))
 
+    def snapshot_screws(self):
+        return self.screw_tool.get_screws()
+
+    def record_screw_edit(self, label, before):
+        self.recorded = (label, before)
+
 
 class _ScrewMPRController:
     def __init__(self):

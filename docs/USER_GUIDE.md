@@ -436,6 +436,10 @@ Values are normalized to 0.5 mm increments between 4.0 and 7.5 mm.
 
 Select a screw and use **Delete Screw** or the `Delete` key.
 
+### 6.5 Undo and Redo
+
+The menu bar's **Edit** menu has **Undo** (`Ctrl+Z`) and **Redo** (`Ctrl+Shift+Z` or `Ctrl+Y`) for changes to the screw list: adding a screw (by clicks or with **Insert at crosshair**), deleting one, moving it (one whole drag — including a guide-handle rotation — or one edit-mode click is one step), changing the selected screw's diameter (a run of changes to the same screw is one step), and accepting an automatic plan (the whole batch is one step). The menu entries name the step they will undo or redo, such as "Undo Delete Screw", and are greyed out when there is nothing to undo or redo; the status bar confirms each step, for example "Undo: delete screw". A restored screw comes back at the same place in the list with the grade and metrics it had, and is selected. The last 50 steps are kept. Making a new change after an undo discards the steps you could have redone. Opening a new study and loading a plan clear the history. Undo does nothing while you are dragging a screw, and measurements and segmentation edits are not part of the history.
+
 ## 7. Manual Tools
 
 Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
@@ -530,6 +534,8 @@ The window stays open while you work: it redraws when screws are added, moved, r
 | `Ctrl+O` | Open a DICOM folder |
 | `Ctrl+S` | Save the plan |
 | `Ctrl+L` | Load a plan |
+| `Ctrl+Z` | Undo the last screw change (6.5) |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | Redo the last undone screw change (6.5) |
 | `Ctrl+Q` | Exit |
 | `Ctrl+M` | Maximise the pane you last worked in; repeat to restore |
 | `R` | Reset Camera: fit the MPR views and the 3D view (ignored while you type in a field) |
