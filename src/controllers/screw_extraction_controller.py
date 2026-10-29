@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from src.core.screw_extraction import extract_screws
 from src.models.screw import Screw
+from src.utils.constants import MAX_SCREW_DIAMETER, MIN_SCREW_DIAMETER
 
 if TYPE_CHECKING:
     from src.core.volume_manager import VolumeManager
@@ -90,14 +91,20 @@ class ScrewExtractionController:
             screw = Screw(
                 entry_point=found.entry_lps,
                 target_point=found.target_lps,
-                diameter=round(found.diameter_mm, 1),
+                # Metal blooming widens the shaft; keep the model inside the
+                # sizes the app can edit and say what was measured.
+                diameter=min(
+                    max(round(found.diameter_mm, 1), MIN_SCREW_DIAMETER),
+                    MAX_SCREW_DIAMETER,
+                ),
                 side=side_from_segmentation(
                     screw_tool.grader, found.entry_lps, found.target_lps, centres
                 ),
                 source="extracted",
                 warnings=[
                     f"Extracted from post-op CT ({found.reason}, confidence "
-                    f"{found.confidence:.1f}); check against the images"
+                    f"{found.confidence:.1f}, measured {found.diameter_mm:.1f} mm "
+                    "wide); check against the images"
                 ],
             )
             screw_tool.evaluate_screw(screw)

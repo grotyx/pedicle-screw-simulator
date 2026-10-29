@@ -151,3 +151,21 @@ def test_an_extraction_failure_warns_instead_of_escaping_the_slot(ui_main_window
 
     assert len(warnings) == 1
     assert window._tool_ctrl.screw_tool.get_screws() == []
+
+
+def test_a_bloomed_diameter_is_clamped_to_the_supported_range(ui_main_window, monkeypatch):
+    from src.core.screw_extraction import ExtractedScrew, ScrewExtraction
+    from src.utils.constants import MAX_SCREW_DIAMETER
+
+    window = ui_main_window
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: _phantom([]))
+    found = ExtractedScrew((0.0, 60.0, 110.0), (0.0, 20.0, 110.0), 8.8, 40.0, 900, 0.9, "head at the wider end")
+    monkeypatch.setattr(
+        controller_module, "extract_screws", lambda _image: ScrewExtraction([found], "1 screw(s) found")
+    )
+
+    window._extract_screws_action.trigger()
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.diameter == MAX_SCREW_DIAMETER
+    assert any("8.8 mm" in w for w in screw.warnings)

@@ -6,7 +6,6 @@ import SimpleITK as sitk
 
 from src.core.screw_extraction import (
     METAL_HU_THRESHOLD,
-    extract_screw_near,
     extract_screws,
 )
 
@@ -214,27 +213,6 @@ def test_threshold_is_adjustable():
 
     assert extract_screws(image, threshold_hu=3500).screws == []
     assert len(extract_screws(image, threshold_hu=2500).screws) == 1
-
-
-def test_seeded_mode_picks_the_screw_nearest_the_click():
-    points = _grid()
-    image = _phantom([_screw(points, LEFT_HEAD), _screw(points, RIGHT_HEAD)])
-    click = RIGHT_HEAD + AXIS * 20.0 + np.array([2.0, 0.0, 0.0])
-
-    extraction = extract_screw_near(image, tuple(click))
-
-    assert len(extraction.screws) == 1
-    assert np.linalg.norm(np.asarray(extraction.screws[0].entry_lps) - RIGHT_HEAD) <= 1.5
-
-
-def test_seeded_mode_far_from_any_screw_returns_empty():
-    points = _grid()
-    image = _phantom([_screw(points, LEFT_HEAD)])
-
-    extraction = extract_screw_near(image, (60.0, 20.0, 105.0))
-
-    assert extraction.screws == []
-    assert extraction.reason
 
 
 def test_rotated_direction_matrix_is_rejected():

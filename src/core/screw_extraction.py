@@ -62,8 +62,6 @@ MIN_ELONGATION = 3.0
 MIN_AP_COMPONENT = 0.5
 #: A slab this many times wider than the shaft belongs to the head.
 HEAD_AREA_RATIO = 1.5
-#: Seeded mode ignores screws whose axis is further than this from the click.
-SEED_MAX_DISTANCE_MM = 10.0
 
 _IDENTITY_DIRECTION = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 _SLAB_MM = 1.0
@@ -148,36 +146,6 @@ def extract_screws(
     return ScrewExtraction(screws=screws, reason=f"{len(screws)} screw(s) found")
 
 
-def extract_screw_near(
-    ct_image: sitk.Image,
-    seed_lps: Point3,
-    threshold_hu: float = METAL_HU_THRESHOLD,
-    max_distance_mm: float = SEED_MAX_DISTANCE_MM,
-) -> ScrewExtraction:
-    """The screw whose axis passes nearest ``seed_lps``, if within reach."""
-    found = extract_screws(ct_image, threshold_hu)
-    seed = np.asarray(seed_lps, dtype=np.float64)
-    best: Optional[ExtractedScrew] = None
-    best_distance = float(max_distance_mm)
-    for screw in found.screws:
-        distance = _segment_distance(seed, screw.entry_lps, screw.target_lps)
-        if distance <= best_distance:
-            best, best_distance = screw, distance
-    if best is None:
-        reason = found.reason if not found.screws else (
-            f"No screw within {max_distance_mm:.0f} mm of the selected point"
-        )
-        return ScrewExtraction(reason=reason)
-    return ScrewExtraction(screws=[best], reason=best.reason)
-
-
-def _segment_distance(point: np.ndarray, start: Point3, end: Point3) -> float:
-    a = np.asarray(start, dtype=np.float64)
-    b = np.asarray(end, dtype=np.float64)
-    ab = b - a
-    t = np.clip(np.dot(point - a, ab) / max(np.dot(ab, ab), 1e-12), 0.0, 1.0)
-    return float(np.linalg.norm(point - (a + t * ab)))
-
 
 def _fit_screw(
     component: np.ndarray, box, origin: np.ndarray, spacing_xyz: np.ndarray
@@ -191,8 +159,8 @@ def _fit_screw(
     points = origin + zyx[:, ::-1] * spacing_xyz          # (N, 3) LPS mm
 
     centre, axis = _principal_axis(points)
-    if axis is None or abs(axis[1]) < MIN_AP_COMPONENT:
-        return None                                    # rod or cross-link
+    if axis is None:
+        return None
     t = (points - centre) @ axis
     areas, edges = _slab_areas(t, voxel_mm3)
     if len(areas) < 4:
@@ -234,8 +202,9 @@ def _fit_screw(
 
     # Refit on the shaft alone: a tulip off to one side would tilt the axis.
     centre, axis = _principal_axis(points[shaft])
-    if axis is None:
-        return None
+    # On the shaft axis: a tulip with a rod stub can tilt the whole piece.
+    if axis is None or abs(axis[1]) < MIN_AP_COMPONENT:
+        return None                                    # rod or cross-link
     t = (points[shaft] - centre) @ axis
     radial = np.linalg.norm(points[shaft] - centre - t[:, None] * axis, axis=1)
     if np.dot(head_point - centre, axis) < 0:
