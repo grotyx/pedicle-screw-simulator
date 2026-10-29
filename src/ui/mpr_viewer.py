@@ -110,6 +110,9 @@ class MPRViewer(QWidget):
     - Synchronized scroll with other viewers
     """
 
+    # The rotation guide is a control, not part of the plan: report captures hide it.
+    _guides_hidden = False
+
     # Signals for cross-viewer synchronization
     slice_changed = pyqtSignal(str, float)  # (plane, position)
     promote_requested = pyqtSignal(str)  # (plane) -- show in the main view
@@ -807,6 +810,12 @@ class MPRViewer(QWidget):
         """Replace the ``Screw-aligned`` readout prefix with ``text``."""
         self._custom_readout = None if text is None else str(text)
         self._update_slice_info()
+
+    def set_guides_visible(self, visible: bool) -> None:
+        """Hide the rotation guide (e.g. for a report capture) or bring it back."""
+        self._guides_hidden = not visible
+        if self._screw_data:
+            self._update_screw_projections()
 
     def set_review_screw(self, screw_id: Optional[int]) -> None:
         """Show only one selected screw during Screw MPR."""
@@ -1614,7 +1623,11 @@ class MPRViewer(QWidget):
 
         # The reviewed screw's rotation guide, as in 3D: only on the long-axis
         # panes, whose plane holds the axis the handle swings in.
-        if custom_long_axis and screw_id == self._review_screw_id:
+        if (
+            custom_long_axis
+            and screw_id == self._review_screw_id
+            and not self._guides_hidden
+        ):
             handle_slice = world_to_slice(
                 guide_handle_point(entry, target, GUIDE_REACH_MM), axes
             )

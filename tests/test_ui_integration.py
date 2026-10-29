@@ -163,6 +163,9 @@ class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     def set_review_screw(self, screw_id):
         self.review_screw_id = screw_id
 
+    def set_guides_visible(self, visible):
+        self.guides_visible = bool(visible)
+
     rod_lines = {}
     rod_lines_visible = False
 
@@ -3359,9 +3362,13 @@ def test_report_capture_hides_the_reference_ghosts_and_guides(ui_main_window, tm
     monkeypatch.setattr(
         plan_controller_module, "capture_png",
         lambda render_window: seen.append(
-            window.viewer_3d.reference_visible or window.viewer_3d.guides_visible
+            window.viewer_3d.reference_visible
+            or window.viewer_3d.guides_visible
+            or any(getattr(v, "guides_visible", True) for v in window._get_mpr_viewers())
         ),
     )
+    for viewer in window._get_mpr_viewers():
+        viewer.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: None)
     monkeypatch.setattr(
         plan_controller_module.QFileDialog, "getSaveFileName",
         staticmethod(lambda *a, **k: (str(tmp_path / "report.html"), "")),
@@ -3372,6 +3379,7 @@ def test_report_capture_hides_the_reference_ghosts_and_guides(ui_main_window, tm
     assert seen and not any(seen)
     assert window.viewer_3d.reference_visible is True
     assert window.viewer_3d.guides_visible is True
+    assert all(v.guides_visible for v in window._get_mpr_viewers())
 
 
 def test_replacing_a_hidden_reference_shows_the_new_one_and_ticks_show(
