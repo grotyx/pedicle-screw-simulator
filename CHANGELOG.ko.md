@@ -28,7 +28,7 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   `surface_hu_samples`, `surface_hu_coverage_pct` 열이 끝에 붙고, HTML
   보고서에도 세 비율이 나옵니다. 표면 일부가 CT 밖이면 `*`로 표시합니다.
 - **File → Reference Plan** 메뉴로 지금의 스크류를
-  같은 CT의 다른 계획과 비교합니다. 기준 스크류는 3D에 선택할 수 없는 회색
+  같은 CT의 다른 계획과 비교합니다. 기준 스크류는 3D에 선택할 수 없는 주황색
   원기둥으로 나오고, 창에 레벨·side별 head/tip 거리, 축 각도, 각도·길이·직경
   차이, Dice와 함께 짝이 없거나 비교할 수 없는 스크류가 표시됩니다. 다른
   series의 계획은 거부합니다.

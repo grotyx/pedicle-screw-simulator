@@ -32,7 +32,7 @@ COLUMNS = (
 FRAME_VERIFIED_TEXT = "Same CT series as the reference plan."
 FRAME_UNVERIFIED_TEXT = (
     "Coordinate frame unverified: one of the plans has no series ID. "
-    "Check that the grey reference screws line up with the anatomy."
+    "Check that the amber reference screws line up with the anatomy."
 )
 NO_PAIRS_TEXT = "No comparable screws."
 

@@ -130,9 +130,10 @@ _OVERLAY_BUTTON_SIZING = "font-size: 11px; font-weight: 600; padding: 5px 9px;"
 ROD_LINE_RADIUS_MM = 1.0
 ROD_LINE_OPACITY = 0.55
 
-#: Reference-plan screws: grey ghosts that never take a pick or a selection.
-REFERENCE_SCREW_COLOR = (0.75, 0.75, 0.75)
-REFERENCE_SCREW_OPACITY = 0.35
+#: Reference-plan screws: amber ghosts that never take a pick or a selection.
+#: Grey at 35% disappeared between the translucent bone and the cyan screws.
+REFERENCE_SCREW_COLOR = (1.0, 0.65, 0.1)
+REFERENCE_SCREW_OPACITY = 0.55
 
 #: Distance (mm) the "Cut View" camera sits back from the cross-section
 #: centre, on the entry side, looking down the screw at the open cut face.

@@ -2228,6 +2228,19 @@ def test_reference_screws_are_unpickable_ghosts_outside_the_screw_maps(qtbot, mo
     assert viewer._renderer.GetActors().GetNumberOfItems() == 0
 
 
+def test_reference_screw_colour_stands_out_from_bone_and_planned_screws():
+    # On a real CT the 35% grey ghosts vanished between the translucent
+    # vertebra and the cyan screws; the reference needs its own hue.
+    from src.ui import viewer_3d
+    from src.utils.constants import COLOR_SCREW
+
+    r, g, b = viewer_3d.REFERENCE_SCREW_COLOR
+    assert max(r, g, b) - min(r, g, b) >= 0.5          # saturated, not grey
+    planned = tuple(v / 255.0 for v in COLOR_SCREW)
+    assert sum(abs(a - c) for a, c in zip((r, g, b), planned, strict=True)) >= 0.8
+    assert viewer_3d.REFERENCE_SCREW_OPACITY >= 0.5
+
+
 def test_translucent_vertebra_surfaces_are_depth_sorted(qtbot, monkeypatch):
     # Without depth peeling the 50% vertebra surface shows its back faces and
     # the canal walls through the front as dark scribbles.

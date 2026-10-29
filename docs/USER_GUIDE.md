@@ -389,12 +389,12 @@ When the model runs successfully, each side's pedicle isthmus is measured from i
 
 **File → Reference Plan** compares the screws you have now with another plan of the same CT — an expert's plan, an earlier version of yours, or the automatic proposal saved for comparison. It is a teaching and self-check aid; the reference is the plan you chose, not a validated ground truth.
 
-1. Choose **Load Reference Plan...** and pick a plan JSON (saved with **File → Save Plan**). The reference screws appear in 3D as grey translucent cylinders that cannot be selected or edited, and the comparison window opens. Nothing from the reference is added to your plan, saved with it, or exported.
+1. Choose **Load Reference Plan...** and pick a plan JSON (saved with **File → Save Plan**). The reference screws appear in 3D as amber translucent cylinders that cannot be selected or edited, and the comparison window opens. Nothing from the reference is added to your plan, saved with it, or exported.
 2. The window lists one row per screw pair matched by level and side (case and spaces ignored): head and tip distance in mm, the angle between the axes, and the convergence, craniocaudal, length and diameter differences (Δ = current − reference), plus the Dice overlap of the two screw volumes. Screws only in one plan, screws without a level or side (never matched, even to each other), and screws whose geometry cannot be compared (zero length, no diameter) follow with the reason. The summary gives the pair count and means; spread (±) and 95% limits of agreement appear only from two pairs on, and with no pair it says "No comparable screws".
 3. The results are a snapshot. After moving screws, click **Recompare** in the window (or **File → Reference Plan → Compare with Reference**).
-4. **Show Reference Screws** hides or shows the grey reference screws; **Clear Reference** drops the reference. Loading another study clears it too.
+4. **Show Reference Screws** hides or shows the amber reference screws; **Clear Reference** drops the reference. Loading another study clears it too.
 
-A reference plan saved from a different CT series is refused. When either plan has no series ID, the comparison still runs but the window says the coordinate frame is unverified — check in 3D that the grey screws sit where they should. The exported HTML report never shows the reference screws.
+A reference plan saved from a different CT series is refused. When either plan has no series ID, the comparison still runs but the window says the coordinate frame is unverified — check in 3D that the amber screws sit where they should. The exported HTML report never shows the reference screws.
 
 ## 6. Edit Screws
 
