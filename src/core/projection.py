@@ -19,6 +19,7 @@ MODES = ("raysum", "mip")
 # view labels approximate; the window says so instead of hiding it.
 OBLIQUE_TOLERANCE_DEG = 2.0
 AIR_HU = -1000
+_SLAB = 32   # slices per ray-sum chunk
 
 VIEW_LETTERS = {
     "ap": {"top": "S", "bottom": "I", "left": "R", "right": "L"},
@@ -114,10 +115,14 @@ def project_volume(
     if mode == "mip":
         flat = volume.max(axis=beam_axis).astype(np.float32)
     else:
-        # Air floor so padding below -1000 HU cannot read as negative mass.
-        if volume.dtype.kind != "u":
-            volume = np.maximum(volume, volume.dtype.type(AIR_HU))
-        flat = volume.mean(axis=beam_axis, dtype=np.float32)
+        # Air floor so padding below -1000 HU cannot read as negative mass;
+        # in slabs, so a large CT is not copied whole.
+        flat = np.empty((volume.shape[col_axis], volume.shape[2]), dtype=np.float32)
+        for z0 in range(0, volume.shape[2], _SLAB):
+            slab = volume[:, :, z0:z0 + _SLAB]
+            if slab.dtype.kind != "u":
+                slab = np.maximum(slab, slab.dtype.type(AIR_HU))
+            flat[:, z0:z0 + _SLAB] = slab.mean(axis=beam_axis, dtype=np.float32)
     # flat is (column axis, z): transpose to rows and put superior on top.
     image = flat.T[::-1]
     low, high = float(image.min()), float(image.max())

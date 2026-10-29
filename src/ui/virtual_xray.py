@@ -44,6 +44,8 @@ class VirtualXrayDialog(QDialog):
         self._table = screw_table
         self._cache_image = None
         self._cache: Dict[tuple, object] = {}
+        # Scaled CT pixmap per (view, mode): screw edits only repaint lines.
+        self._bases: Dict[tuple, QPixmap] = {}
         self._overlay_counts = {view: 0 for view in VIEWS}
         # One table edit emits a signal per cell; coalesce them into one repaint.
         self._pending = QTimer(self)
@@ -129,12 +131,14 @@ class VirtualXrayDialog(QDialog):
                 # Do not hold the previous study's CT while nobody looks.
                 self._cache_image = None
                 self._cache.clear()
+                self._bases.clear()
             self._on_screws_changed()
 
     def _projection(self, image, view: str, force: bool):
         if image is not self._cache_image or force:
             self._cache_image = image
             self._cache.clear()
+            self._bases.clear()
         key = (view, self.mode())
         if key not in self._cache:
             import SimpleITK as sitk
@@ -163,7 +167,11 @@ class VirtualXrayDialog(QDialog):
         selected = self._table.currentRow()
         notes = []
         for view in VIEWS:
-            projection = self._projection(image, view, force)
+            try:
+                projection = self._projection(image, view, force)
+            except MemoryError:
+                self.status_label.setText("Not enough memory to project this CT.")
+                return
             force = False
             self._labels[view].setPixmap(self._render(projection, screws, selected))
             self._overlay_counts[view] = len(screws)
@@ -180,18 +188,21 @@ class VirtualXrayDialog(QDialog):
 
     def _render(self, projection, screws, selected: int) -> QPixmap:
         scale = DISPLAY_LONG_SIDE_PX / max(projection.width_mm, projection.height_mm)
-        gray = np.ascontiguousarray((projection.image * 255.0).astype(np.uint8))
-        rows, cols = gray.shape
-        qimage = QImage(gray.data, cols, rows, cols, QImage.Format.Format_Grayscale8)
         width = max(1, round(projection.width_mm * scale))
         height = max(1, round(projection.height_mm * scale))
-        # Scaling to the mm extent honours anisotropic spacing.
-        pixmap = QPixmap.fromImage(qimage.copy()).scaled(
-            width,
-            height,
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        key = (projection.view, projection.mode)
+        if key not in self._bases:
+            gray = np.ascontiguousarray((projection.image * 255.0).astype(np.uint8))
+            rows, cols = gray.shape
+            qimage = QImage(gray.data, cols, rows, cols, QImage.Format.Format_Grayscale8)
+            # Scaling to the mm extent honours anisotropic spacing.
+            self._bases[key] = QPixmap.fromImage(qimage.copy()).scaled(
+                width,
+                height,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        pixmap = self._bases[key].copy()
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

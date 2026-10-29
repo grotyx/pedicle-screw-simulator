@@ -253,3 +253,30 @@ def test_a_hidden_dialog_lets_go_of_the_previous_ct(qtbot):
     observers["virtual_xray"]("volume_loaded")
 
     assert dialog._cache_image is None and not dialog._cache
+
+
+def test_a_screw_change_repaints_the_overlay_without_rescaling_the_ct(qtbot, monkeypatch):
+    pytest.importorskip("pytestqt")
+    from types import SimpleNamespace
+
+    import SimpleITK as sitk
+
+    import src.ui.virtual_xray as module
+    from src.ui.screw_plan_table import ScrewPlanTable
+
+    image = sitk.GetImageFromArray(_phantom())
+    volume_manager = SimpleNamespace(get_sitk_image=lambda: image, add_observer=lambda *a: None)
+    table = ScrewPlanTable()
+    qtbot.addWidget(table)
+    dialog = module.VirtualXrayDialog(volume_manager, SimpleNamespace(get_screws=lambda: []), table)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    calls = []
+    real = module.QPixmap.fromImage
+    monkeypatch.setattr(
+        module.QPixmap, "fromImage", staticmethod(lambda *a: (calls.append(1), real(*a))[1])
+    )
+
+    dialog.refresh()
+
+    assert calls == []
