@@ -93,6 +93,7 @@ from .styles import (
 from .tool_dock import ToolDock
 from .tool_icons import create_tool_icon
 from .viewer_3d import Viewer3D
+from .virtual_xray import VirtualXrayDialog
 from .workflow_bar import STEP_NAMES, WorkflowBar, WorkflowStep, workflow_states
 
 logger = logging.getLogger(__name__)
@@ -2282,6 +2283,13 @@ class MainWindow(QMainWindow):
         self._register_themed_icon(self._maximize_view_action, "layout")
         view_menu.addAction(self._maximize_view_action)
 
+        self._virtual_xray_action = QAction("Virtual X-ray...", self)
+        self._virtual_xray_action.setToolTip(
+            "AP and lateral projections of the CT with the planned screws"
+        )
+        self._virtual_xray_action.triggered.connect(self.show_virtual_xray)
+        view_menu.addAction(self._virtual_xray_action)
+
         view_menu.addSeparator()
 
         self.theme_combo = QComboBox()
@@ -2340,6 +2348,21 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Screw MPR controls", SCREW_MPR_CONTROLS_HELP
         )
+
+    def show_virtual_xray(self) -> None:
+        """Open (or raise) the non-modal AP / lateral projection window."""
+        dialog = self.__dict__.get("_virtual_xray_dialog")
+        if dialog is None:
+            dialog = VirtualXrayDialog(
+                self.volume_manager,
+                self._tool_ctrl.screw_tool,
+                self.screw_list_widget,
+                self,
+            )
+            self._virtual_xray_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def show_about_dialog(self) -> None:
         """Display version, creator credit, contact, license, and safety scope."""

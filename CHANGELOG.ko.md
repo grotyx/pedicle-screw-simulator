@@ -35,6 +35,10 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 - Screw MPR: Oblique Axial과 Oblique Sagittal 창에도 같은 guide 손잡이가
   표시됩니다. 더블클릭하면 그 창의 평면 안에서 entry를 중심으로 스크류가
   회전하고, 움직이는 동안 창은 고정되었다가 끝나면 다시 정렬됩니다.
+- View → Virtual X-ray...: CT의 AP·lateral 투영 영상(Ray-sum 또는 MIP)에
+  계획된 스크류를 직경 그대로 겹쳐 보여 주는 비모달 창. 투시 영상에서 보일
+  모습으로 계획을 확인할 수 있습니다. 스크류 편집과 선택을 따라가며, CT 축이
+  기울어져 있으면 경고합니다.
 
 ### 수정
 

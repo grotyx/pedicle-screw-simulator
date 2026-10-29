@@ -1252,3 +1252,21 @@ def test_the_narrow_warning_is_listed_first_in_the_cockpit(ui_main_window):
     # Grouped under the Safety heading, with the narrow note still first.
     assert lines[0] == "Safety"
     assert lines[1].startswith("• Narrow pedicle (4.5 mm)")
+
+
+def test_view_menu_opens_one_non_modal_virtual_xray_window(ui_main_window):
+    window = ui_main_window
+    view_menu = next(
+        action.menu()
+        for action in window.menuBar().actions()
+        if action.text() == "View"
+    )
+    action = next(a for a in view_menu.actions() if a.text() == "Virtual X-ray...")
+
+    action.trigger()
+    dialog = window._virtual_xray_dialog
+    action.trigger()
+
+    assert window._virtual_xray_dialog is dialog
+    assert dialog.isVisible() and not dialog.isModal()
+    assert "Load a CT" in dialog.status_label.text()

@@ -37,6 +37,10 @@ current version; every other place the version appears is derived from it.
 - Screw MPR: the Oblique Axial and Oblique Sagittal panes show the same guide
   handle. Double-click it to rotate the screw about its entry within that
   pane's plane; the pane holds still during the move and realigns after.
+- View → Virtual X-ray...: a non-modal window with AP and lateral projections
+  of the CT (Ray-sum or MIP) and the planned screws drawn at their diameter,
+  so the plan can be checked the way it will look on fluoroscopy. It follows
+  screw edits and selection, and warns when the CT axes are oblique.
 
 ### Fixed
 

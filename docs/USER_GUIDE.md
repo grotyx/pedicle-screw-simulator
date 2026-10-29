@@ -510,6 +510,19 @@ See 5.8 for how Screw MPR changes what these planes show and cut.
 
 Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
 
+### Virtual X-ray
+
+**View → Virtual X-ray...** opens a separate window with two projections of the loaded CT side by side, the way the plan would look on intra-operative fluoroscopy: **AP** (beam along the patient's anterior–posterior axis, patient right on the viewer's left) and **Lateral** (beam along left–right, anterior on the left). Superior is up in both, and the edge letters name the patient axes as on the MPR views.
+
+| Control | Action |
+|---|---|
+| `Ray-sum` | Mean attenuation along the beam, like a radiograph (default) |
+| `MIP` | Brightest voxel along the beam |
+| `Screws` | Show or hide the planned screws, drawn at their diameter in the 3D colour; the selected screw has a yellow outline |
+| `Refresh` | Recompute both projections |
+
+The window stays open while you work: it redraws when screws are added, moved, resized, removed or selected, and when a new study is loaded. The images are parallel projections of the CT, not calibrated fluoroscopy: there is no beam divergence or magnification. If the CT axes are tilted more than 2° from the patient axes, the window says so and the edge letters are approximate.
+
 ### Keyboard shortcuts
 
 | Key | Action |
