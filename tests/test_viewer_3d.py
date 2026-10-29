@@ -2191,6 +2191,43 @@ def test_rod_line_toggle_shows_and_hides_the_3d_rods(qtbot, monkeypatch):
     assert viewer._renderer.GetActors().GetNumberOfItems() == 0
 
 
+def test_reference_screws_are_unpickable_ghosts_outside_the_screw_maps(qtbot, monkeypatch):
+    import vtk
+    from PyQt6.QtWidgets import QWidget
+
+    from src.ui import viewer_3d
+
+    monkeypatch.setattr(viewer_3d, "create_vtk_widget", lambda parent: QWidget(parent))
+    monkeypatch.setattr(viewer_3d.Viewer3D, "_setup_vtk_pipeline", lambda self: None)
+    monkeypatch.setattr(viewer_3d.Viewer3D, "_request_render", lambda self: None)
+    viewer = viewer_3d.Viewer3D(SimpleNamespace(add_observer=lambda *_args: None))
+    qtbot.addWidget(viewer)
+    viewer._renderer = vtk.vtkRenderer()
+    segments = [((0.0, 0.0, 0.0), (0.0, -40.0, 0.0), 3.0), ((20.0, 0.0, 0.0), (20.0, -40.0, 5.0), 2.75)]
+
+    viewer.set_reference_screws(segments)
+
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 2
+    for actor in viewer._reference_actors:
+        assert not actor.GetPickable()
+        assert actor.GetProperty().GetOpacity() < 1.0
+    bounds = viewer._reference_actors[0].GetBounds()
+    assert bounds[2] == pytest.approx(-40.0, abs=0.01) and bounds[3] == pytest.approx(0.0, abs=0.01)
+    assert bounds[1] - bounds[0] == pytest.approx(6.0, abs=0.05)   # diameter, not radius
+    assert viewer._screw_actors == [] and viewer._screw_prop_parts == {}
+
+    viewer.clear_screws()                    # editable screws only
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 2
+
+    viewer.set_reference_screws_visible(False)
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 0
+    viewer.set_reference_screws_visible(True)
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 2
+
+    viewer.set_reference_screws([])          # cleared reference / new study
+    assert viewer._renderer.GetActors().GetNumberOfItems() == 0
+
+
 def test_translucent_vertebra_surfaces_are_depth_sorted(qtbot, monkeypatch):
     # Without depth peeling the 50% vertebra surface shows its back faces and
     # the canal walls through the front as dark scribbles.

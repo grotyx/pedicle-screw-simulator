@@ -23,7 +23,7 @@ All coordinates are LPS millimetres, matching :class:`src.models.screw.Screw`.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -265,7 +265,21 @@ def compare_screw(
 
 
 def _match_key(screw: Screw) -> Tuple[str, str]:
-    return (screw.vertebra_level, screw.side)
+    # Same casing rule as scripts/validate_plans.py: level upper, side lower.
+    return (
+        str(screw.vertebra_level or "").strip().upper(),
+        str(screw.side or "").strip().lower(),
+    )
+
+
+def _canonical(screw: Screw) -> Screw:
+    """A copy with the matched level/side spelling.
+
+    ``Screw`` signs its convergence only for an exact ``left``/``right`` side,
+    so ``"Left"`` and ``"left"`` would match yet read opposite angles.
+    """
+    level, side = _match_key(screw)
+    return replace(screw, vertebra_level=level, side=side)
 
 
 def match_screws(
@@ -408,8 +422,8 @@ def compare_plans(
     Reference screws may carry an optional ``"pedicle_center": [x, y, z]``
     entry, which feeds :attr:`ScrewComparison.pedicle_center_offset_mm`.
     """
-    pred_screws: List[Screw] = deserialize_plan(pred_payload)["screws"]
-    ref_screws: List[Screw] = deserialize_plan(ref_payload)["screws"]
+    pred_screws = [_canonical(s) for s in deserialize_plan(pred_payload)["screws"]]
+    ref_screws = [_canonical(s) for s in deserialize_plan(ref_payload)["screws"]]
 
     centers = _pedicle_centers(ref_payload)
     center_by_screw = {
@@ -428,3 +442,114 @@ def compare_plans(
         for pred, ref in pairs
     ]
     return comparisons, summarize(comparisons, len(unmatched_pred), len(unmatched_ref))
+
+
+# --- in-app comparison ---------------------------------------------------
+
+
+@dataclass
+class ScrewListComparison:
+    """:func:`compare_screw_lists` result; every screw is named by list index.
+
+    ``pairs`` and ``comparisons`` run in parallel, in current-list order.  A
+    screw that is not paired appears in exactly one of the other lists:
+    ``invalid_*`` (with the reason) when its geometry cannot be compared,
+    ``unassigned_*`` when it has no level or side to match on, else
+    ``unmatched_*``.
+    """
+
+    pairs: List[Tuple[int, int]]
+    comparisons: List[ScrewComparison]
+    unmatched_current: List[int]
+    unmatched_reference: List[int]
+    unassigned_current: List[int]
+    unassigned_reference: List[int]
+    invalid_current: List[Tuple[int, str]]
+    invalid_reference: List[Tuple[int, str]]
+    summary: ComparisonSummary
+
+
+def screw_geometry_problem(screw: Screw) -> Optional[str]:
+    """Why ``screw`` cannot be compared or drawn, or ``None`` when it can."""
+    points = (*screw.entry_point, *screw.target_point)
+    if not all(math.isfinite(float(v)) for v in points):
+        return "entry or tip is not a finite point"
+    if math.dist(screw.entry_point, screw.target_point) <= 1e-6:
+        return "zero length"
+    diameter = float(screw.diameter)
+    if not (math.isfinite(diameter) and diameter > 0.0):
+        return "diameter is not a positive number"
+    return None
+
+
+def _finite_point(point: Optional[Point3]) -> Optional[Point3]:
+    if point is None:
+        return None
+    values = tuple(float(v) for v in point)
+    return values if len(values) == 3 and all(math.isfinite(v) for v in values) else None
+
+
+def compare_screw_lists(
+    current: List[Screw],
+    reference: List[Screw],
+    reference_pedicle_centers: Optional[Sequence[Optional[Point3]]] = None,
+    voxel_mm: float = DEFAULT_VOXEL_MM,
+) -> ScrewListComparison:
+    """Compare the working plan's screws against a reference plan's screws.
+
+    The desktop app's entry point: unlike :func:`compare_plans` it never pairs
+    two screws that both lack a level or side (a blank key is not an identity)
+    and leaves screws with unusable geometry out of every number.
+    """
+    centers = list(reference_pedicle_centers or [])
+    current = [_canonical(screw) for screw in current]
+    reference = [_canonical(screw) for screw in reference]
+
+    def split(screws: List[Screw]):
+        eligible, unassigned, invalid = [], [], []
+        for index, screw in enumerate(screws):
+            problem = screw_geometry_problem(screw)
+            if problem is not None:
+                invalid.append((index, problem))
+            elif not all(_match_key(screw)):
+                unassigned.append(index)
+            else:
+                eligible.append(index)
+        return eligible, unassigned, invalid
+
+    cur_ok, cur_unassigned, cur_invalid = split(current)
+    ref_ok, ref_unassigned, ref_invalid = split(reference)
+    pairs_by_screw, _, _ = match_screws(
+        [current[i] for i in cur_ok], [reference[i] for i in ref_ok]
+    )
+    cur_index = {id(current[i]): i for i in cur_ok}
+    ref_index = {id(reference[i]): i for i in ref_ok}
+    pairs = [(cur_index[id(c)], ref_index[id(r)]) for c, r in pairs_by_screw]
+    comparisons = [
+        compare_screw(
+            current[c],
+            reference[r],
+            ref_pedicle_center=_finite_point(centers[r] if r < len(centers) else None),
+            voxel_mm=voxel_mm,
+        )
+        for c, r in pairs
+    ]
+    paired_cur = {c for c, _ in pairs}
+    paired_ref = {r for _, r in pairs}
+    unmatched_cur = [i for i in cur_ok if i not in paired_cur]
+    unmatched_ref = [i for i in ref_ok if i not in paired_ref]
+    return ScrewListComparison(
+        pairs=pairs,
+        comparisons=comparisons,
+        unmatched_current=unmatched_cur,
+        unmatched_reference=unmatched_ref,
+        unassigned_current=cur_unassigned,
+        unassigned_reference=ref_unassigned,
+        invalid_current=cur_invalid,
+        invalid_reference=ref_invalid,
+        summary=summarize(
+            comparisons,
+            len(current) - len(pairs),
+            len(reference) - len(pairs),
+        ),
+    )

@@ -280,3 +280,85 @@ def test_cli_exits_nonzero_when_no_screws_match(tmp_path):
     assert "no screws matched" in out.stdout.lower()
     assert not (tmp_path / "report.csv").exists()
     assert not (tmp_path / "report.json").exists()
+
+
+# --- in-app comparison: indexed rows, invalid and unassigned screws ------
+
+
+def test_compare_screw_lists_reports_indexed_pairs_and_leftovers():
+    from src.core.plan_metrics import compare_screw_lists
+
+    current = [
+        _s((0, 0, 0), (0, -40, 0), level="L4", side="left"),
+        _s((30, 0, 0), (30, -40, 0), level="L5", side="right"),
+    ]
+    reference = [
+        _s((40, 0, 0), (40, -40, 0), level="L3", side="left"),
+        _s((1, 0, 0), (1, -40, 0), level="l4 ", side="Left"),
+    ]
+
+    result = compare_screw_lists(current, reference)
+
+    assert result.pairs == [(0, 1)]
+    assert result.comparisons[0].head_mad_mm == pytest.approx(1.0)
+    assert result.unmatched_current == [1]
+    assert result.unmatched_reference == [0]
+    assert result.summary.n_matched == 1
+
+
+def test_compare_screw_lists_never_pairs_screws_without_level_or_side():
+    from src.core.plan_metrics import compare_screw_lists
+
+    current = [_s((0, 0, 0), (0, -40, 0), level="", side="left")]
+    reference = [_s((0, 0, 0), (0, -40, 0), level="", side="left")]
+
+    result = compare_screw_lists(current, reference)
+
+    assert result.pairs == []
+    assert result.unassigned_current == [0]
+    assert result.unassigned_reference == [0]
+
+
+def test_compare_screw_lists_excludes_invalid_geometry_with_a_reason():
+    from src.core.plan_metrics import compare_screw_lists
+
+    collapsed = _s((0, 0, 0), (0, -40, 0))
+    collapsed.target_point = collapsed.entry_point  # stale trajectory left behind
+    no_diameter = _s((0, 0, 0), (0, -40, 0), side="right", d=0.0)
+    reference = [_s((0, 0, 0), (0, -40, 0)), _s((0, 0, 0), (0, -40, 0), side="right")]
+
+    result = compare_screw_lists([collapsed, no_diameter], reference)
+
+    assert result.pairs == []
+    assert [index for index, _reason in result.invalid_current] == [0, 1]
+    assert "length" in result.invalid_current[0][1]
+    assert "diameter" in result.invalid_current[1][1]
+    assert result.unmatched_reference == [0, 1]
+
+
+def test_compare_screw_lists_ignores_a_nonfinite_pedicle_centre():
+    from src.core.plan_metrics import compare_screw_lists
+
+    current = [_s((0, 0, 0), (0, -40, 0))]
+    reference = [_s((0, 0, 0), (0, -40, 0))]
+
+    result = compare_screw_lists(
+        current, reference, reference_pedicle_centers=[(float("nan"), 0.0, 0.0)]
+    )
+
+    assert result.comparisons[0].pedicle_center_offset_mm is None
+
+
+@pytest.mark.parametrize("side", ["Left", "left ", "LEFT"])
+def test_side_spelling_never_fakes_a_convergence_delta(side):
+    from src.core.plan_metrics import compare_screw_lists
+
+    current = [_s((0, 0, 0), (10, -40, 0), side="left")]
+    reference = [_s((0, 0, 0), (10, -40, 0), side=side)]
+
+    for comparison in (
+        compare_screw_lists(current, reference).comparisons[0],
+        compare_plans(serialize_plan(None, current, []), serialize_plan(None, reference, []))[0][0],
+    ):
+        assert comparison.convergence_delta_deg == pytest.approx(0.0)
+        assert comparison.craniocaudal_delta_deg == pytest.approx(0.0)

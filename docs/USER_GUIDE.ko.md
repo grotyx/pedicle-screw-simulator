@@ -385,6 +385,17 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 모델이 정상적으로 실행되면 각 방향의 척추경 협부(isthmus)를 먼저 해당 label에서 측정하고, label이 그 방향을 찾지 못한 경우에만 coronal 단면 탐색으로 대체합니다. Segmentation 상태 표시줄에는 "· pedicle model used"가 표시되거나, 모델은 실행되었지만 결과에 pedicle label이 전혀 없을 때는 "· pedicle model ran but found no pedicle voxels"가, 실행되지 못했을 때는 이유와 함께 "· pedicle model unavailable: <reason>"이 표시됩니다 — 2단계 실패가 그 아래 TotalSegmentator 결과 자체를 막지는 않습니다.
 
+### 5.11 기준(reference) 계획과 비교
+
+**File → Reference Plan** 메뉴는 지금의 스크류를 같은 CT의 다른 계획과 비교합니다 — 전문가의 계획, 내 이전 계획, 비교용으로 저장해 둔 자동 제안 등입니다. 교육과 자가 점검을 위한 기능이며, 기준은 사용자가 고른 계획일 뿐 검증된 정답(ground truth)이 아닙니다.
+
+1. **Load Reference Plan...**을 골라 계획 JSON(**File → Save Plan**으로 저장한 파일)을 엽니다. 기준 스크류는 3D에 회색 반투명 원기둥으로 나타나며 선택하거나 수정할 수 없고, 비교 창이 열립니다. 기준 계획의 어떤 것도 내 계획에 추가되거나 함께 저장·내보내지지 않습니다.
+2. 창에는 레벨과 side로 짝지은(대소문자와 공백 무시) 스크류 쌍마다 한 줄씩 나옵니다: head와 tip 거리(mm), 두 축 사이 각도, convergence·craniocaudal·길이·직경 차이(Δ = 현재 − 기준), 두 스크류 부피의 Dice 겹침. 한쪽 계획에만 있는 스크류, 레벨이나 side가 없는 스크류(서로끼리도 짝짓지 않음), 형상을 비교할 수 없는 스크류(길이 0, 직경 없음)는 그 뒤에 이유와 함께 나옵니다. 요약에는 쌍의 수와 평균이 나오고, 표준편차(±)와 95% 일치 한계는 쌍이 두 개 이상일 때만 나옵니다. 쌍이 하나도 없으면 "No comparable screws"로 표시됩니다.
+3. 결과는 그 시점의 스냅샷입니다. 스크류를 움직인 뒤에는 창의 **Recompare**(또는 **File → Reference Plan → Compare with Reference**)를 누르십시오.
+4. **Show Reference Screws**로 회색 기준 스크류를 숨기거나 보이고, **Clear Reference**로 기준을 지웁니다. 다른 study를 불러와도 지워집니다.
+
+다른 CT series에서 저장한 기준 계획은 거부합니다. 어느 한쪽 계획에 series ID가 없으면 비교는 하지만, 창에 좌표계가 확인되지 않았다고 표시됩니다 — 3D에서 회색 스크류가 제자리에 있는지 확인하십시오. 내보낸 HTML 보고서에는 기준 스크류가 나오지 않습니다.
+
 ## 6. 스크류 수정
 
 ### 6.1 Edit 메뉴

@@ -227,6 +227,8 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
         # (isolated, available) as last reported by set_isolation_state.
         self.isolation_state = (False, False)
         self.rod_lines = {}
+        self.reference_segments = []
+        self.reference_visible = True
         self.rod_line_toggle = QToolButton(self)
         self.rod_line_toggle.setCheckable(True)
 
@@ -235,6 +237,12 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
 
     def set_isolation_state(self, isolated: bool, available: bool) -> None:
         self.isolation_state = (bool(isolated), bool(available))
+
+    def set_reference_screws(self, segments):
+        self.reference_segments = list(segments)
+
+    def set_reference_screws_visible(self, visible):
+        self.reference_visible = bool(visible)
 
     def show_screw_mpr(
         self,
@@ -3159,3 +3167,172 @@ def test_unreadable_manual_screw_defaults_fall_back_at_startup(ui_main_window, i
     finally:
         reopened.close()
         reopened.deleteLater()
+
+
+# --- reference-plan comparison -------------------------------------------
+
+
+def _reference_file(tmp_path, series_id, screws):
+    from src.utils.planning_io import save_plan_json, serialize_plan
+
+    path = tmp_path / "reference.json"
+    save_plan_json(str(path), serialize_plan(series_id, screws, []))
+    return str(path)
+
+
+def _add_current_screw(window, screw):
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+
+def _pick_file(monkeypatch, path):
+    import src.controllers.plan_controller as plan_controller_module
+
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog, "getOpenFileName",
+        staticmethod(lambda *a, **k: (path, "")),
+    )
+
+
+def _plan_screw(x, level="L4", side="left"):
+    from src.models.screw import Screw
+
+    return Screw(entry_point=(x, 30.0, 5.0), target_point=(x, 10.0, 5.0),
+                 diameter=6.0, vertebra_level=level, side=side)
+
+
+def test_reference_plan_shows_ghosts_and_a_comparison_without_touching_the_plan(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _add_current_screw(window, _plan_screw(30.0, level="L5", side="right"))
+    reference = [_plan_screw(11.0), _plan_screw(-10.0, level="L3")]
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", reference))
+    assert not window.reference_compare_action.isEnabled()
+
+    window.reference_load_action.trigger()
+
+    dialog = window._plan_ctrl.reference_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.table.rowCount() == 3            # one pair, one leftover each side
+    assert dialog.table.item(0, 0).text() == "matched"
+    assert dialog.table.item(0, 5).text() == "1.0"  # head delta, mm
+    assert dialog.frame_label.text().startswith("Same CT series")
+    assert len(window.viewer_3d.reference_segments) == 2
+    assert window.reference_compare_action.isEnabled() and window.reference_clear_action.isEnabled()
+    # The working plan is untouched: same screws, nothing imported.
+    screws = window._tool_ctrl.screw_tool.get_screws()
+    assert [s.entry_point[0] for s in screws] == [10.0, 30.0]
+
+    window.reference_clear_action.trigger()
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+    assert not dialog.isVisible()
+
+
+def test_reference_plan_from_another_series_is_refused(ui_main_window, tmp_path, monkeypatch):
+    import src.controllers.plan_controller as plan_controller_module
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-A")
+    warnings = []
+    monkeypatch.setattr(
+        plan_controller_module.QMessageBox, "warning",
+        staticmethod(lambda *a, **k: warnings.append(a[1])),
+    )
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-B", [_plan_screw(10.0)]))
+
+    window.reference_load_action.trigger()
+
+    assert warnings == ["Different Series"]
+    assert window._plan_ctrl.reference_dialog is None
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+
+
+def test_reference_plan_without_a_series_id_is_marked_unverified(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _pick_file(monkeypatch, _reference_file(tmp_path, None, [_plan_screw(10.0)]))
+
+    window.reference_load_action.trigger()
+
+    assert window._plan_ctrl.reference_dialog.frame_label.text().startswith("Coordinate frame unverified")
+
+
+def test_recompare_uses_the_screws_as_they_are_now(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    dialog = window._plan_ctrl.reference_dialog
+    assert dialog.table.item(0, 5).text() == "0.0"
+
+    window._tool_ctrl.screw_tool.replace_screw(
+        0, entry_point=(13.0, 30.0, 5.0), target_point=(13.0, 10.0, 5.0)
+    )
+    dialog.recompare_btn.click()
+
+    assert dialog.table.item(0, 5).text() == "3.0"
+
+
+def test_a_new_study_clears_the_reference(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+
+    _load_large_study(window, "SERIES-NEXT")
+
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+
+
+def test_report_capture_hides_the_reference_ghosts(ui_main_window, tmp_path, monkeypatch):
+    import src.controllers.plan_controller as plan_controller_module
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    from types import SimpleNamespace
+
+    window.viewer_3d.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: None)
+    seen = []
+    monkeypatch.setattr(
+        plan_controller_module, "capture_png",
+        lambda render_window: seen.append(window.viewer_3d.reference_visible),
+    )
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(tmp_path / "report.html"), "")),
+    )
+
+    window._plan_ctrl.export_report_dialog()
+
+    assert seen and not any(seen)
+    assert window.viewer_3d.reference_visible is True
+
+
+def test_replacing_a_hidden_reference_shows_the_new_one_and_ticks_show(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    window.reference_show_action.trigger()             # hide A
+    assert window.viewer_3d.reference_visible is False
+
+    window.reference_load_action.trigger()             # load B over it
+
+    assert window.reference_show_action.isChecked()
+    assert window.viewer_3d.reference_visible is True
+    window.reference_show_action.trigger()
+    assert window.viewer_3d.reference_visible is False

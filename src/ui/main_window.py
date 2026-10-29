@@ -2053,6 +2053,7 @@ class MainWindow(QMainWindow):
         )
         self.construct_map.screw_clicked.connect(self._select_screw_from_view)
         self.viewer_3d.rod_line_toggle.toggled.connect(self._on_rod_line_toggled)
+
         for pane in self._panes().values():
             pane.promote_requested.connect(self.set_hero_view)
         self._refresh_workflow_bar()
@@ -2165,6 +2166,24 @@ class MainWindow(QMainWindow):
         load_plan_action.setShortcut("Ctrl+L")
         load_plan_action.triggered.connect(self._plan_ctrl.load_dialog)
         file_menu.addAction(load_plan_action)
+
+        # Reference plan: compared with, never edited, saved or exported.
+        reference_menu = file_menu.addMenu("Reference Plan")
+        self.reference_load_action = QAction("Load Reference Plan...", self)
+        self.reference_load_action.triggered.connect(self._plan_ctrl.load_reference_dialog)
+        reference_menu.addAction(self.reference_load_action)
+        self.reference_compare_action = QAction("Compare with Reference", self)
+        self.reference_compare_action.triggered.connect(self._plan_ctrl.compare_reference)
+        reference_menu.addAction(self.reference_compare_action)
+        self.reference_show_action = QAction("Show Reference Screws", self)
+        self.reference_show_action.setCheckable(True)
+        self.reference_show_action.setChecked(True)
+        self.reference_show_action.toggled.connect(self._plan_ctrl.set_reference_visible)
+        reference_menu.addAction(self.reference_show_action)
+        self.reference_clear_action = QAction("Clear Reference", self)
+        self.reference_clear_action.triggered.connect(self._plan_ctrl.clear_reference)
+        reference_menu.addAction(self.reference_clear_action)
+        self.refresh_reference_controls(False)
 
         export_csv_action = QAction("Export Screws CSV...", self)
         export_csv_action.triggered.connect(self._plan_ctrl.export_csv_dialog)
@@ -3021,6 +3040,19 @@ class MainWindow(QMainWindow):
     # Screw inspector
     # ------------------------------------------------------------------
 
+    def refresh_reference_controls(self, loaded: bool) -> None:
+        """Enable the reference actions that need a loaded reference plan."""
+        for action in (
+            self.reference_compare_action,
+            self.reference_show_action,
+            self.reference_clear_action,
+        ):
+            action.setEnabled(loaded)
+        # Every load or clear leaves the reference screws shown.
+        self.reference_show_action.blockSignals(True)
+        self.reference_show_action.setChecked(True)
+        self.reference_show_action.blockSignals(False)
+
     def _clear_screw_metric_rows(self) -> None:
         """Reset the clinical metric rows of the screw inspector."""
         for label in (
@@ -3407,6 +3439,7 @@ class MainWindow(QMainWindow):
             viewer.clear_screw_overlays()
         self.viewer_3d.clear_screws()
         self.viewer_3d.clear_segmentation_mask()
+        self._plan_ctrl.clear_reference()
 
         # Clear list widgets
         self.screw_list_widget.clear()

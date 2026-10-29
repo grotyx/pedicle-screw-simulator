@@ -29,6 +29,11 @@ current version; every other place the version appears is derived from it.
   `surface_hu_high_pct`, `surface_hu_samples` and `surface_hu_coverage_pct`,
   and the HTML report shows the three shares. A `*` marks a screw whose
   surface is partly outside the CT.
+- **File → Reference Plan** compares the current screws with another plan of
+  the same CT. Reference screws show in 3D as grey, unselectable cylinders;
+  a window lists head/tip distance, axis
+  angle, angle/length/diameter differences and Dice per level and side, plus
+  unmatched and invalid screws. Plans from another series are refused.
 
 ### Fixed
 
