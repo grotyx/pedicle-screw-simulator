@@ -13,6 +13,8 @@ A kept piece is measured in millimetres:
   cross-section evenly, so the 90th percentile of their distance from the axis
   is ``r * sqrt(0.9)``.  The percentile ignores the few voxels a thread crest or
   a touching neighbour adds, which a maximum would not.
+* **Direction** -- a pedicle screw runs mainly front to back; a piece whose
+  axis is mostly craniocaudal or transverse is a rod or cross-link.
 * **Head** -- the end with the larger cross-section (the tulip or the head
   sphere).  When neither end is clearly wider, the dorsal end (larger LPS
   ``y``) is taken as the head, because pedicle screws are inserted from the
@@ -53,6 +55,11 @@ MIN_VOLUME_MM3 = 200.0
 MAX_VOLUME_MM3 = 15000.0
 #: sqrt(largest / second PCA eigenvalue).  A 6.5 x 45 mm cylinder scores ~8.
 MIN_ELONGATION = 3.0
+#: Smallest |A-P (LPS y) component| of a screw axis.  A pedicle screw with
+#: 45 deg convergence and 30 deg craniocaudal tilt still scores 0.61; a rod
+#: (craniocaudal) or cross-link (transverse) scores near 0.  On real post-op
+#: CTs headless rod pieces otherwise passed every other check.
+MIN_AP_COMPONENT = 0.5
 #: A slab this many times wider than the shaft belongs to the head.
 HEAD_AREA_RATIO = 1.5
 #: Seeded mode ignores screws whose axis is further than this from the click.
@@ -184,8 +191,8 @@ def _fit_screw(
     points = origin + zyx[:, ::-1] * spacing_xyz          # (N, 3) LPS mm
 
     centre, axis = _principal_axis(points)
-    if axis is None:
-        return None
+    if axis is None or abs(axis[1]) < MIN_AP_COMPONENT:
+        return None                                    # rod or cross-link
     t = (points - centre) @ axis
     areas, edges = _slab_areas(t, voxel_mm3)
     if len(areas) < 4:

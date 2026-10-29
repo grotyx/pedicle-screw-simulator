@@ -479,10 +479,10 @@ Measurements belong to the cut where they were created. They hide on another cut
 
 **Tools > Extract Screws from Post-op CT** finds the screws already implanted in the loaded CT and adds them to the plan as editable screws (source `extracted`), so they are graded, drawn in the MPR and 3D views, and listed on the Review page like any other screw.
 
-- Metal is voxels at or above 2000 HU. The metal is eroded step by step until each screw comes loose from the rods and tulips joined to it; a piece is kept when it is elongated, 20-70 mm long and 3-10 mm thick, with a thin tip. Small metal such as a clip is ignored.
+- Metal is voxels at or above 2000 HU. The metal is eroded step by step until each screw comes loose from the rods and tulips joined to it; a piece is kept when it is elongated, 20-70 mm long and 3-10 mm thick, with a thin tip, and runs mainly front to back (a craniocaudal rod or a transverse cross-link does not). Small metal such as a clip is ignored.
 - The entry is where the shaft leaves the head, so the tulip does not count towards the length. The head is the wider end; when neither end is wider, the posterior end is taken as the head and the screw's note says so.
 - Run segmentation first to get a grade, level, and side for each screw; without it they are added ungraded with no level or side.
-- A screw thinner than the rod (for example 4.5 mm screws on a 5.5 mm rod) may not come loose and is then missed. Metal artefacts can shift the axis or the diameter. Check every extracted screw against the images and correct it by dragging (6.2); the result is not clinically validated.
+- A screw thinner than the rod (for example 4.5 mm screws on a 5.5 mm rod) may not come loose and is then missed. On twelve real post-op CTs, constructs whose screws, tulips and rod stay fused into one block of metal were missed in part or entirely. Metal artefacts can shift the axis or the diameter. Check every extracted screw against the images and correct it by dragging (6.2); the result is not clinically validated.
 - Details → **Source** reads "Extracted from CT" for these screws. **Edit → Undo** (6.5) removes the whole extracted batch in one step; running the tool again adds the screws a second time.
 
 ## 8. Display Controls

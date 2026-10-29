@@ -159,6 +159,24 @@ def test_plain_cylinder_head_falls_back_to_the_dorsal_end():
     assert "dorsal" in screw.reason
 
 
+def test_rods_and_cross_links_are_not_taken_for_screws():
+    # On real post-op CTs, headless craniocaudal rod pieces and transverse
+    # connectors passed the shape check; a pedicle screw runs front to back.
+    points = _grid()
+    rod = _cylinder(points, np.array([70.0, 30.0, 103.0]), np.array([70.0, 30.0, 137.0]), 6.0)
+    cross_link = _cylinder(
+        points, np.array([-15.0, 40.0, 104.0]), np.array([25.0, 40.0, 104.0]), 6.0
+    )
+    screw = _screw(points, RIGHT_HEAD)
+    image = _phantom([rod, cross_link, screw])
+
+    extraction = extract_screws(image)
+
+    assert len(extraction.screws) == 1
+    found = extraction.screws[0]
+    assert np.linalg.norm(np.asarray(found.entry_lps) - RIGHT_HEAD) <= 1.5
+
+
 def test_small_metal_blob_is_rejected():
     points = _grid()
     clip = _box(points, (20.0, 40.0, 120.0), (1.5, 1.5, 4.0))
