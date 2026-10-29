@@ -32,7 +32,7 @@ class Screw:
         breach_distance: Maximum cortical breach in mm (0 for A).
         mean_hu / min_hu: Trajectory HU statistics when a CT was available.
         warnings: Planner or grader notes shown in the inspector.
-        source: "manual" or "auto".
+        source: "manual", "auto", or "extracted" (found in a post-op CT).
         reviewed: The surgeon has checked this screw on the Review page. Any
             change to its geometry, size or grade clears it (see ScrewTool).
         metrics: Clinical metric bundle for this trajectory. Keys, when

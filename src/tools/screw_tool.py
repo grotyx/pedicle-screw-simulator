@@ -858,6 +858,10 @@ class ScrewTool:
         self._screws.append(screw)
         self._restamp_construct_alignment()
 
+    def evaluate_screw(self, screw: Screw) -> None:
+        """Grade a screw that is not in the list yet (e.g. one extracted from CT)."""
+        self._evaluate_screw(screw)
+
     def regrade_all(self) -> List[Screw]:
         """Re-evaluate every stored screw against the current grader."""
         for screw in self._screws:

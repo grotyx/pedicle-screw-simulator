@@ -42,6 +42,7 @@ from src.controllers.auto_placement_controller import AutoPlacementController
 from src.controllers.dicom_controller import DicomController
 from src.controllers.plan_controller import PlanController
 from src.controllers.screw_edit_controller import ScrewEditController
+from src.controllers.screw_extraction_controller import ScrewExtractionController
 from src.controllers.screw_mpr_controller import (
     SCREW_MPR_CONTROLS_HELP,
     ScrewMPRController,
@@ -253,6 +254,7 @@ class MainWindow(QMainWindow):
         self._auto_placement_ctrl = AutoPlacementController(self.volume_manager, self)
         self._screw_mpr_ctrl = ScrewMPRController(self.volume_manager, self)
         self._screw_edit_ctrl = ScrewEditController(self.volume_manager, self)
+        self._screw_extraction_ctrl = ScrewExtractionController(self.volume_manager, self)
 
         # load_planner_settings() runs before the status bar exists, so a
         # migration message waits here until _setup_statusbar can show it.
@@ -2254,6 +2256,13 @@ class MainWindow(QMainWindow):
         )
         tools_menu.addAction(angle_action)
 
+        tools_menu.addSeparator()
+        self._extract_screws_action = QAction("Extract Screws from Post-op CT", self)
+        self._extract_screws_action.triggered.connect(
+            self._screw_extraction_ctrl.run_extraction
+        )
+        tools_menu.addAction(self._extract_screws_action)
+
         # View menu
         view_menu = menubar.addMenu("View")
         self._view_menu = view_menu
@@ -3304,9 +3313,9 @@ class MainWindow(QMainWindow):
                 f"mean {mean_hu:.0f} / min {min_hu:.0f} HU"
             )
         self.selected_screw_source.setText(
-            "Auto plan"
-            if getattr(screw, "source", "manual") == "auto"
-            else "Manual"
+            {"auto": "Auto plan", "extracted": "Extracted from CT"}.get(
+                getattr(screw, "source", "manual"), "Manual"
+            )
         )
         self._update_screw_metric_rows(getattr(screw, "metrics", None) or {})
 
