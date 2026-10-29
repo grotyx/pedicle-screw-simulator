@@ -857,14 +857,22 @@ class ToolController:
         )
         screw_mpr = self._window._screw_mpr_ctrl
         reopen_screw_mpr = screw_mpr.is_active
+        # Review marks are not undo steps: a screw the step does not move keeps
+        # the mark it has now.
+        reviewed = {
+            (s.entry_point, s.target_point, s.diameter): s.reviewed for s in current
+        }
+        for screw in screws:
+            # Snapshots keep the grades of their time; the segmentation may
+            # have changed or gone since, as on plan load.
+            self.screw_tool.evaluate_screw(screw)
+            screw.reviewed = reviewed.get(
+                (screw.entry_point, screw.target_point, screw.diameter), False
+            )
         # The plan-load rebuild path: every index-linked view is redrawn once.
         self.clear_screws()
         for screw in screws:
             self.add_existing_screw(screw)
-        # Snapshots keep the grades of their time; the segmentation may have
-        # changed since, as on plan load.
-        if self.screw_tool.grader is not None:
-            self.regrade_all()
         if screws:
             self._window.screw_list_widget.setCurrentRow(
                 min(changed, len(screws) - 1)

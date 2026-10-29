@@ -130,6 +130,11 @@ def _loaded(window, series="SERIES-UNDO"):
     return window
 
 
+def _geometry(screws):
+    # Undo regrades what it restores, so compare where the screws are.
+    return [(s.entry_point, s.target_point, s.diameter) for s in screws]
+
+
 def _overlay_entries(window):
     return {
         viewer.plane: {k: v["entry"] for k, v in viewer.screw_overlays.items()}
@@ -167,7 +172,7 @@ def test_manual_insert_undo_and_redo(ui_main_window):
     assert not window._undo_action.isEnabled()
 
     window._redo_action.trigger()
-    assert window.screw_tool.get_screws() == [placed]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([placed])
     assert window.screw_list_widget.count() == 1
     assert window.screw_list_widget.currentRow() == 0
     assert window.viewer_3d.screws[0].screw_id == 0
@@ -191,8 +196,11 @@ def test_delete_undo_restores_the_same_screw_at_the_same_index(ui_main_window):
     window._undo_action.trigger()
 
     restored = window.screw_tool.get_screws()
-    assert restored == screws
-    assert restored[1].grade == "C"
+    assert [(r.entry_point, r.target_point) for r in restored] == [
+        (s.entry_point, s.target_point) for s in screws
+    ]
+    # Regraded on restore: no segmentation here, so no grade to bring back.
+    assert restored[1].grade == "N/A"
     assert window.screw_list_widget.currentRow() == 1
     assert [a.screw_id for a in window.viewer_3d.screws] == [0, 1, 2]
     assert window.axial_viewer.screw_overlays[1]["entry"] == screws[1].entry_point
@@ -214,7 +222,7 @@ def test_drag_is_one_step_and_undo_puts_the_screw_back(ui_main_window):
     assert window.screw_tool.get_screws()[0].entry_point == (4.0, 5.0, 6.0)
 
     window._undo_action.trigger()
-    assert window.screw_tool.get_screws() == [screw]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([screw])
     assert window.viewer_3d.screws[0].entry_point == screw.entry_point
     assert not window._undo_action.isEnabled()  # the whole drag was one step
 
@@ -250,7 +258,7 @@ def test_guide_rotation_is_one_undoable_step(ui_main_window):
 
     window._undo_action.trigger()
 
-    assert window.screw_tool.get_screws() == [screw]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([screw])
     assert not window._undo_action.isEnabled()
 
 
@@ -275,7 +283,7 @@ def test_click_edit_is_undoable(ui_main_window):
     assert window.screw_tool.get_screws()[0].target_point == (5.0, 6.0, 11.0)
 
     window._undo_action.trigger()
-    assert window.screw_tool.get_screws() == [screw]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([screw])
 
 
 def test_diameter_burst_is_one_step(ui_main_window):
@@ -313,7 +321,7 @@ def test_auto_plan_batch_is_one_step(ui_main_window):
     ]
 
     window._undo_action.trigger()
-    assert window.screw_tool.get_screws() == [old_auto, manual]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([old_auto, manual])
     assert window.statusbar.currentMessage() == "Undo: auto plan"
     assert not window._undo_action.isEnabled()
 
@@ -364,21 +372,45 @@ def test_a_drag_left_with_esc_is_still_one_undo_step(ui_main_window):
 
     assert window._undo_action.text() == "Undo Drag Screw"
     window._undo_action.trigger()
-    assert window.screw_tool.get_screws() == [screw]
+    assert _geometry(window.screw_tool.get_screws()) == _geometry([screw])
 
 
 def test_undo_regrades_against_the_current_segmentation(ui_main_window, monkeypatch):
+    # Without a grader (segmentation cleared) a restored grade must not come
+    # back as if it were current; each screw is graded once, before display.
     window = _loaded(ui_main_window)
-    window._tool_ctrl.add_existing_screw(Screw((2.0, 3.0, 4.0), (2.0, 3.0, 10.0)))
+    graded = Screw((2.0, 3.0, 4.0), (2.0, 3.0, 10.0))
+    graded.grade = "A"
+    window._tool_ctrl.add_existing_screw(graded)
     window.screw_list_widget.setCurrentRow(0)
     window._tool_ctrl.remove_selected_screw()
-    calls = []
-    monkeypatch.setattr(type(window.screw_tool), "grader", property(lambda self: object()))
-    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: calls.append(1))
+    evaluated = []
+    real = window.screw_tool.evaluate_screw
+    monkeypatch.setattr(
+        window.screw_tool, "evaluate_screw", lambda screw: (evaluated.append(1), real(screw))
+    )
+    monkeypatch.setattr(
+        window._tool_ctrl, "regrade_all", lambda: pytest.fail("rebuilds every view twice")
+    )
 
     window._undo_action.trigger()
 
-    assert calls == [1]
+    assert evaluated == [1]
+    assert window.screw_tool.get_screws()[0].grade == "N/A"
+
+
+def test_undo_keeps_review_marks_on_screws_it_does_not_move(ui_main_window):
+    window = _loaded(ui_main_window)
+    for x in (1.0, 2.0, 3.0):
+        window._tool_ctrl.add_existing_screw(Screw((x, 3.0, 4.0), (x, 3.0, 30.0)))
+    window.screw_list_widget.setCurrentRow(1)
+    window._tool_ctrl.remove_selected_screw()
+    for screw in window.screw_tool.get_screws():
+        screw.reviewed = True
+
+    window._undo_action.trigger()
+
+    assert [s.reviewed for s in window.screw_tool.get_screws()] == [True, False, True]
 
 
 def test_undo_keeps_screw_mpr_open(ui_main_window):
