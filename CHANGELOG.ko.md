@@ -25,7 +25,8 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   샘플 가운데 130 HU 미만, 130–249 HU, 250 HU 이상의 비율을 보여 줍니다.
   척추 밖 샘플도 세고, 3 mm 진입 구간은 뺍니다. CSV 내보내기에
   `surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`,
-  `surface_hu_samples` 열이 끝에 붙고, HTML 보고서에도 세 비율이 나옵니다.
+  `surface_hu_samples`, `surface_hu_coverage_pct` 열이 끝에 붙고, HTML
+  보고서에도 세 비율이 나옵니다. 표면 일부가 CT 밖이면 `*`로 표시합니다.
 
 ### 수정
 

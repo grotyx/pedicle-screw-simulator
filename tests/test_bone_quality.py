@@ -219,15 +219,17 @@ class TestSurfaceHuMetrics:
         from src.core.bone_quality import surface_hu_metric_items
         from src.core.screw_grading import SurfaceHuDistribution
 
-        assert surface_hu_metric_items(SurfaceHuDistribution(10.0, 30.0, 60.0, 42)) == {
+        assert surface_hu_metric_items(SurfaceHuDistribution(10.0, 30.0, 60.0, 42, 87.5)) == {
             "surface_hu_low_pct": 10.0,
             "surface_hu_mid_pct": 30.0,
             "surface_hu_high_pct": 60.0,
             "surface_hu_samples": 42,
+            "surface_hu_coverage_pct": 87.5,
         }
         assert surface_hu_metric_items(None) == {
             "surface_hu_low_pct": None,
             "surface_hu_mid_pct": None,
             "surface_hu_high_pct": None,
             "surface_hu_samples": None,
+            "surface_hu_coverage_pct": None,
         }

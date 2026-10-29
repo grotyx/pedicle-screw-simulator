@@ -390,9 +390,10 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
             "endplate_reference",
             # Appended last, per the plan-file contract: the share of screw
             # surface samples below 130, 130-249 and >= 250 HU, and how many
-            # CT samples those shares come from.
+            # CT samples those shares come from, and which share of the
+            # surface lay inside the CT.
             "surface_hu_low_pct", "surface_hu_mid_pct", "surface_hu_high_pct",
-            "surface_hu_samples",
+            "surface_hu_samples", "surface_hu_coverage_pct",
         ])
 
         for index, screw in enumerate(screws, start=1):
@@ -440,4 +441,5 @@ def export_screws_csv(path: str, screws: List[Screw]) -> None:
                 _metric_number(metrics, "surface_hu_mid_pct"),
                 _metric_number(metrics, "surface_hu_high_pct"),
                 _metric_number(metrics, "surface_hu_samples", "d"),
+                _metric_number(metrics, "surface_hu_coverage_pct"),
             ])

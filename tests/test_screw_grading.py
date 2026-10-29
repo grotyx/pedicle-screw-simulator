@@ -1008,6 +1008,16 @@ class TestSurfaceHuDistribution:
         )
         assert dist.high_pct == pytest.approx(100.0)
 
+    def test_partial_ct_coverage_is_reported(self):
+        # Axis 1 mm inside the CT's x=0 face: the ring reaches 2 mm past it.
+        mask, ct = _rod_phantom(lambda x, y, z: np.full_like(x, 300))
+        grader = ScrewGrader(mask, ct)
+        full = grader.surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28)
+        edge = grader.surface_hu_distribution((1.0, 58.0, 30.0), (1.0, 12.0, 30.0), 6.0, 28)
+        assert full.coverage_pct == pytest.approx(100.0)
+        assert 0.0 < edge.coverage_pct < 100.0
+        assert edge.high_pct == pytest.approx(100.0)
+
     def test_unavailable_without_ct(self):
         mask, _ct = _rod_phantom(lambda x, y, z: np.full_like(x, 300))
         assert ScrewGrader(mask).surface_hu_distribution(ROD_ENTRY, ROD_TIP, 6.0, 28) is None

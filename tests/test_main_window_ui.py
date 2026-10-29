@@ -502,6 +502,32 @@ def test_details_surface_hu_row_shows_the_three_bins(ui_main_window):
     window.screw_list_widget.setCurrentRow(1)
     assert window.selected_screw_surface_hu.text() == "--"
 
+    window.screw_list_widget.setCurrentRow(0)
+    window._clear_screw_metric_rows()        # no selection / plan cleared
+    assert "320" not in window.selected_screw_surface_hu.toolTip()
+
+
+def test_details_surface_hu_row_flags_partial_ct_coverage(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0), side="right",
+        metrics={
+            "surface_hu_low_pct": 0.0,
+            "surface_hu_mid_pct": 0.0,
+            "surface_hu_high_pct": 100.0,
+            "surface_hu_samples": 120,
+            "surface_hu_coverage_pct": 62.5,
+        },
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_surface_hu.text() == "0 / 0 / 100 %*"
+    assert "62" in window.selected_screw_surface_hu.toolTip()
+
 
 def test_details_endplate_row_names_the_neighbour_reference(ui_main_window):
     from src.models.screw import Screw

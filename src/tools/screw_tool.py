@@ -111,6 +111,7 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "surface_hu_mid_pct",
     "surface_hu_high_pct",
     "surface_hu_samples",
+    "surface_hu_coverage_pct",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold

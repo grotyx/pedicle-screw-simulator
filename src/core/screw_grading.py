@@ -154,6 +154,9 @@ class SurfaceHuDistribution:
     mid_pct: float
     high_pct: float
     samples: int
+    #: Share of the surface samples that fell inside the CT; below 100 the
+    #: shares above describe only part of the screw.
+    coverage_pct: float = 100.0
 
 
 @dataclass
@@ -375,12 +378,15 @@ class ScrewGrader:
             return None
         ring = points.reshape(stations, per_station, 3)[:, 1:, :].reshape(-1, 3)
         hu = self.hu_at_points(ring)
+        attempted = hu.size
         hu = hu[np.isfinite(hu)]
         if hu.size == 0:
             return None
         low = float(np.mean(hu < SURFACE_HU_LOW) * 100.0)
         high = float(np.mean(hu >= SURFACE_HU_HIGH) * 100.0)
-        return SurfaceHuDistribution(low, 100.0 - low - high, high, int(hu.size))
+        return SurfaceHuDistribution(
+            low, 100.0 - low - high, high, int(hu.size), 100.0 * hu.size / attempted
+        )
 
     def distances_at_points(self, points: np.ndarray, label: int) -> Tuple[np.ndarray, np.ndarray]:
         """Distances (mm) from each ``(N, 3)`` LPS point to ``label``.

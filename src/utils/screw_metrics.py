@@ -116,15 +116,23 @@ def surface_hu_text(metrics: Mapping[str, Any]) -> str:
     ]
     if any(share is None for share in shares):
         return UNKNOWN_TEXT
-    return " / ".join(f"{share:.0f}" for share in shares) + " %"
+    coverage = _metric_float(metrics, "surface_hu_coverage_pct")
+    partial = "*" if coverage is not None and coverage < 100.0 else ""
+    return " / ".join(f"{share:.0f}" for share in shares) + " %" + partial
 
 
 def surface_hu_tooltip(metrics: Mapping[str, Any]) -> str:
     """Which bin each share is, and how many CT samples they come from."""
     samples = _metric_float(metrics, "surface_hu_samples")
     count = f" from {samples:.0f} samples" if samples is not None else ""
+    coverage = _metric_float(metrics, "surface_hu_coverage_pct")
+    partial = (
+        f" * Only {coverage:.0f}% of the surface lies inside the CT."
+        if coverage is not None and coverage < 100.0
+        else ""
+    )
     return (
         "Share of CT samples at the screw surface below 130 / 130-249 / "
         f"250 HU and above{count}, past the 3 mm cortical entry zone. "
-        "Sampled CT numbers, not a tissue classification."
+        f"Sampled CT numbers, not a tissue classification.{partial}"
     )

@@ -26,8 +26,9 @@ current version; every other place the version appears is derived from it.
   on the screw's surface below 130, 130–249 and at least 250 HU. Samples
   outside the vertebra count too, and the 3 mm entry zone is left out. The
   CSV export appends `surface_hu_low_pct`, `surface_hu_mid_pct`,
-  `surface_hu_high_pct` and `surface_hu_samples`, and the HTML report shows
-  the three shares.
+  `surface_hu_high_pct`, `surface_hu_samples` and `surface_hu_coverage_pct`,
+  and the HTML report shows the three shares. A `*` marks a screw whose
+  surface is partly outside the CT.
 
 ### Fixed
 

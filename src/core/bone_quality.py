@@ -44,6 +44,7 @@ SURFACE_HU_METRIC_KEYS = (
     "surface_hu_mid_pct",
     "surface_hu_high_pct",
     "surface_hu_samples",
+    "surface_hu_coverage_pct",
 )
 
 
@@ -69,6 +70,7 @@ def surface_hu_metric_items(surface_hu: Optional[SurfaceHuDistribution]) -> Dict
         "surface_hu_mid_pct": surface_hu.mid_pct,
         "surface_hu_high_pct": surface_hu.high_pct,
         "surface_hu_samples": surface_hu.samples,
+        "surface_hu_coverage_pct": surface_hu.coverage_pct,
     }
 
 

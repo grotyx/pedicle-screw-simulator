@@ -267,7 +267,7 @@ def test_ungradable_screw_drops_only_what_it_measured():
                 "min_wall_mm", "heary_direction", "facet_grade", "facet_text",
                 "medial_breach_mm", "lateral_breach_mm", "craniocaudal_breach_mm",
                 "medial_wall_mm", "surface_hu_low_pct", "surface_hu_mid_pct",
-                "surface_hu_high_pct", "surface_hu_samples"):
+                "surface_hu_high_pct", "surface_hu_samples", "surface_hu_coverage_pct"):
         assert key not in screw.metrics
     # Everything the plan still knows: kept.
     assert screw.metrics["score"] == pytest.approx(1.9)

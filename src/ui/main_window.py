@@ -3035,6 +3035,7 @@ class MainWindow(QMainWindow):
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip({}))
         self._pedicle_row_narrow = False
         self._repaint_pedicle_row()
 
