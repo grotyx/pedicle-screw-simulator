@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def side_from_segmentation(grader, entry, target) -> str:
+def side_from_segmentation(grader, entry, target, centres=None) -> str:
     """``"left"``/``"right"`` from the vertebra the screw runs through, else ``""``.
 
     The planner's rule: a head on the +x (patient left, LPS) side of the
@@ -33,9 +33,15 @@ def side_from_segmentation(grader, entry, target) -> str:
     label = grader.detect_label(entry, target)
     if label is None:
         return ""
-    columns = np.nonzero(grader.label_array() == label)[2]
-    mask = grader.mask_image()
-    centre_x = mask.GetOrigin()[0] + mask.GetSpacing()[0] * float(columns.mean())
+    # ``centres`` caches each label's x centre across one extraction run.
+    centres = {} if centres is None else centres
+    if label not in centres:
+        columns = np.nonzero(grader.label_array() == label)[2]
+        mask = grader.mask_image()
+        centres[label] = (
+            mask.GetOrigin()[0] + mask.GetSpacing()[0] * float(columns.mean())
+        )
+    centre_x = centres[label]
     return "left" if entry[0] > centre_x else "right"
 
 
@@ -58,7 +64,8 @@ class ScrewExtractionController:
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             result = extract_screws(ct_image)
-        except ValueError as exc:
+        except Exception as exc:
+            logger.exception("Screw extraction failed")
             QMessageBox.warning(
                 self._window, "Cannot Extract Screws", f"{exc}."
             )
@@ -78,13 +85,14 @@ class ScrewExtractionController:
         tool_ctrl = self._window._tool_ctrl
         screw_tool = tool_ctrl.screw_tool
         before = tool_ctrl.snapshot_screws()
+        centres = {}
         for offset, found in enumerate(result.screws):
             screw = Screw(
                 entry_point=found.entry_lps,
                 target_point=found.target_lps,
                 diameter=round(found.diameter_mm, 1),
                 side=side_from_segmentation(
-                    screw_tool.grader, found.entry_lps, found.target_lps
+                    screw_tool.grader, found.entry_lps, found.target_lps, centres
                 ),
                 source="extracted",
                 warnings=[

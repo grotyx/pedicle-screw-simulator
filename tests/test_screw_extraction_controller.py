@@ -132,3 +132,22 @@ def test_a_ct_the_extractor_cannot_read_warns_instead_of_raising(ui_main_window,
 
     assert window._tool_ctrl.screw_tool.get_screws() == []
     assert len(warnings) == 1 and "direction" in warnings[0][2]
+
+
+def test_an_extraction_failure_warns_instead_of_escaping_the_slot(ui_main_window, monkeypatch):
+    window = ui_main_window
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: _phantom([]))
+
+    def boom(_image):
+        raise MemoryError("out of memory")
+
+    monkeypatch.setattr(controller_module, "extract_screws", boom)
+    warnings = []
+    monkeypatch.setattr(
+        controller_module.QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args)
+    )
+
+    window._extract_screws_action.trigger()
+
+    assert len(warnings) == 1
+    assert window._tool_ctrl.screw_tool.get_screws() == []

@@ -203,7 +203,10 @@ def _fit_screw(
         y_low = centre[1] + axis[1] * t.min()
         y_high = centre[1] + axis[1] * t.max()
         head_low = y_low > y_high
-        confidence, how = 0.6, "head at the dorsal end (no wider head found)"
+        confidence, how = 0.6, (
+            "no wider head found, head assumed at the dorsal end; "
+            "may be a rod or connector piece"
+        )
     tip_area = high_end if head_low else low_end
     if tip_area > HEAD_AREA_RATIO * shaft_area:
         return None                                    # wide at both ends: rod, connector
