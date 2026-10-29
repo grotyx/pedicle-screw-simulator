@@ -125,6 +125,10 @@ class VirtualXrayDialog(QDialog):
     def _on_volume_event(self, event: str, **_kwargs):
         # Slice and crosshair moves notify too; only a new volume matters here.
         if event == "volume_loaded":
+            if not self.isVisible():
+                # Do not hold the previous study's CT while nobody looks.
+                self._cache_image = None
+                self._cache.clear()
             self._on_screws_changed()
 
     def _projection(self, image, view: str, force: bool):

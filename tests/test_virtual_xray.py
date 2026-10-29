@@ -224,3 +224,32 @@ def test_dialog_reprojects_when_a_new_volume_loads(qtbot):
     state["image"] = sitk.GetImageFromArray(_phantom())
     observers["virtual_xray"]("volume_loaded")
     qtbot.waitUntil(lambda: not dialog.ap_label.pixmap().isNull())
+
+
+def test_a_hidden_dialog_lets_go_of_the_previous_ct(qtbot):
+    pytest.importorskip("pytestqt")
+    from types import SimpleNamespace
+
+    import SimpleITK as sitk
+
+    from src.ui.screw_plan_table import ScrewPlanTable
+    from src.ui.virtual_xray import VirtualXrayDialog
+
+    observers = {}
+    state = {"image": sitk.GetImageFromArray(_phantom())}
+    volume_manager = SimpleNamespace(
+        get_sitk_image=lambda: state["image"],
+        add_observer=lambda name, callback: observers.__setitem__(name, callback),
+    )
+    table = ScrewPlanTable()
+    qtbot.addWidget(table)
+    dialog = VirtualXrayDialog(volume_manager, SimpleNamespace(get_screws=lambda: []), table)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog._cache_image is state["image"]
+    dialog.hide()
+
+    state["image"] = None
+    observers["virtual_xray"]("volume_loaded")
+
+    assert dialog._cache_image is None and not dialog._cache
