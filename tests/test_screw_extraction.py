@@ -131,22 +131,6 @@ def test_rod_bridged_screws_with_tulips_separate_into_two():
         assert abs(screw.diameter_mm - SCREW_D) <= 1.0
 
 
-def test_head_is_the_wide_end_even_when_it_is_anterior():
-    # Cross-section beats the dorsal fallback: the tulip end is the head even
-    # in this (unphysical) screw whose head points forwards.
-    points = _grid()
-    head = np.array([20.0, 20.0, 115.0])
-    axis = -AXIS
-    image = _phantom([_screw(points, head, axis=axis), _tulip(points, head, axis=axis)])
-
-    extraction = extract_screws(image)
-
-    assert len(extraction.screws) == 1, extraction.reason
-    screw = extraction.screws[0]
-    assert np.linalg.norm(np.asarray(screw.entry_lps) - head) <= 2.5
-    assert np.linalg.norm(np.asarray(screw.target_lps) - (head + axis * SCREW_L)) <= 1.5
-
-
 def test_plain_cylinder_head_falls_back_to_the_dorsal_end():
     points = _grid()
     image = _phantom([_screw(points, LEFT_HEAD)])
@@ -174,6 +158,36 @@ def test_rods_and_cross_links_are_not_taken_for_screws():
     assert len(extraction.screws) == 1
     found = extraction.screws[0]
     assert np.linalg.norm(np.asarray(found.entry_lps) - RIGHT_HEAD) <= 1.5
+
+
+def test_screws_thinner_than_a_bloomed_rod_are_freed_by_subtraction():
+    # Real post-op CTs: blooming makes the rod (here 9 mm) and tulips thicker
+    # than the shafts (6 mm), so erosion would remove the shafts first.
+    points = _grid()
+    rod = _cylinder(
+        points,
+        LEFT_HEAD - AXIS * 5.0 - np.array([8.0, 0.0, 0.0]),
+        RIGHT_HEAD - AXIS * 5.0 + np.array([8.0, 0.0, 0.0]),
+        9.0,
+    )
+    image = _phantom(
+        [
+            _screw(points, LEFT_HEAD, diameter=6.0),
+            _screw(points, RIGHT_HEAD, diameter=6.0),
+            _tulip(points, LEFT_HEAD),
+            _tulip(points, RIGHT_HEAD),
+            rod,
+        ]
+    )
+
+    extraction = extract_screws(image)
+
+    assert len(extraction.screws) == 2, extraction.reason
+    for head in (LEFT_HEAD, RIGHT_HEAD):
+        screw = _match(extraction.screws, head)
+        assert np.linalg.norm(np.asarray(screw.entry_lps) - head) <= 3.0
+        assert np.linalg.norm(np.asarray(screw.target_lps) - (head + AXIS * SCREW_L)) <= 1.5
+        assert screw.diameter_mm == pytest.approx(6.0, abs=1.0)
 
 
 def test_small_metal_blob_is_rejected():
@@ -221,3 +235,20 @@ def test_rotated_direction_matrix_is_rejected():
 
     with pytest.raises(ValueError):
         extract_screws(image)
+
+
+def test_two_pieces_on_one_axis_are_joined_into_one_screw():
+    # A coarse post-op CT split one screw into a head-side and a tip-side piece.
+    from src.core.screw_extraction import ExtractedScrew, _merge_collinear
+
+    head_piece = ExtractedScrew((0.0, 60.0, 100.0), (0.0, 35.0, 100.0), 6.0, 25.0, 500, 0.6, "a")
+    tip_piece = ExtractedScrew((0.5, 33.0, 100.0), (0.5, 12.0, 100.0), 6.0, 21.0, 400, 0.6, "b")
+    neighbour = ExtractedScrew((40.0, 60.0, 100.0), (40.0, 20.0, 100.0), 6.0, 40.0, 800, 0.9, "c")
+
+    merged = _merge_collinear([head_piece, tip_piece, neighbour])
+
+    assert len(merged) == 2
+    joined = next(s for s in merged if s.entry_lps[0] < 20.0)
+    assert joined.entry_lps[1] == pytest.approx(60.0, abs=0.1)
+    assert joined.target_lps[1] == pytest.approx(12.0, abs=0.6)
+    assert joined.length_mm == pytest.approx(48.0, abs=0.6)

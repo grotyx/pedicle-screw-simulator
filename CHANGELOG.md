@@ -47,7 +47,7 @@ current version; every other place the version appears is derived from it.
   changing its diameter, and accepting an automatic plan (one step per
   batch). The last 50 steps are kept; a new study or a loaded plan clears
   them. Measurements and segmentation edits are not included.
-- Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, millimetre-based erosion to separate them from rods and tulips, shape check) and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other. Check each against the images; it is not clinically validated.
+- Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, subtraction of the thicker bloomed rods and tulips or millimetre-based erosion, shape and front-to-back checks) and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other. Check each against the images; it is not clinically validated.
 
 ### Fixed
 
