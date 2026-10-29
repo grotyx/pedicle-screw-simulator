@@ -78,6 +78,30 @@ def world_to_slice(point: Point3D, axes: vtk.vtkMatrix4x4) -> Point3D:
     return _transform_point(point, inverse)
 
 
+def slice_ray_to_world(
+    near: Point3D,
+    far: Point3D,
+    axes: vtk.vtkMatrix4x4,
+) -> Point3D:
+    """World point where a display ray crosses the slice plane.
+
+    ``near`` and ``far`` are two slice-local points on the pointer's ray
+    (display depths 0 and 1); the slice itself is local ``z = 0``.  Unlike
+    picking the CT image, this also works where no image lies under the
+    pointer, such as a drag handle outside the patient.
+    """
+    delta_z = float(far[2]) - float(near[2])
+    if abs(delta_z) <= 1e-12:
+        raise ValueError("display ray is parallel to the slice")
+    fraction = -float(near[2]) / delta_z
+    local = (
+        float(near[0]) + fraction * (float(far[0]) - float(near[0])),
+        float(near[1]) + fraction * (float(far[1]) - float(near[1])),
+        0.0,
+    )
+    return slice_to_world(local, axes)
+
+
 # (negative-direction letter, positive-direction letter) per LPS axis.
 _LPS_AXIS_LETTERS = (("R", "L"), ("A", "P"), ("I", "S"))
 

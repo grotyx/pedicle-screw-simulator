@@ -416,6 +416,8 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
 
+In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, move the pointer, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
+
 ### 6.3 Diameter
 
 The diameter field accepts the value as written or as shorthand:

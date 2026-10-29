@@ -641,6 +641,7 @@ def test_help_text_documents_every_screw_mpr_gesture():
         "Shift",
         "Ctrl",
         "Middle",
+        "guide handle",
         "right-hand rule",
     ):
         assert fragment in SCREW_MPR_CONTROLS_HELP

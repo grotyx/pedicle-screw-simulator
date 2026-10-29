@@ -34,6 +34,9 @@ current version; every other place the version appears is derived from it.
   a window lists head/tip distance, axis
   angle, angle/length/diameter differences and Dice per level and side, plus
   unmatched and invalid screws. Plans from another series are refused.
+- Screw MPR: the Oblique Axial and Oblique Sagittal panes show the same guide
+  handle. Double-click it to rotate the screw about its entry within that
+  pane's plane; the pane holds still during the move and realigns after.
 
 ### Fixed
 

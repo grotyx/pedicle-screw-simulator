@@ -1408,6 +1408,53 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     assert window.screw_axis_position_slider.value() == 50
 
 
+def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
+    import math
+
+    from src.core.mpr_geometry import world_to_slice
+    from src.core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
+
+    window = ui_main_window
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": "SERIES-GUIDE-MPR", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw((8.0, 12.0, 8.0), (8.0, 4.0, 8.0), diameter=6.0)
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.screw_axis_mpr_btn.click()
+    frozen = window.axial_viewer.custom_axes
+    transverse = tuple(frozen.GetElement(row, 0) for row in range(3))
+    handle = guide_handle_point(
+        screw.entry_point, screw.target_point, GUIDE_REACH_MM
+    )
+    pointer = tuple(handle[i] + 5.0 * transverse[i] for i in range(3))
+    callbacks = window.axial_viewer.screw_interaction_callbacks
+
+    assert callbacks["on_begin"](0, "guide", handle) is True
+    assert callbacks["on_drag"](pointer, "Axial MPR") is True
+
+    updated = window.screw_tool.get_screws()[0]
+    assert updated.entry_point == pytest.approx(screw.entry_point, abs=1e-6)
+    assert math.dist(updated.entry_point, updated.target_point) == (
+        pytest.approx(8.0)
+    )
+    assert updated.target_point != pytest.approx(screw.target_point)
+    # The tip swings within the dragged pane: it stays on the frozen plane.
+    assert world_to_slice(updated.target_point, frozen)[2] == (
+        pytest.approx(0.0, abs=1e-6)
+    )
+    assert window.axial_viewer.custom_axes is frozen
+    assert window.axial_viewer.screw_overlays[0]["target"] == (
+        updated.target_point
+    )
+
+    callbacks["on_end"]()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.axial_viewer.custom_axes is not frozen
+
+
 def test_escape_action_cancels_pending_screw_edit(ui_main_window):
     window = ui_main_window
     image = _create_test_image()

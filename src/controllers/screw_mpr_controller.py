@@ -36,6 +36,8 @@ SCREW_MPR_CONTROLS_HELP = (
     "Ctrl + left-drag on the cross-section — rotate continuously\n"
     "Middle-button drag — pan any view (the Pan toggle still works too)\n"
     "Ctrl + wheel — zoom; Fit — fit the image to the view\n"
+    "Double-click the blue guide handle on an oblique view — rotate the "
+    "screw about its entry in that plane; double-click again to finish\n"
     "\n"
     "Positive rotation follows the right-hand rule about the screw axis, "
     "which points from the entry point to the target point."

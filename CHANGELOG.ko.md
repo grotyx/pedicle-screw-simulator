@@ -32,6 +32,9 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   원기둥으로 나오고, 창에 레벨·side별 head/tip 거리, 축 각도, 각도·길이·직경
   차이, Dice와 함께 짝이 없거나 비교할 수 없는 스크류가 표시됩니다. 다른
   series의 계획은 거부합니다.
+- Screw MPR: Oblique Axial과 Oblique Sagittal 창에도 같은 guide 손잡이가
+  표시됩니다. 더블클릭하면 그 창의 평면 안에서 entry를 중심으로 스크류가
+  회전하고, 움직이는 동안 창은 고정되었다가 끝나면 다시 정렬됩니다.
 
 ### 수정
 

@@ -29,9 +29,11 @@ from PyQt6.QtWidgets import (
 from ..core.mpr_geometry import (
     orientation_letters,
     project_screw_to_slice,
+    slice_ray_to_world,
     slice_to_world,
     world_to_slice,
 )
+from ..core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
 from ..core.volume_manager import VolumeManager
 from ..utils.constants import (
     COLOR_AXIAL,
@@ -44,6 +46,7 @@ from ..utils.constants import (
 from .click_detector import DoubleClickDetector
 from .styles import DEFAULT_THEME, get_theme, theme_rgb_float
 from .tool_icons import create_tool_icon
+from .viewer_3d import GUIDE_COLOR, GUIDE_HANDLE_COLOR
 from .viewer_header import ViewerHeaderLabel
 from .vtk_widget import create_vtk_widget
 
@@ -1609,6 +1612,46 @@ class MPRViewer(QWidget):
             props.append(marker_actor)
             self._register_screw_prop(marker_actor, screw_id, part)
 
+        # The reviewed screw's rotation guide, as in 3D: only on the long-axis
+        # panes, whose plane holds the axis the handle swings in.
+        if custom_long_axis and screw_id == self._review_screw_id:
+            handle_slice = world_to_slice(
+                guide_handle_point(entry, target, GUIDE_REACH_MM), axes
+            )
+            handle_point = (*handle_slice[:2], overlay_z)
+            guide_line = vtk.vtkLineSource()
+            guide_line.SetPoint1(*p1)
+            guide_line.SetPoint2(*handle_point)
+            guide_mapper = vtk.vtkPolyDataMapper()
+            guide_mapper.SetInputConnection(guide_line.GetOutputPort())
+            guide_actor = vtk.vtkActor()
+            guide_actor.SetMapper(guide_mapper)
+            guide_actor.SetObjectName("screw-guide-line")
+            guide_actor.GetProperty().SetColor(*GUIDE_COLOR)
+            guide_actor.GetProperty().SetLineWidth(2.0)
+            guide_actor.GetProperty().SetLighting(False)
+            guide_actor.PickableOff()
+            self._renderer.AddViewProp(guide_actor)
+            props.append(guide_actor)
+
+            handle = vtk.vtkRegularPolygonSource()
+            handle.SetNumberOfSides(32)
+            handle.SetRadius(max(3.0, marker_radius))
+            handle.SetCenter(*handle_point)
+            handle.SetNormal(0, 0, 1)
+            handle.GeneratePolygonOn()
+            handle_mapper = vtk.vtkPolyDataMapper()
+            handle_mapper.SetInputConnection(handle.GetOutputPort())
+            handle_actor = vtk.vtkActor()
+            handle_actor.SetMapper(handle_mapper)
+            handle_actor.SetObjectName("screw-guide-handle")
+            handle_actor.GetProperty().SetColor(*GUIDE_HANDLE_COLOR)
+            handle_actor.GetProperty().SetOpacity(0.95)
+            handle_actor.GetProperty().SetLighting(False)
+            self._renderer.AddViewProp(handle_actor)
+            props.append(handle_actor)
+            self._register_screw_prop(handle_actor, screw_id, "guide")
+
         if projection.intersection_slice is not None and not custom_long_axis:
             projected_length = math.hypot(local_delta[0], local_delta[1])
             if projected_length > 1e-9:
@@ -1723,7 +1766,7 @@ class MPRViewer(QWidget):
         pick_position: Tuple[float, float, float],
     ) -> str:
         """Prefer visible endpoint hit zones over an overlapping shaft prop."""
-        if fallback_part in {"entry", "tip"}:
+        if fallback_part in {"entry", "tip", "guide"}:
             return fallback_part
         data = self._screw_data.get(int(screw_id))
         axes = self._active_reslice_axes()
@@ -1815,10 +1858,22 @@ class MPRViewer(QWidget):
             tip_display = self._slice_point_to_display(
                 projection.target_slice
             )
-            for part, display_point, radius in (
+            hit_zones = [
                 ("entry", entry_display, self.ENTRY_HIT_RADIUS_PX),
                 ("tip", tip_display, self.TIP_HIT_RADIUS_PX),
-            ):
+            ]
+            if "guide" in visible_parts:
+                hit_zones.append((
+                    "guide",
+                    self._slice_point_to_display(world_to_slice(
+                        guide_handle_point(
+                            data["entry"], data["target"], GUIDE_REACH_MM
+                        ),
+                        axes,
+                    )),
+                    self.ENTRY_HIT_RADIUS_PX,
+                ))
+            for part, display_point, radius in hit_zones:
                 if part not in visible_parts:
                     continue
                 distance = math.hypot(
@@ -2033,8 +2088,11 @@ class MPRViewer(QWidget):
             click_pos[0], click_pos[1]
         )
         if screen_screw_part is not None:
-            world_pos = self._pick_world_on_slice(
-                click_pos[0], click_pos[1]
+            # The handle sits behind the patient, often off the CT image.
+            world_pos = (
+                self._display_to_world_on_slice(click_pos[0], click_pos[1])
+                if screen_screw_part[1] == "guide"
+                else self._pick_world_on_slice(click_pos[0], click_pos[1])
             )
             if world_pos is None:
                 data = self._screw_data.get(screen_screw_part[0], {})
@@ -2046,7 +2104,7 @@ class MPRViewer(QWidget):
                             (entry[index] + target[index]) / 2.0
                             for index in range(3)
                         )
-                else:
+                elif screen_screw_part[1] != "guide":
                     endpoint_key = (
                         "entry"
                         if screen_screw_part[1] == "entry"
@@ -2151,7 +2209,12 @@ class MPRViewer(QWidget):
             return
 
         if self._screw_drag_active:
-            world_pos = self._pick_world_on_slice(x, y)
+            world_pos = (
+                self._display_to_world_on_slice(x, y)
+                if self._active_screw_part is not None
+                and self._active_screw_part[1] == "guide"
+                else self._pick_world_on_slice(x, y)
+            )
             if world_pos is not None:
                 self._drag_screw_to(world_pos)
             return
@@ -2194,6 +2257,26 @@ class MPRViewer(QWidget):
         if not picker.Pick(x, y, 0, self._renderer):
             return None
         return self._slice_display_to_world(picker.GetPickPosition())
+
+    def _display_to_world_on_slice(
+        self, x: int, y: int
+    ) -> Optional[Tuple[float, float, float]]:
+        """Map a display position onto the slice plane, image or not."""
+        axes = self._active_reslice_axes()
+        if axes is None or self._renderer is None:
+            return None
+        ends = []
+        for depth in (0.0, 1.0):
+            self._renderer.SetDisplayPoint(float(x), float(y), depth)
+            self._renderer.DisplayToWorld()
+            world = self._renderer.GetWorldPoint()
+            if abs(world[3]) <= 1e-12:
+                return None
+            ends.append(tuple(world[index] / world[3] for index in range(3)))
+        try:
+            return slice_ray_to_world(ends[0], ends[1], axes)
+        except ValueError:
+            return None
 
     def _get_scroll_step(self) -> float:
         """Get slice step size in mm for current plane."""
