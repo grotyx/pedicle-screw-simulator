@@ -337,7 +337,7 @@ Warnings fall into three categories, worst first, matched by keyword on the warn
 
 The categories only sort the lines for reading; they are not a clinical risk rating, and every plan still needs review on the CT.
 
-Below the action row, the remaining per-screw metrics (Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle, Surface HU) sit in a collapsed **Details** section, described in full below — the Gertzbein-Robbins grade itself is not repeated there, since it is already the chip shown large above the list. **Measurements** (section 7) are collapsed at the bottom of the same page.
+Below the action row, the remaining per-screw metrics (Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Surface HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle) sit in a collapsed **Details** section, described in full below — the Gertzbein-Robbins grade itself is not repeated there, since it is already the chip shown large above the list. **Measurements** (section 7) are collapsed at the bottom of the same page.
 
 The **Review** page reports:
 

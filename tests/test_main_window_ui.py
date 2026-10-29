@@ -477,6 +477,18 @@ def test_details_is_collapsed_and_holds_the_metric_rows(ui_main_window):
         assert window.details_group.isAncestorOf(widget)
 
 
+def test_details_surface_hu_row_sits_under_trajectory_hu(ui_main_window):
+    # Row 12 was below the fold of the collapsed panel at 1600x900.
+    layout = ui_main_window.selected_screw_metrics.layout()
+
+    def row_of(widget):
+        return layout.getItemPosition(layout.indexOf(widget))[0]
+
+    assert row_of(ui_main_window.selected_screw_surface_hu) == (
+        row_of(ui_main_window.selected_screw_hu) + 1
+    )
+
+
 def test_details_surface_hu_row_shows_the_three_bins(ui_main_window):
     from src.models.screw import Screw
 

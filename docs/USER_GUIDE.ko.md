@@ -337,7 +337,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 이 category는 읽기 쉽게 경고를 분류할 뿐 임상적 위험도 평가가 아니며, 모든 계획은 여전히 CT에서 검토해야 합니다.
 
-동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle, Surface HU)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
+동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Surface HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
 
 **Review** 페이지에는 다음 값이 표시됩니다.
 
