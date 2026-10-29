@@ -56,6 +56,10 @@ class ScrewHistory:
         self._undo.append((label, copy.deepcopy(list(before))))
         del self._undo[: -self._limit]
 
+    def end_burst(self) -> None:
+        """The next push starts a new step even with the same coalesce key."""
+        self._coalesce_key = None
+
     def undo(self, current: List[Screw]) -> Optional[Step]:
         """Pop the last step; ``current`` becomes the matching redo step."""
         return self._move(self._undo, self._redo, current)

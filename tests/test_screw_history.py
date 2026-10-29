@@ -350,3 +350,61 @@ def test_new_edit_after_undo_clears_redo(ui_main_window):
     window._tool_ctrl.remove_selected_screw()
     assert not window._redo_action.isEnabled()
     assert window._undo_action.text() == "Undo Delete Screw"
+
+
+def test_a_drag_left_with_esc_is_still_one_undo_step(ui_main_window):
+    window = _loaded(ui_main_window)
+    screw = Screw((2.0, 3.0, 4.0), (2.0, 3.0, 10.0))
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+    callbacks = window.viewer_3d.screw_interaction_callbacks
+
+    callbacks["on_begin"](0, "entry", screw.entry_point)
+    callbacks["on_drag"]((4.0, 5.0, 6.0), "3D")
+    window._screw_edit_ctrl.cancel()            # Esc keeps the geometry
+
+    assert window._undo_action.text() == "Undo Drag Screw"
+    window._undo_action.trigger()
+    assert window.screw_tool.get_screws() == [screw]
+
+
+def test_undo_regrades_against_the_current_segmentation(ui_main_window, monkeypatch):
+    window = _loaded(ui_main_window)
+    window._tool_ctrl.add_existing_screw(Screw((2.0, 3.0, 4.0), (2.0, 3.0, 10.0)))
+    window.screw_list_widget.setCurrentRow(0)
+    window._tool_ctrl.remove_selected_screw()
+    calls = []
+    monkeypatch.setattr(type(window.screw_tool), "grader", property(lambda self: object()))
+    monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: calls.append(1))
+
+    window._undo_action.trigger()
+
+    assert calls == [1]
+
+
+def test_undo_keeps_screw_mpr_open(ui_main_window):
+    window = _loaded(ui_main_window)
+    window._tool_ctrl.add_existing_screw(Screw((8.0, 9.0, 4.0), (8.0, 9.0, 24.0), diameter=6.0))
+    window.screw_list_widget.setCurrentRow(0)
+    window.screw_axis_mpr_btn.click()
+    assert window._screw_mpr_ctrl.is_active
+    window._tool_ctrl.set_selected_screw_diameter(7.0)
+
+    window._undo_action.trigger()
+
+    assert window.screw_tool.get_screws()[0].diameter == 6.0
+    assert window._screw_mpr_ctrl.is_active
+
+
+def test_diameter_edits_separated_by_a_selection_change_are_two_steps(ui_main_window):
+    window = _loaded(ui_main_window)
+    for x in (1.0, 2.0):
+        window._tool_ctrl.add_existing_screw(Screw((x, 3.0, 4.0), (x, 3.0, 30.0), diameter=6.5))
+    window.screw_list_widget.setCurrentRow(0)
+    window._tool_ctrl.set_selected_screw_diameter(7.0)
+    window.screw_list_widget.setCurrentRow(1)
+    window.screw_list_widget.setCurrentRow(0)
+    window._tool_ctrl.set_selected_screw_diameter(7.5)
+
+    window._undo_action.trigger()
+
+    assert window.screw_tool.get_screws()[0].diameter == 7.0

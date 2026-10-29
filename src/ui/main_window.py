@@ -1838,6 +1838,9 @@ class MainWindow(QMainWindow):
             self._screw_edit_ctrl.on_screw_selection_changed
         )
         self.screw_list_widget.currentRowChanged.connect(
+            lambda _row: self._tool_ctrl.history.end_burst()
+        )
+        self.screw_list_widget.currentRowChanged.connect(
             self._on_screw_visual_selection_changed
         )
         self.screw_previous_btn.clicked.connect(

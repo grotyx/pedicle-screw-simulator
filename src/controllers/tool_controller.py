@@ -855,14 +855,22 @@ class ToolController:
             (i for i, (a, b) in enumerate(pairs) if a != b),
             min(len(current), len(screws)),
         )
+        screw_mpr = self._window._screw_mpr_ctrl
+        reopen_screw_mpr = screw_mpr.is_active
         # The plan-load rebuild path: every index-linked view is redrawn once.
         self.clear_screws()
         for screw in screws:
             self.add_existing_screw(screw)
+        # Snapshots keep the grades of their time; the segmentation may have
+        # changed since, as on plan load.
+        if self.screw_tool.grader is not None:
+            self.regrade_all()
         if screws:
             self._window.screw_list_widget.setCurrentRow(
                 min(changed, len(screws) - 1)
             )
+            if reopen_screw_mpr:
+                screw_mpr.enter()
         self._sync_undo_actions()
         self._window.statusbar.showMessage(f"{verb}: {label}")
 

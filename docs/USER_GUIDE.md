@@ -412,7 +412,7 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 4. Double-click the blue guide handle to rotate the screw about its entry. The handle sits 60 mm behind the head, outside the bone, at the end of a green guide line, and appears on the selected screw only. Entry and length stay fixed, and the status bar shows the convergence and craniocaudal angles while you move (unsigned convergence when the screw has no side). The guide is a control only: it is not graded, saved, or exported.
 5. Move the pointer without holding a button.
 6. Double-click again to finish.
-7. Press `Esc` to leave movement mode while retaining the last valid position. There is no undo.
+7. Press `Esc` to leave movement mode while retaining the last valid position. **Edit → Undo** (6.5) puts the screw back where the drag began.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
 

@@ -86,6 +86,9 @@ class ScrewEditController:
     def cancel(self, show_message: bool = True) -> None:
         """Cancel the pending edit without changing screw geometry."""
         was_active = self.is_active
+        # Esc, a selection change or an abort ends a drag but keeps its
+        # geometry, so it is still one undo step.
+        before, self._drag_before = self._drag_before, None
         self._mode = "idle"
         self._selected_index = None
         self._drag_anchor = None
@@ -93,6 +96,8 @@ class ScrewEditController:
         self._drag_target = None
         self._active_source = None
         self.refresh_controls()
+        if before is not None:
+            self._window._tool_ctrl.record_screw_edit("drag screw", before)
         if was_active and show_message:
             self._window.statusbar.showMessage("Screw edit cancelled")
 
@@ -231,10 +236,7 @@ class ScrewEditController:
         """Finish direct manipulation while preserving the last valid state."""
         selected_index = self._selected_index
         was_active = self.is_active
-        before, self._drag_before = self._drag_before, None
         self.cancel(show_message=False)
-        if before is not None:
-            self._window._tool_ctrl.record_screw_edit("drag screw", before)
         if was_active and selected_index is not None:
             self._realign_screw_mpr(selected_index)
 
