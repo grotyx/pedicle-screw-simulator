@@ -100,7 +100,7 @@ Every page opens with a header: a small "Step N of 4" line, the page title, and 
 
 - **Study:** the **Open DICOM…** button, the **Study** info section, then the collapsed **Window/Level** (window/level sliders and Bone/Soft Tissue presets) and **3D Rendering** (transfer-function preset and opacity) sections.
 - **Segment:** the **Segmentation** group (**Run Auto Segmentation**, **Refine boundaries against CT**, the status line, and the isolate/restore button — see 5.2) and a hint about the automatic isolation and the 3D header toggle.
-- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
+- **Plan:** the **Planning** group, holding **Levels to plan (also shown in 3D)** at the top (the level checkboxes and their **All**/**Clear** buttons, see 5.3), then the mode combo, a review notice, **Plan Screws**, status, and **Clear All Screws** — then the **Insert at crosshair: Left / Right** buttons (see 7), followed by the collapsed **Planning parameters** and **Manual Screw Defaults** sections.
 - **Review:** starts with the **Construct** map (see "The construct map" below), then the selected screw's key numbers with its **✓ Reviewed** button and warning line, then the per-level screw list, which takes most of the page (see 5.9/5.10 for its layout, and 6 for editing); **Measurements** are collapsed at the bottom (see 7).
 
 ### 3D header: Vertebrae / Full CT
@@ -250,7 +250,7 @@ Select **Reset Defaults** to restore every value in this table, along with the p
 
 S1 and the sacrum are excluded from this borrowing in both directions: the lumbosacral angle differs from L5's own by 15–30°, so S1 never lends its normal to L5 and never borrows one back, whatever its own fit looks like.
 
-Whichever reference was actually used, the planner reports the endplate angle against it — never against a rejected own fit — and the screw's later re-grade (5.9, ScrewTool) measures the same angle against the same reference, so the two never disagree. The reference is recorded per screw as `endplate_reference` (`own` / `neighbours` / `none`), shown in the Review page's Details section (5.9) and exported as the last CSV column (section 9).
+Whichever reference was actually used, the planner reports the endplate angle against it — never against a rejected own fit — and the screw's later re-grade (5.9, ScrewTool) measures the same angle against the same reference, so the two never disagree. The reference is recorded per screw as `endplate_reference` (`own` / `neighbours` / `none`), shown in the Review page's Details section (5.9) and exported as the `endplate_reference` CSV column (section 9).
 
 ### 5.6 Trajectory Optimizer
 
@@ -337,7 +337,7 @@ Warnings fall into three categories, worst first, matched by keyword on the warn
 
 The categories only sort the lines for reading; they are not a clinical risk rating, and every plan still needs review on the CT.
 
-Below the action row, the remaining per-screw metrics (Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle) sit in a collapsed **Details** section, described in full below — the Gertzbein-Robbins grade itself is not repeated there, since it is already the chip shown large above the list. **Measurements** (section 7) are collapsed at the bottom of the same page.
+Below the action row, the remaining per-screw metrics (Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Surface HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle) sit in a collapsed **Details** section, described in full below — the Gertzbein-Robbins grade itself is not repeated there, since it is already the chip shown large above the list. **Measurements** (section 7) are collapsed at the bottom of the same page.
 
 The **Review** page reports:
 
@@ -363,6 +363,7 @@ Once a screw is graded against a segmentation, the Review page's Details section
 - **Minimum cortical wall distance ("Wall margin"):** the closest approach, in mm, between the screw and the cortical wall (past the 3 mm entry zone, see 5.9).
 - **Heary breach direction:** the anatomical direction of the worst cortical breach — medial, lateral, anterior, posterior, superior, or inferior (Heary 2004). Reported as "mediolateral" for a medial/lateral breach on a manually placed screw with no known side, and "none" when there is no breach.
 - **Facet-joint violation grade (0-3):** an approximation of the Babu (2012) grading, measured from the proximal third of the screw to the cephalad vertebra's segmentation label — 0 no contact, 1 abuts the facet within 1 mm, 2 enters it by less than 1 mm, 3 penetrates it by 1 mm or more.
+- **Surface HU (Details row "Surface HU", CSV `surface_hu_low_pct` / `surface_hu_mid_pct` / `surface_hu_high_pct` / `surface_hu_samples` / `surface_hu_coverage_pct`):** the share of CT samples on the screw's outer surface that read below 130 HU, 130–249 HU, and 250 HU or more, shown as "low / mid / high %"; the tooltip gives the sample count. A trailing `*` means part of the surface lies outside the CT, so the shares describe only the part inside it; the tooltip and `surface_hu_coverage_pct` say how much. Samples cover the shaft from 3 mm past where the axis enters the vertebra (as in 5.9) to the tip, and, unlike the trajectory HU, samples outside the vertebra label count too — soft tissue or canal against the thread is what this shows. Each sample reads its nearest voxel, so the shares are of samples, not of surface area. They are CT numbers, not a tissue classification or a fixation-strength estimate. Blank ("--") without a CT or segmentation, or when no sample falls inside the CT. The bins follow the open-source 3D Slicer pedicle-screw training module.
 
 Details and the export also warn when a measurement crosses a literature threshold:
 
@@ -384,6 +385,17 @@ This is a source-install feature: it requires a non-frozen Python environment wi
 
 When the model runs successfully, each side's pedicle isthmus is measured from its label first, falling back to the coronal cross-section search only for a side the label does not resolve. The segmentation status line reports "· pedicle model used", "· pedicle model ran but found no pedicle voxels" when the model ran but its output contains no pedicle label at all, or "· pedicle model unavailable: <reason>" when it could not run — a stage-2 failure never blocks the TotalSegmentator result underneath it.
 
+### 5.11 Compare with a Reference Plan
+
+**File → Reference Plan** compares the screws you have now with another plan of the same CT — an expert's plan, an earlier version of yours, or the automatic proposal saved for comparison. It is a teaching and self-check aid; the reference is the plan you chose, not a validated ground truth.
+
+1. Choose **Load Reference Plan...** and pick a plan JSON (saved with **File → Save Plan**). The reference screws appear in 3D as amber translucent cylinders that cannot be selected or edited, and the comparison window opens. Nothing from the reference is added to your plan, saved with it, or exported.
+2. The window lists one row per screw pair matched by level and side (case and spaces ignored): head and tip distance in mm, the angle between the axes, and the convergence, craniocaudal, length and diameter differences (Δ = current − reference), plus the Dice overlap of the two screw volumes. Screws only in one plan, screws without a level or side (never matched, even to each other), and screws whose geometry cannot be compared (zero length, no diameter) follow with the reason. The summary gives the pair count and means; spread (±) and 95% limits of agreement appear only from two pairs on, and with no pair it says "No comparable screws".
+3. The results are a snapshot. After moving screws, click **Recompare** in the window (or **File → Reference Plan → Compare with Reference**).
+4. **Show Reference Screws** hides or shows the amber reference screws; **Clear Reference** drops the reference. Loading another study clears it too.
+
+A reference plan saved from a different CT series is refused. When either plan has no series ID, the comparison still runs but the window says the coordinate frame is unverified — check in 3D that the amber screws sit where they should. The exported HTML report never shows the reference screws.
+
 ## 6. Edit Screws
 
 ### 6.1 The Edit Menu
@@ -397,11 +409,14 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 1. Double-click the large head to move the entry point only.
 2. Double-click the pointed tip or distal shaft to move the tip only.
 3. Double-click the middle shaft to move entry and tip together.
-4. Move the pointer without holding a button.
-5. Double-click again to finish.
-6. Press `Esc` to leave movement mode while retaining the last valid position.
+4. Double-click the blue guide handle to rotate the screw about its entry. The handle sits 60 mm behind the head, outside the bone, at the end of a green guide line, and appears on the selected screw only. Entry and length stay fixed, and the status bar shows the convergence and craniocaudal angles while you move (unsigned convergence when the screw has no side). The guide is a control only: it is not graded, saved, or exported.
+5. Move the pointer without holding a button.
+6. Double-click again to finish.
+7. Press `Esc` to leave movement mode while retaining the last valid position. **Edit → Undo** (6.5) puts the screw back where the drag began.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
+
+In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, move the pointer, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
 
 ### 6.3 Diameter
 
@@ -421,6 +436,10 @@ Values are normalized to 0.5 mm increments between 4.0 and 7.5 mm.
 
 Select a screw and use **Delete Screw** or the `Delete` key.
 
+### 6.5 Undo and Redo
+
+The menu bar's **Edit** menu has **Undo** (`Ctrl+Z`) and **Redo** (`Ctrl+Shift+Z` or `Ctrl+Y`) for changes to the screw list: adding a screw (by clicks or with **Insert at crosshair**), deleting one, moving it (one whole drag — including a guide-handle rotation — or one edit-mode click is one step), changing the selected screw's diameter (a run of changes to the same screw is one step), and accepting an automatic plan (the whole batch is one step). The menu entries name the step they will undo or redo, such as "Undo Delete Screw", and are greyed out when there is nothing to undo or redo; the status bar confirms each step, for example "Undo: delete screw". A restored screw comes back at the same place in the list, is graded again against the current segmentation ("N/A" without one), and is selected. Review marks are not undo steps: a screw the step does not move keeps its **✓ Reviewed** mark, and a restored screw comes back unreviewed. The last 50 steps are kept. Making a new change after an undo discards the steps you could have redone. Opening a new study and loading a plan clear the history. Undo does nothing while you are dragging a screw, and measurements and segmentation edits are not part of the history.
+
 ## 7. Manual Tools
 
 Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
@@ -431,6 +450,16 @@ Add Screw, Distance, and Angle are buttons in the tool dock below the main view 
 2. Click the entry point in an MPR view.
 3. Click the target point in the same MPR view.
 4. Review and adjust the new screw.
+
+### Insert at crosshair
+
+One click places a screw at the current MPR crosshair using the **Manual Screw Defaults** (length, diameter, convergence, craniocaudal):
+
+1. Move the crosshair to the entry point in the standard MPR views.
+2. On the **Plan** page, select **Left** or **Right** next to **Insert at crosshair**. The side is required and decides which way "medial" points, wherever the patient lies in the scan.
+3. The screw is created, graded and selected. Positive convergence aims the tip medially, positive craniocaudal cranially; both default to 0° and can be set from −89° to +89°.
+
+Nothing is placed when the tip would leave the CT; the status bar says why. The buttons stay disabled until a study is loaded and while Screw MPR is active, because its slices do not pass through the stored crosshair. The four Manual Screw Defaults are remembered for the next session.
 
 ### Distance and Angle
 
@@ -445,6 +474,16 @@ Measurements belong to the cut where they were created. They hide on another cut
 - Select **Edit** to re-measure the item.
 - Select **Delete** or press `Delete` to remove it.
 - A measurement taken while Screw MPR is active is listed as `(screw view)` with no cut position, because its points lie on a screw-aligned plane that is not stored with the measurement. **Show Cut** does not jump for it, and it can be neither edited nor moved by its handles: delete it and measure again in Screw MPR.
+
+### Extract Screws from a Post-op CT
+
+**Tools > Extract Screws from Post-op CT** finds the screws already implanted in the loaded CT and adds them to the plan as editable screws (source `extracted`), so they are graded, drawn in the MPR and 3D views, and listed on the Review page like any other screw.
+
+- Metal is voxels at or above 2000 HU. On a real CT, blooming makes the rod and the tulips look thicker than the screw shafts, so the thick metal is found (metal deeper than 3-5 mm from its surface, grown back by the same distance) and subtracted, which leaves each shaft as a separate piece. Metal that subtraction left untouched — for example screws thicker than their rod — is instead eroded step by step until each screw comes loose. A piece is kept when it is elongated, 20-70 mm long and 3-10 mm thick, with a thin tip and its head at the back, and runs mainly front to back (a craniocaudal rod or a transverse cross-link does not); two pieces on one axis, no more than 10 mm apart, are joined into one screw. Small metal such as a clip is ignored.
+- The entry is at the dorsal end, where the shaft meets the head, so the tulip does not count towards the length. A measured diameter outside 4.0-7.5 mm (blooming widens shafts) is clamped to that range and the screw's note keeps the measured width.
+- Run segmentation first to get a grade, level, and side for each screw; without it they are added ungraded with no level or side. On a post-op CT the metal distorts the segmentation and blooming widens the screw, so each extracted screw notes that its grade is indicative only. The **Ped.** column stays empty unless the level was auto-planned, because the pedicle width comes from the planner's pedicle analysis.
+- On twelve real post-op CTs (pedicle screw constructs over one to four levels) the tool found every screw in eleven and seven of eight in the twelfth, with no rod or connector taken for a screw, in 0.4-7 s each (the search runs in the background, so the window stays responsive); entries sit at the junction of shaft and head, and blooming makes diameters read about 0.5-1 mm wide. Metal artefacts can shift the axis or the diameter. Check every extracted screw against the images and correct it by dragging (6.2); the result is not clinically validated.
+- Details → **Source** reads "Extracted from CT" for these screws. **Edit → Undo** (6.5) removes the whole extracted batch in one step; running the tool again adds the screws a second time.
 
 ## 8. Display Controls
 
@@ -485,6 +524,19 @@ See 5.8 for how Screw MPR changes what these planes show and cut.
 
 Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on macOS, where the OpenGL-to-Metal translation layer stalls during 3D texture upload. The choice is automatic and is recorded in the log.
 
+### Virtual X-ray
+
+**View → Virtual X-ray...** opens a separate window with two projections of the loaded CT side by side, the way the plan would look on intra-operative fluoroscopy: **AP** (beam along the patient's anterior–posterior axis, patient right on the viewer's left) and **Lateral** (beam along left–right, anterior on the left). Superior is up in both, and the edge letters name the patient axes as on the MPR views.
+
+| Control | Action |
+|---|---|
+| `Ray-sum` | Mean attenuation along the beam, like a radiograph (default) |
+| `MIP` | Brightest voxel along the beam |
+| `Screws` | Show or hide the planned screws, drawn at their diameter in the 3D colour; the selected screw has a yellow outline |
+| `Refresh` | Recompute both projections |
+
+The window stays open while you work: it redraws when screws are added, moved, resized, removed or selected, and when a new study is loaded. The images are parallel projections of the CT, not calibrated fluoroscopy: there is no beam divergence or magnification. If the CT axes are tilted more than 2° from the patient axes, the window says so and the edge letters are approximate.
+
 ### Keyboard shortcuts
 
 | Key | Action |
@@ -492,6 +544,8 @@ Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on mac
 | `Ctrl+O` | Open a DICOM folder |
 | `Ctrl+S` | Save the plan |
 | `Ctrl+L` | Load a plan |
+| `Ctrl+Z` | Undo the last screw change (6.5) |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | Redo the last undone screw change (6.5) |
 | `Ctrl+Q` | Exit |
 | `Ctrl+M` | Maximise the pane you last worked in; repeat to restore |
 | `R` | Reset Camera: fit the MPR views and the 3D view (ignored while you type in a field) |
@@ -505,7 +559,7 @@ Volume rendering uses the GPU on Windows and Linux and the CPU ray caster on mac
 - Export supported bone surfaces as STL.
 - Export a single-file HTML report of the plan (see below).
 
-Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. A plan saved by an earlier build may show better grades once re-graded this way, because the entry cortex is no longer graded (see 5.9) — nothing in the plan file itself changes. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`, and — as the new last column — `endplate_reference` (`own` / `neighbours` / `none`, or blank when the screw never had an endplate reference recorded — for example a manually placed screw on a level with no pedicle analysis (not planned and not within two levels of a planned level, or placed after segmentation was re-run, which discards the analyses), or a screw from a plan saved by an earlier version), naming which reference the `endplate_angle_deg` column was measured against (see 5.5, "Endplate reference for a rough fit"). A planned screw keeps its planner-recorded value through later re-grades. Each screw also carries a `reviewed` flag, the **✓ Reviewed** mark (5.9); it is an additive key within schema version 3, so a plan saved without it loads with every screw not reviewed.
+Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. A plan saved by an earlier build may show better grades once re-graded this way, because the entry cortex is no longer graded (see 5.9) — nothing in the plan file itself changes. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`, and — as the new last column — `endplate_reference` (`own` / `neighbours` / `none`, or blank when the screw never had an endplate reference recorded — for example a manually placed screw on a level with no pedicle analysis (not planned and not within two levels of a planned level, or placed after segmentation was re-run, which discards the analyses), or a screw from a plan saved by an earlier version), naming which reference the `endplate_angle_deg` column was measured against (see 5.5, "Endplate reference for a rough fit"), followed by the five surface HU columns (`surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`, `surface_hu_samples`, `surface_hu_coverage_pct`, see 5.10). A planned screw keeps its planner-recorded value through later re-grades. Each screw also carries a `reviewed` flag, the **✓ Reviewed** mark (5.9); it is an additive key within schema version 3, so a plan saved without it loads with every screw not reviewed.
 
 The Save, Load and Export dialogs open in the folder you last used for a plan (or your Documents folder the first time), never in the application folder. A plan records the DICOM Series Instance UID only as a one-way SHA-256 digest (`series_uid_sha256`), which is enough to warn you when a plan is loaded against a different series but cannot be looked up in PACS. Older plans that hold the raw UID still load and are checked the same way; saving them again writes the digest only.
 

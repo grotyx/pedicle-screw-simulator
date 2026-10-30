@@ -456,11 +456,11 @@ def test_csv_carries_the_narrow_pedicle_columns(tmp_path):
     # Each wave appends its own columns and never reorders an earlier one, so
     # these four (W7) sit before the endplate angle (W8), the uncertainty
     # flag and the endplate reference, not at the end of the row.
-    assert header[-7:-3] == [
+    assert header[-12:-8] == [
         "pedicle_width_mm", "narrow_pedicle", "medial_breach_mm", "lateral_breach_mm"
     ]
-    assert header[-3:-1] == ["endplate_angle_deg", "width_uncertain"]
-    assert header[-1] == "endplate_reference"
+    assert header[-8:-6] == ["endplate_angle_deg", "width_uncertain"]
+    assert header[-6] == "endplate_reference"
     row = dict(zip(header, rows[1], strict=True))
     assert row["pedicle_width_mm"] == "4.500"
     assert row["narrow_pedicle"] == "true"
@@ -557,7 +557,7 @@ def test_csv_appends_the_endplate_reference_column_last(tmp_path):
 
     rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
     header = rows[0]
-    assert header[-1] == "endplate_reference"
+    assert header[-6] == "endplate_reference"
     row = dict(zip(header, rows[1], strict=True))
     assert row["endplate_reference"] == "neighbours"
     blank = dict(zip(header, rows[2], strict=True))
@@ -690,3 +690,33 @@ def test_plans_without_the_flag_load_as_standard_measurements():
         measurement_planes=["sagittal"],
     )
     assert deserialize_plan(payload)["measurement_screw_aligned"] == [False]
+
+
+def test_csv_appends_the_surface_hu_columns_last(tmp_path):
+    screws = [
+        Screw(
+            entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0), side="left",
+            metrics={
+                "surface_hu_low_pct": 12.5,
+                "surface_hu_mid_pct": 37.5,
+                "surface_hu_high_pct": 50.0,
+                "surface_hu_samples": 320,
+                "surface_hu_coverage_pct": 100.0,
+            },
+        ),
+        Screw(entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0)),
+    ]
+    path = tmp_path / "plan.csv"
+
+    export_screws_csv(str(path), screws)
+
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+    header = rows[0]
+    assert header[-5:] == [
+        "surface_hu_low_pct", "surface_hu_mid_pct", "surface_hu_high_pct",
+        "surface_hu_samples", "surface_hu_coverage_pct",
+    ]
+    row = dict(zip(header, rows[1], strict=True))
+    assert (row["surface_hu_low_pct"], row["surface_hu_samples"]) == ("12.500", "320")
+    blank = dict(zip(header, rows[2], strict=True))
+    assert blank["surface_hu_low_pct"] == "" and blank["surface_hu_samples"] == ""

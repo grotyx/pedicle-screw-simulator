@@ -6,7 +6,8 @@ import pytest
 import vtk
 from PyQt6.QtCore import Qt
 
-from src.core.mpr_geometry import build_screw_mpr_axes
+from src.core.mpr_geometry import build_screw_mpr_axes, world_to_slice
+from src.core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
 from src.ui.click_detector import DoubleClickDetector
 from src.ui.mpr_viewer import MPRViewer
 from src.utils.vtk_helpers import create_reslice_axes
@@ -957,3 +958,115 @@ def test_clearing_the_rod_lines_removes_the_projection():
 
     assert viewer._rod_line_props == []
     assert viewer._renderer.GetViewProps().GetNumberOfItems() == 0
+
+
+_GUIDE_ENTRY = (0.0, 0.0, 0.0)
+_GUIDE_TARGET = (0.0, -40.0, 0.0)
+
+
+def _make_screw_mpr_viewer(plane="oblique_axial"):
+    """A camera viewer showing one Screw MPR plane of the reviewed screw 0."""
+    viewer = _make_camera_viewer()
+    window = vtk.vtkRenderWindow()
+    window.SetOffScreenRendering(1)
+    window.SetSize(400, 200)
+    window.AddRenderer(viewer._renderer)
+    viewer._render_window = window  # the renderer does not keep it alive
+    viewer._renderer.ResetCameraClippingRange(-200, 200, -200, 200, -1, 1)
+    axes = getattr(build_screw_mpr_axes(_GUIDE_ENTRY, _GUIDE_TARGET), plane)
+    viewer._reslice = SimpleNamespace(GetResliceAxes=lambda: axes)
+    viewer._custom_reslice_axes = axes
+    viewer._screw_data = {
+        0: {
+            "entry": _GUIDE_ENTRY,
+            "target": _GUIDE_TARGET,
+            "color": (0.2, 0.8, 0.2),
+            "diameter": 6.0,
+        }
+    }
+    viewer._screw_overlays = {}
+    viewer._review_screw_id = 0
+    viewer._screw_prop_parts = {}
+    viewer._screw_drag_active = False
+    viewer._screw_drag_callback = None
+    viewer._screw_drag_begin_callback = None
+    viewer._screw_drag_end_callback = None
+    viewer._screw_select_callback = None
+    viewer._double_click_detector = DoubleClickDetector()
+    viewer._active_screw_part = None
+    viewer._pending_screw_press = None
+    viewer._render_guard_active = False
+    viewer._draw_screw_projection(0)
+    return viewer, axes
+
+
+def _handle_display(viewer, axes):
+    handle = guide_handle_point(_GUIDE_ENTRY, _GUIDE_TARGET, GUIDE_REACH_MM)
+    return viewer._slice_point_to_display(world_to_slice(handle, axes))
+
+
+def test_long_axis_screw_mpr_pane_draws_the_guide_handle_behind_the_entry():
+    viewer, axes = _make_screw_mpr_viewer()
+
+    props = viewer._screw_overlays[0]
+    handle = _actor_by_name(props, "screw-guide-handle")
+    line = _actor_by_name(props, "screw-guide-line")
+    expected = world_to_slice(
+        guide_handle_point(_GUIDE_ENTRY, _GUIDE_TARGET, GUIDE_REACH_MM), axes
+    )
+    bounds = handle.GetBounds()
+    centre = ((bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0)
+    assert centre == pytest.approx(expected[:2])
+    assert viewer._screw_prop_parts[viewer._prop_key(handle)] == (0, "guide")
+    # Only the handle is a hit target; the line is a visual cue.
+    assert line.GetPickable() == 0
+
+
+def test_cross_section_pane_shows_no_guide_handle():
+    viewer, _axes = _make_screw_mpr_viewer("cross_section")
+
+    names = {prop.GetObjectName() for prop in viewer._screw_overlays[0]}
+    assert "screw-guide-handle" not in names
+    assert "screw-guide-line" not in names
+
+
+def test_guide_handle_wins_the_hit_test_only_near_the_handle():
+    viewer, axes = _make_screw_mpr_viewer()
+    hx, hy = _handle_display(viewer, axes)
+    ex, ey = viewer._slice_point_to_display(world_to_slice(_GUIDE_ENTRY, axes))
+
+    assert viewer._pick_screw_part_at_display(round(hx), round(hy)) == (0, "guide")
+    assert viewer._pick_screw_part_at_display(round(ex), round(ey)) == (0, "entry")
+    assert viewer._pick_screw_part_at_display(round(hx) + 60, round(hy)) is None
+
+
+def test_guide_press_and_drag_map_the_pointer_onto_the_frozen_plane():
+    viewer, axes = _make_screw_mpr_viewer()
+    # Behind the patient there is no CT under the pointer to pick.
+    viewer._pick_world_on_slice = lambda x, y: None
+    viewer._pick_measurement_part_at_display = lambda x, y: None
+    events = []
+    viewer.set_screw_interaction_callbacks(
+        on_begin=lambda screw_id, part, world: events.append(
+            ("begin", screw_id, part, world)
+        ) or True,
+        on_drag=lambda world, source: events.append(("drag", world, source)),
+        on_select=lambda screw_id: None,
+    )
+    hx, hy = _handle_display(viewer, axes)
+
+    for _ in range(2):  # double-click locks the handle, as for the other parts
+        viewer.vtk_widget.event_position = (round(hx), round(hy))
+        viewer._on_left_click(None, "LeftButtonPressEvent")
+    viewer.vtk_widget.event_position = (round(hx) + 30, round(hy))
+    viewer._on_mouse_move(None, "MouseMoveEvent")
+
+    (_, screw_id, part, picked), (_, pointer, source) = events
+    assert (screw_id, part, source) == (0, "guide", "Axial MPR")
+    assert world_to_slice(picked, axes)[2] == pytest.approx(0.0, abs=1e-9)
+    assert world_to_slice(pointer, axes)[2] == pytest.approx(0.0, abs=1e-9)
+    moved = tuple(
+        world_to_slice(pointer, axes)[i] - world_to_slice(picked, axes)[i]
+        for i in range(2)
+    )
+    assert moved == pytest.approx((30.0, 0.0))

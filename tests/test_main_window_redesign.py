@@ -115,6 +115,32 @@ def test_promote_swaps_the_main_view_without_reparenting_any_pane(ui_main_window
     assert {name: pane.parentWidget() for name, pane in _pane_map(window).items()} == parents
 
 
+def test_panes_are_built_inside_the_view_container(monkeypatch, qtbot, isolated_qsettings):
+    # A parentless pane becomes a top-level window when the first layout pass
+    # shows it; on X11 its native VTK window then never reaches the screen.
+    parents = []
+
+    class RecordingMPRViewer(DummyMPRViewer):
+        def __init__(self, plane, volume_manager, parent=None):
+            parents.append(parent)
+            super().__init__(plane, volume_manager, parent)
+
+    class RecordingViewer3D(DummyViewer3D):
+        def __init__(self, volume_manager, parent=None):
+            parents.append(parent)
+            super().__init__(volume_manager, parent)
+
+    monkeypatch.setattr(main_window_module, "MPRViewer", RecordingMPRViewer)
+    monkeypatch.setattr(main_window_module, "Viewer3D", RecordingViewer3D)
+    QApplication.instance().setProperty("themeName", "graphite_blue")
+    window = main_window_module.MainWindow()
+    qtbot.addWidget(window)
+
+    assert len(parents) == 4
+    assert all(parent is not None for parent in parents)
+    assert {pane.parentWidget() for pane in _pane_map(window).values()} == set(parents)
+
+
 def test_promoting_the_current_main_view_is_a_no_op(ui_main_window):
     window = ui_main_window
     window.set_hero_view("3d")

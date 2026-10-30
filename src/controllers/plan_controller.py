@@ -7,12 +7,18 @@ and applying loaded plans back to the tool state.
 
 import logging
 import os
+from datetime import datetime
 from typing import List, Optional
 
 from PyQt6.QtCore import QStandardPaths
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.controllers.tool_controller import screw_display_color
+from src.core.plan_metrics import (
+    _pedicle_centers,
+    compare_screw_lists,
+    screw_geometry_problem,
+)
 from src.utils.planning_io import (
     deserialize_plan,
     export_screws_csv,
@@ -37,6 +43,10 @@ class PlanController:
     def __init__(self, volume_manager, main_window):
         self._vm = volume_manager
         self._window = main_window
+        #: The loaded reference plan, kept apart from the editable plan: never
+        #: graded, saved, exported or selectable.  ``None`` when there is none.
+        self._reference: Optional[dict] = None
+        self.reference_dialog = None
 
     def _start_dir(self) -> str:
         """Folder file dialogs open in: last plan folder, else Documents.
@@ -202,16 +212,30 @@ class PlanController:
 
         win = self._window
         images = {}
-        for title, viewer in (
-            ("Axial", win.axial_viewer),
-            ("Sagittal", win.sagittal_viewer),
-            ("Coronal", win.coronal_viewer),
-            ("3D", win.viewer_3d),
-        ):
-            widget = getattr(viewer, "vtk_widget", None)
-            images[title] = (
-                capture_png(widget.GetRenderWindow()) if widget is not None else None
-            )
+        # The report lists only the working plan, so its 3D image must not
+        # show the reference ghosts or the rotation guide (a control) either.
+        hide_reference = self._reference is not None and self._reference["visible"]
+        if hide_reference:
+            win.viewer_3d.set_reference_screws_visible(False)
+        guide_viewers = (win.viewer_3d, *win._get_mpr_viewers())
+        for viewer in guide_viewers:
+            viewer.set_guides_visible(False)
+        try:
+            for title, viewer in (
+                ("Axial", win.axial_viewer),
+                ("Sagittal", win.sagittal_viewer),
+                ("Coronal", win.coronal_viewer),
+                ("3D", win.viewer_3d),
+            ):
+                widget = getattr(viewer, "vtk_widget", None)
+                images[title] = (
+                    capture_png(widget.GetRenderWindow()) if widget is not None else None
+                )
+        finally:
+            for viewer in guide_viewers:
+                viewer.set_guides_visible(True)
+            if hide_reference:
+                win.viewer_3d.set_reference_screws_visible(True)
         try:
             html = build_report_html(
                 ReportContext(
@@ -228,6 +252,113 @@ class PlanController:
             QMessageBox.critical(
                 win, "Export Error", f"Failed to export report: {e}"
             )
+
+    # --- reference plan ----------------------------------------------------
+
+    def load_reference_dialog(self):
+        """Open a plan JSON as the reference to compare the working plan with."""
+        if self._vm.get_vtk_image() is None:
+            QMessageBox.warning(
+                self._window,
+                "No Volume Loaded",
+                "Load a DICOM volume before loading a reference plan.",
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self._window,
+            "Load Reference Plan JSON",
+            self._start_dir(),
+            "JSON Files (*.json)",
+        )
+        if not path:
+            return
+        self._remember_dir(path)
+        try:
+            payload = load_plan_json(path)
+            parsed = deserialize_plan(payload)
+        except Exception as e:
+            QMessageBox.critical(
+                self._window, "Load Error", f"Failed to load reference plan: {e}"
+            )
+            return
+
+        plan_digest = parsed.get("series_uid_sha256")
+        current_digest = series_uid_digest(self._window._current_series_id)
+        if plan_digest and current_digest and plan_digest != current_digest:
+            # Unlike loading a plan to edit, there is no "continue anyway":
+            # numbers from another series' coordinates would look meaningful.
+            QMessageBox.warning(
+                self._window,
+                "Different Series",
+                "The reference plan was made on a different CT series and "
+                "cannot be compared with this one.",
+            )
+            return
+
+        screws = parsed["screws"]
+        self._reference = {
+            "screws": screws,
+            "centers": self._reference_centers(payload, len(screws)),
+            "frame_verified": bool(plan_digest and current_digest),
+            "visible": True,
+        }
+        self._window.viewer_3d.set_reference_screws(
+            [
+                (screw.entry_point, screw.target_point, screw.diameter / 2.0)
+                for screw in screws
+                if screw_geometry_problem(screw) is None
+            ]
+        )
+        self._window.viewer_3d.set_reference_screws_visible(True)
+        self._window.refresh_reference_controls(True)
+        self._window.statusbar.showMessage(
+            f"Reference plan loaded ({len(screws)} screws)"
+        )
+        self.compare_reference()
+
+    @staticmethod
+    def _reference_centers(payload, count: int):
+        centers = _pedicle_centers(payload)
+        return centers if len(centers) == count else [None] * count
+
+    def compare_reference(self):
+        """Compare the working plan as it is now and show the result."""
+        if self._reference is None:
+            return
+        from src.ui.reference_comparison_dialog import ReferenceComparisonDialog
+
+        current = self._window._tool_ctrl.screw_tool.get_screws()
+        reference = self._reference["screws"]
+        result = compare_screw_lists(
+            current, reference, reference_pedicle_centers=self._reference["centers"]
+        )
+        if self.reference_dialog is None:
+            self.reference_dialog = ReferenceComparisonDialog(
+                self._window, on_recompare=self.compare_reference
+            )
+        self.reference_dialog.set_result(
+            result,
+            current,
+            reference,
+            self._reference["frame_verified"],
+            computed_at=datetime.now().strftime("%H:%M:%S"),
+        )
+        self.reference_dialog.show()
+        self.reference_dialog.raise_()
+
+    def set_reference_visible(self, visible: bool) -> None:
+        if self._reference is None:
+            return
+        self._reference["visible"] = bool(visible)
+        self._window.viewer_3d.set_reference_screws_visible(visible)
+
+    def clear_reference(self):
+        """Drop the reference plan, its ghosts and its comparison window."""
+        self._reference = None
+        if self.reference_dialog is not None:
+            self.reference_dialog.close()
+        self._window.viewer_3d.set_reference_screws([])
+        self._window.refresh_reference_controls(False)
 
     def export_stl_dialog(self):
         """Export bone surface as STL file."""
@@ -332,6 +463,7 @@ class PlanController:
         # header, inspector and 3D highlight show it instead of "No screws".
         if screws:
             self._window.screw_list_widget.setCurrentRow(0)
+        tool_ctrl.clear_history()
 
     @staticmethod
     def _build_measurement_planes(entries, count: int) -> List[Optional[str]]:

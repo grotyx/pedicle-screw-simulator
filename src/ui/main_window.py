@@ -2,6 +2,7 @@
 
 import functools
 import logging
+import math
 import sys
 from typing import List, Optional
 
@@ -41,6 +42,7 @@ from src.controllers.auto_placement_controller import AutoPlacementController
 from src.controllers.dicom_controller import DicomController
 from src.controllers.plan_controller import PlanController
 from src.controllers.screw_edit_controller import ScrewEditController
+from src.controllers.screw_extraction_controller import ScrewExtractionController
 from src.controllers.screw_mpr_controller import (
     SCREW_MPR_CONTROLS_HELP,
     ScrewMPRController,
@@ -48,7 +50,12 @@ from src.controllers.screw_mpr_controller import (
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
 from src.controllers.view_controller import ViewController
-from src.utils.screw_metrics import is_narrow_pedicle, pedicle_row_text
+from src.utils.screw_metrics import (
+    is_narrow_pedicle,
+    pedicle_row_text,
+    surface_hu_text,
+    surface_hu_tooltip,
+)
 
 from .. import (
     __academic_affiliation__,
@@ -63,6 +70,7 @@ from .. import (
     __website__,
 )
 from ..core.planner_config import PlannerConfig
+from ..core.screw_geometry import MAX_TRAJECTORY_ANGLE_DEG
 from ..core.volume_manager import VolumeManager
 from ..utils.constants import (
     DEFAULT_SCREW_DIAMETER,
@@ -86,6 +94,7 @@ from .styles import (
 from .tool_dock import ToolDock
 from .tool_icons import create_tool_icon
 from .viewer_3d import Viewer3D
+from .virtual_xray import VirtualXrayDialog
 from .workflow_bar import STEP_NAMES, WorkflowBar, WorkflowStep, workflow_states
 
 logger = logging.getLogger(__name__)
@@ -245,6 +254,7 @@ class MainWindow(QMainWindow):
         self._auto_placement_ctrl = AutoPlacementController(self.volume_manager, self)
         self._screw_mpr_ctrl = ScrewMPRController(self.volume_manager, self)
         self._screw_edit_ctrl = ScrewEditController(self.volume_manager, self)
+        self._screw_extraction_ctrl = ScrewExtractionController(self.volume_manager, self)
 
         # load_planner_settings() runs before the status bar exists, so a
         # migration message waits here until _setup_statusbar can show it.
@@ -255,6 +265,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self.load_planner_settings()
         self.load_segmentation_settings()
+        self.load_manual_screw_defaults()
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_statusbar()
@@ -332,11 +343,13 @@ class MainWindow(QMainWindow):
         #: The pane shown large in the planning layout; the rest are thumbnails.
         self._hero_view = "3d"
 
-        # Create viewers
-        self.axial_viewer = MPRViewer("axial", self.volume_manager)
-        self.sagittal_viewer = MPRViewer("sagittal", self.volume_manager)
-        self.coronal_viewer = MPRViewer("coronal", self.volume_manager)
-        self.viewer_3d = Viewer3D(self.volume_manager)
+        # Create viewers inside the container: the first layout pass shows the
+        # panes, and a parentless pane would open as a top-level window whose
+        # native VTK surface never reaches the main window on X11.
+        self.axial_viewer = MPRViewer("axial", self.volume_manager, view_container)
+        self.sagittal_viewer = MPRViewer("sagittal", self.volume_manager, view_container)
+        self.coronal_viewer = MPRViewer("coronal", self.volume_manager, view_container)
+        self.viewer_3d = Viewer3D(self.volume_manager, view_container)
 
         # The views are laid out once, at the end of _setup_toolbar, when the
         # tool dock they reserve a row for exists.
@@ -1289,6 +1302,19 @@ class MainWindow(QMainWindow):
         plan_params_group.set_content_layout(params_layout)
         plan_layout.addWidget(plan_params_group)
 
+        # ── Insert at crosshair: one click with the manual defaults ──
+        insert_row = QHBoxLayout()
+        insert_row.addWidget(QLabel("Insert at crosshair:"))
+        self.insert_left_btn = QPushButton("Left")
+        self.insert_right_btn = QPushButton("Right")
+        for button, side in ((self.insert_left_btn, "left"), (self.insert_right_btn, "right")):
+            button.setEnabled(False)
+            button.setToolTip(
+                f"Place a {side} screw at the MPR crosshair with the Manual Screw Defaults"
+            )
+            insert_row.addWidget(button)
+        plan_layout.addLayout(insert_row)
+
         # ── Manual Screw Defaults (collapsed) ──
         screw_defaults_group = CollapsibleGroupBox("Manual Screw Defaults")
         self.screw_parameters_group = screw_defaults_group
@@ -1308,6 +1334,23 @@ class MainWindow(QMainWindow):
         self.diameter_spin.setValue(DEFAULT_SCREW_DIAMETER)
         self.diameter_spin.setSuffix(" mm")
         screw_layout.addWidget(self.diameter_spin, 1, 1)
+
+        screw_layout.addWidget(QLabel("Convergence (°):"), 2, 0)
+        self.convergence_spin = QDoubleSpinBox()
+        screw_layout.addWidget(QLabel("Craniocaudal (°):"), 3, 0)
+        self.craniocaudal_spin = QDoubleSpinBox()
+        for row, (spin, tip) in enumerate(
+            (
+                (self.convergence_spin, "Positive aims the tip medially"),
+                (self.craniocaudal_spin, "Positive aims the tip cranially"),
+            ),
+            start=2,
+        ):
+            spin.setRange(-MAX_TRAJECTORY_ANGLE_DEG, MAX_TRAJECTORY_ANGLE_DEG)
+            spin.setDecimals(1)
+            spin.setSingleStep(1.0)
+            spin.setToolTip(tip)
+            screw_layout.addWidget(spin, row, 1)
 
         screw_defaults_group.set_content_layout(screw_layout)
         plan_layout.addWidget(screw_defaults_group)
@@ -1606,28 +1649,32 @@ class MainWindow(QMainWindow):
         selected_screw_details.addWidget(QLabel("Trajectory HU"), 4, 0)
         self.selected_screw_hu = QLabel("--")
         selected_screw_details.addWidget(self.selected_screw_hu, 4, 1)
-        selected_screw_details.addWidget(QLabel("Source"), 5, 0)
+        selected_screw_details.addWidget(QLabel("Surface HU"), 5, 0)
+        self.selected_screw_surface_hu = QLabel("--")
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip({}))
+        selected_screw_details.addWidget(self.selected_screw_surface_hu, 5, 1)
+        selected_screw_details.addWidget(QLabel("Source"), 6, 0)
         self.selected_screw_source = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_source, 5, 1)
-        selected_screw_details.addWidget(QLabel("Body HU"), 6, 0)
+        selected_screw_details.addWidget(self.selected_screw_source, 6, 1)
+        selected_screw_details.addWidget(QLabel("Body HU"), 7, 0)
         self.selected_screw_body_hu = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_body_hu, 6, 1)
-        selected_screw_details.addWidget(QLabel("Wall margin"), 7, 0)
+        selected_screw_details.addWidget(self.selected_screw_body_hu, 7, 1)
+        selected_screw_details.addWidget(QLabel("Wall margin"), 8, 0)
         self.selected_screw_wall = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_wall, 7, 1)
-        selected_screw_details.addWidget(QLabel("Facet"), 8, 0)
+        selected_screw_details.addWidget(self.selected_screw_wall, 8, 1)
+        selected_screw_details.addWidget(QLabel("Facet"), 9, 0)
         self.selected_screw_facet = QLabel("--")
         self.selected_screw_facet.setWordWrap(True)
-        selected_screw_details.addWidget(self.selected_screw_facet, 8, 1)
-        selected_screw_details.addWidget(QLabel("Heary"), 9, 0)
+        selected_screw_details.addWidget(self.selected_screw_facet, 9, 1)
+        selected_screw_details.addWidget(QLabel("Heary"), 10, 0)
         self.selected_screw_heary = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_heary, 9, 1)
-        selected_screw_details.addWidget(QLabel("Trajectory"), 10, 0)
+        selected_screw_details.addWidget(self.selected_screw_heary, 10, 1)
+        selected_screw_details.addWidget(QLabel("Trajectory"), 11, 0)
         self.selected_screw_trajectory = QLabel("—")
-        selected_screw_details.addWidget(self.selected_screw_trajectory, 10, 1)
-        selected_screw_details.addWidget(QLabel("Pedicle"), 11, 0)
+        selected_screw_details.addWidget(self.selected_screw_trajectory, 11, 1)
+        selected_screw_details.addWidget(QLabel("Pedicle"), 12, 0)
         self.selected_screw_pedicle = QLabel("--")
-        selected_screw_details.addWidget(self.selected_screw_pedicle, 11, 1)
+        selected_screw_details.addWidget(self.selected_screw_pedicle, 12, 1)
         self.selected_screw_metrics.setLayout(selected_screw_details)
         details_layout.addWidget(self.selected_screw_metrics)
 
@@ -1791,6 +1838,9 @@ class MainWindow(QMainWindow):
             self._screw_edit_ctrl.on_screw_selection_changed
         )
         self.screw_list_widget.currentRowChanged.connect(
+            lambda _row: self._tool_ctrl.history.end_burst()
+        )
+        self.screw_list_widget.currentRowChanged.connect(
             self._on_screw_visual_selection_changed
         )
         self.screw_previous_btn.clicked.connect(
@@ -1907,6 +1957,14 @@ class MainWindow(QMainWindow):
         self.plan_reset_defaults_btn.clicked.connect(
             self.reset_planner_settings
         )
+        for spin in self._manual_screw_spin_boxes().values():
+            spin.valueChanged.connect(self.save_manual_screw_defaults)
+        self.insert_left_btn.clicked.connect(
+            lambda: self._tool_ctrl.insert_screw_at_crosshair("left")
+        )
+        self.insert_right_btn.clicked.connect(
+            lambda: self._tool_ctrl.insert_screw_at_crosshair("right")
+        )
         # Transfer function preset
         self.tf_preset_combo.currentTextChanged.connect(
             self._view_ctrl.on_preset_changed
@@ -2001,6 +2059,7 @@ class MainWindow(QMainWindow):
         )
         self.construct_map.screw_clicked.connect(self._select_screw_from_view)
         self.viewer_3d.rod_line_toggle.toggled.connect(self._on_rod_line_toggled)
+
         for pane in self._panes().values():
             pane.promote_requested.connect(self.set_hero_view)
         self._refresh_workflow_bar()
@@ -2114,6 +2173,24 @@ class MainWindow(QMainWindow):
         load_plan_action.triggered.connect(self._plan_ctrl.load_dialog)
         file_menu.addAction(load_plan_action)
 
+        # Reference plan: compared with, never edited, saved or exported.
+        reference_menu = file_menu.addMenu("Reference Plan")
+        self.reference_load_action = QAction("Load Reference Plan...", self)
+        self.reference_load_action.triggered.connect(self._plan_ctrl.load_reference_dialog)
+        reference_menu.addAction(self.reference_load_action)
+        self.reference_compare_action = QAction("Compare with Reference", self)
+        self.reference_compare_action.triggered.connect(self._plan_ctrl.compare_reference)
+        reference_menu.addAction(self.reference_compare_action)
+        self.reference_show_action = QAction("Show Reference Screws", self)
+        self.reference_show_action.setCheckable(True)
+        self.reference_show_action.setChecked(True)
+        self.reference_show_action.toggled.connect(self._plan_ctrl.set_reference_visible)
+        reference_menu.addAction(self.reference_show_action)
+        self.reference_clear_action = QAction("Clear Reference", self)
+        self.reference_clear_action.triggered.connect(self._plan_ctrl.clear_reference)
+        reference_menu.addAction(self.reference_clear_action)
+        self.refresh_reference_controls(False)
+
         export_csv_action = QAction("Export Screws CSV...", self)
         export_csv_action.triggered.connect(self._plan_ctrl.export_csv_dialog)
         file_menu.addAction(export_csv_action)
@@ -2138,6 +2215,18 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        # Edit menu: undo/redo of screw plan edits (ToolController labels them)
+        edit_menu = menubar.addMenu("Edit")
+        self._undo_action = QAction("Undo", self)
+        self._undo_action.setShortcut("Ctrl+Z")
+        self._undo_action.triggered.connect(self._tool_ctrl.undo)
+        edit_menu.addAction(self._undo_action)
+        self._redo_action = QAction("Redo", self)
+        self._redo_action.setShortcuts(["Ctrl+Shift+Z", "Ctrl+Y"])
+        self._redo_action.triggered.connect(self._tool_ctrl.redo)
+        edit_menu.addAction(self._redo_action)
+        self._tool_ctrl._sync_undo_actions()
 
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
@@ -2169,6 +2258,13 @@ class MainWindow(QMainWindow):
             lambda: self._tool_ctrl.set_tool("angle")
         )
         tools_menu.addAction(angle_action)
+
+        tools_menu.addSeparator()
+        self._extract_screws_action = QAction("Extract Screws from Post-op CT", self)
+        self._extract_screws_action.triggered.connect(
+            self._screw_extraction_ctrl.run_extraction
+        )
+        tools_menu.addAction(self._extract_screws_action)
 
         # View menu
         view_menu = menubar.addMenu("View")
@@ -2210,6 +2306,13 @@ class MainWindow(QMainWindow):
         )
         self._register_themed_icon(self._maximize_view_action, "layout")
         view_menu.addAction(self._maximize_view_action)
+
+        self._virtual_xray_action = QAction("Virtual X-ray...", self)
+        self._virtual_xray_action.setToolTip(
+            "AP and lateral projections of the CT with the planned screws"
+        )
+        self._virtual_xray_action.triggered.connect(self.show_virtual_xray)
+        view_menu.addAction(self._virtual_xray_action)
 
         view_menu.addSeparator()
 
@@ -2269,6 +2372,21 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Screw MPR controls", SCREW_MPR_CONTROLS_HELP
         )
+
+    def show_virtual_xray(self) -> None:
+        """Open (or raise) the non-modal AP / lateral projection window."""
+        dialog = self.__dict__.get("_virtual_xray_dialog")
+        if dialog is None:
+            dialog = VirtualXrayDialog(
+                self.volume_manager,
+                self._tool_ctrl.screw_tool,
+                self.screw_list_widget,
+                self,
+            )
+            self._virtual_xray_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def show_about_dialog(self) -> None:
         """Display version, creator credit, contact, license, and safety scope."""
@@ -2750,6 +2868,39 @@ class MainWindow(QMainWindow):
         }
         return PlannerConfig.from_mapping(data)
 
+    def _manual_screw_spin_boxes(self) -> dict:
+        """Settings keys of the Manual Screw Defaults and their spin boxes."""
+        return {
+            "length_mm": self.length_spin,
+            "diameter_mm": self.diameter_spin,
+            "convergence_deg": self.convergence_spin,
+            "craniocaudal_deg": self.craniocaudal_spin,
+        }
+
+    def save_manual_screw_defaults(self, _value=None) -> None:
+        """Persist the Manual Screw Defaults for the next session."""
+        settings = app_settings()
+        settings.beginGroup("manual_screw")
+        for key, spin in self._manual_screw_spin_boxes().items():
+            settings.setValue(key, spin.value())
+
+    def load_manual_screw_defaults(self) -> None:
+        """Restore the Manual Screw Defaults; unreadable values keep the widget default."""
+        settings = app_settings()
+        settings.beginGroup("manual_screw")
+        for key, spin in self._manual_screw_spin_boxes().items():
+            raw = settings.value(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = math.nan
+            if not math.isfinite(value) or not spin.minimum() <= value <= spin.maximum():
+                logger.warning("Ignoring unreadable manual screw setting %s=%r", key, raw)
+                continue
+            spin.setValue(int(round(value)) if isinstance(spin, QSpinBox) else value)
+
     def save_planner_settings(self) -> None:
         """Persist the panel's planner parameters for the next session.
 
@@ -2936,6 +3087,19 @@ class MainWindow(QMainWindow):
     # Screw inspector
     # ------------------------------------------------------------------
 
+    def refresh_reference_controls(self, loaded: bool) -> None:
+        """Enable the reference actions that need a loaded reference plan."""
+        for action in (
+            self.reference_compare_action,
+            self.reference_show_action,
+            self.reference_clear_action,
+        ):
+            action.setEnabled(loaded)
+        # Every load or clear leaves the reference screws shown.
+        self.reference_show_action.blockSignals(True)
+        self.reference_show_action.setChecked(True)
+        self.reference_show_action.blockSignals(False)
+
     def _clear_screw_metric_rows(self) -> None:
         """Reset the clinical metric rows of the screw inspector."""
         for label in (
@@ -2946,9 +3110,11 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary,
             self.selected_screw_pedicle,
             self.selected_screw_alignment,
+            self.selected_screw_surface_hu,
         ):
             label.setText("--")
         self.selected_screw_trajectory.setText("—")
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip({}))
         self._pedicle_row_narrow = False
         self._repaint_pedicle_row()
 
@@ -3031,6 +3197,8 @@ class MainWindow(QMainWindow):
             self.selected_screw_heary.setText(heary)
 
         self.selected_screw_pedicle.setText(pedicle_row_text(metrics))
+        self.selected_screw_surface_hu.setText(surface_hu_text(metrics))
+        self.selected_screw_surface_hu.setToolTip(surface_hu_tooltip(metrics))
         self._pedicle_row_narrow = is_narrow_pedicle(metrics)
         self._repaint_pedicle_row()
 
@@ -3148,9 +3316,9 @@ class MainWindow(QMainWindow):
                 f"mean {mean_hu:.0f} / min {min_hu:.0f} HU"
             )
         self.selected_screw_source.setText(
-            "Auto plan"
-            if getattr(screw, "source", "manual") == "auto"
-            else "Manual"
+            {"auto": "Auto plan", "extracted": "Extracted from CT"}.get(
+                getattr(screw, "source", "manual"), "Manual"
+            )
         )
         self._update_screw_metric_rows(getattr(screw, "metrics", None) or {})
 
@@ -3302,6 +3470,7 @@ class MainWindow(QMainWindow):
 
         # Clear tools
         self._tool_ctrl.screw_tool.clear_screws()
+        self._tool_ctrl.clear_history()
         self._tool_ctrl.screw_tool.cancel()
         self._tool_ctrl.measurement_tool.clear_measurements()
         self._tool_ctrl.measurement_tool.cancel()
@@ -3318,6 +3487,7 @@ class MainWindow(QMainWindow):
             viewer.clear_screw_overlays()
         self.viewer_3d.clear_screws()
         self.viewer_3d.clear_segmentation_mask()
+        self._plan_ctrl.clear_reference()
 
         # Clear list widgets
         self.screw_list_widget.clear()
@@ -3365,6 +3535,13 @@ class MainWindow(QMainWindow):
                 "Segmentation Running",
                 "Auto segmentation is still running. "
                 "Please wait for completion.",
+            )
+            event.ignore()
+            return
+
+        if self._screw_extraction_ctrl.is_running:
+            self.statusbar.showMessage(
+                "Screw extraction is still running — close again once it stops"
             )
             event.ignore()
             return

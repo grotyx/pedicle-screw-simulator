@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
 from ..core.vertebral_mesh import (
     MESH_SMOOTHING_ITERATIONS,
     MESH_SMOOTHING_PASSBAND,
@@ -128,6 +129,11 @@ _OVERLAY_BUTTON_SIZING = "font-size: 11px; font-weight: 600; padding: 5px 9px;"
 #: translucent, so it threads the heads without hiding them.
 ROD_LINE_RADIUS_MM = 1.0
 ROD_LINE_OPACITY = 0.55
+
+#: Reference-plan screws: amber ghosts that never take a pick or a selection.
+#: Grey at 35% disappeared between the translucent bone and the cyan screws.
+REFERENCE_SCREW_COLOR = (1.0, 0.65, 0.1)
+REFERENCE_SCREW_OPACITY = 0.55
 
 #: Distance (mm) the "Cut View" camera sits back from the cross-section
 #: centre, on the entry side, looking down the screw at the open cut face.
@@ -248,10 +254,20 @@ class ScrewVisual:
     entry_actor: vtk.vtkActor
     shaft_actor: vtk.vtkActor
     tip_actor: vtk.vtkActor
+    # Rotation guide: a line out of the entry and a handle behind it, shown
+    # for the selected screw only; a control, never part of the implant.
+    guide_line_actor: vtk.vtkActor
+    guide_handle_actor: vtk.vtkActor
 
     @property
-    def props(self) -> Tuple[vtk.vtkActor, vtk.vtkActor, vtk.vtkActor]:
-        return (self.entry_actor, self.shaft_actor, self.tip_actor)
+    def props(self) -> Tuple[vtk.vtkActor, ...]:
+        return (
+            self.entry_actor,
+            self.shaft_actor,
+            self.tip_actor,
+            self.guide_line_actor,
+            self.guide_handle_actor,
+        )
 
     def GetProperty(self):
         """Keep actor-like opacity compatibility for legacy callers."""
@@ -325,6 +341,12 @@ def _style_screw_actor(
     actor.PickableOn()
 
 
+GUIDE_LINE_RADIUS_MM = 0.6
+GUIDE_HANDLE_RADIUS_MM = 4.0
+GUIDE_COLOR = (0.35, 0.85, 0.35)
+GUIDE_HANDLE_COLOR = (0.25, 0.45, 1.0)
+
+
 def create_screw_visual(
     screw_id: int,
     entry_point: Tuple[float, float, float],
@@ -386,6 +408,25 @@ def create_screw_visual(
     _style_screw_actor(entry_actor, entry_color)
     _style_screw_actor(shaft_actor, base_color)
     _style_screw_actor(tip_actor, tip_color)
+
+    handle_centre = guide_handle_point(entry, target, GUIDE_REACH_MM)
+    guide_line_actor = _cylinder_actor(entry, handle_centre, GUIDE_LINE_RADIUS_MM)
+    guide_line_actor.SetObjectName("screw-guide-line")
+    _style_screw_actor(guide_line_actor, GUIDE_COLOR)
+    guide_line_actor.PickableOff()
+    handle = vtk.vtkSphereSource()
+    handle.SetCenter(*handle_centre)
+    handle.SetRadius(GUIDE_HANDLE_RADIUS_MM)
+    handle.SetThetaResolution(24)
+    handle.SetPhiResolution(16)
+    handle_mapper = vtk.vtkPolyDataMapper()
+    handle_mapper.SetInputConnection(handle.GetOutputPort())
+    guide_handle_actor = vtk.vtkActor()
+    guide_handle_actor.SetMapper(handle_mapper)
+    guide_handle_actor.SetObjectName("screw-guide-handle")
+    _style_screw_actor(guide_handle_actor, GUIDE_HANDLE_COLOR)
+    for actor in (guide_line_actor, guide_handle_actor):
+        actor.VisibilityOff()
     return ScrewVisual(
         int(screw_id),
         entry,
@@ -393,6 +434,8 @@ def create_screw_visual(
         entry_actor,
         shaft_actor,
         tip_actor,
+        guide_line_actor,
+        guide_handle_actor,
     )
 
 
@@ -433,6 +476,9 @@ class Viewer3D(QWidget):
     No mesh generation, no background threads — volume is rendered directly
     from vtkImageData with transfer functions.
     """
+
+    # The rotation guide is a control, not part of the plan: report captures hide it.
+    _guides_hidden = False
 
     header_double_clicked = pyqtSignal(str)  # ("3d") — maximise request
     #: Emitted only from a user click on the header Vertebrae/Full CT toggle
@@ -558,6 +604,9 @@ class Viewer3D(QWidget):
         self._rod_lines: Dict[str, Tuple[Sequence[float], Sequence[float]]] = {}
         self._rod_lines_visible = False
         self._rod_actors: List[vtk.vtkActor] = []
+        self._reference_segments: List[Tuple[Sequence[float], Sequence[float], float]] = []
+        self._reference_visible = True
+        self._reference_actors: List[vtk.vtkActor] = []
 
         # Measurement visualization
         self._measurement_props: Dict[int, List[vtk.vtkProp]] = {}
@@ -859,6 +908,10 @@ class Viewer3D(QWidget):
         render_window = self.vtk_widget.GetRenderWindow()
         render_window.AddRenderer(self._renderer)
         render_window.SetMultiSamples(0)  # Disable MSAA
+        # Depth-sort the translucent vertebra surfaces; unsorted, their back
+        # faces and canal walls bleed through the front as dark scribbles.
+        render_window.SetAlphaBitPlanes(1)
+        self._renderer.SetUseDepthPeeling(1)
 
         # VTK-level render guard: abort any render when guard is active.
         render_window.AddObserver("StartEvent", self._render_guard_callback)
@@ -1524,11 +1577,14 @@ class Viewer3D(QWidget):
             ("entry", visual.entry_actor),
             ("shaft", visual.shaft_actor),
             ("tip", visual.tip_actor),
+            ("guide", visual.guide_handle_actor),
         ):
             self._renderer.AddActor(actor)
             self._screw_prop_parts[self._prop_key(actor)] = (resolved_id, part)
+        self._renderer.AddActor(visual.guide_line_actor)
         self._screw_actors.append(visual)
         self._apply_screw_selection_style(visual)
+        self._renderer.ResetCameraClippingRange()
         self._request_render()
 
         return visual
@@ -1597,6 +1653,32 @@ class Viewer3D(QWidget):
                 self._rod_actors.append(actor)
         self._request_render()
 
+    def set_reference_screws(self, segments) -> None:
+        """Replace the reference-plan ghosts: ``(entry, target, radius)`` in LPS mm."""
+        self._reference_segments = list(segments)
+        self._rebuild_reference_actors()
+
+    def set_reference_screws_visible(self, visible: bool) -> None:
+        self._reference_visible = bool(visible)
+        self._rebuild_reference_actors()
+
+    def _rebuild_reference_actors(self) -> None:
+        if self._renderer is None:
+            return
+        for actor in self._reference_actors:
+            self._renderer.RemoveActor(actor)
+        self._reference_actors = []
+        if self._reference_visible:
+            for entry, target, radius in self._reference_segments:
+                actor = _cylinder_actor(tuple(entry), tuple(target), float(radius))
+                actor.PickableOff()
+                actor.GetProperty().SetColor(*REFERENCE_SCREW_COLOR)
+                actor.GetProperty().SetOpacity(REFERENCE_SCREW_OPACITY)
+                self._renderer.AddActor(actor)
+                self._reference_actors.append(actor)
+            self._renderer.ResetCameraClippingRange()
+        self._request_render()
+
     def set_screw_interaction_callbacks(
         self,
         on_begin: Optional[Callable] = None,
@@ -1615,6 +1697,8 @@ class Viewer3D(QWidget):
         self._selected_screw_id = None if screw_id is None else int(screw_id)
         for visual in self._screw_actors:
             self._apply_screw_selection_style(visual)
+        # The guide reaches 60 mm behind the head, possibly past the fitted depth.
+        self._renderer.ResetCameraClippingRange()
         self._apply_screw_focus()
         if self._screw_actors:
             self._request_render()
@@ -1641,7 +1725,8 @@ class Viewer3D(QWidget):
         picker.PickFromListOn()
         for visual in self._screw_actors:
             for prop in visual.props:
-                picker.AddPickList(prop)
+                if prop.GetPickable():
+                    picker.AddPickList(prop)
         return picker
 
     def _screw_visual_by_id(self, screw_id: int) -> Optional[ScrewVisual]:
@@ -1679,8 +1764,17 @@ class Viewer3D(QWidget):
             return "tip"
         return fallback_part
 
+    def set_guides_visible(self, visible: bool) -> None:
+        """Hide the rotation guides (e.g. for a report capture) or bring them back."""
+        self._guides_hidden = not visible
+        for visual in self._screw_actors:
+            self._apply_screw_selection_style(visual)
+        self._request_render()
+
     def _apply_screw_selection_style(self, visual: ScrewVisual) -> None:
         selected = visual.screw_id == self._selected_screw_id
+        visual.guide_line_actor.SetVisibility(selected and not self._guides_hidden)
+        visual.guide_handle_actor.SetVisibility(selected and not self._guides_hidden)
         for part, actor in (
             ("entry", visual.entry_actor),
             ("shaft", visual.shaft_actor),

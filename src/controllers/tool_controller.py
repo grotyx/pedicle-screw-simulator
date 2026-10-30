@@ -7,10 +7,13 @@ clicks to the active tool, and maintains screw/measurement UI lists.
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from src.core.screw_geometry import target_from_angles
 from src.models.measurement import Measurement
+from src.models.screw_history import ScrewHistory
 from src.tools.measurement_tool import MeasurementTool
 from src.tools.screw_tool import ScrewTool
 from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
@@ -54,6 +57,7 @@ class ToolController:
         self._measurement_entries: list = []
         self._next_measurement_id: int = 1
         self._editing_measurement_row: Optional[int] = None
+        self.history = ScrewHistory()
 
         self.screw_tool.set_callbacks(
             on_screw_placed=self._on_screw_placed,
@@ -157,26 +161,11 @@ class ToolController:
                 length=float(self._window.length_spin.value()),
                 diameter=float(self._window.diameter_spin.value()),
             )
+            before = self.snapshot_screws()
             screw = self.screw_tool.on_click(x, y, z, plane=plane)
             if screw is not None:
-                screw_id = len(self.screw_tool.get_screws()) - 1
-                actor = self._window.viewer_3d.add_screw(
-                    screw.entry_point,
-                    screw.target_point,
-                    radius=screw.diameter / 2.0,
-                    color=screw_display_color(screw),
-                    screw_id=screw_id,
-                )
-                self._screw_actors.append(actor)
-                self._add_screw_to_list(screw)
-                # Add screw projection to all MPR viewers
-                self._add_screw_to_mpr(screw_id, screw)
-                self._window.screw_list_widget.setCurrentRow(screw_id)
-                grade_text = self.screw_tool.get_grade_description(screw.grade)
-                self._window.statusbar.showMessage(
-                    f"Screw placed: {screw.length:.1f} mm, "
-                    f"Grade {screw.grade} ({grade_text})"
-                )
+                self.record_screw_edit("add screw", before)
+                self._display_created_screw(screw)
             return
 
         if self._current_tool in self.MEASUREMENT_TOOLS:
@@ -629,6 +618,76 @@ class ToolController:
         index = self._window.screw_list_widget.count()
         self._window.screw_list_widget.addScrewRow(screw, index)
 
+    def _display_created_screw(self, screw) -> None:
+        """Show a screw the tool just created and graded in every linked view."""
+        screw_id = len(self.screw_tool.get_screws()) - 1
+        actor = self._window.viewer_3d.add_screw(
+            screw.entry_point,
+            screw.target_point,
+            radius=screw.diameter / 2.0,
+            color=screw_display_color(screw),
+            screw_id=screw_id,
+        )
+        self._screw_actors.append(actor)
+        self._add_screw_to_list(screw)
+        # Add screw projection to all MPR viewers
+        self._add_screw_to_mpr(screw_id, screw)
+        self._window.screw_list_widget.setCurrentRow(screw_id)
+        grade_text = self.screw_tool.get_grade_description(screw.grade)
+        self._window.statusbar.showMessage(
+            f"Screw placed: {screw.length:.1f} mm, "
+            f"Grade {screw.grade} ({grade_text})"
+        )
+
+    def insert_screw_at_crosshair(self, side: str) -> bool:
+        """Place one screw at the MPR crosshair using the Manual Screw Defaults."""
+        if self._vm.get_vtk_image() is None:
+            self._window.statusbar.showMessage("Load a CT before inserting a screw")
+            return False
+        if self._window._screw_mpr_ctrl.is_active:
+            # Screw MPR slices do not follow the stored crosshair, so the visible
+            # intersection is not where the screw would go.
+            self._window.statusbar.showMessage(
+                "Return to Standard MPR to insert at the crosshair"
+            )
+            return False
+        entry = tuple(float(v) for v in self._vm.get_crosshair_position())
+        length = float(self._window.length_spin.value())
+        try:
+            target = target_from_angles(
+                entry,
+                length,
+                float(self._window.convergence_spin.value()),
+                float(self._window.craniocaudal_spin.value()),
+                side,
+            )
+        except ValueError as exc:
+            self._window.statusbar.showMessage(f"Cannot insert screw: {exc}")
+            return False
+        bounds = self._vm.bounds
+        if len(bounds) != 6 or not all(
+            bounds[2 * axis] <= point[axis] <= bounds[2 * axis + 1]
+            for point in (entry, target)
+            for axis in range(3)
+        ):
+            self._window.statusbar.showMessage(
+                "Screw entry and tip must remain inside the CT volume"
+            )
+            return False
+
+        edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+        if edit_controller is not None:
+            edit_controller.abort()
+        self.set_tool("navigate")
+        self.screw_tool.set_screw_parameters(
+            length=length, diameter=float(self._window.diameter_spin.value())
+        )
+        before = self.snapshot_screws()
+        screw = self.screw_tool.create_screw(entry, target, side=side)
+        self.record_screw_edit("insert screw", before)
+        self._display_created_screw(screw)
+        return True
+
     def add_existing_screw(self, screw, select: bool = False) -> int:
         """Register an existing screw in the model and every linked view."""
         self.screw_tool.add_screw(screw)
@@ -690,9 +749,13 @@ class ToolController:
     def set_selected_screw_diameter(self, diameter: float) -> None:
         """Resize the selected screw and refresh every linked representation."""
         row = self._window.screw_list_widget.currentRow()
-        if row < 0 or row >= len(self.screw_tool.get_screws()):
+        before = self.snapshot_screws()
+        if row < 0 or row >= len(before):
             return
         updated = self.screw_tool.update_screw_diameter(row, diameter)
+        self.record_screw_edit(
+            "change diameter", before, coalesce_key=("diameter", row)
+        )
         self.refresh_screw(row, updated)
         self._window.statusbar.showMessage(
             f"Screw #{row + 1} diameter set to {updated.diameter:.1f} mm"
@@ -705,7 +768,9 @@ class ToolController:
             self._window.statusbar.showMessage("Select a screw to remove")
             return
 
+        before = self.snapshot_screws()
         self.remove_screws([row])
+        self.record_screw_edit("delete screw", before)
         screws = self.screw_tool.get_screws()
         if screws:
             self._window.screw_list_widget.setCurrentRow(
@@ -750,6 +815,84 @@ class ToolController:
             )
             self._screw_actors.append(actor)
             self._add_screw_to_list(screw)
+
+    def snapshot_screws(self) -> list:
+        """Deep copy of the screw list, taken before an undoable edit.
+
+        Deep, because some edits restamp other screws' metrics in place.
+        """
+        return copy.deepcopy(self.screw_tool.get_screws())
+
+    def record_screw_edit(self, label: str, before, coalesce_key=None) -> None:
+        """Push one undo step if the screw list differs from ``before``."""
+        if before != self.screw_tool.get_screws():
+            self.history.push(label, before, coalesce_key=coalesce_key)
+            self._sync_undo_actions()
+
+    def clear_history(self) -> None:
+        """Forget every undo/redo step (new study, workspace reset, plan load)."""
+        self.history.clear()
+        self._sync_undo_actions()
+
+    def undo(self) -> None:
+        self._step(self.history.undo, "Undo")
+
+    def redo(self) -> None:
+        self._step(self.history.redo, "Redo")
+
+    def _step(self, pop, verb: str) -> None:
+        edit_controller = getattr(self._window, "_screw_edit_ctrl", None)
+        if edit_controller is not None and edit_controller.is_dragging:
+            return
+        current = self.screw_tool.get_screws()
+        step = pop(current)
+        if step is None:
+            return
+        label, screws = step
+        # Select the first row that changed, so the restored screw is in view.
+        pairs = zip(current, screws, strict=False)
+        changed = next(
+            (i for i, (a, b) in enumerate(pairs) if a != b),
+            min(len(current), len(screws)),
+        )
+        screw_mpr = self._window._screw_mpr_ctrl
+        reopen_screw_mpr = screw_mpr.is_active
+        # Review marks are not undo steps: a screw the step does not move keeps
+        # the mark it has now.
+        reviewed = {
+            (s.entry_point, s.target_point, s.diameter): s.reviewed for s in current
+        }
+        for screw in screws:
+            # Snapshots keep the grades of their time; the segmentation may
+            # have changed or gone since, as on plan load.
+            self.screw_tool.evaluate_screw(screw)
+            screw.reviewed = reviewed.get(
+                (screw.entry_point, screw.target_point, screw.diameter), False
+            )
+        # The plan-load rebuild path: every index-linked view is redrawn once.
+        self.clear_screws()
+        for screw in screws:
+            self.add_existing_screw(screw)
+        if screws:
+            self._window.screw_list_widget.setCurrentRow(
+                min(changed, len(screws) - 1)
+            )
+            if reopen_screw_mpr:
+                screw_mpr.enter()
+        self._sync_undo_actions()
+        self._window.statusbar.showMessage(f"{verb}: {label}")
+
+    def _sync_undo_actions(self) -> None:
+        """Enable and label the Edit menu's Undo/Redo actions."""
+        for attr, verb, label in (
+            ("_undo_action", "Undo", self.history.undo_label),
+            ("_redo_action", "Redo", self.history.redo_label),
+        ):
+            action = getattr(self._window, attr, None)
+            if action is None:
+                continue
+            action.setEnabled(label is not None)
+            action.setText(f"{verb} {label.title()}" if label else verb)
 
     def _format_measurement_result(self, measurement) -> str:
         """Format measurement result text for status bar."""

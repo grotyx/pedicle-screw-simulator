@@ -10,6 +10,7 @@ could a report.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Mapping, Optional
 
 #: Planner-owned metric keys.  Both survive a re-grade (they are absent from
@@ -88,3 +89,50 @@ def pedicle_row_text(metrics: Mapping[str, Any]) -> str:
     if is_narrow_pedicle(metrics):
         return f"{text} · narrow"
     return text
+
+
+def _metric_float(metrics: Mapping[str, Any], key: str) -> Optional[float]:
+    """A finite number stored under ``key``; ``None`` for anything else."""
+    value = metrics.get(key)
+    if value is None or isinstance(value, (bool, str)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def surface_hu_text(metrics: Mapping[str, Any]) -> str:
+    """Surface HU shares as ``"low / mid / high %"``, or ``--`` when unmeasured.
+
+    The bins are :data:`src.core.screw_grading.SURFACE_HU_LOW` /
+    ``SURFACE_HU_HIGH`` (<130, 130-249, >=250 HU); :func:`surface_hu_tooltip`
+    spells them out next to the sample count.
+    """
+    shares = [
+        _metric_float(metrics, key)
+        for key in ("surface_hu_low_pct", "surface_hu_mid_pct", "surface_hu_high_pct")
+    ]
+    if any(share is None for share in shares):
+        return UNKNOWN_TEXT
+    coverage = _metric_float(metrics, "surface_hu_coverage_pct")
+    partial = "*" if coverage is not None and coverage < 100.0 else ""
+    return " / ".join(f"{share:.0f}" for share in shares) + " %" + partial
+
+
+def surface_hu_tooltip(metrics: Mapping[str, Any]) -> str:
+    """Which bin each share is, and how many CT samples they come from."""
+    samples = _metric_float(metrics, "surface_hu_samples")
+    count = f" from {samples:.0f} samples" if samples is not None else ""
+    coverage = _metric_float(metrics, "surface_hu_coverage_pct")
+    partial = (
+        f" * Only {coverage:.0f}% of the surface lies inside the CT."
+        if coverage is not None and coverage < 100.0
+        else ""
+    )
+    return (
+        "Share of CT samples at the screw surface below 130 / 130-249 / "
+        f"250 HU and above{count}, past the 3 mm cortical entry zone. "
+        f"Sampled CT numbers, not a tissue classification.{partial}"
+    )

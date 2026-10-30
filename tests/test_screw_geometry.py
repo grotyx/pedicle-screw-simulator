@@ -109,3 +109,86 @@ class TestEndplateAngle:
         assert endplate_slope_deg((0.0, 1.0, 0.0)) is None       # n_z = 0: not an endplate
         assert endplate_slope_deg((0.0, 1.0)) is None            # wrong shape
         assert endplate_angle_deg(entry, target, None) is None
+
+
+class TestTargetFromAngles:
+    @pytest.mark.parametrize("side", ["left", "right"])
+    @pytest.mark.parametrize("medial, cranial", [(15.0, 0.0), (-8.0, 12.0), (30.0, -20.0)])
+    def test_round_trips_through_the_shared_angle_helpers(self, side, medial, cranial):
+        from src.core.screw_geometry import target_from_angles
+
+        entry = (5.0, -2.0, 30.0)
+        target = target_from_angles(entry, 45.0, medial, cranial, side)
+
+        assert math.dist(entry, target) == pytest.approx(45.0)
+        assert convergence_angle_deg(entry, target, side) == pytest.approx(medial)
+        assert craniocaudal_angle_deg(entry, target) == pytest.approx(cranial)
+
+    def test_direction_depends_only_on_the_stated_side_not_on_x(self):
+        from src.core.screw_geometry import target_from_angles
+
+        # Both entries sit far from x = 0 on the same sign; only the side decides.
+        for entry in ((180.0, 10.0, 0.0), (220.0, 10.0, 0.0)):
+            left = target_from_angles(entry, 40.0, 20.0, 0.0, "left")
+            right = target_from_angles(entry, 40.0, 20.0, 0.0, "right")
+            assert left[0] < entry[0] < right[0]
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ((0, 0, 0), 40.0, 10.0, 0.0, ""),
+            ((0, 0, 0), 40.0, 10.0, 0.0, "up"),
+            ((0, 0, 0), 0.0, 10.0, 0.0, "left"),
+            ((0, 0, 0), 40.0, 90.0, 0.0, "left"),
+            ((0, 0, 0), 40.0, 0.0, -90.0, "left"),
+            ((0, 0, math.nan), 40.0, 0.0, 0.0, "left"),
+            ((0, 0, 0), 40.0, math.inf, 0.0, "left"),
+        ],
+    )
+    def test_rejects_invalid_input(self, args):
+        from src.core.screw_geometry import target_from_angles
+
+        with pytest.raises(ValueError):
+            target_from_angles(*args)
+
+
+class TestGuideHandle:
+    def test_handle_sits_behind_the_entry_on_the_axis(self):
+        from src.core.screw_geometry import guide_handle_point
+
+        handle = guide_handle_point((0.0, 0.0, 0.0), (0.0, -40.0, 0.0), 60.0)
+
+        assert handle == pytest.approx((0.0, 60.0, 0.0))
+
+    def test_drag_rotates_about_the_entry_and_keeps_the_length(self):
+        from src.core.screw_geometry import guide_handle_point, target_from_guide_drag
+
+        entry, target = (10.0, 0.0, 5.0), (10.0, -45.0, 5.0)
+        handle = guide_handle_point(entry, target, 60.0)
+        picked = (handle[0] + 3.0, handle[1], handle[2])  # surface, not centre
+
+        # Moving the handle toward +X (patient left) swings the tip toward -X.
+        moved = (picked[0] + 20.0, picked[1], picked[2] + 10.0)
+        new_target = target_from_guide_drag(entry, target, handle, picked, moved)
+
+        assert math.dist(entry, new_target) == pytest.approx(45.0)
+        assert new_target[0] < entry[0]
+        assert new_target[2] < entry[2]
+
+    def test_no_jump_when_the_pick_is_off_centre(self):
+        from src.core.screw_geometry import guide_handle_point, target_from_guide_drag
+
+        entry, target = (0.0, 0.0, 0.0), (0.0, -40.0, 0.0)
+        handle = guide_handle_point(entry, target, 60.0)
+        picked = (handle[0] + 4.0, handle[1] - 1.0, handle[2] + 2.0)
+
+        assert target_from_guide_drag(entry, target, handle, picked, picked) == pytest.approx(target)
+
+    def test_degenerate_lever_is_rejected(self):
+        from src.core.screw_geometry import guide_handle_point, target_from_guide_drag
+
+        entry, target = (0.0, 0.0, 0.0), (0.0, -40.0, 0.0)
+        handle = guide_handle_point(entry, target, 60.0)
+        # Dragging the handle onto the entry leaves no direction.
+        with pytest.raises(ValueError):
+            target_from_guide_drag(entry, target, handle, handle, entry)

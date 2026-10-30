@@ -472,8 +472,73 @@ def test_details_is_collapsed_and_holds_the_metric_rows(ui_main_window):
         window.selected_screw_heary,
         window.selected_screw_trajectory,
         window.selected_screw_pedicle,
+        window.selected_screw_surface_hu,
     ):
         assert window.details_group.isAncestorOf(widget)
+
+
+def test_details_surface_hu_row_sits_under_trajectory_hu(ui_main_window):
+    # Row 12 was below the fold of the collapsed panel at 1600x900.
+    layout = ui_main_window.selected_screw_metrics.layout()
+
+    def row_of(widget):
+        return layout.getItemPosition(layout.indexOf(widget))[0]
+
+    assert row_of(ui_main_window.selected_screw_surface_hu) == (
+        row_of(ui_main_window.selected_screw_hu) + 1
+    )
+
+
+def test_details_surface_hu_row_shows_the_three_bins(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    measured = Screw(
+        entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0), side="right",
+        metrics={
+            "surface_hu_low_pct": 12.0,
+            "surface_hu_mid_pct": 38.0,
+            "surface_hu_high_pct": 50.0,
+            "surface_hu_samples": 320,
+        },
+    )
+    unmeasured = Screw(entry_point=(5.0, 0.0, 0.0), target_point=(5.0, -40.0, 0.0))
+    for screw in (measured, unmeasured):
+        window._tool_ctrl.screw_tool.add_screw(screw)
+        window._tool_ctrl._add_screw_to_list(screw)
+
+    window.screw_list_widget.setCurrentRow(0)
+    assert window.selected_screw_surface_hu.text() == "12 / 38 / 50 %"
+    assert "320" in window.selected_screw_surface_hu.toolTip()
+
+    window.screw_list_widget.setCurrentRow(1)
+    assert window.selected_screw_surface_hu.text() == "--"
+
+    window.screw_list_widget.setCurrentRow(0)
+    window._clear_screw_metric_rows()        # no selection / plan cleared
+    assert "320" not in window.selected_screw_surface_hu.toolTip()
+
+
+def test_details_surface_hu_row_flags_partial_ct_coverage(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    screw = Screw(
+        entry_point=(0.0, 0.0, 0.0), target_point=(0.0, -40.0, 0.0), side="right",
+        metrics={
+            "surface_hu_low_pct": 0.0,
+            "surface_hu_mid_pct": 0.0,
+            "surface_hu_high_pct": 100.0,
+            "surface_hu_samples": 120,
+            "surface_hu_coverage_pct": 62.5,
+        },
+    )
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+    window.screw_list_widget.setCurrentRow(0)
+
+    assert window.selected_screw_surface_hu.text() == "0 / 0 / 100 %*"
+    assert "62" in window.selected_screw_surface_hu.toolTip()
 
 
 def test_details_endplate_row_names_the_neighbour_reference(ui_main_window):
@@ -1187,3 +1252,21 @@ def test_the_narrow_warning_is_listed_first_in_the_cockpit(ui_main_window):
     # Grouped under the Safety heading, with the narrow note still first.
     assert lines[0] == "Safety"
     assert lines[1].startswith("• Narrow pedicle (4.5 mm)")
+
+
+def test_view_menu_opens_one_non_modal_virtual_xray_window(ui_main_window):
+    window = ui_main_window
+    view_menu = next(
+        action.menu()
+        for action in window.menuBar().actions()
+        if action.text() == "View"
+    )
+    action = next(a for a in view_menu.actions() if a.text() == "Virtual X-ray...")
+
+    action.trigger()
+    dialog = window._virtual_xray_dialog
+    action.trigger()
+
+    assert window._virtual_xray_dialog is dialog
+    assert dialog.isVisible() and not dialog.isModal()
+    assert "Load a CT" in dialog.status_label.text()

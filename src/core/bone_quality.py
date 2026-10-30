@@ -16,7 +16,7 @@ Thresholds live in :mod:`src.utils.constants`; see the citations there.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import SimpleITK as sitk
@@ -27,7 +27,7 @@ from ..utils.constants import (
     VERTEBRAL_HU_LOW_BMD_THRESHOLD,
     VERTEBRAL_HU_OSTEOPOROSIS_THRESHOLD,
 )
-from .screw_grading import ScrewGrader
+from .screw_grading import ScrewGrader, SurfaceHuDistribution
 
 Point3 = Sequence[float]
 
@@ -37,6 +37,15 @@ PEDICLE_ROI_RADIUS_MM = 10.0
 BODY_ROI_RADII_MM = (8.0, 8.0, 6.0)
 #: Fewer voxels than this and the ROI mean is too noisy to report.
 MIN_ROI_VOXELS = 20
+
+#: Screw-metric keys :func:`surface_hu_metric_items` writes.
+SURFACE_HU_METRIC_KEYS = (
+    "surface_hu_low_pct",
+    "surface_hu_mid_pct",
+    "surface_hu_high_pct",
+    "surface_hu_samples",
+    "surface_hu_coverage_pct",
+)
 
 
 @dataclass
@@ -49,6 +58,20 @@ class BoneQualityMetrics:
     body_mean_hu: Optional[float] = None
     trajectory_body_ratio: Optional[float] = None
     warnings: List[str] = field(default_factory=list)
+    surface_hu: Optional[SurfaceHuDistribution] = None
+
+
+def surface_hu_metric_items(surface_hu: Optional[SurfaceHuDistribution]) -> Dict[str, Any]:
+    """The screw-metric keys for one surface HU distribution; ``None`` = not measured."""
+    if surface_hu is None:
+        return dict.fromkeys(SURFACE_HU_METRIC_KEYS)
+    return {
+        "surface_hu_low_pct": surface_hu.low_pct,
+        "surface_hu_mid_pct": surface_hu.mid_pct,
+        "surface_hu_high_pct": surface_hu.high_pct,
+        "surface_hu_samples": surface_hu.samples,
+        "surface_hu_coverage_pct": surface_hu.coverage_pct,
+    }
 
 
 def vertebral_body_hu(
@@ -167,4 +190,7 @@ def assess_bone_quality(
             f"Trajectory/body HU ratio {ratio:.2f} below {TRAJECTORY_BODY_HU_RATIO_THRESHOLD:.1f}"
         )
 
-    return BoneQualityMetrics(traj_mean, traj_min, pedicle_mean, body_mean, ratio, warnings)
+    surface_hu = grader.surface_hu_distribution(entry, target, diameter_mm, label)
+    return BoneQualityMetrics(
+        traj_mean, traj_min, pedicle_mean, body_mean, ratio, warnings, surface_hu
+    )

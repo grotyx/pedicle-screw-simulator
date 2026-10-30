@@ -150,6 +150,9 @@ def test_regrade_raises_a_hu_warning_for_a_newly_osteoporotic_trajectory():
     )
 
     assert moved.metrics["trajectory_mean_hu"] == pytest.approx(80.0)
+    # The surface distribution is re-measured with the trajectory it describes.
+    assert moved.metrics["surface_hu_low_pct"] > 0.0
+    assert moved.metrics["surface_hu_samples"] > 0
     assert any(w.startswith("Trajectory HU 80 below 123 HU") for w in moved.warnings)
     assert moved.metrics["trajectory_type"] == "cbt"
     assert CBT_CONTRAINDICATION_NOTE in moved.warnings
@@ -263,7 +266,8 @@ def test_ungradable_screw_drops_only_what_it_measured():
     for key in ("trajectory_mean_hu", "trajectory_min_hu", "trajectory_body_ratio",
                 "min_wall_mm", "heary_direction", "facet_grade", "facet_text",
                 "medial_breach_mm", "lateral_breach_mm", "craniocaudal_breach_mm",
-                "medial_wall_mm"):
+                "medial_wall_mm", "surface_hu_low_pct", "surface_hu_mid_pct",
+                "surface_hu_high_pct", "surface_hu_samples", "surface_hu_coverage_pct"):
         assert key not in screw.metrics
     # Everything the plan still knows: kept.
     assert screw.metrics["score"] == pytest.approx(1.9)
@@ -1268,3 +1272,16 @@ def test_a_manual_screw_does_not_bend_the_drawn_rod_either():
     tool.add_screw(_construct_screw("L4", 30.0, x=48.0, planned=False))
 
     assert tool.rod_lines() == before
+
+
+def test_create_screw_grades_with_the_stated_side():
+    tool = _split_density_tool()
+    seen = []
+    original = tool._screw_side
+    tool._screw_side = lambda screw: seen.append(screw.side) or original(screw)
+
+    screw = tool.create_screw((25.0, 30.0, 30.0), (25.0, 22.0, 30.0), side="left")
+
+    assert screw.side == "left"
+    assert seen and seen[0] == "left"
+    assert tool.get_screws() == [screw]

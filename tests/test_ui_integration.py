@@ -163,6 +163,9 @@ class DummyMPRViewer(_ViewerOverlayHooks, QWidget):
     def set_review_screw(self, screw_id):
         self.review_screw_id = screw_id
 
+    def set_guides_visible(self, visible):
+        self.guides_visible = bool(visible)
+
     rod_lines = {}
     rod_lines_visible = False
 
@@ -227,6 +230,9 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
         # (isolated, available) as last reported by set_isolation_state.
         self.isolation_state = (False, False)
         self.rod_lines = {}
+        self.reference_segments = []
+        self.reference_visible = True
+        self.guides_visible = True
         self.rod_line_toggle = QToolButton(self)
         self.rod_line_toggle.setCheckable(True)
 
@@ -235,6 +241,15 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
 
     def set_isolation_state(self, isolated: bool, available: bool) -> None:
         self.isolation_state = (bool(isolated), bool(available))
+
+    def set_reference_screws(self, segments):
+        self.reference_segments = list(segments)
+
+    def set_reference_screws_visible(self, visible):
+        self.reference_visible = bool(visible)
+
+    def set_guides_visible(self, visible):
+        self.guides_visible = bool(visible)
 
     def show_screw_mpr(
         self,
@@ -1394,6 +1409,53 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
         assert viewer.screw_overlays[0]["entry"] == (4.0, 5.0, 6.0)
     assert window.viewer_3d.screws[0].entry_point == (4.0, 5.0, 6.0)
     assert window.screw_axis_position_slider.value() == 50
+
+
+def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
+    import math
+
+    from src.core.mpr_geometry import world_to_slice
+    from src.core.screw_geometry import GUIDE_REACH_MM, guide_handle_point
+
+    window = ui_main_window
+    window._on_dicom_loaded(
+        image=_create_test_image(),
+        metadata={"series_id": "SERIES-GUIDE-MPR", "num_slices": 12},
+        progress=_ProgressStub(),
+    )
+    screw = Screw((8.0, 12.0, 8.0), (8.0, 4.0, 8.0), diameter=6.0)
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+    window.screw_axis_mpr_btn.click()
+    frozen = window.axial_viewer.custom_axes
+    transverse = tuple(frozen.GetElement(row, 0) for row in range(3))
+    handle = guide_handle_point(
+        screw.entry_point, screw.target_point, GUIDE_REACH_MM
+    )
+    pointer = tuple(handle[i] + 5.0 * transverse[i] for i in range(3))
+    callbacks = window.axial_viewer.screw_interaction_callbacks
+
+    assert callbacks["on_begin"](0, "guide", handle) is True
+    assert callbacks["on_drag"](pointer, "Axial MPR") is True
+
+    updated = window.screw_tool.get_screws()[0]
+    assert updated.entry_point == pytest.approx(screw.entry_point, abs=1e-6)
+    assert math.dist(updated.entry_point, updated.target_point) == (
+        pytest.approx(8.0)
+    )
+    assert updated.target_point != pytest.approx(screw.target_point)
+    # The tip swings within the dragged pane: it stays on the frozen plane.
+    assert world_to_slice(updated.target_point, frozen)[2] == (
+        pytest.approx(0.0, abs=1e-6)
+    )
+    assert window.axial_viewer.custom_axes is frozen
+    assert window.axial_viewer.screw_overlays[0]["target"] == (
+        updated.target_point
+    )
+
+    callbacks["on_end"]()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.axial_viewer.custom_axes is not frozen
 
 
 def test_escape_action_cancels_pending_screw_edit(ui_main_window):
@@ -3006,3 +3068,333 @@ def test_isolation_hides_the_3d_overlay_and_full_ct_honours_show_3d(
 
     window.seg_show_3d_check.setChecked(True)
     assert window.viewer_3d.visible is True
+
+
+def _load_large_study(window, series_id):
+    # 60 x 60 x 40 mm with a non-zero origin, so a 20 mm screw fits.
+    image = sitk.Image([60, 60, 40], sitk.sitkInt16) + 250
+    image.SetOrigin((-20.0, 5.0, -10.0))
+    window._on_dicom_loaded(
+        image=image,
+        metadata={"series_id": series_id, "num_slices": 40},
+        progress=_ProgressStub(),
+    )
+
+
+def _set_manual_defaults(window, length, convergence, craniocaudal):
+    window.length_spin.setValue(length)
+    window.convergence_spin.setValue(convergence)
+    window.craniocaudal_spin.setValue(craniocaudal)
+
+
+def test_insert_at_crosshair_places_one_screw_with_the_default_angles(ui_main_window):
+    from src.core.screw_geometry import convergence_angle_deg, craniocaudal_angle_deg
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT")
+    _set_manual_defaults(window, length=20, convergence=12.0, craniocaudal=-5.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+
+    window.insert_left_btn.click()
+
+    screws = window.screw_tool.get_screws()
+    assert len(screws) == 1
+    screw = screws[0]
+    assert screw.entry_point == pytest.approx((10.0, 50.0, 5.0))
+    assert screw.side == "left"
+    assert screw.source == "manual"
+    assert screw.length == pytest.approx(20.0)
+    assert convergence_angle_deg(screw.entry_point, screw.target_point, "left") == pytest.approx(12.0)
+    assert craniocaudal_angle_deg(screw.entry_point, screw.target_point) == pytest.approx(-5.0)
+    assert window.screw_list_widget.currentRow() == 0
+    assert len(window.viewer_3d.screws) == 1
+    for viewer in window._get_mpr_viewers():
+        assert viewer.screw_overlays[0]["entry"] == pytest.approx((10.0, 50.0, 5.0))
+    assert window._tool_ctrl.active_tool == "navigate"
+
+
+def test_insert_right_mirrors_the_convergence(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-R")
+    _set_manual_defaults(window, length=20, convergence=20.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(5.0, 50.0, 5.0)
+
+    window.insert_right_btn.click()
+
+    screw = window.screw_tool.get_screws()[0]
+    assert screw.side == "right"
+    assert screw.target_point[0] > screw.entry_point[0]
+
+
+def test_insert_at_crosshair_refuses_a_tip_outside_the_ct(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-OUT")
+    _set_manual_defaults(window, length=70, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+
+    window.insert_left_btn.click()
+
+    assert window.screw_tool.get_screws() == []
+    assert window.viewer_3d.screws == [] or len(window.viewer_3d.screws) == 0
+    assert "inside the ct" in window.statusbar.currentMessage().lower()
+
+
+def test_insert_buttons_wait_for_a_study(ui_main_window):
+    window = ui_main_window
+    assert not window.insert_left_btn.isEnabled()
+    assert not window.insert_right_btn.isEnabled()
+    _load_study(window, "SERIES-INSERT-ENABLE")
+    assert window.insert_left_btn.isEnabled()
+    assert window.insert_right_btn.isEnabled()
+
+
+def test_manual_screw_defaults_persist_into_a_new_window(ui_main_window, isolated_qsettings):
+    window = ui_main_window
+    _set_manual_defaults(window, length=38, convergence=14.5, craniocaudal=-3.0)
+    window.diameter_spin.setValue(5.5)
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.length_spin.value() == 38
+        assert reopened.diameter_spin.value() == pytest.approx(5.5)
+        assert reopened.convergence_spin.value() == pytest.approx(14.5)
+        assert reopened.craniocaudal_spin.value() == pytest.approx(-3.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+def test_insert_at_crosshair_is_refused_while_screw_mpr_is_active(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-SMPR")
+    _set_manual_defaults(window, length=20, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+    window.insert_left_btn.click()
+    window.screw_axis_mpr_btn.click()
+    assert window._screw_mpr_ctrl.is_active
+
+    assert not window.insert_left_btn.isEnabled()
+    assert not window.insert_right_btn.isEnabled()
+    assert window._tool_ctrl.insert_screw_at_crosshair("left") is False
+    assert len(window.screw_tool.get_screws()) == 1
+    assert "standard mpr" in window.statusbar.currentMessage().lower()
+
+    window.standard_mpr_btn.click()
+    assert window.insert_left_btn.isEnabled()
+
+
+def test_insert_during_direct_editing_releases_the_viewer_lock(ui_main_window):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-INSERT-LOCK")
+    _set_manual_defaults(window, length=20, convergence=0.0, craniocaudal=0.0)
+    window.volume_manager.set_crosshair_position(10.0, 50.0, 5.0)
+    window.insert_left_btn.click()
+    first = window.screw_tool.get_screws()[0]
+    entry, target = first.entry_point, first.target_point
+    window._screw_edit_ctrl.begin_drag(0, "guide", (10.0, 60.0, 5.0))
+    window.viewer_3d.is_screw_interaction_active = True
+    cancelled_before = window.viewer_3d.screw_interaction_cancelled
+
+    window.volume_manager.set_crosshair_position(-5.0, 50.0, 5.0)
+    window.insert_right_btn.click()
+
+    assert window._screw_edit_ctrl.mode == "idle"
+    assert window.viewer_3d.screw_interaction_cancelled == cancelled_before + 1
+    assert len(window.screw_tool.get_screws()) == 2
+    assert window.screw_tool.get_screws()[0].entry_point == entry
+    assert window.screw_tool.get_screws()[0].target_point == target
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "1e400", "abc", "100000000000"])
+def test_unreadable_manual_screw_defaults_fall_back_at_startup(ui_main_window, isolated_qsettings, raw):
+    settings = isolated_qsettings("SNUBH", "PedicleScrewSimulator")
+    settings.beginGroup("manual_screw")
+    for key in ("length_mm", "diameter_mm", "convergence_deg", "craniocaudal_deg"):
+        settings.setValue(key, raw)
+    settings.sync()
+
+    reopened = main_window_module.MainWindow()
+    try:
+        assert reopened.length_spin.value() == ui_main_window.length_spin.value()
+        assert reopened.convergence_spin.value() == pytest.approx(0.0)
+        assert reopened.craniocaudal_spin.value() == pytest.approx(0.0)
+    finally:
+        reopened.close()
+        reopened.deleteLater()
+
+
+# --- reference-plan comparison -------------------------------------------
+
+
+def _reference_file(tmp_path, series_id, screws):
+    from src.utils.planning_io import save_plan_json, serialize_plan
+
+    path = tmp_path / "reference.json"
+    save_plan_json(str(path), serialize_plan(series_id, screws, []))
+    return str(path)
+
+
+def _add_current_screw(window, screw):
+    window._tool_ctrl.screw_tool.add_screw(screw)
+    window._tool_ctrl._add_screw_to_list(screw)
+
+
+def _pick_file(monkeypatch, path):
+    import src.controllers.plan_controller as plan_controller_module
+
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog, "getOpenFileName",
+        staticmethod(lambda *a, **k: (path, "")),
+    )
+
+
+def _plan_screw(x, level="L4", side="left"):
+    from src.models.screw import Screw
+
+    return Screw(entry_point=(x, 30.0, 5.0), target_point=(x, 10.0, 5.0),
+                 diameter=6.0, vertebra_level=level, side=side)
+
+
+def test_reference_plan_shows_ghosts_and_a_comparison_without_touching_the_plan(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _add_current_screw(window, _plan_screw(30.0, level="L5", side="right"))
+    reference = [_plan_screw(11.0), _plan_screw(-10.0, level="L3")]
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", reference))
+    assert not window.reference_compare_action.isEnabled()
+
+    window.reference_load_action.trigger()
+
+    dialog = window._plan_ctrl.reference_dialog
+    assert dialog is not None and dialog.isVisible()
+    assert dialog.table.rowCount() == 3            # one pair, one leftover each side
+    assert dialog.table.item(0, 0).text() == "matched"
+    assert dialog.table.item(0, 5).text() == "1.0"  # head delta, mm
+    assert dialog.frame_label.text().startswith("Same CT series")
+    assert len(window.viewer_3d.reference_segments) == 2
+    assert window.reference_compare_action.isEnabled() and window.reference_clear_action.isEnabled()
+    # The working plan is untouched: same screws, nothing imported.
+    screws = window._tool_ctrl.screw_tool.get_screws()
+    assert [s.entry_point[0] for s in screws] == [10.0, 30.0]
+
+    window.reference_clear_action.trigger()
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+    assert not dialog.isVisible()
+
+
+def test_reference_plan_from_another_series_is_refused(ui_main_window, tmp_path, monkeypatch):
+    import src.controllers.plan_controller as plan_controller_module
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-A")
+    warnings = []
+    monkeypatch.setattr(
+        plan_controller_module.QMessageBox, "warning",
+        staticmethod(lambda *a, **k: warnings.append(a[1])),
+    )
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-B", [_plan_screw(10.0)]))
+
+    window.reference_load_action.trigger()
+
+    assert warnings == ["Different Series"]
+    assert window._plan_ctrl.reference_dialog is None
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+
+
+def test_reference_plan_without_a_series_id_is_marked_unverified(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _pick_file(monkeypatch, _reference_file(tmp_path, None, [_plan_screw(10.0)]))
+
+    window.reference_load_action.trigger()
+
+    assert window._plan_ctrl.reference_dialog.frame_label.text().startswith("Coordinate frame unverified")
+
+
+def test_recompare_uses_the_screws_as_they_are_now(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _add_current_screw(window, _plan_screw(10.0))
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    dialog = window._plan_ctrl.reference_dialog
+    assert dialog.table.item(0, 5).text() == "0.0"
+
+    window._tool_ctrl.screw_tool.replace_screw(
+        0, entry_point=(13.0, 30.0, 5.0), target_point=(13.0, 10.0, 5.0)
+    )
+    dialog.recompare_btn.click()
+
+    assert dialog.table.item(0, 5).text() == "3.0"
+
+
+def test_a_new_study_clears_the_reference(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+
+    _load_large_study(window, "SERIES-NEXT")
+
+    assert window.viewer_3d.reference_segments == []
+    assert not window.reference_compare_action.isEnabled()
+
+
+def test_report_capture_hides_the_reference_ghosts_and_guides(ui_main_window, tmp_path, monkeypatch):
+    import src.controllers.plan_controller as plan_controller_module
+
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    from types import SimpleNamespace
+
+    window.viewer_3d.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: None)
+    seen = []
+    monkeypatch.setattr(
+        plan_controller_module, "capture_png",
+        lambda render_window: seen.append(
+            window.viewer_3d.reference_visible
+            or window.viewer_3d.guides_visible
+            or any(getattr(v, "guides_visible", True) for v in window._get_mpr_viewers())
+        ),
+    )
+    for viewer in window._get_mpr_viewers():
+        viewer.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: None)
+    monkeypatch.setattr(
+        plan_controller_module.QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(tmp_path / "report.html"), "")),
+    )
+
+    window._plan_ctrl.export_report_dialog()
+
+    assert seen and not any(seen)
+    assert window.viewer_3d.reference_visible is True
+    assert window.viewer_3d.guides_visible is True
+    assert all(v.guides_visible for v in window._get_mpr_viewers())
+
+
+def test_replacing_a_hidden_reference_shows_the_new_one_and_ticks_show(
+    ui_main_window, tmp_path, monkeypatch
+):
+    window = ui_main_window
+    _load_large_study(window, "SERIES-REF")
+    _pick_file(monkeypatch, _reference_file(tmp_path, "SERIES-REF", [_plan_screw(10.0)]))
+    window.reference_load_action.trigger()
+    window.reference_show_action.trigger()             # hide A
+    assert window.viewer_3d.reference_visible is False
+
+    window.reference_load_action.trigger()             # load B over it
+
+    assert window.reference_show_action.isChecked()
+    assert window.viewer_3d.reference_visible is True
+    window.reference_show_action.trigger()
+    assert window.viewer_3d.reference_visible is False

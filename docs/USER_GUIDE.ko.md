@@ -100,7 +100,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 
 - **Study:** **Open DICOM…** 버튼, **Study** 정보 섹션, 그다음 기본적으로 접혀 있는 **Window/Level**(window/level 슬라이더와 Bone/Soft Tissue 프리셋)과 **3D Rendering**(transfer-function 프리셋과 opacity) 섹션.
 - **Segment:** **Segmentation** 그룹(**Run Auto Segmentation**, **Refine boundaries against CT**, 상태 표시줄, isolate/restore 버튼 — 5.2절 참고)과 자동 isolation·3D 화면 머리글 토글에 대한 안내문.
-- **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
+- **Plan:** **Planning** 그룹 — 맨 위에 **Levels to plan (also shown in 3D)**(레벨 체크박스와 **All**/**Clear** 버튼, 5.3절 참고)가 있고, 이어서 모드 콤보, 안내 문구, **Plan Screws**, 상태, **Clear All Screws**가 들어 있습니다 — 그 아래에 **Insert at crosshair: Left / Right** 버튼(7절 참고), 접이식 **Planning parameters**와 **Manual Screw Defaults** 섹션이 이어집니다.
 - **Review:** **Construct** 지도(아래 "구성 지도" 참고)로 시작하고, 선택한 스크류의 핵심 수치와 **✓ Reviewed** 버튼·경고 줄이 이어지며, 그다음 페이지 대부분을 차지하는 레벨별 스크류 목록이 있습니다(레이아웃은 5.9/5.10절, 수정은 6절 참고). **Measurements**는 하단에 접혀 있습니다(7절 참고).
 
 ### 3D 화면 머리글: Vertebrae / Full CT
@@ -250,7 +250,7 @@ TotalSegmentator는 약 1.5 mm에서 추론하고 그 결과를 CT 격자로 업
 
 S1과 sacrum은 이웃 레벨 기준 차용에서 양방향 모두 제외됩니다. 요천추각(lumbosacral angle)은 L5 자체의 각도와 15–30° 차이가 나므로, S1은 자신의 적합 상태와 무관하게 L5에 법선(normal)을 빌려주지도, L5로부터 빌리지도 않습니다.
 
-실제로 어떤 기준이 쓰였든, 플래너는 종판각을 그 기준에 대해 보고합니다 — 신뢰하지 않기로 한 자체 적합을 기준으로 보고하는 일은 없습니다 — 그리고 이후 스크류의 재등급(5.9절, ScrewTool)도 같은 기준으로 같은 각도를 측정하므로 두 값이 서로 어긋나지 않습니다. 이 기준은 스크류마다 `endplate_reference`(`own` / `neighbours` / `none`)로 기록되어 Review 페이지의 Details 섹션(5.9절)에 표시되고, CSV의 마지막 열로 내보내집니다(9절 참고).
+실제로 어떤 기준이 쓰였든, 플래너는 종판각을 그 기준에 대해 보고합니다 — 신뢰하지 않기로 한 자체 적합을 기준으로 보고하는 일은 없습니다 — 그리고 이후 스크류의 재등급(5.9절, ScrewTool)도 같은 기준으로 같은 각도를 측정하므로 두 값이 서로 어긋나지 않습니다. 이 기준은 스크류마다 `endplate_reference`(`own` / `neighbours` / `none`)로 기록되어 Review 페이지의 Details 섹션(5.9절)에 표시되고, CSV의 `endplate_reference` 열로 내보내집니다(9절 참고).
 
 ### 5.6 궤적 최적화기(Trajectory Optimizer)
 
@@ -337,7 +337,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 이 category는 읽기 쉽게 경고를 분류할 뿐 임상적 위험도 평가가 아니며, 모든 계획은 여전히 CT에서 검토해야 합니다.
 
-동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
+동작 버튼 아래에는 나머지 스크류별 지표(Convergence, Craniocaudal, Endplate, Alignment, Trajectory HU, Surface HU, Source, Body HU, Wall margin, Facet, Heary, Trajectory, Pedicle)가 접이식 **Details** 섹션에 들어 있으며, 아래에서 자세히 설명합니다 — Gertzbein-Robbins 등급 자체는 여기에 다시 나오지 않습니다. 이미 목록 위에 크게 표시되는 chip이 그 역할을 하기 때문입니다. **Measurements**(7절)는 같은 페이지 하단에 접혀 있습니다.
 
 **Review** 페이지에는 다음 값이 표시됩니다.
 
@@ -363,6 +363,7 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 - **최소 피질골 여유거리("Wall margin"):** 스크류와 피질골 사이의 가장 가까운 거리(mm)입니다(3 mm 진입 구간 이후, 5.9절 참고).
 - **Heary breach 방향:** 가장 심한 피질골 천공의 해부학적 방향 — medial, lateral, anterior, posterior, superior, inferior 중 하나입니다(Heary 2004). Side 정보가 없는 수동 스크류에서 medial/lateral 방향의 breach가 발생하면 "mediolateral"로, breach가 없으면 "none"으로 표시됩니다.
 - **후관절(facet) 침범 등급(0–3):** Babu(2012) 등급을 근사한 값으로, 스크류 근위부(entry에서 가까운 1/3) 구간과 상위(cephalad) 척추의 segmentation label 사이 관계로 판정합니다 — 0은 접촉 없음, 1은 1 mm 이내로 후관절에 접함, 2는 1 mm 미만으로 침범, 3은 1 mm 이상 침범을 의미합니다.
+- **표면 HU(Details의 "Surface HU" 행, CSV `surface_hu_low_pct` / `surface_hu_mid_pct` / `surface_hu_high_pct` / `surface_hu_samples` / `surface_hu_coverage_pct`):** 스크류 바깥 표면에서 얻은 CT 샘플 가운데 130 HU 미만, 130–249 HU, 250 HU 이상인 샘플의 비율을 "low / mid / high %"로 표시합니다. tooltip에 샘플 수가 나옵니다. 끝에 `*`가 붙으면 표면 일부가 CT 밖에 있어서, 비율은 CT 안쪽 부분만 나타냅니다. 얼마나 들어왔는지는 tooltip과 `surface_hu_coverage_pct`에 나옵니다. 샘플 구간은 축이 척추에 들어간 지점에서 3 mm 지난 곳(5.9절과 같음)부터 tip까지이며, trajectory HU와 달리 척추 label 밖의 샘플도 셉니다 — 나사산에 닿은 연부조직이나 척추관을 보여 주려는 값이기 때문입니다. 샘플마다 가장 가까운 voxel 값을 읽으므로 표면적이 아니라 샘플의 비율입니다. CT 수치일 뿐 조직 분류나 고정력 추정이 아닙니다. CT나 segmentation이 없거나 CT 안에 들어오는 샘플이 하나도 없으면 "--"로 비워 둡니다. 구간 경계는 공개된 3D Slicer 척추경 나사 교육 모듈을 따랐습니다.
 
 측정값이 문헌 기준값을 넘으면 Details와 내보내기에 경고가 함께 표시됩니다.
 
@@ -384,6 +385,17 @@ Cross-section 자체는 단순한 색상 표시가 아니라 실제 텍스처가
 
 모델이 정상적으로 실행되면 각 방향의 척추경 협부(isthmus)를 먼저 해당 label에서 측정하고, label이 그 방향을 찾지 못한 경우에만 coronal 단면 탐색으로 대체합니다. Segmentation 상태 표시줄에는 "· pedicle model used"가 표시되거나, 모델은 실행되었지만 결과에 pedicle label이 전혀 없을 때는 "· pedicle model ran but found no pedicle voxels"가, 실행되지 못했을 때는 이유와 함께 "· pedicle model unavailable: <reason>"이 표시됩니다 — 2단계 실패가 그 아래 TotalSegmentator 결과 자체를 막지는 않습니다.
 
+### 5.11 기준(reference) 계획과 비교
+
+**File → Reference Plan** 메뉴는 지금의 스크류를 같은 CT의 다른 계획과 비교합니다 — 전문가의 계획, 내 이전 계획, 비교용으로 저장해 둔 자동 제안 등입니다. 교육과 자가 점검을 위한 기능이며, 기준은 사용자가 고른 계획일 뿐 검증된 정답(ground truth)이 아닙니다.
+
+1. **Load Reference Plan...**을 골라 계획 JSON(**File → Save Plan**으로 저장한 파일)을 엽니다. 기준 스크류는 3D에 주황색 반투명 원기둥으로 나타나며 선택하거나 수정할 수 없고, 비교 창이 열립니다. 기준 계획의 어떤 것도 내 계획에 추가되거나 함께 저장·내보내지지 않습니다.
+2. 창에는 레벨과 side로 짝지은(대소문자와 공백 무시) 스크류 쌍마다 한 줄씩 나옵니다: head와 tip 거리(mm), 두 축 사이 각도, convergence·craniocaudal·길이·직경 차이(Δ = 현재 − 기준), 두 스크류 부피의 Dice 겹침. 한쪽 계획에만 있는 스크류, 레벨이나 side가 없는 스크류(서로끼리도 짝짓지 않음), 형상을 비교할 수 없는 스크류(길이 0, 직경 없음)는 그 뒤에 이유와 함께 나옵니다. 요약에는 쌍의 수와 평균이 나오고, 표준편차(±)와 95% 일치 한계는 쌍이 두 개 이상일 때만 나옵니다. 쌍이 하나도 없으면 "No comparable screws"로 표시됩니다.
+3. 결과는 그 시점의 스냅샷입니다. 스크류를 움직인 뒤에는 창의 **Recompare**(또는 **File → Reference Plan → Compare with Reference**)를 누르십시오.
+4. **Show Reference Screws**로 주황색 기준 스크류를 숨기거나 보이고, **Clear Reference**로 기준을 지웁니다. 다른 study를 불러와도 지워집니다.
+
+다른 CT series에서 저장한 기준 계획은 거부합니다. 어느 한쪽 계획에 series ID가 없으면 비교는 하지만, 창에 좌표계가 확인되지 않았다고 표시됩니다 — 3D에서 주황색 스크류가 제자리에 있는지 확인하십시오. 내보낸 HTML 보고서에는 기준 스크류가 나오지 않습니다.
+
 ## 6. 스크류 수정
 
 ### 6.1 Edit 메뉴
@@ -397,11 +409,14 @@ Review 페이지의 **Edit** 버튼을 누르면 **Move entry point**, **Move ti
 1. 큰 head를 더블클릭하면 entry point만 이동합니다.
 2. 뾰족한 tip 또는 원위부 shaft를 더블클릭하면 tip만 이동합니다.
 3. 중간 shaft를 더블클릭하면 entry와 tip이 함께 이동합니다.
-4. 마우스 버튼을 누르지 않은 상태로 포인터를 움직입니다.
-5. 다시 더블클릭하면 이동을 종료합니다.
-6. `Esc`를 누르면 마지막 유효 위치를 유지하고 이동 모드를 종료합니다.
+4. 파란 guide 손잡이를 더블클릭하면 entry를 중심으로 스크류가 회전합니다. 손잡이는 head 뒤 60 mm, 뼈 바깥쪽의 초록 guide 선 끝에 있고, 선택한 스크류에만 보입니다. 회전하는 동안 entry와 길이는 고정되고, 상태 표시줄에 convergence와 craniocaudal 각도가 표시됩니다(side가 없는 스크류는 convergence를 부호 없이 표시). guide는 조작용일 뿐이며 채점·저장·내보내기에 포함되지 않습니다.
+5. 마우스 버튼을 누르지 않은 상태로 포인터를 움직입니다.
+6. 다시 더블클릭하면 이동을 종료합니다.
+7. `Esc`를 누르면 마지막 유효 위치를 유지하고 이동 모드를 종료합니다. **Edit → Undo**(6.5)로 드래그를 시작하기 전 위치로 되돌릴 수 있습니다.
 
 MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 후 Screw MPR은 변경된 궤적에 다시 정렬됩니다.
+
+Screw MPR에서는 Oblique Axial과 Oblique Sagittal 창에도 선택한 스크류의 guide 선과 파란 손잡이가 같은 모양으로 표시됩니다(Cross-section에는 없음). 손잡이를 더블클릭하고 포인터를 움직인 뒤 다시 더블클릭하면, entry와 길이를 고정한 채 그 창의 평면 안에서 entry를 중심으로 스크류가 회전합니다. 손잡이가 CT 영상 바깥에 있어도 포인터를 따라갑니다. 움직이는 동안 창은 고정되고, 끝내면 다시 정렬됩니다.
 
 ### 6.3 직경 입력
 
@@ -421,6 +436,10 @@ MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 
 
 스크류를 선택하고 **Delete Screw** 또는 `Delete` 키를 사용합니다.
 
+### 6.5 실행 취소와 다시 실행
+
+메뉴 막대의 **Edit** 메뉴에 스크류 목록 변경을 위한 **Undo**(`Ctrl+Z`)와 **Redo**(`Ctrl+Shift+Z` 또는 `Ctrl+Y`)가 있습니다. 스크류 추가(클릭 또는 **Insert at crosshair**), 삭제, 이동(guide 손잡이 회전을 포함해 드래그 한 번 또는 편집 모드 클릭 한 번이 한 단계), 선택한 스크류의 직경 변경(같은 스크류에 연달아 바꾼 값은 한 단계), 자동 계획 결과 반영(한 번에 추가된 전체가 한 단계)이 대상입니다. 메뉴 항목에는 "Undo Delete Screw"처럼 되돌릴 단계 이름이 표시되고, 되돌릴 단계가 없으면 비활성화됩니다. 상태 표시줄에는 "Undo: delete screw"처럼 각 단계가 표시됩니다. 되돌린 스크류는 목록의 같은 위치로 돌아와 현재 분할 기준으로 grade를 다시 매기고(분할이 없으면 "N/A") 선택됩니다. 검토 표시는 undo 단계가 아닙니다. 되돌리기로 움직이지 않는 스크류는 **✓ Reviewed** 표시를 유지하고, 되살아난 스크류는 검토 전 상태로 돌아옵니다. 최근 50단계까지 보관합니다. 실행 취소 후 새로 변경하면 다시 실행할 수 있던 단계는 사라집니다. 새 검사를 열거나 계획을 불러오면 기록이 지워집니다. 스크류를 드래그하는 동안에는 실행 취소가 동작하지 않으며, 측정과 분할 편집은 기록 대상이 아닙니다.
+
 ## 7. 수동 도구
 
 Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4절 참고). **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
@@ -431,6 +450,16 @@ Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4�
 2. MPR에서 entry point를 클릭합니다.
 3. 같은 MPR에서 target point를 클릭합니다.
 4. 새 스크류를 확인하고 수정합니다.
+
+### 십자선에 삽입 (Insert at crosshair)
+
+**Manual Screw Defaults**(길이, 직경, convergence, craniocaudal)로 현재 MPR 십자선 위치에 클릭 한 번으로 스크류를 놓습니다.
+
+1. 표준 MPR에서 십자선을 entry point로 옮깁니다.
+2. **Plan** 페이지의 **Insert at crosshair** 옆 **Left** 또는 **Right**를 선택합니다. side는 반드시 골라야 하며, 환자가 영상 안에서 어디에 있든 "내측" 방향을 이 선택으로 정합니다.
+3. 스크류가 만들어지고 채점된 뒤 선택됩니다. convergence 양수는 tip을 내측으로, craniocaudal 양수는 두측으로 향하게 합니다. 둘 다 기본값은 0°이며 −89°~+89° 범위에서 정할 수 있습니다.
+
+tip이 CT 밖으로 나가면 스크류를 놓지 않고 상태 표시줄에 이유를 표시합니다. 검사를 불러오기 전과 Screw MPR 사용 중에는 버튼이 비활성입니다. Screw MPR 단면은 저장된 십자선 위치를 지나지 않기 때문입니다. Manual Screw Defaults의 네 값은 다음 실행에도 기억됩니다.
 
 ### 거리와 각도
 
@@ -445,6 +474,16 @@ Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4�
 - **Edit**으로 전체 측정을 다시 합니다.
 - **Delete** 또는 `Delete` 키로 제거합니다.
 - Screw MPR이 활성화된 동안 한 측정은 점이 측정과 함께 저장되지 않는 스크류 정렬 plane 위에 있으므로 절단 위치 없이 `(screw view)`로 표시됩니다. **Show Cut**은 이동하지 않으며, 수정할 수도 조절점으로 옮길 수도 없습니다. 삭제한 뒤 Screw MPR에서 다시 측정하십시오.
+
+### 수술 후 CT에서 스크류 추출
+
+**Tools > Extract Screws from Post-op CT**는 불러온 CT에 이미 삽입된 스크류를 찾아 수정 가능한 스크류(source `extracted`)로 계획에 추가합니다. 다른 스크류처럼 grade가 매겨지고, MPR과 3D 화면에 그려지며, Review 페이지 목록에 나옵니다.
+
+- 2000 HU 이상인 복셀을 금속으로 봅니다. 실제 CT에서는 금속 블루밍 때문에 rod와 tulip이 스크류 shaft보다 두껍게 보이므로, 두꺼운 금속(표면에서 3-5 mm보다 깊은 부분을 같은 거리만큼 되살린 것)을 찾아 빼면 shaft가 따로 떨어집니다. 빼기에서 건드리지 않은 금속(예: rod보다 굵은 스크류)은 단계적으로 깎아(erosion) 각 스크류를 떼어 냅니다. 길쭉하고 길이 20-70 mm, 굵기 3-10 mm이며 끝이 가늘고 head가 뒤쪽에 있으며 주로 앞뒤 방향으로 놓인 조각만 스크류로 남기고(위아래로 놓인 rod나 좌우로 놓인 cross-link는 제외), 한 축 위에서 10 mm 이내로 떨어진 두 조각은 하나로 합칩니다. 클립 같은 작은 금속은 무시합니다.
+- 진입점은 shaft가 head와 만나는 뒤쪽 끝이므로 tulip은 길이에 들어가지 않습니다. 잰 직경이 4.0-7.5 mm를 벗어나면(블루밍으로 shaft가 넓어 보임) 그 범위로 맞추고, 잰 값은 스크류 메모에 남깁니다.
+- 스크류마다 grade, 레벨, 좌우를 얻으려면 먼저 분할을 실행하십시오. 분할이 없으면 grade, 레벨, 좌우 없이 추가됩니다. 수술 후 CT에서는 금속이 분할을 왜곡하고 블루밍이 스크류를 넓혀 보이게 하므로, 추출한 스크류에는 grade가 참고용이라는 메모가 붙습니다. 척추경 폭은 플래너의 척추경 분석에서 오므로, 그 레벨을 자동 계획하지 않았다면 **Ped.** 열은 비어 있습니다.
+- 실제 수술 후 CT 12건(1-4개 레벨의 척추경 나사 고정)에서 11건은 스크류를 모두, 나머지 1건은 8개 중 7개를 찾았고, rod나 connector를 스크류로 잘못 잡은 경우는 없었으며, 한 건에 0.4-7초 걸렸습니다(검색은 백그라운드에서 실행되므로 창은 계속 반응합니다). 진입점은 shaft와 head의 경계에 놓이고, 블루밍 때문에 직경이 0.5-1 mm 정도 크게 나옵니다. 금속 인공물 때문에 축이나 직경이 어긋날 수 있습니다. 추출한 스크류는 모두 영상과 대조해 확인하고 드래그(6.2)로 고치십시오. 결과는 임상적으로 검증되지 않았습니다.
+- 이 스크류들은 Details → **Source**에 "Extracted from CT"로 표시됩니다. **Edit → Undo**(6.5) 한 번으로 추출한 스크류 전체를 되돌립니다. 도구를 다시 실행하면 같은 스크류가 한 번 더 추가됩니다.
 
 ## 8. 화면 조작
 
@@ -485,6 +524,19 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 
 볼륨 렌더링은 Windows와 Linux에서 GPU를, macOS에서는 CPU 레이캐스터를 사용합니다. macOS는 OpenGL→Metal 변환 계층이 3D 텍스처 업로드에서 멈추기 때문입니다. 선택은 자동이며 로그에 기록됩니다.
 
+### Virtual X-ray
+
+**View → Virtual X-ray...** 를 누르면 불러온 CT의 투영 영상 두 장을 나란히 보여 주는 별도 창이 열립니다. 계획이 수술 중 투시 영상에서 어떻게 보일지 확인하는 용도입니다. **AP**(빔이 환자의 전후 방향, 환자 오른쪽이 화면 왼쪽)와 **Lateral**(빔이 좌우 방향, 앞쪽이 화면 왼쪽)이며, 두 영상 모두 위쪽이 상방입니다. 가장자리 글자는 MPR 화면과 같은 방식으로 환자 축을 표시합니다.
+
+| 조작 | 기능 |
+|---|---|
+| `Ray-sum` | 빔 방향의 평균 감쇠값, 방사선 사진과 비슷함(기본값) |
+| `MIP` | 빔 방향에서 가장 밝은 복셀 |
+| `Screws` | 계획된 스크류 표시/숨김. 직경 그대로 3D와 같은 색으로 그리며, 선택한 스크류는 노란 테두리로 강조 |
+| `Refresh` | 두 투영 영상을 다시 계산 |
+
+창은 작업하는 동안 열어 둘 수 있습니다. 스크류를 추가·이동·크기 변경·삭제·선택하거나 새 study를 열면 다시 그립니다. 이 영상은 CT의 평행 투영이며 보정된 투시 영상이 아닙니다. 빔 발산이나 확대 효과가 없습니다. CT 축이 환자 축에서 2°보다 많이 기울어져 있으면 창에 그 사실을 표시하며, 이때 가장자리 글자는 근사값입니다.
+
 ### 키보드 단축키
 
 | 키 | 기능 |
@@ -492,6 +544,8 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 | `Ctrl+O` | DICOM 폴더 열기 |
 | `Ctrl+S` | 계획 저장 |
 | `Ctrl+L` | 계획 불러오기 |
+| `Ctrl+Z` | 마지막 스크류 변경 실행 취소(6.5) |
+| `Ctrl+Shift+Z`, `Ctrl+Y` | 마지막으로 취소한 스크류 변경 다시 실행(6.5) |
 | `Ctrl+Q` | 종료 |
 | `Ctrl+M` | 마지막으로 작업한 창 최대화, 다시 누르면 복원 |
 | `R` | Reset Camera: MPR 화면과 3D 화면 맞춤(입력란에 입력 중에는 동작하지 않음) |
@@ -505,7 +559,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 - 지원되는 골 표면을 STL로 내보냅니다.
 - 계획을 단일 HTML 보고서 파일로 내보냅니다(아래 참고).
 
-계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 각 스크류에는 **✓ Reviewed** 표시를 담는 `reviewed` 값도 저장됩니다(5.9절). schema version 3 안에서 추가된 키이므로, 이 값 없이 저장된 계획을 불러오면 모든 스크류가 검토하지 않은 상태가 됩니다.
+계획 파일은 schema version 3을 사용하며, 각 스크류에 5.10절 "스크류 골질 지표"에서 설명한 골질·안전성 지표(trajectory/pedicle/body HU, HU 비율, 최소 wall 거리, Heary breach 방향, facet 침범 등급)를 담는 `metrics` 필드가 추가되었습니다. schema version 2에서는 각 스크류에 `mean_hu`, `min_hu`, `warnings`, `source`가 추가되었습니다. 이전 버전으로 저장한 계획 파일도 계속 불러올 수 있으며, 이미 segmentation이 있는 상태에서 계획을 불러오면 즉시 다시 등급이 매겨져 schema v3 지표가 채워집니다. 이렇게 다시 등급이 매겨지면 진입부 피질골이 더 이상 채점되지 않으므로(5.9절 참고) 예전 빌드가 저장한 계획이 더 좋은 등급으로 나올 수 있습니다 — 계획 파일 자체는 바뀌지 않습니다. CSV 내보내기에는 이름이 변경된 `convergence_angle_deg`, `craniocaudal_angle_deg` 열, `mean_hu`, `min_hu`, `source`, `warnings` 열, schema v3 지표 열인 `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, `facet_grade`에 더해, 새로 추가된 마지막 열 `endplate_reference`(`own` / `neighbours` / `none`; 해당 스크류에 종판 기준이 기록된 적이 없으면 빈칸 — 예를 들어 척추경 분석이 없는 레벨에 수동으로 배치한 스크류(계획된 적도 없고 계획된 레벨에서 두 레벨 이내도 아닌 경우, 또는 segmentation을 다시 실행한 뒤에 배치되어 분석이 폐기된 경우), 또는 이전 버전이 저장한 계획에서 온 스크류)가 포함됩니다. 이 열은 `endplate_angle_deg` 열이 어느 기준을 대상으로 측정되었는지 나타냅니다(5.5절 "종판(endplate) 상태가 나쁠 때의 기준(reference)" 참고). 그 뒤에 표면 HU 열 다섯 개(`surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`, `surface_hu_samples`, `surface_hu_coverage_pct`, 5.10절 참고)가 붙습니다. 계획된 스크류는 이후 다시 등급을 매겨도 플래너가 기록한 값을 그대로 유지합니다. 각 스크류에는 **✓ Reviewed** 표시를 담는 `reviewed` 값도 저장됩니다(5.9절). schema version 3 안에서 추가된 키이므로, 이 값 없이 저장된 계획을 불러오면 모든 스크류가 검토하지 않은 상태가 됩니다.
 
 저장·불러오기·내보내기 대화상자는 마지막으로 계획에 사용한 폴더(처음에는 문서 폴더)에서 열리며, 응용 프로그램 폴더에서는 열리지 않습니다. 계획 파일은 DICOM Series Instance UID를 일방향 SHA-256 해시(`series_uid_sha256`)로만 기록합니다. 다른 series에 계획을 불러올 때 경고하기에는 충분하지만 PACS에서 조회할 수는 없습니다. 원본 UID가 들어 있는 이전 계획도 그대로 불러오며 같은 방식으로 검사하고, 다시 저장하면 해시만 기록됩니다.
 

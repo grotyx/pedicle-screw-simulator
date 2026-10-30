@@ -107,6 +107,11 @@ _GRADER_MEASURED_METRIC_KEYS = (
     "lateral_breach_mm",
     "craniocaudal_breach_mm",
     "medial_wall_mm",
+    "surface_hu_low_pct",
+    "surface_hu_mid_pct",
+    "surface_hu_high_pct",
+    "surface_hu_samples",
+    "surface_hu_coverage_pct",
 )
 
 #: Mirrors the planner's ``High convergence angle`` threshold
@@ -411,16 +416,27 @@ class ScrewTool:
         screw = self._create_screw(entry, target)
         return screw
 
+    def create_screw(
+        self,
+        entry: Tuple[float, float, float],
+        target: Tuple[float, float, float],
+        side: str = "",
+    ) -> Screw:
+        """Create, grade and store a manual screw from explicit geometry."""
+        return self._create_screw(entry, target, side=side)
+
     def _create_screw(
         self,
         entry: Tuple[float, float, float],
-        target: Tuple[float, float, float]
+        target: Tuple[float, float, float],
+        side: str = "",
     ) -> Screw:
         """Create a new screw and add to list."""
         screw = Screw(
             entry_point=entry,
             target_point=target,
-            diameter=self._default_diameter
+            diameter=self._default_diameter,
+            side=side,
         )
 
         # Evaluate placement
@@ -644,7 +660,7 @@ class ScrewTool:
         the colour of the screw, so a drag that moves it to another level has
         to move the width with it.
         """
-        from ..core.bone_quality import assess_bone_quality
+        from ..core.bone_quality import assess_bone_quality, surface_hu_metric_items
         from ..core.breach_classification import facet_violation_grade, medial_breach_warning
 
         quality = assess_bone_quality(
@@ -700,6 +716,7 @@ class ScrewTool:
             "heary_direction": self._heary_label(screw.side, result),
             "facet_grade": facet_grade,
             "facet_text": facet_text,
+            **surface_hu_metric_items(quality.surface_hu),
         }
         warnings = list(quality.warnings)
         if facet_grade >= 2:
@@ -840,6 +857,10 @@ class ScrewTool:
         """Append an existing screw (used for plan restore)."""
         self._screws.append(screw)
         self._restamp_construct_alignment()
+
+    def evaluate_screw(self, screw: Screw) -> None:
+        """Grade a screw that is not in the list yet (e.g. one extracted from CT)."""
+        self._evaluate_screw(screw)
 
     def regrade_all(self) -> List[Screw]:
         """Re-evaluate every stored screw against the current grader."""

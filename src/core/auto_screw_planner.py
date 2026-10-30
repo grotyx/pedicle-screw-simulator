@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import SimpleITK as sitk
 
-from .bone_quality import assess_bone_quality
+from .bone_quality import assess_bone_quality, surface_hu_metric_items
 from .breach_classification import facet_violation_grade, heary_direction, medial_breach_warning
 from .cbt_planner import plan_cbt_screws
 from .construct_alignment import stamp_alignment
@@ -941,6 +941,7 @@ class AutoScrewPlanner:
             "heary_direction": heary,
             "facet_grade": facet_grade,
             "facet_text": facet_text,
+            **surface_hu_metric_items(quality.surface_hu),
             # Overwritten by :mod:`.cbt_planner`, which shares this tail.
             "trajectory_type": "traditional",
         }

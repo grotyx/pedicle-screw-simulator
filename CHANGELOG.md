@@ -13,6 +13,53 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Added
+
+- Plan page: **Insert at crosshair — Left / Right** places a screw at the MPR
+  crosshair in one click, using the Manual Screw Defaults. The defaults gain
+  convergence and craniocaudal angles, and all four are remembered.
+- 3D view: the selected screw shows a guide line and a blue handle 60 mm
+  behind its head, outside the bone. Double-click the handle to rotate the
+  screw about its entry with entry and length fixed; the status bar shows the
+  angles while you move.
+- Review page: a **Surface HU** row in Details shows the share of CT samples
+  on the screw's surface below 130, 130–249 and at least 250 HU. Samples
+  outside the vertebra count too, and the 3 mm entry zone is left out. The
+  CSV export appends `surface_hu_low_pct`, `surface_hu_mid_pct`,
+  `surface_hu_high_pct`, `surface_hu_samples` and `surface_hu_coverage_pct`,
+  and the HTML report shows the three shares. A `*` marks a screw whose
+  surface is partly outside the CT.
+- **File → Reference Plan** compares the current screws with another plan of
+  the same CT. Reference screws show in 3D as amber, unselectable cylinders;
+  a window lists head/tip distance, axis
+  angle, angle/length/diameter differences and Dice per level and side, plus
+  unmatched and invalid screws. Plans from another series are refused.
+- Screw MPR: the Oblique Axial and Oblique Sagittal panes show the same guide
+  handle. Double-click it to rotate the screw about its entry within that
+  pane's plane; the pane holds still during the move and realigns after.
+- View → Virtual X-ray...: a non-modal window with AP and lateral projections
+  of the CT (Ray-sum or MIP) and the planned screws drawn at their diameter,
+  so the plan can be checked the way it will look on fluoroscopy. It follows
+  screw edits and selection, and warns when the CT axes are oblique.
+- Edit menu: Undo (`Ctrl+Z`) and Redo (`Ctrl+Shift+Z`, `Ctrl+Y`) for
+  screw plan edits — adding (also at the crosshair), deleting, dragging
+  (also with the guide handle) or click-editing a screw,
+  changing its diameter, and accepting an automatic plan (one step per
+  batch). The last 50 steps are kept; a new study or a loaded plan clears
+  them. Measurements and segmentation edits are not included.
+- Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, subtraction of the thicker bloomed rods and tulips or millimetre-based erosion, shape and front-to-back checks) in the background and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other; their grade is marked indicative, since metal artefact skews it. Check each against the images; it is not clinically validated.
+
+### Fixed
+
+- In Screw MPR the status bar now names the screw you move to; it kept saying
+  "screw #1" after selecting another screw.
+- Linux (X11): the 3D view and the three MPR views no longer stay black.
+  The panes were created without a parent and briefly opened as separate
+  windows, so their VTK surfaces never reached the main window.
+- The translucent vertebra surfaces in the 3D view are now depth-sorted,
+  so back faces and the spinal canal walls no longer show through the
+  front as dark scribbles.
+
 ## [0.2.5] - 2026-10-02
 
 Review tools on top of 0.2.4's safer planning: mark each screw as

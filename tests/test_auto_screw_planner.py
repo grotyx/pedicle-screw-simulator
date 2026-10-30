@@ -1559,7 +1559,8 @@ class TestScrewMetrics:
         keys = {
             "trajectory_mean_hu", "trajectory_min_hu", "pedicle_mean_hu", "body_mean_hu",
             "trajectory_body_ratio", "min_wall_mm", "heary_direction",
-            "facet_grade", "facet_text",
+            "facet_grade", "facet_text", "surface_hu_low_pct", "surface_hu_mid_pct",
+            "surface_hu_high_pct", "surface_hu_samples",
         }
         assert keys <= set(screws[0].metrics)
         assert screws[0].metrics["facet_grade"] == 0

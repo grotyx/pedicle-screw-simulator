@@ -5,6 +5,14 @@ from __future__ import annotations
 import math
 from typing import Optional, Tuple
 
+from src.core.screw_geometry import (
+    GUIDE_REACH_MM,
+    convergence_angle_deg,
+    craniocaudal_angle_deg,
+    guide_handle_point,
+    target_from_guide_drag,
+)
+
 Point3D = Tuple[float, float, float]
 
 
@@ -13,6 +21,7 @@ class ScrewEditController:
 
     MODES = {"entry", "tip", "move"}
     MIN_LENGTH_MM = 1.0
+    GUIDE_REACH_MM = GUIDE_REACH_MM
 
     def __init__(self, volume_manager, main_window):
         self._vm = volume_manager
@@ -23,6 +32,8 @@ class ScrewEditController:
         self._drag_entry: Optional[Point3D] = None
         self._drag_target: Optional[Point3D] = None
         self._active_source: Optional[str] = None
+        #: Screw list as it was when the current drag began, for undo.
+        self._drag_before: Optional[list] = None
 
     @property
     def mode(self) -> str:
@@ -31,6 +42,11 @@ class ScrewEditController:
     @property
     def is_active(self) -> bool:
         return self._mode != "idle"
+
+    @property
+    def is_dragging(self) -> bool:
+        """A direct drag is in progress (not a pending one-click edit)."""
+        return self.is_active and self._drag_anchor is not None
 
     @property
     def active_source(self) -> Optional[str]:
@@ -70,6 +86,9 @@ class ScrewEditController:
     def cancel(self, show_message: bool = True) -> None:
         """Cancel the pending edit without changing screw geometry."""
         was_active = self.is_active
+        # Esc, a selection change or an abort ends a drag but keeps its
+        # geometry, so it is still one undo step.
+        before, self._drag_before = self._drag_before, None
         self._mode = "idle"
         self._selected_index = None
         self._drag_anchor = None
@@ -77,17 +96,24 @@ class ScrewEditController:
         self._drag_target = None
         self._active_source = None
         self.refresh_controls()
+        if before is not None:
+            self._window._tool_ctrl.record_screw_edit("drag screw", before)
         if was_active and show_message:
             self._window.statusbar.showMessage("Screw edit cancelled")
+
+    def abort(self) -> None:
+        """Release every viewer lock and leave edit mode, keeping the geometry."""
+        self._cancel_active_viewer_locks()
+        self.cancel(show_message=False)
 
     def reset(self) -> None:
         """Reset edit state during volume or planning workspace changes."""
         self.cancel(show_message=False)
 
     def begin_drag(self, index: int, part: str, world_point: Point3D) -> bool:
-        """Begin direct manipulation of an entry handle, tip, or shaft."""
-        mode = "move" if part == "shaft" else part
-        if mode not in self.MODES:
+        """Begin direct manipulation of an entry handle, tip, shaft, or guide."""
+        mode = {"shaft": "move", "guide": "rotate"}.get(part, part)
+        if mode not in self.MODES | {"rotate"}:
             raise ValueError(f"Unknown screw drag part: {part}")
         if self._vm.get_vtk_image() is None:
             return False
@@ -101,13 +127,19 @@ class ScrewEditController:
         self._cancel_active_viewer_locks()
         self._window._tool_ctrl.set_tool("navigate")
         self._window.screw_list_widget.setCurrentRow(index)
+        self._drag_before = self._window._tool_ctrl.snapshot_screws()
         self._selected_index = int(index)
         self._mode = mode
         self._drag_anchor = self._point(world_point)
         self._drag_entry = self._point(screw.entry_point)
         self._drag_target = self._point(screw.target_point)
         self.refresh_controls()
-        labels = {"entry": "insertion head", "tip": "tip", "move": "shaft"}
+        labels = {
+            "entry": "insertion head",
+            "tip": "tip",
+            "move": "shaft",
+            "rotate": "guide handle (rotates about the entry)",
+        }
         self._window.statusbar.showMessage(
             f"Dragging screw {labels[mode]}"
         )
@@ -130,6 +162,25 @@ class ScrewEditController:
             entry_point, target_point = point, self._drag_target
         elif self._mode == "tip":
             entry_point, target_point = self._drag_entry, point
+        elif self._mode == "rotate":
+            try:
+                target_point = target_from_guide_drag(
+                    self._drag_entry,
+                    self._drag_target,
+                    guide_handle_point(
+                        self._drag_entry, self._drag_target, self.GUIDE_REACH_MM
+                    ),
+                    self._drag_anchor,
+                    point,
+                )
+            except ValueError as exc:
+                self._window.statusbar.showMessage(f"Guide ignored: {exc}")
+                return False
+            entry_point = self._drag_entry
+            current = self._screw_at(self._selected_index)
+            # Locking the guide without moving it must not regrade or clear review.
+            if current is not None and math.dist(current.target_point, target_point) < 1e-6:
+                return True
         else:
             delta = tuple(
                 point[axis] - self._drag_anchor[axis] for axis in range(3)
@@ -146,6 +197,20 @@ class ScrewEditController:
         updated = self._screw_at(self._selected_index)
         if str(source).strip().lower() == "3d" and updated is not None:
             self._focus_mpr_on_3d_edit(updated)
+        if self._mode == "rotate" and updated is not None:
+            side = updated.side if updated.side in ("left", "right") else None
+            convergence = convergence_angle_deg(
+                updated.entry_point, updated.target_point, side
+            )
+            craniocaudal = craniocaudal_angle_deg(
+                updated.entry_point, updated.target_point
+            )
+            label = "Conv" if side else "Conv (unsigned)"
+            self._window.statusbar.showMessage(
+                f"{label} {convergence:.1f}°  CC {craniocaudal:.1f}° — "
+                "double-click again to finish"
+            )
+            return True
         self._window.statusbar.showMessage(
             f"Screw updated from {source}; double-click again to finish"
         )
@@ -153,7 +218,7 @@ class ScrewEditController:
 
     def _focus_mpr_on_3d_edit(self, screw) -> None:
         """Move standard MPR crosshairs to the part being edited in 3D."""
-        if self._mode == "entry":
+        if self._mode in ("entry", "rotate"):
             point = screw.entry_point
         elif self._mode == "tip":
             point = screw.target_point
@@ -183,7 +248,7 @@ class ScrewEditController:
         z: float,
     ) -> bool:
         """Consume one MPR click when editing and update the selected screw."""
-        if not self.is_active or self._selected_index is None:
+        if not self.is_active or self._selected_index is None or self._mode == "rotate":
             return False
 
         if self._window.screw_list_widget.currentRow() != self._selected_index:
@@ -198,13 +263,17 @@ class ScrewEditController:
         point = (float(x), float(y), float(z))
         entry_point, target_point = self._edited_points(screw, point)
         mode = self._mode
+        before = self._window._tool_ctrl.snapshot_screws()
         if not self._apply_points(entry_point, target_point):
             return True
+        labels = {"entry": "Entry", "tip": "Tip", "move": "Whole screw"}
+        self._window._tool_ctrl.record_screw_edit(
+            f"edit {labels[mode].lower()}", before
+        )
         selected_index = self._selected_index
         self.cancel(show_message=False)
         if selected_index is not None:
             self._realign_screw_mpr(selected_index)
-        labels = {"entry": "Entry", "tip": "Tip", "move": "Whole screw"}
         self._window.statusbar.showMessage(
             f"{labels[mode]} updated from {plane.capitalize()} MPR"
         )

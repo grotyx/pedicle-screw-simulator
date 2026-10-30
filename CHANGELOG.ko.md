@@ -13,6 +13,47 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### 추가
+
+- Plan 페이지: **Insert at crosshair — Left / Right**로 Manual Screw Defaults를
+  써서 MPR 십자선 위치에 클릭 한 번으로 스크류를 놓습니다. 기본값에
+  convergence와 craniocaudal 각도가 추가되었고, 네 값 모두 기억됩니다.
+- 3D 뷰: 선택한 스크류에 head 뒤 60 mm, 뼈 바깥쪽으로 guide 선과 파란 손잡이가
+  표시됩니다. 손잡이를 더블클릭하면 entry와 길이를 고정한 채 entry를 중심으로
+  회전하고, 움직이는 동안 상태 표시줄에 각도가 표시됩니다.
+- Review 페이지: Details에 **Surface HU** 행이 생겼습니다. 스크류 표면의 CT
+  샘플 가운데 130 HU 미만, 130–249 HU, 250 HU 이상의 비율을 보여 줍니다.
+  척추 밖 샘플도 세고, 3 mm 진입 구간은 뺍니다. CSV 내보내기에
+  `surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`,
+  `surface_hu_samples`, `surface_hu_coverage_pct` 열이 끝에 붙고, HTML
+  보고서에도 세 비율이 나옵니다. 표면 일부가 CT 밖이면 `*`로 표시합니다.
+- **File → Reference Plan** 메뉴로 지금의 스크류를
+  같은 CT의 다른 계획과 비교합니다. 기준 스크류는 3D에 선택할 수 없는 주황색
+  원기둥으로 나오고, 창에 레벨·side별 head/tip 거리, 축 각도, 각도·길이·직경
+  차이, Dice와 함께 짝이 없거나 비교할 수 없는 스크류가 표시됩니다. 다른
+  series의 계획은 거부합니다.
+- Screw MPR: Oblique Axial과 Oblique Sagittal 창에도 같은 guide 손잡이가
+  표시됩니다. 더블클릭하면 그 창의 평면 안에서 entry를 중심으로 스크류가
+  회전하고, 움직이는 동안 창은 고정되었다가 끝나면 다시 정렬됩니다.
+- View → Virtual X-ray...: CT의 AP·lateral 투영 영상(Ray-sum 또는 MIP)에
+  계획된 스크류를 직경 그대로 겹쳐 보여 주는 비모달 창. 투시 영상에서 보일
+  모습으로 계획을 확인할 수 있습니다. 스크류 편집과 선택을 따라가며, CT 축이
+  기울어져 있으면 경고합니다.
+- Edit 메뉴: 스크류 계획 변경을 위한 Undo(`Ctrl+Z`)와 Redo(`Ctrl+Shift+Z`,
+  `Ctrl+Y`). 스크류 추가(crosshair 삽입 포함), 삭제, 드래그(guide 손잡이 포함)·클릭 편집, 직경 변경, 자동 계획 결과
+  반영(한 번에 한 단계)이 대상입니다. 최근 50단계를 보관하며, 새 검사를 열거나
+  계획을 불러오면 지워집니다. 측정과 분할 편집은 포함하지 않습니다.
+- Tools > Extract Screws from Post-op CT: 불러온 CT에 삽입된 스크류를 찾아(금속 임계값, 블루밍으로 더 두꺼워진 rod·tulip 빼기 또는 mm 단위 erosion, 형태·앞뒤 방향 검사) 백그라운드에서 수정 가능한 `extracted` 스크류로 계획에 추가합니다. 다른 스크류처럼 grade가 매겨지고 화면과 목록에 표시되며, 금속 인공물이 grade를 왜곡하므로 참고용으로 표시됩니다. 각 스크류는 영상과 대조해 확인해야 하며, 임상적으로 검증되지 않았습니다.
+
+### 수정
+
+- Screw MPR에서 다른 스크류를 선택해도 상태 표시줄이 "screw #1"에 머물던 문제를 고쳐, 이제 선택한 스크류 번호를 표시합니다.
+- Linux(X11): 3D 뷰와 MPR 뷰 세 개가 검은 화면으로 남던 문제를 고쳤습니다.
+  뷰 패널이 부모 없이 만들어져 잠깐 별도 창으로 열리면서, VTK 화면이
+  메인 창에 나타나지 않았습니다.
+- 3D 뷰의 반투명 척추 표면을 깊이 순서대로 그립니다. 뒷면과 척추관 벽이
+  앞면 위로 검은 낙서처럼 비쳐 보이던 현상이 사라집니다.
+
 ## [0.2.5] - 2026-10-02
 
 0.2.4의 더 안전한 계획 위에 검토 도구를 더했습니다. 스크류마다 검토 완료를

@@ -416,6 +416,7 @@ def test_active_review_realigns_when_another_screw_is_selected():
 
     assert second != first
     assert window.axial_viewer.title == "Oblique Axial · Screw #2"
+    assert window.statusbar.message == "Screw MPR active for screw #2"
     assert window.inspector_updates[-1][0] == 1
     assert window.inspector_updates[-1][2] is True
     assert all(
@@ -641,6 +642,7 @@ def test_help_text_documents_every_screw_mpr_gesture():
         "Shift",
         "Ctrl",
         "Middle",
+        "guide handle",
         "right-hand rule",
     ):
         assert fragment in SCREW_MPR_CONTROLS_HELP

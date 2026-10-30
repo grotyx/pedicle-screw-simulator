@@ -36,6 +36,8 @@ SCREW_MPR_CONTROLS_HELP = (
     "Ctrl + left-drag on the cross-section — rotate continuously\n"
     "Middle-button drag — pan any view (the Pan toggle still works too)\n"
     "Ctrl + wheel — zoom; Fit — fit the image to the view\n"
+    "Double-click the blue guide handle on an oblique view — rotate the "
+    "screw about its entry in that plane; double-click again to finish\n"
     "\n"
     "Positive rotation follows the right-hand rule about the screw axis, "
     "which points from the entry point to the target point."
@@ -330,6 +332,7 @@ class ScrewMPRController:
             except ValueError:
                 self.exit()
                 return
+            self._window.statusbar.showMessage(f"Screw MPR active for screw #{row + 1}")
         self.refresh_selected_screw()
         self.refresh_controls()
 
@@ -390,6 +393,7 @@ class ScrewMPRController:
             except ValueError:
                 self.exit()
                 return
+            self._window.statusbar.showMessage(f"Screw MPR active for screw #{row + 1}")
         self.refresh_selected_screw()
         self.refresh_controls()
 
@@ -401,6 +405,10 @@ class ScrewMPRController:
         self._window.screw_axis_mpr_btn.setEnabled(can_enter)
         self._window.standard_mpr_btn.setEnabled(self._active)
         self._window.screw_axis_position_slider.setEnabled(self._active)
+        for name in ("insert_left_btn", "insert_right_btn"):
+            button = getattr(self._window, name, None)
+            if button is not None:
+                button.setEnabled(self._has_loaded_volume() and not self._active)
         previous_button = getattr(self._window, "screw_previous_btn", None)
         next_button = getattr(self._window, "screw_next_btn", None)
         if previous_button is not None:

@@ -6,6 +6,7 @@ import pytest
 from src.core.mpr_geometry import (
     build_screw_mpr_axes,
     project_screw_to_slice,
+    slice_ray_to_world,
     slice_to_world,
     world_to_slice,
 )
@@ -362,3 +363,23 @@ def test_rotated_and_offset_axes_stay_orthonormal_and_right_handed():
         )
         assert rotation.T @ rotation == pytest.approx(np.eye(3), abs=1e-9)
         assert np.linalg.det(rotation) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_a_display_ray_lands_on_the_frozen_screw_plane():
+    axes = build_screw_mpr_axes(
+        (10.0, 20.0, 30.0), (25.0, -15.0, 40.0), rotation_deg=20.0,
+        long_axis_offset_mm=(3.0, 0.0),
+    ).oblique_axial
+
+    # A slanted ray (perspective-like) still lands on the slice, z = 0.
+    world = slice_ray_to_world((12.0, -7.0, 40.0), (16.0, -5.0, -40.0), axes)
+
+    assert world == pytest.approx(slice_to_world((14.0, -6.0, 0.0), axes))
+    assert world_to_slice(world, axes)[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_ray_parallel_to_the_slice_has_no_plane_point():
+    axes = create_reslice_axes("axial", (0.0, 0.0, 0.0))
+
+    with pytest.raises(ValueError):
+        slice_ray_to_world((0.0, 0.0, 5.0), (10.0, 0.0, 5.0), axes)
