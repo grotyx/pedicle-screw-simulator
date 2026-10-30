@@ -80,6 +80,35 @@ To use it from a source install:
 
 Labels are read from the model's own `dataset.json` at runtime rather than hard-coded, so any nnU-Net checkpoint using recognizable subregion names resolves correctly. Memory needs are similar to TotalSegmentator's `3d_fullres` configuration; a GPU is recommended. A stage-2 failure never blocks the underlying TotalSegmentator result. License: see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
+## Package size
+
+Most of the package is the GPU segmentation runtime, not the application.
+Measured on the Linux development environment (torch 2.14 + CUDA 13,
+2026-10-30):
+
+| Part | Size |
+|:--|--:|
+| CUDA libraries (`nvidia/*`: cu13, cuDNN, NCCL, cuSPARSELt, NVSHMEM) | 3.2 GB |
+| `torch` | 1.2 GB |
+| `triton` (Linux only, **excluded from builds**) | 0.9 GB |
+| VTK + SimpleITK + PyQt6 + SciPy + NumPy | about 1.25 GB |
+| Application code | a few MB |
+| TotalSegmentator weights (downloaded on first use, not bundled) | 0.16–1.4 GB |
+
+- The package targets GPU inference only. A CPU-only build would drop the
+  CUDA libraries but make segmentation take minutes, so it is not offered.
+- NCCL, cuSPARSELt and NVSHMEM look like multi-GPU extras but
+  `libtorch_cuda` links them directly; removing them stops torch loading.
+- Triton only backs `torch.compile`; TotalSegmentator GPU inference was
+  checked to run without it. Windows and macOS torch wheels never include it.
+- Weights are fetched per task on first run (`~/.totalsegmentator`), so only
+  the tasks a user runs take space. The full `total` task needs all five
+  parts (about 1.2 GB); the fast mode needs one 159 MB model.
+- VTK could shrink to roughly 100–200 MB if the source imported individual
+  `vtkmodules.*` instead of `import vtk` (7 files). Not done yet.
+- Replacing PyTorch with ONNX Runtime would save the most, but means
+  re-implementing the nnU-Net pre/post-processing; deliberately not pursued.
+
 ## Runtime files
 
 Packaged logs are written to a user-writable location:

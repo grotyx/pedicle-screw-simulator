@@ -251,3 +251,14 @@ def test_install_totalsegmentator_script_pins_version():
         / "install_totalsegmentator.sh"
     ).read_text(encoding="utf-8")
     assert "TotalSegmentator==2.12.0" in install_script
+
+
+def test_pyinstaller_spec_leaves_out_triton():
+    # Triton only serves torch.compile; nnU-Net inference runs without it,
+    # and Linux torch wheels would otherwise pull ~0.9 GB into the bundle.
+    spec = (
+        Path(__file__).resolve().parents[1]
+        / "packaging"
+        / "PedicleScrewSimulator.spec"
+    ).read_text(encoding="utf-8")
+    assert 'excludes=["triton"]' in spec

@@ -49,6 +49,12 @@ current version; every other place the version appears is derived from it.
   them. Measurements and segmentation edits are not included.
 - Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, subtraction of the thicker bloomed rods and tulips or millimetre-based erosion, shape and front-to-back checks) in the background and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other; their grade is marked indicative, since metal artefact skews it. Check each against the images; it is not clinically validated.
 
+### Changed
+
+- Desktop builds leave out Triton (about 0.9 GB with Linux torch wheels). It
+  only serves `torch.compile`; TotalSegmentator GPU inference runs without it.
+  Windows and macOS torch wheels never shipped it.
+
 ### Fixed
 
 - In Screw MPR the status bar now names the screw you move to; it kept saying

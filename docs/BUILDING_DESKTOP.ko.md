@@ -80,6 +80,34 @@ dist/PedicleScrewSimulator.app/Contents/MacOS/PedicleScrewSimulator --self-check
 
 라벨은 하드코딩하지 않고 모델 자체의 `dataset.json`에서 실행 시점에 읽어오므로, 세부영역 이름을 알아볼 수 있는 nnU-Net 체크포인트라면 어떤 것이든 올바르게 인식됩니다. 메모리 요구량은 TotalSegmentator의 `3d_fullres` 설정과 비슷하며 GPU를 권장합니다. 2단계 실패는 기존 TotalSegmentator 결과를 막지 않습니다. 라이선스는 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)를 참고하십시오.
 
+## 패키지 크기
+
+패키지 대부분은 프로그램이 아니라 GPU 분할 런타임입니다. Linux 개발 환경에서
+측정한 값입니다(torch 2.14 + CUDA 13, 2026-10-30).
+
+| 구성 | 크기 |
+|:--|--:|
+| CUDA 라이브러리(`nvidia/*`: cu13, cuDNN, NCCL, cuSPARSELt, NVSHMEM) | 3.2 GB |
+| `torch` | 1.2 GB |
+| `triton`(Linux 전용, **빌드에서 제외**) | 0.9 GB |
+| VTK + SimpleITK + PyQt6 + SciPy + NumPy | 약 1.25 GB |
+| 프로그램 코드 | 수 MB |
+| TotalSegmentator 가중치(처음 사용할 때 다운로드, 패키지에 미포함) | 0.16–1.4 GB |
+
+- 패키지는 GPU 추론만 대상으로 합니다. CPU 전용 빌드는 CUDA 라이브러리가 빠지지만
+  분할이 몇 분 걸리므로 제공하지 않습니다.
+- NCCL, cuSPARSELt, NVSHMEM은 다중 GPU용처럼 보이지만 `libtorch_cuda`가 직접
+  링크합니다. 빼면 torch가 로드되지 않습니다.
+- Triton은 `torch.compile` 전용입니다. Triton 없이 TotalSegmentator GPU 추론이
+  동작하는 것을 확인했습니다. Windows와 macOS torch wheel에는 원래 없습니다.
+- 가중치는 task별로 처음 실행할 때 받습니다(`~/.totalsegmentator`). 사용자가 돌린
+  task만 공간을 차지합니다. 전체 `total` task는 다섯 part(약 1.2 GB)가 모두 필요하고,
+  fast 모드는 159 MB 모델 하나면 됩니다.
+- 소스가 `import vtk` 대신 필요한 `vtkmodules.*`만 불러오면(7개 파일) VTK를
+  약 100–200 MB로 줄일 수 있습니다. 아직 하지 않았습니다.
+- PyTorch를 ONNX Runtime으로 바꾸면 가장 많이 줄지만, nnU-Net 전처리·후처리를
+  다시 구현해야 하므로 의도적으로 하지 않습니다.
+
 ## 로그 위치
 
 - macOS: `~/Library/Logs/PedicleScrewSimulator/app.log`
