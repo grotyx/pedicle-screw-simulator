@@ -1,14 +1,20 @@
-# Handover — 2026-10-18 (Windows → Linux)
+# Handover — 2026-10-18 (Windows → Linux), 2026-10-31 갱신
 
 다음 컴퓨터(Linux)에서 이어서 작업할 사람/에이전트를 위한 인수인계 메모입니다.
 저장소 규칙은 `AGENTS.md`(Claude 는 `CLAUDE.md` → `@AGENTS.md`)가 우선합니다.
 
 ## 1. 현재 상태
 
-- 최신 릴리스: **v0.2.5** (2026-10-02). `main` = `dc91bf1`, 태그 `v0.2.5`, GitHub Release "Latest".
-  - 테스트 1860 passed / 2 skipped, ruff clean, CI(Tests)·데스크톱 빌드(Windows x64, macOS arm64) 통과.
-- 모든 작업은 커밋·푸시됨. 진행 중인 작업 없음. `CHANGELOG*.md` 의 `[Unreleased]` 는 비어 있음.
-- 남은 브랜치: `grotyx/review-fixes` (origin 에 있음, main 에 없는 커밋 13개 — 일부러 남김. 지우지 말 것).
+- 최신 릴리스: **v0.2.5** (2026-10-02, 태그 `v0.2.5`). 그 뒤 작업은 아직 릴리스 전.
+- `main` = `98f5008` (2026-10-30, `grotyx/reference-compare-surface-hu` 를 `--no-ff` merge, 푸시됨).
+  - 들어간 기능: 기준 계획 비교, surface HU, undo/redo, Virtual X-ray, Screw MPR 가이드 핸들,
+    post-op CT 스크류 추출(Tools > Extract Screws from Post-op CT). 내용은 `CHANGELOG*.md` `[Unreleased]`.
+  - merge 전 테스트 2014 passed / 1 skipped, ruff clean.
+- merge 이후 작업 트리 변경(2026-10-31, 커밋 안 함): 데스크톱 빌드에서 Triton 제외
+  (`packaging/PedicleScrewSimulator.spec`, `tests/test_packaging.py`), changelog 쌍, BUILDING_DESKTOP 쌍
+  "Package size" 절, 이 문서. 테스트 2015 passed / 1 skipped.
+- 남은 브랜치: `grotyx/review-fixes`(일부러 남김, 지우지 말 것), `grotyx/reference-compare-surface-hu`
+  (merge 됨, 로컬·origin 에 남아 있음 — 삭제는 소유자 결정).
 
 ## 2. Linux 에서 시작하기
 
@@ -40,6 +46,13 @@ git diff --check
 - 재계획: "Replace planned screws?" 확인창, (level, side) 단위로 교체, 새 계획 성공 후에만.
 - 골질 경고는 **Info** 등급 유지.
 - 계획 JSON 에는 Series UID 원문 대신 `series_uid_sha256`. DICOM 오류 로그는 예외 타입만(경로 정규식 마스킹은 환자 폴더명이 새어서 폐기).
+- 스크류 추출: head 는 항상 등쪽(LPS y 큰 쪽) 끝. 결과 grade 는 금속 인공물 때문에 참고용으로 표시.
+  추출 스크류의 Ped. 열은 비워 둠(금속 있는 척추경 폭 분석은 신뢰 불가).
+- **Rust 전면 재작성 안 함 (2026-10-30 검토).** 무거운 계산은 이미 numpy/VTK/SimpleITK(C/C++)가 하고,
+  UI(PyQt6)·3D(VTK)를 Rust 로 대체할 성숙한 라이브러리가 없으며, 용량·속도는 TotalSegmentator(torch+CUDA)가
+  좌우해서 얻는 게 거의 없음. 나중에 특정 함수가 느리면 그 함수만 PyO3 모듈로 바꾸는 방식만 고려
+  (후보: 스크류 추출 반경별 EDT 0.4–7 s, Virtual X-ray 투영). 먼저 프로파일링으로 확인할 것.
+- **분할은 GPU 전용.** CPU 전용 배포판 만들지 않음. **ONNX Runtime 전환 안 함**(nnU-Net 전·후처리 재구현 필요).
 - UI: A+C 워크스테이션(좌측 단계 레일, 3D 메인 + 썸네일 3개, 도구 독은 이미지 밖 별도 행), 그라데이션 최소.
 
 ## 4. 교훈
@@ -48,6 +61,9 @@ git diff --check
 - 오프스크린 VTK `grab()` 은 검은 화면. 스크린 캡처는 다른 창(실제 CT)을 찍을 위험 → 캡처 시 맨 위 고정 + 즉시 확인/삭제.
 - 전체 pytest 를 동시에 여러 개 돌리지 말 것(시그널 대기 플레이키).
 - QMessageBox 질문은 `setText` 에(macOS 는 창 제목을 무시 → v0.2.4 macOS 빌드 실패 사례).
+- 패키지 용량의 ~85% 는 torch+CUDA+가중치. `nccl`·`nvshmem`·`cusparselt` 는 `libtorch_cuda.so` 가 직접 링크해서
+  뺄 수 없음(`readelf -d` 로 확인). Triton 만 빼도 됨(GPU 추론 실측 확인). 자세한 표는 `docs/BUILDING_DESKTOP.md` "Package size".
+- TotalSegmentator 를 Python API 로 직접 부르는 스크립트는 `if __name__ == "__main__":` 필수(nnU-Net 작업자가 spawn).
 - `Agent(isolation="worktree")` 는 main 에서 분기. 스택 작업은 `git worktree add -b <branch> <path> <base>`.
 
 ## 5. 릴리스 절차 (검증됨)
@@ -69,4 +85,7 @@ git diff --check
 
 - 실제 CT 에서 `scripts/compare_planning_defaults.py` 실행(이전 vs 현재 기본값 비교) — 소유자가 직접.
 - USER_GUIDE 5.4 의 표본 수치는 0.2.4 이전 기본값 기준(본문에 날짜 표기됨) — 새로 측정해 갱신 가능.
-- 남은 브랜치 `grotyx/review-fixes` 정리 여부 결정.
+- 남은 브랜치 `grotyx/review-fixes`, `grotyx/reference-compare-surface-hu` 정리 여부 결정.
+- VTK 용량 축소: 소스 7곳의 `import vtk` 를 필요한 `vtkmodules.*` 로 바꾸면 565 MB → 약 100–200 MB 예상(미측정).
+- 스크류 추출 남은 과제: 반경별 EDT 속도, op05 에서 8개 중 1개 놓침, ball-head entry 오차 약 2.85 mm.
+- v0.2.6 릴리스(위 5번 절차).
