@@ -3539,6 +3539,13 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        if self._screw_extraction_ctrl.is_running:
+            self.statusbar.showMessage(
+                "Screw extraction is still running — close again once it stops"
+            )
+            event.ignore()
+            return
+
         if self._auto_placement_ctrl.is_running:
             self._auto_placement_ctrl.request_cancel()
             self.statusbar.showMessage(

@@ -44,13 +44,20 @@ def ui_main_window(monkeypatch, qtbot, tmp_path):
     return window
 
 
-def test_menu_action_adds_extracted_screws_to_the_plan(ui_main_window, monkeypatch):
+def _extract(window, qtbot):
+    """Trigger the menu action and wait for the worker thread to deliver."""
+    window._extract_screws_action.trigger()
+    qtbot.waitUntil(lambda: not window._screw_extraction_ctrl.is_running, timeout=30000)
+    QApplication.processEvents()
+
+
+def test_menu_action_adds_extracted_screws_to_the_plan(ui_main_window, qtbot, monkeypatch):
     window = ui_main_window
     points = _grid()
     image = _phantom([_screw(points, LEFT_HEAD), _screw(points, RIGHT_HEAD)])
     monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: image)
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
 
     screws = window._tool_ctrl.screw_tool.get_screws()
     assert len(screws) == 2
@@ -62,9 +69,10 @@ def test_menu_action_adds_extracted_screws_to_the_plan(ui_main_window, monkeypat
     assert "2 screws" in window.statusbar.currentMessage()
 
 
-def test_menu_action_warns_when_no_screw_is_found(ui_main_window, monkeypatch):
+def test_menu_action_warns_when_no_screw_is_found(ui_main_window, qtbot, monkeypatch):
     window = ui_main_window
-    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: _phantom([]))
+    empty = _phantom([])
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: empty)
     warnings = []
     monkeypatch.setattr(
         controller_module.QMessageBox,
@@ -72,7 +80,7 @@ def test_menu_action_warns_when_no_screw_is_found(ui_main_window, monkeypatch):
         lambda *args, **kwargs: warnings.append(args),
     )
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
 
     assert window._tool_ctrl.screw_tool.get_screws() == []
     assert len(warnings) == 1
@@ -100,13 +108,13 @@ def test_side_comes_from_the_vertebra_the_screw_is_in():
     assert side_of(None, (60.0, 5.0, 5.0), (52.0, 15.0, 5.0)) == ""
 
 
-def test_extraction_is_one_undo_step_and_reads_as_extracted(ui_main_window, monkeypatch):
+def test_extraction_is_one_undo_step_and_reads_as_extracted(ui_main_window, qtbot, monkeypatch):
     window = ui_main_window
     points = _grid()
     image = _phantom([_screw(points, LEFT_HEAD), _screw(points, RIGHT_HEAD)])
     monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: image)
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
     window.screw_list_widget.setCurrentRow(0)
     assert "Extracted" in window.selected_screw_source.text()
 
@@ -116,7 +124,7 @@ def test_extraction_is_one_undo_step_and_reads_as_extracted(ui_main_window, monk
     assert not window._undo_action.isEnabled()
 
 
-def test_a_ct_the_extractor_cannot_read_warns_instead_of_raising(ui_main_window, monkeypatch):
+def test_a_ct_the_extractor_cannot_read_warns_instead_of_raising(ui_main_window, qtbot, monkeypatch):
     window = ui_main_window
     image = _phantom([])
     image.SetDirection((0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0))
@@ -128,15 +136,16 @@ def test_a_ct_the_extractor_cannot_read_warns_instead_of_raising(ui_main_window,
         lambda *args, **kwargs: warnings.append(args),
     )
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
 
     assert window._tool_ctrl.screw_tool.get_screws() == []
     assert len(warnings) == 1 and "direction" in warnings[0][2]
 
 
-def test_an_extraction_failure_warns_instead_of_escaping_the_slot(ui_main_window, monkeypatch):
+def test_an_extraction_failure_warns_instead_of_escaping_the_slot(ui_main_window, qtbot, monkeypatch):
     window = ui_main_window
-    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: _phantom([]))
+    empty = _phantom([])
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: empty)
 
     def boom(_image):
         raise MemoryError("out of memory")
@@ -147,25 +156,57 @@ def test_an_extraction_failure_warns_instead_of_escaping_the_slot(ui_main_window
         controller_module.QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args)
     )
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
 
     assert len(warnings) == 1
     assert window._tool_ctrl.screw_tool.get_screws() == []
 
 
-def test_a_bloomed_diameter_is_clamped_to_the_supported_range(ui_main_window, monkeypatch):
+def test_a_bloomed_diameter_is_clamped_to_the_supported_range(ui_main_window, qtbot, monkeypatch):
     from src.core.screw_extraction import ExtractedScrew, ScrewExtraction
     from src.utils.constants import MAX_SCREW_DIAMETER
 
     window = ui_main_window
-    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: _phantom([]))
+    empty = _phantom([])
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: empty)
     found = ExtractedScrew((0.0, 60.0, 110.0), (0.0, 20.0, 110.0), 8.8, 40.0, 900, 0.9, "head at the wider end")
     monkeypatch.setattr(
         controller_module, "extract_screws", lambda _image: ScrewExtraction([found], "1 screw(s) found")
     )
 
-    window._extract_screws_action.trigger()
+    _extract(window, qtbot)
 
     screw = window._tool_ctrl.screw_tool.get_screws()[0]
     assert screw.diameter == MAX_SCREW_DIAMETER
     assert any("8.8 mm" in w for w in screw.warnings)
+
+
+def test_extracted_screws_say_their_grade_is_only_indicative(ui_main_window, qtbot, monkeypatch):
+    window = ui_main_window
+    points = _grid()
+    image = _phantom([_screw(points, LEFT_HEAD)])
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: image)
+
+    _extract(window, qtbot)
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert controller_module.POSTOP_GRADE_WARNING in screw.warnings
+
+
+def test_a_result_for_a_ct_that_was_replaced_meanwhile_is_dropped(ui_main_window, qtbot, monkeypatch):
+    window = ui_main_window
+    points = _grid()
+    images = [_phantom([_screw(points, LEFT_HEAD)])]
+    monkeypatch.setattr(window.volume_manager, "get_sitk_image", lambda: images[-1])
+    real = controller_module.extract_screws
+
+    def slow_extract(image):
+        images.append(_phantom([]))   # another study loads while extraction runs
+        return real(image)
+
+    monkeypatch.setattr(controller_module, "extract_screws", slow_extract)
+
+    _extract(window, qtbot)
+
+    assert window._tool_ctrl.screw_tool.get_screws() == []
+    assert "discarded" in window.statusbar.currentMessage()

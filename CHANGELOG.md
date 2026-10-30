@@ -47,10 +47,12 @@ current version; every other place the version appears is derived from it.
   changing its diameter, and accepting an automatic plan (one step per
   batch). The last 50 steps are kept; a new study or a loaded plan clears
   them. Measurements and segmentation edits are not included.
-- Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, subtraction of the thicker bloomed rods and tulips or millimetre-based erosion, shape and front-to-back checks) and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other. Check each against the images; it is not clinically validated.
+- Tools > Extract Screws from Post-op CT: finds the screws implanted in the loaded CT (metal threshold, subtraction of the thicker bloomed rods and tulips or millimetre-based erosion, shape and front-to-back checks) in the background and adds them to the plan as editable `extracted` screws that are graded, drawn, and listed like any other; their grade is marked indicative, since metal artefact skews it. Check each against the images; it is not clinically validated.
 
 ### Fixed
 
+- In Screw MPR the status bar now names the screw you move to; it kept saying
+  "screw #1" after selecting another screw.
 - Linux (X11): the 3D view and the three MPR views no longer stay black.
   The panes were created without a parent and briefly opened as separate
   windows, so their VTK surfaces never reached the main window.

@@ -332,6 +332,7 @@ class ScrewMPRController:
             except ValueError:
                 self.exit()
                 return
+            self._window.statusbar.showMessage(f"Screw MPR active for screw #{row + 1}")
         self.refresh_selected_screw()
         self.refresh_controls()
 
@@ -392,6 +393,7 @@ class ScrewMPRController:
             except ValueError:
                 self.exit()
                 return
+            self._window.statusbar.showMessage(f"Screw MPR active for screw #{row + 1}")
         self.refresh_selected_screw()
         self.refresh_controls()
 

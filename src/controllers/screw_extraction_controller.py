@@ -10,8 +10,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtWidgets import QMessageBox
 
 from src.core.screw_extraction import extract_screws
 from src.models.screw import Screw
@@ -46,14 +46,47 @@ def side_from_segmentation(grader, entry, target, centres=None) -> str:
     return "left" if entry[0] > centre_x else "right"
 
 
+#: Shown under an extracted screw's grade, which the post-op CT itself skews.
+POSTOP_GRADE_WARNING = (
+    "Grade is indicative only: metal artefact distorts the post-op "
+    "segmentation and blooming widens the measured screw"
+)
+
+
+class ScrewExtractionThread(QThread):
+    """Runs :func:`extract_screws` off the GUI thread (0.4-7 s on real CTs)."""
+
+    extracted = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, ct_image):
+        super().__init__()
+        self._ct_image = ct_image
+
+    def run(self):
+        try:
+            self.extracted.emit(extract_screws(self._ct_image))
+        except Exception as exc:
+            logger.exception("Screw extraction failed")
+            self.failed.emit(f"{exc}.")
+
+
 class ScrewExtractionController:
     """Runs screw extraction on the loaded CT and adds the result to the plan."""
 
     def __init__(self, volume_manager: VolumeManager, main_window):
         self._vm = volume_manager
         self._window = main_window
+        self._thread = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
 
     def run_extraction(self) -> None:
+        if self.is_running:
+            self._window.statusbar.showMessage("Screw extraction is already running")
+            return
         ct_image = self._vm.get_sitk_image()
         if ct_image is None:
             QMessageBox.warning(
@@ -61,19 +94,28 @@ class ScrewExtractionController:
             )
             return
 
-        # Synchronous: 0.4-5 s on real post-op CTs (512 x 512, 0.35-1 mm slices).
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            result = extract_screws(ct_image)
-        except Exception as exc:
-            logger.exception("Screw extraction failed")
-            QMessageBox.warning(
-                self._window, "Cannot Extract Screws", f"{exc}."
-            )
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._window.statusbar.showMessage("Extracting screws from the CT...")
+        thread = ScrewExtractionThread(ct_image)
+        thread.extracted.connect(lambda result: self._on_extracted(ct_image, result))
+        thread.failed.connect(self._on_failed)
+        thread.finished.connect(self._release_thread)
+        self._thread = thread
+        thread.start()
 
+    def _release_thread(self) -> None:
+        if self._thread is not None and not self._thread.isRunning():
+            self._thread.deleteLater()
+            self._thread = None
+
+    def _on_failed(self, message: str) -> None:
+        self._window.statusbar.showMessage("Screw extraction failed")
+        QMessageBox.warning(self._window, "Cannot Extract Screws", message)
+
+    def _on_extracted(self, ct_image, result) -> None:
+        if self._vm.get_sitk_image() is not ct_image:
+            # Another study was loaded meanwhile: these screws belong to the old one.
+            self._window.statusbar.showMessage("Screw extraction discarded: the CT changed")
+            return
         if not result.screws:
             self._window.statusbar.showMessage("Screw extraction: no screws found")
             QMessageBox.warning(
@@ -104,7 +146,8 @@ class ScrewExtractionController:
                 warnings=[
                     f"Extracted from post-op CT ({found.reason}, confidence "
                     f"{found.confidence:.1f}, measured {found.diameter_mm:.1f} mm "
-                    "wide); check against the images"
+                    "wide); check against the images",
+                    POSTOP_GRADE_WARNING,
                 ],
             )
             screw_tool.evaluate_screw(screw)
