@@ -10,7 +10,7 @@
   - 들어간 기능: 기준 계획 비교, surface HU, undo/redo, Virtual X-ray, Screw MPR 가이드 핸들,
     post-op CT 스크류 추출(Tools > Extract Screws from Post-op CT). 내용은 `CHANGELOG*.md` `[Unreleased]`.
   - merge 전 테스트 2014 passed / 1 skipped, ruff clean.
-- merge 이후 작업 트리 변경(2026-10-31, 커밋 안 함): 데스크톱 빌드에서 Triton 제외
+- 2026-10-31 `grotyx/package-size-notes` merge: 데스크톱 빌드에서 Triton 제외
   (`packaging/PedicleScrewSimulator.spec`, `tests/test_packaging.py`), changelog 쌍, BUILDING_DESKTOP 쌍
   "Package size" 절, 이 문서. 테스트 2015 passed / 1 skipped.
 - 남은 브랜치: `grotyx/review-fixes`(일부러 남김, 지우지 말 것), `grotyx/reference-compare-surface-hu`
