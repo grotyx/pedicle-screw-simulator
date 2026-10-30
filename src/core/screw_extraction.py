@@ -2,13 +2,13 @@
 
 Metal is thresholded.  On real CTs blooming makes the rods and tulips thicker
 than the shafts, so the thick metal (deeper than a radius, grown back by it)
-is subtracted at growing radii and the freed shafts are fitted.  When that
-finds nothing (screws thicker than their rod, as in a clean phantom), the
-metal is instead eroded by growing radii until each screw breaks away and is
+is subtracted at growing radii and the freed shafts are fitted.  Metal that
+subtraction left untouched (screws thicker than their rod, as in a clean
+phantom) is instead eroded by growing radii until each screw breaks away and is
 grown back.  All distances are millimetres, so the anisotropic voxel grid of
 an axial series does not bias them.  A piece is kept if its shape fits a
 pedicle screw: elongated, 20-70 mm long, 3-10 mm thick, thin tip, front to
-back; pieces on one axis are joined.
+back; nearby pieces on one axis are joined.
 
 A kept piece is measured in millimetres:
 
@@ -19,10 +19,10 @@ A kept piece is measured in millimetres:
   a touching neighbour adds, which a maximum would not.
 * **Direction** -- a pedicle screw runs mainly front to back; a piece whose
   axis is mostly craniocaudal or transverse is a rod or cross-link.
-* **Head** -- the end with the larger cross-section (the tulip or the head
-  sphere).  When neither end is clearly wider, the dorsal end (larger LPS
-  ``y``) is taken as the head, because pedicle screws are inserted from the
-  back; such a screw is reported with lower confidence.
+* **Head** -- the dorsal end (larger LPS ``y``), because pedicle screws are
+  inserted from the back.  A wider dorsal end (the tulip or the head sphere)
+  confirms it; a piece with no wider end is reported with lower confidence,
+  and one wider at the front end is not a screw.
 * **Entry** -- where the shaft leaves the head, so a tulip does not count
   towards the screw length; **target** -- the tip.  A shaft freed by
   subtraction lost its head, so its entry is the dorsal end, walked back over
@@ -123,31 +123,26 @@ def extract_screws(
     ]
     remaining = metal.copy()
     screws: List[ExtractedScrew] = []
-    objects = 0
     for radius in THICK_RADII_MM:
         core = remaining & (depth > radius)
         if not core.any():
             break
         reach = ndimage.distance_transform_edt(~core, sampling=sampling)
-        shafts = remaining & (reach > radius + max(sampling))
-        labels, _count = ndimage.label(shafts, structure=np.ones((3, 3, 3)))
-        for index, box in enumerate(ndimage.find_objects(labels), start=1):
-            if box is None:
-                continue
-            component = labels[box] == index
-            screw = _fit_screw(component, box, origin, spacing_xyz)
-            if screw is None:
-                continue
-            screws.append(
-                _restore_neck(
-                    screw, metal, depth, origin, spacing_xyz, radius + max(sampling)
-                )
-            )
-            remaining[box][component] = False
+        removed = radius + max(sampling)
+        _take_pieces(
+            remaining & (reach > removed), remaining, screws, origin, spacing_xyz,
+            lambda screw, removed=removed: _restore_neck(
+                screw, metal, depth, origin, spacing_xyz, removed
+            ),
+        )
 
-    # Erosion only when subtraction found nothing: after it, erosion splits
-    # the leftover metal into screw-length fragments.
-    for radius in EROSION_RADII_MM if not screws else ():
+    if screws:
+        # Erode only metal that subtraction left untouched: inside a construct
+        # it already took apart, erosion splits the leftovers into fragments.
+        labels, _count = ndimage.label(metal, structure=np.ones((3, 3, 3)))
+        remaining &= ~np.isin(labels, np.unique(labels[metal & ~remaining]))
+    objects = 0
+    for radius in EROSION_RADII_MM:
         core = remaining & (depth > radius)
         if not core.any():
             break
@@ -157,18 +152,9 @@ def extract_screws(
             pieces = remaining & (reach <= radius + max(sampling))
         else:
             pieces = remaining
-        labels, count = ndimage.label(pieces, structure=np.ones((3, 3, 3)))
+        count = _take_pieces(pieces, remaining, screws, origin, spacing_xyz)
         if radius == 0:
             objects = count
-        for index, box in enumerate(ndimage.find_objects(labels), start=1):
-            if box is None:
-                continue
-            component = labels[box] == index
-            screw = _fit_screw(component, box, origin, spacing_xyz)
-            if screw is None:
-                continue
-            screws.append(screw)
-            remaining[box][component] = False
 
     screws = _merge_collinear(screws)
     if not screws:
@@ -181,25 +167,35 @@ def extract_screws(
         )
     return ScrewExtraction(screws=screws, reason=f"{len(screws)} screw(s) found")
 
+def _take_pieces(pieces, remaining, screws, origin, spacing_xyz, finish=None) -> int:
+    """Fit every connected piece; claim the screws.  Returns the piece count."""
+    labels, count = ndimage.label(pieces, structure=np.ones((3, 3, 3)))
+    for index, box in enumerate(ndimage.find_objects(labels), start=1):
+        if box is None:
+            continue
+        component = labels[box] == index
+        screw = _fit_screw(component, box, origin, spacing_xyz, head_dorsal=finish is not None)
+        if screw is None:
+            continue
+        screws.append(finish(screw) if finish else screw)
+        remaining[box][component] = False
+    return count
 
 
 def _restore_neck(
     screw, metal, depth, origin, spacing_xyz, removed_mm: float
 ) -> ExtractedScrew:
-    """Orient a shaft freed by subtraction and give back its neck.
+    """Give a shaft freed by subtraction back its neck.
 
-    The head went with the thick metal, so the wide-end rule saw nothing: a
-    pedicle screw enters from the back (larger LPS y).  Subtraction also took
-    the shaft within ``removed_mm`` of the head; the entry walks back along
-    the axis, at most that far, through metal no deeper than the shaft.
+    Subtraction took the shaft within ``removed_mm`` of the head as well; the
+    entry walks back along the axis, at most that far, through metal no
+    deeper than the shaft (so it stops where a head starts).
     """
     entry = np.asarray(screw.entry_lps, dtype=np.float64)
     target = np.asarray(screw.target_lps, dtype=np.float64)
-    if entry[1] < target[1]:
-        entry, target = target, entry
     axis = (entry - target) / np.linalg.norm(entry - target)
     step = 0.25
-    limit = screw.diameter_mm / 2.0 + float(spacing_xyz.max())
+    limit = screw.diameter_mm / 2.0 + 0.5 * float(spacing_xyz.max())
     for _ in range(int(removed_mm / step)):
         candidate = entry + axis * step
         index = np.round((candidate - origin) / spacing_xyz).astype(int)[::-1]
@@ -211,16 +207,15 @@ def _restore_neck(
     return replace(
         screw,
         entry_lps=tuple(float(v) for v in entry),
-        target_lps=tuple(float(v) for v in target),
         length_mm=float(np.linalg.norm(entry - target)),
-        confidence=0.8,
-        reason="shaft freed from the rod and tulip; entry at the dorsal end",
     )
 
 
 #: Two pieces this close to one line are one screw split in two (coarse CT).
 MERGE_ANGLE_DEG = 10.0
 MERGE_OFFSET_MM = 3.0
+#: ... and no further apart along it than this.
+MERGE_GAP_MM = 10.0
 
 
 def _merge_collinear(screws: List[ExtractedScrew]) -> List[ExtractedScrew]:
@@ -230,7 +225,7 @@ def _merge_collinear(screws: List[ExtractedScrew]) -> List[ExtractedScrew]:
         for k, kept in enumerate(merged):
             a = np.asarray(kept.entry_lps)
             axis = np.asarray(kept.target_lps) - a
-            axis /= np.linalg.norm(axis)
+            axis = axis / np.linalg.norm(axis)
             other = np.asarray(screw.target_lps) - np.asarray(screw.entry_lps)
             cos = abs(float(np.dot(axis, other))) / float(np.linalg.norm(other))
             if cos < np.cos(np.radians(MERGE_ANGLE_DEG)):
@@ -240,8 +235,12 @@ def _merge_collinear(screws: List[ExtractedScrew]) -> List[ExtractedScrew]:
             if max(offsets) > MERGE_OFFSET_MM:
                 continue
             # Span both pieces along the kept axis, entry at the dorsal end.
-            ts = [0.0, float(np.linalg.norm(np.asarray(kept.target_lps) - a))]
-            ts += [float(np.dot(p - a, axis)) for p in ends]
+            kept_ts = [0.0, float(np.linalg.norm(np.asarray(kept.target_lps) - a))]
+            other_ts = [float(np.dot(p - a, axis)) for p in ends]
+            gap = max(min(other_ts) - max(kept_ts), min(kept_ts) - max(other_ts))
+            ts = kept_ts + other_ts
+            if gap > MERGE_GAP_MM or max(ts) - min(ts) > MAX_LENGTH_MM:
+                continue
             lo, hi = a + axis * min(ts), a + axis * max(ts)
             entry, target = (lo, hi) if lo[1] >= hi[1] else (hi, lo)
             merged[k] = replace(
@@ -259,9 +258,16 @@ def _merge_collinear(screws: List[ExtractedScrew]) -> List[ExtractedScrew]:
 
 
 def _fit_screw(
-    component: np.ndarray, box, origin: np.ndarray, spacing_xyz: np.ndarray
+    component: np.ndarray,
+    box,
+    origin: np.ndarray,
+    spacing_xyz: np.ndarray,
+    head_dorsal: bool = False,
 ) -> Optional[ExtractedScrew]:
-    """Measure one connected piece of metal; ``None`` if it is not a screw."""
+    """Measure one connected piece of metal; ``None`` if it is not a screw.
+
+    ``head_dorsal``: the head was subtracted, so take the dorsal end.
+    """
     voxel_mm3 = float(np.prod(spacing_xyz))
     count = int(component.sum())
     if not MIN_VOLUME_MM3 <= count * voxel_mm3 <= MAX_VOLUME_MM3:
@@ -281,14 +287,17 @@ def _fit_screw(
     end = max(3, int(round(0.15 * n)))
     low_end, high_end = float(areas[:end].mean()), float(areas[-end:].mean())
 
-    if max(low_end, high_end) >= 1.3 * min(low_end, high_end):
-        head_low = low_end > high_end
-        confidence, how = 0.9, "head at the wider end"
+    # Pedicle screws are inserted from the back: the head is the dorsal
+    # (posterior, +y) end.  A wider dorsal end confirms it.
+    head_low = centre[1] + axis[1] * t.min() > centre[1] + axis[1] * t.max()
+    head_area = low_end if head_low else high_end
+    if head_dorsal:
+        confidence, how = 0.8, (
+            "shaft freed from thicker metal (head, tulip or rod); entry at the dorsal end"
+        )
+    elif head_area >= 1.3 * (high_end if head_low else low_end):
+        confidence, how = 0.9, "head at the wider dorsal end"
     else:
-        # Neither end is clearly wider: take the dorsal (posterior, +y) end.
-        y_low = centre[1] + axis[1] * t.min()
-        y_high = centre[1] + axis[1] * t.max()
-        head_low = y_low > y_high
         confidence, how = 0.6, (
             "no wider head found, head assumed at the dorsal end; "
             "may be a rod or connector piece"

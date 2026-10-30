@@ -61,7 +61,7 @@ class ScrewExtractionController:
             )
             return
 
-        # Synchronous: ~0.4 s on a 512 x 512 x 300 volume at 0.7 mm, ~1 s at 0.4 mm.
+        # Synchronous: 0.4-5 s on real post-op CTs (512 x 512, 0.35-1 mm slices).
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             result = extract_screws(ct_image)

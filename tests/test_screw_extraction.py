@@ -252,3 +252,68 @@ def test_two_pieces_on_one_axis_are_joined_into_one_screw():
     assert joined.entry_lps[1] == pytest.approx(60.0, abs=0.1)
     assert joined.target_lps[1] == pytest.approx(12.0, abs=0.6)
     assert joined.length_mm == pytest.approx(48.0, abs=0.6)
+
+
+def test_screws_away_from_a_bloomed_construct_are_still_found_by_erosion():
+    # Subtraction frees the bloomed screw; the separate rod-joined pair with no
+    # tulips still needs erosion, which must not be skipped for it.
+    points = _grid()
+    bloomed = np.array([-10.0, 65.0, 112.0])
+    pair = (np.array([20.0, 65.0, 112.0]), np.array([45.0, 65.0, 112.0]))
+    rod = _cylinder(points, pair[0] - AXIS * 3.0, pair[1] - AXIS * 3.0, 5.5)
+    image = _phantom(
+        [
+            _screw(points, bloomed, diameter=6.0),
+            _tulip(points, bloomed),
+            _screw(points, pair[0]),
+            _screw(points, pair[1]),
+            rod,
+        ]
+    )
+
+    extraction = extract_screws(image)
+
+    assert len(extraction.screws) == 3, extraction.reason
+    for head in (bloomed, *pair):
+        screw = _match(extraction.screws, head)
+        assert np.linalg.norm(np.asarray(screw.entry_lps) - head) <= 3.0
+
+
+def test_ball_headed_screw_freed_by_subtraction_keeps_its_length():
+    # The 9 mm head is subtracted; walking the entry back must stop near the
+    # neck instead of running through the head (it used to overshoot ~4 mm).
+    # Depth barely separates a 9 mm head from a 6.5 mm shaft, hence 3 mm.
+    points = _grid()
+    head = np.linalg.norm(points - (LEFT_HEAD - AXIS * 3.5), axis=-1) <= 4.5
+    image = _phantom([_screw(points, LEFT_HEAD), head])
+
+    extraction = extract_screws(image)
+
+    assert len(extraction.screws) == 1, extraction.reason
+    screw = extraction.screws[0]
+    assert np.linalg.norm(np.asarray(screw.entry_lps) - LEFT_HEAD) <= 3.0
+    assert screw.length_mm == pytest.approx(SCREW_L, abs=3.0)
+    assert "rod and tulip" not in screw.reason
+
+
+def test_pieces_on_one_axis_but_far_apart_are_not_joined():
+    from src.core.screw_extraction import ExtractedScrew, _merge_collinear
+
+    # Integer coordinates on purpose: the merge must not divide in place.
+    near = ExtractedScrew((0, 60, 100), (0, 35, 100), 6.0, 25.0, 500, 0.9, "a")
+    far = ExtractedScrew((0, 0, 100), (0, -25, 100), 6.0, 25.0, 500, 0.9, "b")
+
+    assert len(_merge_collinear([near, far])) == 2
+
+
+def test_piece_wider_at_its_front_end_is_not_a_screw():
+    # Pedicle screw heads are dorsal: a tulip pointing forwards is not one.
+    from src.core.screw_extraction import _fit_screw
+
+    points = _grid()
+    head = np.array([20.0, 20.0, 115.0])
+    axis = -AXIS
+    component = _screw(points, head, axis=axis) | _tulip(points, head, axis=axis)
+    box = tuple(slice(0, n) for n in SHAPE)
+
+    assert _fit_screw(component, box, np.asarray(ORIGIN), np.asarray(SPACING)) is None
