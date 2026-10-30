@@ -70,7 +70,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Triton only backs torch.compile; inference never imports it (Linux wheels).
+    excludes=["triton"],
     noarchive=False,
     optimize=0,
 )

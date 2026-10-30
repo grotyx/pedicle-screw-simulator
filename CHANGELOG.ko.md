@@ -45,6 +45,12 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
   계획을 불러오면 지워집니다. 측정과 분할 편집은 포함하지 않습니다.
 - Tools > Extract Screws from Post-op CT: 불러온 CT에 삽입된 스크류를 찾아(금속 임계값, 블루밍으로 더 두꺼워진 rod·tulip 빼기 또는 mm 단위 erosion, 형태·앞뒤 방향 검사) 백그라운드에서 수정 가능한 `extracted` 스크류로 계획에 추가합니다. 다른 스크류처럼 grade가 매겨지고 화면과 목록에 표시되며, 금속 인공물이 grade를 왜곡하므로 참고용으로 표시됩니다. 각 스크류는 영상과 대조해 확인해야 하며, 임상적으로 검증되지 않았습니다.
 
+### 변경
+
+- 데스크톱 빌드에서 Triton을 뺍니다(Linux torch wheel 기준 약 0.9 GB).
+  `torch.compile` 전용이며, TotalSegmentator GPU 추론은 Triton 없이 동작합니다.
+  Windows와 macOS torch wheel에는 원래 들어 있지 않습니다.
+
 ### 수정
 
 - Screw MPR에서 다른 스크류를 선택해도 상태 표시줄이 "screw #1"에 머물던 문제를 고쳐, 이제 선택한 스크류 번호를 표시합니다.
