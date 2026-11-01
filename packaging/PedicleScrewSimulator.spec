@@ -19,7 +19,10 @@ datas = [
     (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
     (str(project_root / "VERSION"), "."),
     (str(project_root / "README.md"), "."),
+    # Window and taskbar icon, loaded by src.ui.main_window.app_icon().
+    (str(project_root / "packaging" / "icons" / "png"), "icons"),
 ]
+icon_dir = project_root / "packaging" / "icons"
 binaries = []
 hiddenimports = [
     "vtkmodules.qt.QVTKRenderWindowInteractor",
@@ -88,6 +91,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=str(icon_dir / "radwright-screw.ico"),
     disable_windowed_traceback=False,
     version=(
         windows_version_file
@@ -110,7 +114,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="PedicleScrewSimulator.app",
-        icon=None,
+        icon=str(icon_dir / "radwright-screw.icns"),
         bundle_identifier="me.sangmin.pedicle-screw-simulator",
         version=version,
         info_plist={

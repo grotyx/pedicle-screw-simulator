@@ -7,7 +7,7 @@
 | Platform | Output | Build environment |
 |---|---|---|
 | macOS Apple Silicon | `.app` inside a ZIP archive | macOS arm64 |
-| Windows x64 | `.exe` with its support folder inside a ZIP archive | Windows x64 |
+| Windows x64 | Installer (`…-Setup.exe` + `.bin` slices) and a portable ZIP | Windows x64 |
 
 PyInstaller is not a cross-compiler. Each package must be built on its target operating system.
 
@@ -24,7 +24,8 @@ The archive is written to `release/`. The app is unsigned and not notarized, so 
 
 ## Local Windows build
 
-Run in PowerShell with Python 3.12 installed:
+Run in PowerShell with Python 3.12 and [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed
+(`winget install JRSoftware.InnoSetup --scope user`):
 
 ```powershell
 py -3.12 -m venv venv
@@ -33,7 +34,45 @@ py -3.12 -m venv venv
 .\venv\Scripts\python.exe scripts\build_desktop.py
 ```
 
-The archive contains `PedicleScrewSimulator.exe` and its required `_internal` folder. Keep the complete folder together.
+`release\` then holds two outputs:
+
+- **Installer**: `PedicleScrewSimulator-<version>-Windows-x64-Setup.exe` with one or
+  more `…-Setup-N.bin` files beside it (the CUDA runtime makes the payload several GB,
+  so Inno Setup splits it). Keep them in one folder and run the `.exe`. It installs
+  per user into `%LOCALAPPDATA%\Programs\Pedicle Screw Simulator` without an
+  administrator prompt, adds Start menu entries (desktop shortcut optional) and an
+  entry under Settings > Apps for uninstalling. Running a newer installer upgrades
+  in place. Silent install: `…-Setup.exe /VERYSILENT`.
+- **Portable ZIP**: `PedicleScrewSimulator.exe` and its required `_internal` folder.
+  Keep the complete folder together.
+
+Pass `--no-installer` to build only the ZIP. The installer is not code-signed, so
+Windows SmartScreen may warn on first run (**More info** > **Run anyway**).
+
+## RadWright Screw artwork
+
+Brand assets live in `packaging/icons/`. The hand-written
+`radwright-screw.svg` is the 1024-unit master. The two self-contained SVG
+wordmarks use system sans fonts: `radwright-screw-wordmark.svg` for dark
+backgrounds and `radwright-screw-wordmark-light.svg` for white backgrounds.
+When editing the anatomy, keep the embedded icon geometry in both wordmarks
+in sync with the master.
+
+Rebuild the nine PNG sizes (16, 24, 32, 48, 64, 128, 256, 512, 1024),
+seven-frame Windows ICO, macOS ICNS, and contact sheet:
+
+```bash
+python -m pip install Pillow  # artwork tooling only
+python scripts/render_icons.py
+```
+
+The renderer uses the application's existing PyQt6 SVG support and works
+offscreen on Linux. No rasterizer dependency is added to the application.
+Run from any working directory; use `--output-dir <directory>` to export
+elsewhere. Review `packaging/icons/preview.png` after changes: it shows
+1024, 256, 64, 32, and 16 px icons on dark and white backgrounds, enlarged
+small-size samples, and both wordmarks. PNG corners remain transparent.
+System font choice can change wordmark appearance between machines.
 
 ## GitHub Actions
 
@@ -42,7 +81,7 @@ The **Build desktop packages** workflow builds:
 - Windows x64 on `windows-2025`
 - macOS Apple Silicon on `macos-15`
 
-Run it manually from the Actions tab or push a version tag such as `v0.2.5`. Download the resulting artifacts from the completed workflow run.
+Run it manually from the Actions tab or push a version tag such as `v0.2.6`. Download the resulting artifacts from the completed workflow run.
 
 ## Standalone feature scope
 
@@ -79,6 +118,36 @@ To use it from a source install:
 **Current limitation:** the Spine_Subregions release asset currently published upstream uses nnU-Net **v1**-style folder naming (`nnUNetTrainerV2__nnUNetPlansv2.1`), not the nnU-Net **v2** results layout shown above that this app's stage-2 runner expects. Until the weights are re-exported or converted for nnU-Net v2, pointing the **Model directory** field at that release's folder will not be recognized as a valid model, and the segmentation status line will read "pedicle model unavailable" rather than "pedicle model used".
 
 Labels are read from the model's own `dataset.json` at runtime rather than hard-coded, so any nnU-Net checkpoint using recognizable subregion names resolves correctly. Memory needs are similar to TotalSegmentator's `3d_fullres` configuration; a GPU is recommended. A stage-2 failure never blocks the underlying TotalSegmentator result. License: see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+## Publishing an update
+
+A Windows build also writes `release\update\`: one ZIP per layer and
+`components.json` (the same manifest is shipped inside the app folder).
+
+| Layer | Contents | Changes when |
+|:--|:--|:--|
+| `cuda` | `_internal\torch\lib` (CUDA, cuDNN DLLs) | torch is upgraded |
+| `runtime` | every other package under `_internal` | a dependency changes |
+| `app` | the executable (our code) and loose files | every release |
+
+Each layer is named by a hash of its files, so publishing skips layers the server
+already has and the app downloads only layers whose hash changed. Upload with:
+
+```powershell
+.\venv\Scripts\python.exe -m pip install boto3
+.\venv\Scripts\python.exe scripts\publish_update.py release\update --downloads (Get-ChildItem release\*.exe, release\*.bin, release\*.zip) --dry-run
+.\venv\Scripts\python.exe scripts\publish_update.py release\update --downloads (Get-ChildItem release\*.exe, release\*.bin, release\*.zip)
+```
+
+It writes to the `spinemetrics-dl` R2 bucket under `radwright-screw/`, served at
+`https://dl.spinemetrics.sangmin.me/radwright-screw/`. `--downloads` puts the installer
+`.exe` + `.bin` and the ZIPs under `downloads/<version>/` (everything is hosted on R2;
+GitHub limits files to 2 GB). Credentials come from
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID` or
+`%USERPROFILE%\.spinemetrics\r2.env` (never commit it). `latest/components.json` is
+uploaded last, so clients never see a release with missing layers. To roll back, copy
+`versions/<old>/components.json` over `latest/components.json`. Set `PSS_UPDATE_URL` to
+test against another server, or `PSS_NO_UPDATE=1` to turn the check off.
 
 ## Package size
 

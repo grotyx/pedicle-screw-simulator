@@ -4,11 +4,12 @@ import functools
 import logging
 import math
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
-from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtGui import QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -49,6 +50,7 @@ from src.controllers.screw_mpr_controller import (
 )
 from src.controllers.segmentation_controller import SegmentationController
 from src.controllers.tool_controller import ToolController
+from src.controllers.update_controller import UpdateController
 from src.controllers.view_controller import ViewController
 from src.utils.screw_metrics import (
     is_narrow_pedicle,
@@ -255,6 +257,7 @@ class MainWindow(QMainWindow):
         self._screw_mpr_ctrl = ScrewMPRController(self.volume_manager, self)
         self._screw_edit_ctrl = ScrewEditController(self.volume_manager, self)
         self._screw_extraction_ctrl = ScrewExtractionController(self.volume_manager, self)
+        self._update_ctrl = UpdateController(self)
 
         # load_planner_settings() runs before the status bar exists, so a
         # migration message waits here until _setup_statusbar can show it.
@@ -272,6 +275,7 @@ class MainWindow(QMainWindow):
 
         # Wire all signals to controllers
         self._connect_signals()
+        self._update_ctrl.schedule_startup_check()
 
     @staticmethod
     def _calculate_initial_window_size(
@@ -2351,6 +2355,9 @@ class MainWindow(QMainWindow):
         )
         help_menu.addAction(self._screw_mpr_help_action)
         help_menu.addSeparator()
+        self._check_updates_action = QAction("Check for Updates...", self)
+        self._check_updates_action.triggered.connect(lambda: self._update_ctrl.check())
+        help_menu.addAction(self._check_updates_action)
         self._about_action = QAction(f"About {__title__}", self)
         self._about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(self._about_action)
@@ -3546,6 +3553,13 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        if self._update_ctrl.is_running:
+            self.statusbar.showMessage(
+                "An update is downloading — close again once it finishes"
+            )
+            event.ignore()
+            return
+
         if self._auto_placement_ctrl.is_running:
             self._auto_placement_ctrl.request_cancel()
             self.statusbar.showMessage(
@@ -3568,6 +3582,7 @@ class MainWindow(QMainWindow):
             app.removeEventFilter(self)
 
         self._seg_ctrl.reset_state()
+        self._update_ctrl.launch_pending()
 
         event.accept()
 
@@ -3613,10 +3628,25 @@ class MainWindow(QMainWindow):
         self._seg_ctrl._last_segmentation_mask_path = value
 
 
+def app_icon() -> QIcon:
+    """The RadWright Screw icon, from the bundle or from packaging/icons in a source run."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = Path(sys._MEIPASS) / "icons"
+    else:
+        base = Path(__file__).resolve().parents[2] / "packaging" / "icons" / "png"
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        path = base / f"icon-{size}.png"
+        if path.is_file():
+            icon.addFile(str(path))
+    return icon
+
+
 def main():
     """Application entry point."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setWindowIcon(app_icon())
     settings = app_settings()
     saved_theme = settings.value(
         "appearance/theme",

@@ -470,7 +470,7 @@ def test_help_menu_exposes_about_credit(ui_main_window):
     )
     about_actions = [action.text() for action in help_action.menu().actions()]
 
-    assert "About Pedicle Screw Simulator" in about_actions
+    assert "About RadWright Screw" in about_actions
 
 
 def test_default_control_panel_expands_only_main_workflow(ui_main_window):
@@ -3398,3 +3398,11 @@ def test_replacing_a_hidden_reference_shows_the_new_one_and_ticks_show(
     assert window.viewer_3d.reference_visible is True
     window.reference_show_action.trigger()
     assert window.viewer_3d.reference_visible is False
+
+
+def test_window_icon_comes_from_the_radwright_screw_artwork():
+    from src.ui.main_window import app_icon
+
+    icon = app_icon()
+    assert not icon.isNull()
+    assert {size.width() for size in icon.availableSizes()} >= {16, 32, 256}

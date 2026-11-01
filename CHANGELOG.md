@@ -13,8 +13,14 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-01
+
 ### Added
 
+- RadWright Screw brand assets: an axial vertebra and paired cyan pedicle
+  screws, dark- and light-background SVG wordmarks, 16–1024 px PNGs,
+  Windows ICO, macOS ICNS, and a reproducible visual review sheet. Rebuild
+  exports with `python scripts/render_icons.py`.
 - Plan page: **Insert at crosshair — Left / Right** places a screw at the MPR
   crosshair in one click, using the Manual Screw Defaults. The defaults gain
   convergence and craniocaudal angles, and all four are remembered.
@@ -51,6 +57,17 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- The app is now called **RadWright Screw** on screen, in the installer and in reports.
+  Internal names (`PedicleScrewSimulator.exe`, settings and log folders) are unchanged,
+  so existing settings carry over.
+- The installed Windows app updates itself: it checks for a new version shortly after
+  start-up (or via Help > Check for Updates...), downloads only the layers that changed
+  (application, Python runtime, CUDA runtime), and installs them when you close the app,
+  restoring the previous version if anything fails.
+- The Windows build now also produces an installer (Inno Setup): per-user install
+  under `%LOCALAPPDATA%\Programs` without an administrator prompt, Start menu
+  entries, an optional desktop shortcut, uninstall from Settings > Apps, and
+  in-place upgrades. The portable ZIP is still built.
 - Desktop builds leave out Triton (about 0.9 GB with Linux torch wheels). It
   only serves `torch.compile`; TotalSegmentator GPU inference runs without it.
   Windows and macOS torch wheels never shipped it.
@@ -634,7 +651,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3

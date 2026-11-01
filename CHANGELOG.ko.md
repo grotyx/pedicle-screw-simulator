@@ -13,8 +13,14 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-01
+
 ### 추가
 
+- RadWright Screw 브랜드 자산: 축상 척추와 청록색 척추경 스크류 한 쌍을
+  그린 아이콘, 어두운 배경·밝은 배경용 SVG 워드마크, 16–1024 px PNG,
+  Windows ICO, macOS ICNS와 재생성 가능한 검토용 이미지가 추가되었습니다.
+  `python scripts/render_icons.py`로 내보내기 파일을 다시 생성합니다.
 - Plan 페이지: **Insert at crosshair — Left / Right**로 Manual Screw Defaults를
   써서 MPR 십자선 위치에 클릭 한 번으로 스크류를 놓습니다. 기본값에
   convergence와 craniocaudal 각도가 추가되었고, 네 값 모두 기억됩니다.
@@ -47,6 +53,14 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ### 변경
 
+- 화면, 설치 프로그램, 보고서에 표시되는 이름을 **RadWright Screw**로 바꿨습니다.
+  내부 이름(`PedicleScrewSimulator.exe`, 설정·로그 폴더)은 그대로라 기존 설정이 유지됩니다.
+- 설치한 Windows 앱이 스스로 업데이트합니다. 시작 직후(또는 Help > Check for Updates...)
+  새 버전을 확인하고, 바뀐 레이어(프로그램, Python 런타임, CUDA 런타임)만 받아 앱을 닫을 때
+  설치하며, 실패하면 이전 버전으로 되돌립니다.
+- Windows 빌드가 설치 프로그램(Inno Setup)도 만듭니다. 관리자 승인 없이
+  `%LOCALAPPDATA%\Programs`에 사용자별로 설치되고, 시작 메뉴 항목, 선택형 바탕화면
+  바로가기, 설정 > 앱에서 제거, 같은 자리 업데이트를 지원합니다. 포터블 ZIP도 계속 만듭니다.
 - 데스크톱 빌드에서 Triton을 뺍니다(Linux torch wheel 기준 약 0.9 GB).
   `torch.compile` 전용이며, TotalSegmentator GPU 추론은 Triton 없이 동작합니다.
   Windows와 macOS torch wheel에는 원래 들어 있지 않습니다.
@@ -589,7 +603,8 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="title desc">
+  <title id="title">RadWright Screw</title>
+  <desc id="desc">An axial lumbar vertebra in blue (body, pedicles, triangular canal, transverse processes, laminae and spinous process) and two cyan pedicle screws with blunt tips, diagonal threads and open tulip heads. The embedded small-icon variant simplifies the anatomy for 16, 24 and 32 pixel exports.</desc>
+
+  <defs>
+    <!-- Small-size artwork omits transverse and spinous processes. Its wider
+         canal, flatter body and thicker screws keep the anatomy distinct. -->
+    <g id="small-icon">
+      <rect width="1024" height="1024" rx="225" fill="#0B1220"/>
+      <path fill="#60A5FA" fill-rule="evenodd" d="
+        M512 200
+        C380 200 262 236 250 330
+        C242 400 280 450 318 470
+        L330 640 C360 700 440 730 480 740
+        L490 860 Q494 880 512 880 Q530 880 534 860
+        L544 740 C584 730 664 700 694 640
+        L706 470 C744 450 782 400 774 330
+        C762 236 644 200 512 200 Z
+        M512 500
+        C452 500 410 522 408 560
+        C406 610 456 650 512 668
+        C568 650 618 610 616 560
+        C614 522 572 500 512 500 Z"/>
+      <g transform="translate(266 754) rotate(22)" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-48 48 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V48" fill="none" stroke="#0B1220" stroke-width="58"/>
+        <path d="M-42 -48 V-390 C-42 -418 -22 -440 0 -440 C22 -440 42 -418 42 -390 V-48 Z" fill="#22D3EE" stroke="#0B1220" stroke-width="24"/>
+        <path d="M-28 -364 L28 -342 M-28 -270 L28 -248 M-28 -176 L28 -154" fill="none" stroke="#0B1220" stroke-width="14"/>
+        <path d="M-48 48 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V48" fill="none" stroke="#22D3EE" stroke-width="34"/>
+      </g>
+      <g transform="translate(758 754) rotate(-22)" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M-48 48 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V48" fill="none" stroke="#0B1220" stroke-width="58"/>
+        <path d="M-42 -48 V-390 C-42 -418 -22 -440 0 -440 C22 -440 42 -418 42 -390 V-48 Z" fill="#22D3EE" stroke="#0B1220" stroke-width="24"/>
+        <path d="M-28 -342 L28 -364 M-28 -248 L28 -270 M-28 -154 L28 -176" fill="none" stroke="#0B1220" stroke-width="14"/>
+        <path d="M-48 48 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V48" fill="none" stroke="#22D3EE" stroke-width="34"/>
+      </g>
+    </g>
+  </defs>
+
+  <g id="standard-icon">
+    <rect width="1024" height="1024" rx="225" fill="#0B1220"/>
+
+    <!-- Anterior body, paired pedicles, posterior arch and spinous process.
+         The canal is a true cutout in the anatomy, clear of both screws. -->
+    <path fill="#60A5FA" fill-rule="evenodd" d="
+      M512 168
+      C400 168 286 196 262 290
+      C246 360 268 430 330 462
+      L336 560
+      C300 566 220 566 168 572 Q140 576 142 600 Q146 622 174 622
+      C230 622 300 628 340 640
+      C380 672 440 700 476 716
+      L494 880 Q498 906 512 906 Q526 906 530 880
+      L548 716
+      C584 700 644 672 684 640
+      C724 628 794 622 850 622 Q878 622 882 600 Q884 576 856 572
+      C804 566 724 566 688 560
+      L694 462
+      C756 430 778 360 762 290
+      C738 196 624 168 512 168 Z
+      M512 478
+      C452 478 412 500 410 540
+      C408 590 460 640 512 660
+      C564 640 616 590 614 540
+      C612 500 572 478 512 478 Z"/>
+
+    <!-- Navy keylines keep the cyan screws legible against blue anatomy.
+         Local screw axes point anteriorly; the two tips stay separated. -->
+    <!-- Blunt tapered shafts carry inset diagonal thread lines. The tulip
+         heads open posteriorly, away from the shaft and vertebral body. -->
+    <g transform="translate(292 742) rotate(20)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-48 44 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V44" fill="none" stroke="#0B1220" stroke-width="50"/>
+      <path d="M-32 -48 V-428 C-32 -448 -16 -470 0 -470 C16 -470 32 -448 32 -428 V-48 Z" fill="#22D3EE" stroke="#0B1220" stroke-width="22"/>
+      <path d="M-24 -400 L24 -382 M-24 -352 L24 -334 M-24 -304 L24 -286 M-24 -256 L24 -238 M-24 -208 L24 -190 M-24 -160 L24 -142 M-24 -112 L24 -94" fill="none" stroke="#0B1220" stroke-width="12"/>
+      <path d="M-48 44 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V44" fill="none" stroke="#22D3EE" stroke-width="28"/>
+    </g>
+    <g transform="translate(732 742) rotate(-20)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-48 44 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V44" fill="none" stroke="#0B1220" stroke-width="50"/>
+      <path d="M-32 -48 V-428 C-32 -448 -16 -470 0 -470 C16 -470 32 -448 32 -428 V-48 Z" fill="#22D3EE" stroke="#0B1220" stroke-width="22"/>
+      <path d="M-24 -382 L24 -400 M-24 -334 L24 -352 M-24 -286 L24 -304 M-24 -238 L24 -256 M-24 -190 L24 -208 M-24 -142 L24 -160 M-24 -94 L24 -112" fill="none" stroke="#0B1220" stroke-width="12"/>
+      <path d="M-48 44 V-12 Q-48 -44 -16 -44 H16 Q48 -44 48 -12 V44" fill="none" stroke="#22D3EE" stroke-width="28"/>
+    </g>
+  </g>
+</svg>

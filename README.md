@@ -1,10 +1,11 @@
-# Pedicle Screw Simulator
+# RadWright Screw
 
 [English](README.md) | [한국어](README.ko.md)
 
-Research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
+RadWright Screw (formerly Pedicle Screw Simulator; internal names such as the
+`PedicleScrewSimulator.exe` file and settings folders are unchanged) is research desktop software for DICOM CT visualization, vertebral segmentation, and interactive pedicle screw planning with synchronized MPR and 3D review.
 
-**Version:** 0.2.5
+**Version:** 0.2.6
 
 **Primary tested environment:** macOS, Python 3.12
 
@@ -109,7 +110,7 @@ python -m pip install -r requirements-lock.txt
 The GitHub **Build desktop packages** workflow creates separate archives for:
 
 - macOS Apple Silicon (`.app`)
-- Windows x64 (`.exe` with its support folder)
+- Windows x64: an installer (per-user, no administrator prompt) and a portable ZIP
 
 See [Desktop Build Guide](docs/BUILDING_DESKTOP.md). The macOS package is not Apple-notarized yet, so Gatekeeper may require right-clicking the app and selecting **Open**.
 
@@ -205,7 +206,7 @@ data/README.md   local-data privacy instructions; no clinical data
 
 If this software supports academic work, use GitHub's **Cite this repository** function or the metadata in [`CITATION.cff`](CITATION.cff):
 
-> Park S-M. Pedicle Screw Simulator (Version 0.2.5) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
+> Park S-M. Pedicle Screw Simulator (Version 0.2.6) [Computer software]. 2026. https://github.com/grotyx/pedicle-screw-simulator
 
 A peer-reviewed software-paper DOI can be added as the preferred citation after publication without replacing the versioned software citation.
 
