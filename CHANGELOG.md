@@ -13,6 +13,8 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-02
+
 ### Changed
 
 - The Windows build ships the two TotalSegmentator models Spine Only uses
@@ -660,7 +662,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
