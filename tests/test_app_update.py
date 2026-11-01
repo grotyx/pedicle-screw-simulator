@@ -110,3 +110,28 @@ def test_apply_script_waits_for_the_app_and_restores_on_failure(tmp_path):
     assert "Wait-Process -Id 4242" in text
     assert "backup" in text and "catch" in text
     assert "DisplayVersion" in text
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda m: m.update(version="0.2.6'; Remove-Item C:\\"),
+    lambda m: m["layers"]["app"]["files"].append("../evil.dll"),
+    lambda m: m["layers"]["app"]["files"].append("C:/Windows/evil.dll"),
+    lambda m: m["layers"]["app"]["files"].append("_internal\\evil.dll"),
+    lambda m: m["layers"]["app"].update(archive="../../outside.zip"),
+])
+def test_unsafe_manifest_is_rejected(tmp_path, mutate):
+    manifest = app_update.build_layers(_fake_dist(tmp_path / "d"), "0.2.6", tmp_path / "out")
+    mutate(manifest)
+    with pytest.raises(app_update.UpdateError):
+        app_update.validate_manifest(manifest)
+
+
+def test_archive_must_hold_exactly_the_listed_files(tmp_path):
+    local = app_update.build_layers(_fake_dist(tmp_path / "old"), "0.2.5", tmp_path / "old-out")
+    remote = app_update.build_layers(_fake_dist(tmp_path / "new", app_text="app-2"), "0.2.6", tmp_path / "out")
+    archive = tmp_path / "out" / remote["layers"]["app"]["archive"]
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr("../escape.txt", "x")
+    plan = app_update.plan_update(local, remote)
+    with pytest.raises(app_update.UpdateError):
+        app_update.stage_update(plan, local, remote, [archive], tmp_path / "staging")

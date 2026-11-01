@@ -68,6 +68,11 @@ version with a higher number.
 - **Code signing.** The installer and app are unsigned, so Windows SmartScreen warns on
   first run (**More info** > **Run anyway**). A code-signing certificate removes the
   warning.
+- **Signed update manifest.** The app trusts `latest/components.json` because it comes over
+  HTTPS from our own domain, and checks each layer's SHA-256 against it. Anyone who gets the
+  R2 write keys could therefore push code to every installed copy. Signing the manifest with
+  an offline Ed25519 key (public key built into the app) and Authenticode-signing the binaries
+  closes that; until then keep `~/.spinemetrics/r2.env` on the build PC only.
 - **First R2 upload.** Nothing has been published under `radwright-screw/` yet; until
   then the update check finds nothing and stays silent.
 - **Logo.** Done: `packaging/icons/` (RadWright family style, an axial vertebra with two

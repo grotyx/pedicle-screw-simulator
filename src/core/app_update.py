@@ -41,6 +41,9 @@ UNINSTALL_KEY = (
 )
 CUDA_PREFIX = "_internal/torch/lib/"
 _CHUNK = 1 << 20
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+[A-Za-z0-9.-]*")
+_ARCHIVE_RE = re.compile(r"layers/[a-z]+-[0-9a-f]{16}\.zip")
+_PART_RE = re.compile(r"[A-Za-z0-9 ._+()@-]+")
 
 
 class UpdateError(RuntimeError):
@@ -116,6 +119,37 @@ def build_layers(dist: Path, version: str, out: Path) -> Dict:
     return manifest
 
 
+def _safe_rel(rel) -> bool:
+    """A relative POSIX path that cannot leave the application folder."""
+    if not isinstance(rel, str) or not rel:
+        return False
+    parts = rel.split("/")
+    return all(part not in ("", ".", "..") and _PART_RE.fullmatch(part) for part in parts)
+
+
+def validate_manifest(manifest) -> Dict:
+    """Reject a manifest whose version, archive names or file paths are unsafe.
+
+    The server's manifest drives file writes, deletes and the apply script,
+    so nothing from it may point outside the install or staging folders.
+    """
+    try:
+        if not _VERSION_RE.fullmatch(manifest["version"]):
+            raise UpdateError(f"Update manifest has an invalid version: {manifest['version']!r}")
+        for name, layer in manifest["layers"].items():
+            if name not in ("cuda", "runtime", "app"):
+                raise UpdateError(f"Update manifest has an unknown layer: {name!r}")
+            if not _ARCHIVE_RE.fullmatch(layer["archive"]):
+                raise UpdateError(f"Update manifest has an invalid archive: {layer['archive']!r}")
+            bad = [rel for rel in layer["files"] if not _safe_rel(rel)]
+            if bad:
+                raise UpdateError(f"Update manifest has an unsafe path: {bad[0]!r}")
+            int(layer["size"]), str(layer["sha256"])
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise UpdateError(f"Update manifest is malformed: {exc}") from exc
+    return manifest
+
+
 def _version_key(version: str):
     match = re.match(r"(\d+)\.(\d+)\.(\d+)(.*)", version.strip())
     if not match:
@@ -153,9 +187,10 @@ def fetch_manifest(base_url: str, timeout: float = 15.0) -> Dict:
     url = f"{base_url}/latest/{MANIFEST_NAME}"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            manifest = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise UpdateError(f"Could not read the update manifest: {exc}") from exc
+    return validate_manifest(manifest)
 
 
 def download_layer(
@@ -211,10 +246,13 @@ def stage_update(plan: UpdatePlan, local: Dict, remote: Dict, archives: List[Pat
     files_dir.mkdir(parents=True)
     copy: List[str] = []
     remove: List[str] = []
+    validate_manifest(remote)
     for name, archive in zip(plan.layers, archives, strict=True):
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(files_dir)
         new_files = remote["layers"][name]["files"]
+        with zipfile.ZipFile(archive) as zf:
+            if sorted(zf.namelist()) != sorted(new_files):
+                raise UpdateError(f"{Path(archive).name} does not match its file list")
+            zf.extractall(files_dir)
         copy += new_files
         old_files = local.get("layers", {}).get(name, {}).get("files", [])
         remove += sorted(set(old_files) - set(new_files))
@@ -234,6 +272,14 @@ $log = Join-Path $staging 'apply.log'
 try { Wait-Process -Id __PID__ -Timeout 300 -ErrorAction SilentlyContinue } catch {}
 Start-Sleep -Seconds 1
 $plan = Get-Content -LiteralPath (Join-Path $staging 'apply.json') -Raw | ConvertFrom-Json
+$root = [System.IO.Path]::GetFullPath($install).TrimEnd('\') + '\'
+foreach ($rel in @($plan.remove) + @($plan.files)) {
+    if (-not [System.IO.Path]::GetFullPath((Join-Path $install $rel)).StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        "failed: unsafe path $rel" | Out-File -LiteralPath $log -Encoding utf8
+        Start-Process -FilePath $exe
+        exit 1
+    }
+}
 $backup = Join-Path $staging 'backup'
 $moved = New-Object System.Collections.ArrayList
 $copied = New-Object System.Collections.ArrayList
@@ -277,7 +323,11 @@ def write_apply_script(staging: Path, install_dir: Path, pid: int, exe: Path) ->
     failed update leaves the previous version runnable.
     """
     def quote(value) -> str:
-        return str(value).replace("'", "''")
+        # PowerShell also ends a single-quoted string at the typographic quotes U+2018-U+201B.
+        text = str(value)
+        for mark in ("'", "\u2018", "\u2019", "\u201a", "\u201b"):
+            text = text.replace(mark, mark * 2)
+        return text
 
     script = (
         _APPLY_SCRIPT.replace("__STAGING__", quote(staging))
