@@ -13,6 +13,8 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-01
+
 ### Added
 
 - RadWright Screw brand assets: an axial vertebra and paired cyan pedicle
@@ -649,7 +651,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.2...v0.2.3
