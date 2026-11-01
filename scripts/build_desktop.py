@@ -13,7 +13,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.core.app_update import build_layers  # noqa: E402
+
 SPEC = ROOT / "packaging" / "PedicleScrewSimulator.spec"
+INSTALLER_SCRIPT = ROOT / "packaging" / "PedicleScrewSimulator.iss"
 WINDOWS_VERSION_TEMPLATE = ROOT / "packaging" / "windows_version_info.template.txt"
 BUILD_DIR = ROOT / "build"
 DIST = ROOT / "dist"
@@ -137,11 +142,41 @@ def _archive_windows() -> Path:
 
     package_name = f"{PRODUCT}-{VERSION}-Windows-x64"
     _copy_metadata(source)
+    # Before zipping: this also drops components.json into the app folder,
+    # which the installed copy compares against the server to update itself.
+    build_layers(source, VERSION, RELEASE / "update")
     archive_base = RELEASE / package_name
     archive = Path(
         shutil.make_archive(str(archive_base), "zip", DIST, PRODUCT)
     )
     return archive
+
+
+def _find_iscc() -> Path | None:
+    candidates = [shutil.which("iscc"), shutil.which("ISCC")]
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        if base:
+            candidates.append(os.path.join(base, "Inno Setup 6", "ISCC.exe"))
+    return next((Path(c) for c in candidates if c and Path(c).is_file()), None)
+
+
+def _build_windows_installer() -> Path:
+    """Wrap the PyInstaller folder in an Inno Setup installer (Setup.exe + .bin slices)."""
+    iscc = _find_iscc()
+    if iscc is None:
+        raise FileNotFoundError("Inno Setup 6 (ISCC.exe) not found; install it or pass --no-installer.")
+    subprocess.run(
+        [
+            str(iscc),
+            f"/DAppVersion={VERSION}",
+            f"/DSourceDir={DIST / PRODUCT}",
+            f"/DOutputDir={RELEASE}",
+            str(INSTALLER_SCRIPT),
+        ],
+        check=True,
+    )
+    return RELEASE / f"{PRODUCT}-{VERSION}-Windows-x64-Setup.exe"
 
 
 def main() -> None:
@@ -150,6 +185,11 @@ def main() -> None:
         "--skip-build",
         action="store_true",
         help="Archive an existing dist output without rerunning PyInstaller.",
+    )
+    parser.add_argument(
+        "--no-installer",
+        action="store_true",
+        help="On Windows, build only the ZIP and skip the Inno Setup installer.",
     )
     args = parser.parse_args()
 
@@ -163,6 +203,8 @@ def main() -> None:
         archive = _archive_macos()
     elif sys.platform.startswith("win"):
         archive = _archive_windows()
+        if not args.no_installer:
+            print(f"Windows installer created: {_build_windows_installer()}")
     else:
         raise RuntimeError("Desktop packaging currently supports macOS and Windows.")
 

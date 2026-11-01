@@ -63,7 +63,19 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 
 ### Standalone macOS and Windows packages
 
-Standalone packages do not require a separate Python installation. Download the archive produced by the GitHub **Build desktop packages** workflow, extract the complete folder, and run the `.app` or `.exe`. Keep the Windows `_internal` folder beside the executable.
+Standalone packages do not require a separate Python installation. On Windows, run the
+installer (`…-Setup.exe`, with its `.bin` file beside it): it installs per user without an
+administrator prompt and adds RadWright Screw to the Start menu. The portable ZIP still
+works: extract the complete folder and keep `_internal` beside the executable. On macOS,
+extract the archive and run the `.app`.
+
+**Updates (installed Windows app).** About eight seconds after start-up the app checks for
+a newer version and asks before downloading. Only the parts that changed are fetched: an
+update that touches only the application is about 90 MB, while the 4 GB CUDA
+runtime is downloaded again only when it changes. The update installs when you close the
+app (or choose **Restart now**); if anything fails, the previous version is put back.
+**Help > Check for Updates...** checks on demand. The portable ZIP and source installs do
+not update themselves.
 
 The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The first automatic segmentation downloads the open `total` task model weights and later runs reuse the local cache. See [Desktop Build Guide](BUILDING_DESKTOP.md).
 

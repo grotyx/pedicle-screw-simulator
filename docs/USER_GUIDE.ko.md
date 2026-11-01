@@ -63,7 +63,16 @@ powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1 --test
 
 ### macOS·Windows 단독 실행 패키지
 
-Standalone 패키지는 Python을 별도로 설치하지 않아도 됩니다. GitHub의 **Build desktop packages** workflow에서 생성된 압축파일을 내려받아 전체 폴더를 해제한 후 `.app` 또는 `.exe`를 실행합니다. Windows에서는 실행 파일 옆의 `_internal` 폴더를 함께 보관해야 합니다.
+Standalone 패키지는 Python을 별도로 설치하지 않아도 됩니다. Windows에서는 설치 프로그램
+(`…-Setup.exe`와 그 옆의 `.bin` 파일)을 실행합니다. 관리자 승인 없이 사용자별로 설치되고
+시작 메뉴에 RadWright Screw가 생깁니다. 포터블 ZIP도 계속 쓸 수 있습니다. 전체 폴더를 해제하고
+실행 파일 옆에 `_internal` 폴더를 함께 두십시오. macOS에서는 압축을 풀고 `.app`을 실행합니다.
+
+**업데이트(설치한 Windows 앱).** 앱을 켜고 약 8초 뒤 새 버전을 확인하고, 내려받기 전에
+묻습니다. 바뀐 부분만 받습니다. 프로그램만 바뀐 업데이트는 약 90 MB이고, 4 GB인 CUDA
+런타임은 바뀔 때만 다시 받습니다. 업데이트는 앱을 닫을 때(또는 **Restart now**를 고르면 바로)
+설치되며, 실패하면 이전 버전으로 되돌립니다. **Help > Check for Updates...**로 직접 확인할 수
+있습니다. 포터블 ZIP과 소스 설치본은 스스로 업데이트하지 않습니다.
 
 Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니다. 첫 자동 분할 시 공개 `total` task 모델을 내려받고 이후에는 로컬 캐시를 재사용합니다. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
 

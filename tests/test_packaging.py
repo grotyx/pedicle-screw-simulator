@@ -262,3 +262,29 @@ def test_pyinstaller_spec_leaves_out_triton():
         / "PedicleScrewSimulator.spec"
     ).read_text(encoding="utf-8")
     assert 'excludes=["triton"]' in spec
+
+
+def test_windows_installer_installs_per_user_and_takes_its_version_from_the_build():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "packaging" / "PedicleScrewSimulator.iss").read_text(encoding="utf-8")
+    # Per-user install under %LOCALAPPDATA%\Programs: no UAC prompt.
+    assert "PrivilegesRequired=lowest" in script
+    assert "DefaultDirName={autopf}" in script
+    # VERSION stays the single source of truth; build_desktop.py passes it in.
+    assert "AppVersion={#AppVersion}" in script
+    assert "Source: \"{#SourceDir}\\*\"" in script
+    build_script = (root / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
+    assert "PedicleScrewSimulator.iss" in build_script
+    assert "/DAppVersion=" in build_script
+    workflow = (root / ".github" / "workflows" / "build-desktop.yml").read_text(encoding="utf-8")
+    assert "innosetup" in workflow
+    assert "release/*.exe" in workflow
+
+
+def test_builds_carry_the_radwright_screw_icon():
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "packaging" / "PedicleScrewSimulator.spec").read_text(encoding="utf-8")
+    assert "radwright-screw.ico" in spec and "radwright-screw.icns" in spec
+    assert 'project_root / "packaging" / "icons" / "png"' in spec
+    installer = (root / "packaging" / "PedicleScrewSimulator.iss").read_text(encoding="utf-8")
+    assert "SetupIconFile=icons\\radwright-screw.ico" in installer

@@ -35,7 +35,7 @@ def _read_version() -> str:
         return "0.0.0+unknown"
 
 
-__title__ = "Pedicle Screw Simulator"
+__title__ = "RadWright Screw"
 __version__ = _read_version()
 __author__ = "Sang-Min Park, MD, Ph.D."
 __department__ = "Spine Center and Department of Orthopaedic Surgery"

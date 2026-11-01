@@ -17,7 +17,7 @@ from src import __version__
 from src.utils.planning_io import _metric_number
 from src.utils.screw_metrics import UNKNOWN_TEXT, surface_hu_text
 
-TITLE = "Pedicle Screw Simulator — Planning report"
+TITLE = "RadWright Screw — Planning report"
 BANNER = (
     "RESEARCH USE ONLY — not a certified medical device; every value "
     "requires independent clinical review."

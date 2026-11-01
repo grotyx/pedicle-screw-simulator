@@ -1,8 +1,9 @@
-# Pedicle Screw Simulator
+# RadWright Screw
 
 [English](README.md) | [한국어](README.ko.md)
 
-DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
+RadWright Screw(이전 이름 Pedicle Screw Simulator. `PedicleScrewSimulator.exe` 파일과
+설정 폴더 같은 내부 이름은 그대로입니다)는 DICOM CT 영상 확인, 척추 자동 분할, 척추경 나사못 계획 및 MPR·3D 검토를 위한 연구용 데스크톱 프로그램입니다.
 
 **버전:** 0.2.5
 
@@ -109,7 +110,7 @@ python -m pip install -r requirements-lock.txt
 GitHub의 **Build desktop packages** workflow에서 다음 파일을 각각 생성합니다.
 
 - macOS Apple Silicon용 `.app`
-- Windows x64용 `.exe`와 지원 폴더
+- Windows x64용 설치 프로그램(사용자별 설치, 관리자 승인 불필요)과 포터블 ZIP
 
 [데스크톱 빌드 안내](docs/BUILDING_DESKTOP.ko.md)를 참고하십시오. 현재 macOS 앱은 Apple 공증을 받지 않았으므로 최초 실행 시 앱을 우클릭하고 **Open**을 선택해야 할 수 있습니다.
 
