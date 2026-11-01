@@ -13,6 +13,14 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### 변경
+
+- Windows 빌드에 Spine Only가 쓰는 TotalSegmentator 모델 두 개(척추, 6 mm
+  자르기 모델, 약 400 MB)를 넣었습니다. 기본 설정인 Spine Only + Accurate 분할은
+  내려받기도 인터넷 연결도 필요 없습니다. 전에는 Spine Only가 척추 part만 계산하는데도
+  첫 실행 때 `total` 다섯 part(약 1.4 GB)를 모두 받았습니다. Total task와 Fast 품질은
+  지금도 처음 쓸 때 모델을 내려받습니다.
+
 ## [0.2.6] - 2026-11-01
 
 ### 추가

@@ -114,7 +114,7 @@ The GitHub **Build desktop packages** workflow creates separate archives for:
 
 See [Desktop Build Guide](docs/BUILDING_DESKTOP.md). The macOS package is not Apple-notarized yet, so Gatekeeper may require right-clicking the app and selecting **Open**.
 
-Standalone packages include TotalSegmentator 2.12.0, PyTorch, and nnU-Net. No separate Python installation is required. The first automatic segmentation downloads the open `total` task model weights to the user's TotalSegmentator cache, so an internet connection and additional disk space are required once. Later runs reuse the cached models.
+Standalone packages include TotalSegmentator 2.12.0, PyTorch, and nnU-Net. No separate Python installation is required. The Windows build also includes the two models the default Spine Only segmentation uses, so it runs offline. The Total task, Fast quality and the macOS build download the open `total` task weights to the user's TotalSegmentator cache on first use, which needs an internet connection once; later runs reuse the cached models.
 
 ## Typical Workflow
 
@@ -197,7 +197,7 @@ data/README.md   local-data privacy instructions; no clinical data
 - Deformity, fracture, implants, artifacts, transitional anatomy, and poor segmentation may invalidate proposals.
 - Pedicle isthmus detection is geometric (coronal cross-section minimum on the TotalSegmentator mask) and not validated on deformity.
 - Standalone builds are provided for Apple Silicon macOS and Windows x64; Intel macOS and Linux packages are not provided.
-- TotalSegmentator is bundled in standalone builds, but its model weights are downloaded on first use and require substantial memory and disk space.
+- TotalSegmentator is bundled in standalone builds. Only the Spine Only models ship with the Windows build; other weights are downloaded on first use. Segmentation needs substantial memory and disk space.
 - The optional pedicle subregion model (nnU-Net pedicle/corpus/lamina label refinement) requires a source install with `nnunetv2`; standalone packages refuse it.
 - The currently published Spine_Subregions release uses an nnU-Net v1-style folder layout, not the nnU-Net v2 layout this app expects, so the model directory is not recognized until the weights are re-exported for nnU-Net v2.
 - Clinical accuracy, inter-observer agreement, and prospective outcomes have not been established.

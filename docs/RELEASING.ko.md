@@ -15,8 +15,8 @@ RadWright Screw(내부 이름 Pedicle Screw Simulator)의 한 버전이 `main`�
 | macOS Apple Silicon | `PedicleScrewSimulator-<버전>-macOS-arm64.zip` | 압축 해제 후 우클릭 > 열기 | 없음 |
 
 사용자에게 알릴 요구 사항: Windows 10/11 64비트, 최신 드라이버의 NVIDIA GPU(분할을 GPU로
-실행), 앱용 약 6 GB와 첫 분할 때 내려받는 모델 가중치용 최대 1.4 GB의 여유 공간, 첫 실행과
-업데이트를 위한 인터넷 연결.
+실행), 앱용 약 6.5 GB의 여유 공간(Spine Only 모델 포함), 업데이트를 위한 인터넷 연결.
+Total task나 Fast 품질을 처음 쓸 때만 모델을 더 내려받습니다(최대 1.4 GB).
 
 ## 배포 절차
 

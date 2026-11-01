@@ -86,7 +86,7 @@ GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.6` 같은 버전 tag
 
 Standalone 패키지에는 DICOM 로딩, 기본 및 screw 방향 MPR, 3D 렌더링, 수동 도구, 스크류 계획, 측정, TotalSegmentator 2.12.0, PyTorch, nnU-Net과 threshold fallback segmentation이 포함됩니다.
 
-모델 가중치는 ZIP 안에 넣지 않습니다. 첫 자동 분할 시 TotalSegmentator가 공개 `total` task 모델을 `~/.totalsegmentator/nnunet/results`에 내려받고 이후 실행에서 재사용합니다. 따라서 최초 실행에는 인터넷 연결, 추가 저장공간과 다운로드 시간이 필요합니다. Windows 패키지에는 PyTorch CUDA 12.8 실행환경이 포함되며 지원되는 NVIDIA GPU가 없으면 CPU로 자동 전환합니다.
+Windows 빌드에는 Spine Only가 쓰는 TotalSegmentator 모델 두 개(척추 part `Dataset292`, 6 mm 자르기 모델 `Dataset298`, 약 400 MB)가 `_internal/totalseg_weights`에 들어 있습니다. `scripts/build_desktop.py`가 빌드할 때 내려받고, Spine Only + Accurate 분할은 여기서 읽으므로 아무것도 내려받지 않습니다. Total task, Fast 품질, macOS 빌드는 처음 쓸 때 공개 가중치를 `~/.totalsegmentator/nnunet/results`에 내려받고 이후 재사용합니다. Windows 패키지에는 PyTorch CUDA 12.8 실행환경이 포함되며 지원되는 NVIDIA GPU가 없으면 CPU로 자동 전환합니다.
 
 GUI를 열지 않고 번들 상태를 검사할 수 있습니다.
 
@@ -160,7 +160,8 @@ R2 버킷 `spinemetrics-dl`의 `radwright-screw/` 아래에 올리고,
 | `triton`(Linux 전용, **빌드에서 제외**) | 0.9 GB |
 | VTK + SimpleITK + PyQt6 + SciPy + NumPy | 약 1.25 GB |
 | 프로그램 코드 | 수 MB |
-| TotalSegmentator 가중치(처음 사용할 때 다운로드, 패키지에 미포함) | 0.16–1.4 GB |
+| TotalSegmentator Spine Only 가중치(Windows 패키지에 포함) | 0.4 GB |
+| 그 밖의 TotalSegmentator 가중치(처음 사용할 때 다운로드) | 0.16–1.2 GB |
 
 - 패키지는 GPU 추론만 대상으로 합니다. CPU 전용 빌드는 CUDA 라이브러리가 빠지지만
   분할이 몇 분 걸리므로 제공하지 않습니다.
@@ -168,9 +169,10 @@ R2 버킷 `spinemetrics-dl`의 `radwright-screw/` 아래에 올리고,
   링크합니다. 빼면 torch가 로드되지 않습니다.
 - Triton은 `torch.compile` 전용입니다. Triton 없이 TotalSegmentator GPU 추론이
   동작하는 것을 확인했습니다. Windows와 macOS torch wheel에는 원래 없습니다.
-- 가중치는 task별로 처음 실행할 때 받습니다(`~/.totalsegmentator`). 사용자가 돌린
-  task만 공간을 차지합니다. 전체 `total` task는 다섯 part(약 1.2 GB)가 모두 필요하고,
-  fast 모드는 159 MB 모델 하나면 됩니다.
+- 그 밖의 가중치는 task별로 처음 실행할 때 받습니다(`~/.totalsegmentator`). 사용자가
+  돌린 task만 공간을 차지합니다. 전체 `total` task는 다섯 part(약 1.2 GB)가 모두 필요하고,
+  fast 모드는 159 MB 모델 하나면 됩니다. TotalSegmentator 2.12는 Spine Only에서도 다섯
+  part를 모두 받으려 하므로, 포함된 모델이 있으면 앱이 계산하지 않는 네 part를 건너뜁니다.
 - 소스가 `import vtk` 대신 필요한 `vtkmodules.*`만 불러오면(7개 파일) VTK를
   약 100–200 MB로 줄일 수 있습니다. 아직 하지 않았습니다.
 - PyTorch를 ONNX Runtime으로 바꾸면 가장 많이 줄지만, nnU-Net 전처리·후처리를

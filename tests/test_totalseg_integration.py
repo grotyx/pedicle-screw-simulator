@@ -2,6 +2,8 @@
 Tests for TotalSegmentator integration fallback behavior.
 """
 
+import importlib
+import inspect
 import os
 import sys
 import types
@@ -1470,3 +1472,73 @@ def test_exit_hook_kills_a_tracked_live_process():
         if child.poll() is None:
             child.kill()
             child.wait()
+
+
+def _fake_frozen_api(monkeypatch, tmp_path, bundle=totalseg.SPINE_TASK_IDS):
+    """Frozen app whose TotalSegmentator records what it saw at call time."""
+    seen = {}
+    fake_package = types.ModuleType("totalsegmentator")
+    fake_package.__path__ = []
+    fake_api = types.ModuleType("totalsegmentator.python_api")
+    fake_api.download_pretrained_weights = lambda task_id: seen.setdefault("downloaded", []).append(task_id)
+
+    def fake_totalsegmentator(input_path, output_path, **kwargs):
+        for task_id in (291, 292, 293, 294, 295, 298):  # what TotalSegmentator 2.12 asks for
+            fake_api.download_pretrained_weights(task_id)
+        seen["weights_path"] = os.environ.get("TOTALSEG_WEIGHTS_PATH")
+        os.environ["nnUNet_results"] = str(seen["weights_path"])  # as setup_nnunet() does
+        sitk.WriteImage(sitk.Image([2, 2, 2], sitk.sitkUInt8), str(output_path))
+
+    fake_api.totalsegmentator = fake_totalsegmentator
+    monkeypatch.setitem(sys.modules, "totalsegmentator", fake_package)
+    monkeypatch.setitem(sys.modules, "totalsegmentator.python_api", fake_api)
+    monkeypatch.setattr(totalseg.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(totalseg.sys, "_MEIPASS", str(tmp_path / "_internal"), raising=False)
+    monkeypatch.setattr(totalseg, "_ensure_torch_shm_executable", lambda: None)
+    monkeypatch.delenv("TOTALSEG_WEIGHTS_PATH", raising=False)
+    monkeypatch.setenv("nnUNet_results", "user-cache")
+    for task_id in bundle:
+        (tmp_path / "_internal" / "totalseg_weights" / f"Dataset{task_id}_x").mkdir(parents=True)
+    return seen, fake_api
+
+
+def test_spine_only_uses_bundled_weights_and_downloads_nothing_else(tmp_path, monkeypatch):
+    seen, fake_api = _fake_frozen_api(monkeypatch, tmp_path)
+    original = fake_api.download_pretrained_weights
+    totalseg.run_totalsegmentator(
+        sitk.Image([2, 2, 2], sitk.sitkInt16), str(tmp_path / "work"),
+        device="gpu", roi_subset=list(totalseg.SPINE_ROI_SUBSET),
+    )
+    assert seen["weights_path"] == str(tmp_path / "_internal" / "totalseg_weights")
+    assert seen["downloaded"] == [292, 298]
+    # Later runs (Total, Fast) see TotalSegmentator untouched again.
+    assert "TOTALSEG_WEIGHTS_PATH" not in os.environ
+    assert os.environ["nnUNet_results"] == "user-cache"
+    assert fake_api.download_pretrained_weights is original
+
+
+@pytest.mark.parametrize("roi_subset, fast, bundle", [
+    (None, False, (292, 298)),          # Total: needs all five parts
+    (["vertebrae_L4"], True, (292, 298)),  # Fast uses the 3 mm model, not bundled
+    (["vertebrae_L4"], False, ()),      # build without bundled weights
+    (["vertebrae_L4"], False, (292,)),  # damaged install: one model missing
+])
+def test_other_runs_use_totalsegmentator_defaults(tmp_path, monkeypatch, roi_subset, fast, bundle):
+    seen, _ = _fake_frozen_api(monkeypatch, tmp_path, bundle=bundle)
+    totalseg.run_totalsegmentator(
+        sitk.Image([2, 2, 2], sitk.sitkInt16), str(tmp_path / "work"),
+        device="gpu", roi_subset=roi_subset, fast=fast,
+    )
+    assert seen["weights_path"] is None
+    assert seen["downloaded"] == [291, 292, 293, 294, 295, 298]
+
+
+def test_spine_task_ids_match_the_installed_totalsegmentator():
+    """The bundle skips downloads by task id, so catch TotalSegmentator drift."""
+    api = pytest.importorskip("totalsegmentator.python_api")
+    source = inspect.getsource(api)
+    # The patch replaces this module-level name; a call through libs would bypass it.
+    assert "from totalsegmentator.libs import download_pretrained_weights" in source
+    assert "crop_model_task = 298" in source
+    assert '292: "class_map_part_vertebrae"' in inspect.getsource(
+        importlib.import_module("totalsegmentator.map_to_binary"))

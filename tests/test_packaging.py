@@ -288,3 +288,16 @@ def test_builds_carry_the_radwright_screw_icon():
     assert 'project_root / "packaging" / "icons" / "png"' in spec
     installer = (root / "packaging" / "PedicleScrewSimulator.iss").read_text(encoding="utf-8")
     assert "SetupIconFile=icons\\radwright-screw.ico" in installer
+
+
+def test_windows_build_bundles_only_the_spine_models(tmp_path, monkeypatch):
+    import scripts.build_desktop as build_desktop
+    from src.core.totalseg_integration import SPINE_TASK_IDS
+
+    runs = []
+    monkeypatch.setattr(build_desktop.subprocess, "run", lambda args, **kw: runs.append((args, kw)))
+    build_desktop._bundle_spine_weights(tmp_path / "app")
+    (args, kwargs), = runs
+    assert args[-len(SPINE_TASK_IDS):] == [str(task_id) for task_id in SPINE_TASK_IDS]
+    assert kwargs["env"]["TOTALSEG_WEIGHTS_PATH"] == str(tmp_path / "app" / "_internal" / "totalseg_weights")
+    assert kwargs["check"] is True
