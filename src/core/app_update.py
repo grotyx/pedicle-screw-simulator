@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from src import __version__
+
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "components.json"
@@ -183,10 +185,16 @@ def load_local_manifest(install_dir: Path) -> Optional[Dict]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _open(url: str, timeout: float):
+    # Cloudflare in front of R2 answers 403 to urllib's default "Python-urllib" agent.
+    request = urllib.request.Request(url, headers={"User-Agent": f"RadWright-Screw/{__version__}"})
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 def fetch_manifest(base_url: str, timeout: float = 15.0) -> Dict:
     url = f"{base_url}/latest/{MANIFEST_NAME}"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with _open(url, timeout) as response:
             manifest = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise UpdateError(f"Could not read the update manifest: {exc}") from exc
@@ -215,7 +223,7 @@ def download_layer(
     partial = target.with_suffix(".part")
     digest = hashlib.sha256()
     try:
-        with urllib.request.urlopen(f"{base_url}/{layer['archive']}", timeout=60) as response, \
+        with _open(f"{base_url}/{layer['archive']}", 60) as response, \
                 open(partial, "wb") as handle:
             for block in iter(lambda: response.read(_CHUNK), b""):
                 if cancelled and cancelled():

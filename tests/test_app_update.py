@@ -135,3 +135,23 @@ def test_archive_must_hold_exactly_the_listed_files(tmp_path):
     plan = app_update.plan_update(local, remote)
     with pytest.raises(app_update.UpdateError):
         app_update.stage_update(plan, local, remote, [archive], tmp_path / "staging")
+
+
+def test_requests_send_our_user_agent(tmp_path, monkeypatch):
+    """Cloudflare answers 403 to urllib's default "Python-urllib" agent."""
+    manifest = app_update.build_layers(_fake_dist(tmp_path / "a"), "0.2.5", tmp_path / "out")
+    agents = []
+    real_urlopen = app_update.urllib.request.urlopen
+
+    def spy(request, timeout=None):
+        agents.append(request.get_header("User-agent"))
+        return real_urlopen(request.full_url, timeout=timeout)
+
+    monkeypatch.setattr(app_update.urllib.request, "urlopen", spy)
+    (tmp_path / "out" / "latest").mkdir()
+    (tmp_path / "out" / "components.json").replace(tmp_path / "out" / "latest" / "components.json")
+    base = (tmp_path / "out").as_uri()
+    app_update.fetch_manifest(base)
+    app_update.download_layer(base, manifest["layers"]["app"], tmp_path / "dl")
+    assert len(agents) == 2
+    assert all(agent and agent.startswith("RadWright-Screw/") for agent in agents)
