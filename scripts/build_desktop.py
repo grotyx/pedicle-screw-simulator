@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.core.app_update import build_layers  # noqa: E402
+from src.core.totalseg_integration import SPINE_TASK_IDS  # noqa: E402
 
 SPEC = ROOT / "packaging" / "PedicleScrewSimulator.spec"
 INSTALLER_SCRIPT = ROOT / "packaging" / "PedicleScrewSimulator.iss"
@@ -135,6 +136,25 @@ def _archive_macos() -> Path:
     return archive
 
 
+def _bundle_spine_weights(app_dir: Path) -> None:
+    """Ship the Spine Only models so the first segmentation downloads nothing.
+
+    They land under ``_internal`` and so in the runtime update layer, which
+    only changes with the dependencies.
+    """
+    target = app_dir / "_internal" / "totalseg_weights"
+    env = dict(os.environ, TOTALSEG_WEIGHTS_PATH=str(target))
+    code = (
+        "import sys\n"
+        "from totalsegmentator.libs import download_pretrained_weights\n"
+        "for task_id in sys.argv[1:]:\n"
+        "    download_pretrained_weights(int(task_id))\n"
+    )
+    subprocess.run([sys.executable, "-c", code, *map(str, SPINE_TASK_IDS)], check=True, env=env)
+    # The weight archives carry a macOS resource-fork folder nobody reads.
+    shutil.rmtree(target / "__MACOSX", ignore_errors=True)
+
+
 def _archive_windows() -> Path:
     source = DIST / PRODUCT
     if not source.exists():
@@ -142,6 +162,7 @@ def _archive_windows() -> Path:
 
     package_name = f"{PRODUCT}-{VERSION}-Windows-x64"
     _copy_metadata(source)
+    _bundle_spine_weights(source)
     # Before zipping: this also drops components.json into the app folder,
     # which the installed copy compares against the server to update itself.
     build_layers(source, VERSION, RELEASE / "update")

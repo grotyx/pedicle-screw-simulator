@@ -13,6 +13,15 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Changed
+
+- The Windows build ships the two TotalSegmentator models Spine Only uses
+  (vertebrae and the 6 mm crop model, about 400 MB), so the default Spine
+  Only + Accurate segmentation needs no download or internet connection.
+  TotalSegmentator used to fetch all five `total` parts (about 1.4 GB) on
+  the first run even though Spine Only computes only the vertebrae part.
+  The Total task and Fast quality still download their models on first use.
+
 ## [0.2.6] - 2026-11-01
 
 ### Added

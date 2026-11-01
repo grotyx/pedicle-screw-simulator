@@ -114,7 +114,7 @@ GitHub의 **Build desktop packages** workflow에서 다음 파일을 각각 생�
 
 [데스크톱 빌드 안내](docs/BUILDING_DESKTOP.ko.md)를 참고하십시오. 현재 macOS 앱은 Apple 공증을 받지 않았으므로 최초 실행 시 앱을 우클릭하고 **Open**을 선택해야 할 수 있습니다.
 
-Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함되므로 Python을 별도로 설치할 필요가 없습니다. 첫 자동 분할 시 공개 `total` task 모델을 사용자 TotalSegmentator 캐시에 내려받기 때문에 최초 한 번은 인터넷 연결과 추가 저장공간이 필요합니다. 이후에는 캐시된 모델을 재사용합니다.
+Standalone 패키지에는 TotalSegmentator 2.12.0, PyTorch와 nnU-Net이 포함되므로 Python을 별도로 설치할 필요가 없습니다. Windows 빌드에는 기본 설정인 Spine Only 분할이 쓰는 모델 두 개도 들어 있어 인터넷 없이 실행됩니다. Total task, Fast 품질, macOS 빌드는 처음 쓸 때 공개 `total` task 모델을 사용자 TotalSegmentator 캐시에 내려받으므로 그때 한 번 인터넷 연결이 필요하고, 이후에는 캐시된 모델을 재사용합니다.
 
 ## 기본 사용 순서
 
@@ -197,7 +197,7 @@ data/README.md   로컬 데이터 보호 안내; 임상 데이터 없음
 - 변형, 골절, 삽입물, artifact, 이행성 척추 및 부정확한 segmentation은 제안을 무효화할 수 있습니다.
 - 척추경 협부(isthmus) 탐지는 기하학적 방식(TotalSegmentator mask의 coronal 단면 최소 면적 탐색)이며 변형 척추에서는 검증되지 않았습니다.
 - Standalone 빌드는 Apple Silicon macOS와 Windows x64용으로 제공하며 Intel macOS와 Linux 패키지는 제공하지 않습니다.
-- Standalone에 TotalSegmentator가 포함되지만 모델은 최초 사용 시 내려받으며 많은 메모리와 저장공간이 필요할 수 있습니다.
+- Standalone에 TotalSegmentator가 포함됩니다. Windows 빌드에는 Spine Only 모델만 들어 있고 그 밖의 모델은 처음 쓸 때 내려받습니다. 분할에는 많은 메모리와 저장공간이 필요할 수 있습니다.
 - 선택적 척추경 세부영역(subregion) 모델(nnU-Net 기반 pedicle/corpus/lamina 라벨 정밀화)은 `nnunetv2`가 설치된 소스 환경이 필요하며, standalone 패키지에서는 지원하지 않습니다.
 - 현재 공개된 Spine_Subregions release는 이 프로그램이 기대하는 nnU-Net v2 폴더 구조가 아니라 nnU-Net v1 방식의 폴더 구조를 사용하므로, 가중치가 nnU-Net v2용으로 재출력되기 전까지는 model directory가 인식되지 않습니다.
 - 임상 정확도, 관찰자 간 일치도 및 전향적 결과는 아직 확립되지 않았습니다.

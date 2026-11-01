@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +50,12 @@ SPINE_ROI_SUBSET = (
     "vertebrae_T2",
     "vertebrae_T1",
 )
+
+
+#: TotalSegmentator models a Spine Only run needs: the vertebrae part and the
+#: 6 mm model it crops with. The Windows build bundles exactly these.
+SPINE_TASK_IDS = (292, 298)
+_FROZEN_RUN_LOCK = threading.Lock()
 
 
 class SegmentationCancelled(RuntimeError):
@@ -529,18 +536,57 @@ def _run_frozen_totalsegmentator(
             "The packaged TotalSegmentator runtime could not be loaded."
         ) from exc
 
-    totalsegmentator(
-        str(input_path),
-        str(output_path),
-        task=task,
-        ml=True,
-        device=device,
-        roi_subset=roi_subset,
-        fast=fast,
-        force_split=force_split,
-        quiet=True,
-        nr_thr_saving=1,
+    def run() -> None:
+        totalsegmentator(
+            str(input_path),
+            str(output_path),
+            task=task,
+            ml=True,
+            device=device,
+            roi_subset=roi_subset,
+            fast=fast,
+            force_split=force_split,
+            quiet=True,
+            nr_thr_saving=1,
+        )
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    bundled = Path(meipass or ".") / "totalseg_weights"
+    spine_only = bool(roi_subset) and set(roi_subset) <= set(SPINE_ROI_SUBSET)
+    # A damaged install missing one model must fall back to the user's cache;
+    # downloading into the install folder fails for non-admin users.
+    complete = meipass is not None and all(
+        any(bundled.glob(f"Dataset{task_id}_*")) for task_id in SPINE_TASK_IDS
     )
+    # The patch below swaps process-wide state, so a run left over from a
+    # cancelled segmentation must finish before the next one starts.
+    with _FROZEN_RUN_LOCK:
+        if not (spine_only and not fast and task == "total" and complete):
+            run()
+            return
+
+        # TotalSegmentator downloads all five "total" parts before it picks the
+        # one holding the vertebrae, so point it at the bundled models and skip
+        # the rest; Total and Fast runs still download into the user's cache.
+        import totalsegmentator.python_api as api
+
+        download = api.download_pretrained_weights
+        # setup_nnunet() derives the nnUNet_* paths from TOTALSEG_WEIGHTS_PATH.
+        keys = ("TOTALSEG_WEIGHTS_PATH", "nnUNet_raw", "nnUNet_preprocessed", "nnUNet_results")
+        previous = {key: os.environ.get(key) for key in keys}
+        api.download_pretrained_weights = (
+            lambda task_id: download(task_id) if task_id in SPINE_TASK_IDS else None
+        )
+        os.environ["TOTALSEG_WEIGHTS_PATH"] = str(bundled)
+        try:
+            run()
+        finally:
+            api.download_pretrained_weights = download
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def _ensure_torch_shm_executable() -> None:

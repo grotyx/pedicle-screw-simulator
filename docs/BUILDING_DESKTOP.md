@@ -87,7 +87,7 @@ Run it manually from the Actions tab or push a version tag such as `v0.2.6`. Dow
 
 The standalone packages include DICOM loading, standard and screw-aligned MPR, 3D rendering, manual tools, planning, measurements, TotalSegmentator 2.12.0, PyTorch, nnU-Net, and threshold fallback segmentation.
 
-Model weights are not embedded in the ZIP. On the first automatic segmentation, TotalSegmentator downloads the openly available `total` task weights to `~/.totalsegmentator/nnunet/results` and reuses them on later runs. The first run therefore requires internet access, additional disk space, and time for the download. The Windows build bundles the PyTorch CUDA 12.8 runtime and automatically falls back to CPU when no supported NVIDIA GPU is available.
+The Windows build bundles the two TotalSegmentator models that Spine Only uses (vertebrae part `Dataset292` and the 6 mm crop model `Dataset298`, about 400 MB) under `_internal/totalseg_weights`; `scripts/build_desktop.py` downloads them at build time, and Spine Only + Accurate runs read them from there and download nothing. The Total task, Fast quality and the macOS build download the openly available weights to `~/.totalsegmentator/nnunet/results` on first use and reuse them later. The Windows build bundles the PyTorch CUDA 12.8 runtime and automatically falls back to CPU when no supported NVIDIA GPU is available.
 
 The bundled executable can be checked without opening the GUI:
 
@@ -162,7 +162,8 @@ Measured on the Linux development environment (torch 2.14 + CUDA 13,
 | `triton` (Linux only, **excluded from builds**) | 0.9 GB |
 | VTK + SimpleITK + PyQt6 + SciPy + NumPy | about 1.25 GB |
 | Application code | a few MB |
-| TotalSegmentator weights (downloaded on first use, not bundled) | 0.16–1.4 GB |
+| TotalSegmentator Spine Only weights (bundled on Windows) | 0.4 GB |
+| Other TotalSegmentator weights (downloaded on first use) | 0.16–1.2 GB |
 
 - The package targets GPU inference only. A CPU-only build would drop the
   CUDA libraries but make segmentation take minutes, so it is not offered.
@@ -170,9 +171,11 @@ Measured on the Linux development environment (torch 2.14 + CUDA 13,
   `libtorch_cuda` links them directly; removing them stops torch loading.
 - Triton only backs `torch.compile`; TotalSegmentator GPU inference was
   checked to run without it. Windows and macOS torch wheels never include it.
-- Weights are fetched per task on first run (`~/.totalsegmentator`), so only
-  the tasks a user runs take space. The full `total` task needs all five
-  parts (about 1.2 GB); the fast mode needs one 159 MB model.
+- Other weights are fetched per task on first run (`~/.totalsegmentator`), so
+  only the tasks a user runs take space. The full `total` task needs all five
+  parts (about 1.2 GB); the fast mode needs one 159 MB model. TotalSegmentator
+  2.12 would fetch all five parts even for Spine Only, so the app skips the
+  four it does not compute when the bundled models are present.
 - VTK could shrink to roughly 100–200 MB if the source imported individual
   `vtkmodules.*` instead of `import vtk` (7 files). Not done yet.
 - Replacing PyTorch with ONNX Runtime would save the most, but means

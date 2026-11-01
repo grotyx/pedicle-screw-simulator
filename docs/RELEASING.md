@@ -15,9 +15,9 @@ Build details are in [Desktop Build Guide](BUILDING_DESKTOP.md).
 | macOS Apple Silicon | `PedicleScrewSimulator-<ver>-macOS-arm64.zip` | Extract, right-click > Open | None |
 
 Requirements to tell users: Windows 10/11 64-bit, an NVIDIA GPU with a current driver
-(segmentation runs on the GPU), about 6 GB free disk for the app plus up to 1.4 GB for
-model weights downloaded on the first segmentation, and an internet connection for that
-first run and for updates.
+(segmentation runs on the GPU), about 6.5 GB free disk for the app (the Spine Only models
+are included), and an internet connection for updates. Only the Total task or Fast quality
+downloads extra models (up to 1.4 GB) on first use.
 
 ## Release steps
 

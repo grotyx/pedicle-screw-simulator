@@ -77,7 +77,7 @@ app (or choose **Restart now**); if anything fails, the previous version is put 
 **Help > Check for Updates...** checks on demand. The portable ZIP and source installs do
 not update themselves.
 
-The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The first automatic segmentation downloads the open `total` task model weights and later runs reuse the local cache. See [Desktop Build Guide](BUILDING_DESKTOP.md).
+The standalone package includes TotalSegmentator, PyTorch, and nnU-Net. The Windows installer includes the models for the default Spine Only segmentation, so it runs without a download. The Total task and Fast quality download their open model weights on first use and later runs reuse the local cache. See [Desktop Build Guide](BUILDING_DESKTOP.md).
 
 ## 4. Workspace
 
@@ -589,7 +589,7 @@ Use `+`, enable `Pan` and drag, or select `Fit`. Use **Fit MPR** to reset all MP
 
 - Use a CUDA GPU when available.
 - Close memory-intensive applications.
-- Allow the first run to finish downloading model weights; subsequent runs reuse them.
+- With the Total task or Fast quality, allow the first run to finish downloading model weights; subsequent runs reuse them.
 - Remember that lower-resolution segmentation may reduce boundary accuracy.
 
 ### 3D View Is Slow or Stutters

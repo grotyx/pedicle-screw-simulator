@@ -74,7 +74,7 @@ Standalone 패키지는 Python을 별도로 설치하지 않아도 됩니다. Wi
 설치되며, 실패하면 이전 버전으로 되돌립니다. **Help > Check for Updates...**로 직접 확인할 수
 있습니다. 포터블 ZIP과 소스 설치본은 스스로 업데이트하지 않습니다.
 
-Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니다. 첫 자동 분할 시 공개 `total` task 모델을 내려받고 이후에는 로컬 캐시를 재사용합니다. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
+Standalone 패키지에는 TotalSegmentator, PyTorch와 nnU-Net이 포함됩니다. Windows 설치 프로그램에는 기본 설정인 Spine Only 분할용 모델이 들어 있어 내려받기 없이 실행됩니다. Total task와 Fast 품질은 처음 쓸 때 공개 모델을 내려받고 이후에는 로컬 캐시를 재사용합니다. 자세한 내용은 [데스크톱 빌드 안내](BUILDING_DESKTOP.ko.md)를 참고하십시오.
 
 ## 4. 화면 구성
 
@@ -586,7 +586,7 @@ Screw MPR이 이 plane들의 내용과 절단 방식을 어떻게 바꾸는지�
 
 - 가능한 경우 CUDA GPU를 사용합니다.
 - 메모리를 많이 사용하는 다른 프로그램을 종료합니다.
-- 최초 모델 다운로드가 끝날 때까지 기다립니다. 이후에는 캐시된 모델을 재사용합니다.
+- Total task나 Fast 품질을 처음 쓸 때는 모델 다운로드가 끝날 때까지 기다립니다. 이후에는 캐시된 모델을 재사용합니다.
 - 저해상도 segmentation은 경계 정확도를 낮출 수 있습니다.
 
 ### 3D 화면이 느리거나 끊김
