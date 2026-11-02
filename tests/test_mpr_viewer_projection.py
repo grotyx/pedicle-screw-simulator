@@ -1087,3 +1087,53 @@ def test_mpr_screw_moves_only_during_a_held_stroke():
 
     assert events == [("drag", (4.0, 5.0, 6.0)), ("release",)]
     assert viewer.is_screw_interaction_active
+
+
+def test_slice_setter_uses_only_observer_update():
+    viewer = _make_viewer((0, 0, 0), 0)
+    calls = []
+    viewer.volume_manager.set_slice_position = lambda *args: viewer._on_volume_event("slice_changed", plane="axial")
+    viewer._update_reslice_position = lambda: calls.append("reslice")
+    viewer._update_slice_info = lambda: None
+    viewer.sync_crosshairs = lambda: None
+    viewer._request_render = lambda: None
+    viewer.set_slice_position(1)
+    assert calls == ["reslice"]
+
+
+def test_projection_updates_keep_actors_mappers_and_points():
+    viewer = _make_viewer((0, 0, 0), 0)
+    viewer._render_guard_active = True
+    viewer.add_screw_overlay(0, (-10, 0, 0), (10, 0, 0))
+    props = list(viewer._screw_overlays[0])
+    mappers = [p.GetMapper() for p in props]
+    for mapper in mappers:
+        mapper.Update()
+    points = [m.GetInput().GetPoints() for m in mappers]
+    viewer.add_screw_overlay(0, (-9, 0, 0), (11, 0, 0))
+    viewer._update_screw_projections()
+    assert viewer._screw_overlays[0] == props
+    assert [p.GetMapper() for p in props] == mappers
+    for mapper in mappers:
+        mapper.Update()
+    assert [m.GetInput().GetPoints() for m in mappers] == points
+    assert props[0].GetBounds()[0:2] == pytest.approx((-9, 11))
+
+
+def test_reused_projection_resets_highlight_and_removes_hidden_cached_props():
+    viewer = _make_viewer((0, 0, 0), 0)
+    viewer._render_guard_active = True
+    viewer.add_screw_overlay(0, (-10, 0, 0), (10, 0, 0))
+    entry = _actor_by_name(viewer._screw_overlays[0], "screw-entry")
+    viewer._active_screw_part = (0, "entry")
+    viewer._refresh_active_screw_style()
+    assert entry.GetProperty().GetEdgeVisibility()
+    viewer._active_screw_part = None
+    viewer._update_screw_projections()
+    assert not entry.GetProperty().GetEdgeVisibility()
+    viewer.add_screw_overlay(0, (-10, 0, 100), (10, 0, 100))
+    assert viewer._screw_overlays[0] == []
+    assert not entry.GetVisibility()
+    viewer.remove_screw_overlay(0)
+    assert viewer._renderer.GetViewProps().GetNumberOfItems() == 0
+    assert not viewer._screw_prop_parts

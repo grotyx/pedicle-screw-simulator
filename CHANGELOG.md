@@ -50,6 +50,9 @@ current version; every other place the version appears is derived from it.
 - Clearing or replacing segmentation retires old grades, analysis metrics and related warnings; imported plans also discard measurements without verifiable mask provenance. Optimizer provenance and screw geometry remain.
 - Segmentation and planning reject results from older CT/mask revisions and cannot overlap. Loading, closing and rerunning remain blocked through segmentation installation.
 - Segmentation prepares mask images, labels, optional pedicle masks and graders in the worker, skips the unused generic spine surface, and releases retired vertebral surface caches. Mesh extraction, isolation and screw regrading remain on the GUI thread.
+- Screw edits now finish each changed stroke as one undo step, including viewer handoffs, other-pane clicks, selection changes and Esc. Unchanged gestures preserve Reviewed.
+- Moving screws show “grading after release” instead of old safety values, clear Reviewed on the first change, and reconcile the detected vertebra level after grading. Measurements from the previous level are invalidated.
+- Live screw edits reuse 3D/MPR actors and apply the latest pointer sample at display cadence. Table rows and construct chips update in place; unchanged slices and crosshairs produce no notifications, and one wheel step updates its slice once.
 
 ## [0.2.7] - 2026-11-02
 

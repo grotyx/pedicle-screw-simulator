@@ -171,6 +171,8 @@ class VolumeManager:
         elif plane == "coronal":
             position = max(self._bounds[2], min(self._bounds[3], position))
 
+        if self._slice_positions[plane] == position:
+            return
         self._slice_positions[plane] = position
         self._notify_observers("slice_changed", plane=plane, position=position)
 
@@ -201,6 +203,7 @@ class VolumeManager:
             x, y, z: World coordinates
             source_plane: Plane that initiated the change (won't be notified)
         """
+        previous = dict(self._slice_positions)
         self._slice_positions["sagittal"] = max(
             self._bounds[0], min(self._bounds[1], x)
         )
@@ -211,15 +214,17 @@ class VolumeManager:
             self._bounds[4], min(self._bounds[5], z)
         )
 
+        if previous == self._slice_positions:
+            return
         for plane in ("sagittal", "coronal", "axial"):
-            if plane != source_plane:
+            if plane != source_plane and previous[plane] != self._slice_positions[plane]:
                 self._notify_observers(
                     "slice_changed", plane=plane, position=self._slice_positions[plane]
                 )
 
         self._notify_observers(
             "crosshair_changed",
-            position=(x, y, z),
+            position=self.get_crosshair_position(),
             source=source_plane
         )
 

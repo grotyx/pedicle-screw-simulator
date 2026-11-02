@@ -560,6 +560,19 @@ class ScrewTool:
                 "Not graded: trajectory does not pass through a segmented vertebra"
             )
             return
+        from ..core.pedicle_analyzer import VERTEBRA_LABELS
+
+        detected_level = VERTEBRA_LABELS.get(result.label, "")
+        if screw.vertebra_level and detected_level != screw.vertebra_level:
+            # Analysis values belong to the previous anatomical level.
+            screw.metrics = dict(screw.metrics or {})
+            for key in _PEDICLE_ANALYSIS_METRIC_KEYS:
+                screw.metrics.pop(key, None)
+            screw.warnings = [
+                warning for warning in screw.warnings
+                if not warning.startswith(("Narrow pedicle", "Vertebral body HU", "Pedicle width"))
+            ]
+        screw.vertebra_level = detected_level
         screw.grade = result.grade
         screw.breach_distance = result.breach_mm
         screw.mean_hu = result.mean_hu
@@ -567,9 +580,6 @@ class ScrewTool:
         measured, derived_warnings = self._compute_metrics(screw, result)
         screw.metrics = self._merge_metrics(screw.metrics, measured)
         self._refresh_narrow_pedicle_warning(screw, measured)
-        if not screw.vertebra_level:
-            from ..core.pedicle_analyzer import VERTEBRA_LABELS
-            screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
 
         screw.warnings.extend(derived_warnings)
         screw.warnings.extend(self._ratio_warnings(screw.metrics, measured))

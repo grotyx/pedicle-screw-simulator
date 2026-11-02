@@ -1344,7 +1344,7 @@ def _planned_l4():
     )
 
 
-def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
+def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window, qtbot):
     window = ui_main_window
     image = _create_test_image()
     window._on_dicom_loaded(
@@ -1358,6 +1358,7 @@ def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
 
     assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
     assert callbacks["on_drag"]((4.0, 5.0, 6.0), "3D") is True
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
     callbacks["on_end"]()
 
     updated = window.screw_tool.get_screws()[0]
@@ -1367,7 +1368,7 @@ def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
 
 
 def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
-    ui_main_window,
+    ui_main_window, qtbot,
 ):
     window = ui_main_window
     image = _create_test_image()
@@ -1399,6 +1400,7 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
 
     callbacks["on_drag"]((4.0, 5.0, 6.0), "Axial MPR")
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
 
     updated = window.screw_tool.get_screws()[0]
     assert updated.entry_point == (4.0, 5.0, 6.0)
@@ -1416,7 +1418,7 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     assert window.screw_axis_position_slider.value() == 50
 
 
-def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
+def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window, qtbot):
     import math
 
     from src.core.mpr_geometry import world_to_slice
@@ -1441,6 +1443,7 @@ def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
 
     assert callbacks["on_begin"](0, "guide", handle) is True
     assert callbacks["on_drag"](pointer, "Axial MPR") is True
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
 
     updated = window.screw_tool.get_screws()[0]
     assert updated.entry_point == pytest.approx(screw.entry_point, abs=1e-6)

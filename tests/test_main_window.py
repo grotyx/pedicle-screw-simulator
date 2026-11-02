@@ -847,3 +847,32 @@ def test_both_migration_messages_reach_the_status_bar_together(
     message = migrated.statusbar.currentMessage()
     assert main_window_module.PLANNER_MODE_MIGRATION_MESSAGE in message
     assert main_window_module.PLANNER_CLEARANCE_MIGRATION_MESSAGE in message
+
+
+def test_pending_inspector_hides_old_metrics_and_disables_review(ui_main_window):
+    window = ui_main_window
+    screw = Screw((0, 0, 0), (0, -40, 0), grade="C", mean_hu=210, min_hu=95,
+                  metrics={"pedicle_width_mm": 3.2, "body_mean_hu": 90}, reviewed=True)
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    screw.reviewed = False
+    screw.grading_pending = True
+    window.update_selected_screw_inspector(index, screw, False)
+    assert window.selected_screw_grade.text() == "grading after release"
+    assert window.selected_screw_hu.text() == "grading after release"
+    assert window.selected_screw_pedicle.text() == "--"
+    assert window.selected_screw_body_hu.text() == "--"
+    assert not window.screw_reviewed_btn.isEnabled()
+
+
+def test_pending_inspector_samples_do_not_rebuild_static_controls(ui_main_window, monkeypatch):
+    window = ui_main_window
+    screw = Screw((0, 0, 0), (0, -40, 0))
+    index = window._tool_ctrl.add_existing_screw(screw, select=True)
+    screw.grading_pending = True
+    window.update_selected_screw_inspector(index, screw, False)
+    rebuilt = []
+    monkeypatch.setattr(window, "_clear_screw_metric_rows", lambda: rebuilt.append("metrics"))
+    monkeypatch.setattr(window.screw_warnings_summary, "set_placeholder", lambda *_: rebuilt.append("warnings"))
+    monkeypatch.setattr(window.screw_list_widget, "scrollToRow", lambda *_: rebuilt.append("scroll"))
+    window.update_selected_screw_inspector(index, screw, False)
+    assert not rebuilt

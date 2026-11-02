@@ -257,3 +257,19 @@ class TestCrosshairReslicesOtherPanes:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_unchanged_clamped_slice_and_crosshair_emit_nothing():
+    vm = VolumeManager()
+    vm.set_volume(_make_test_volume())
+    events = []
+    vm.add_observer("edit-test", lambda event, **kwargs: events.append((event, kwargs)))
+    vm.set_slice_position("axial", 999)
+    assert len(events) == 1
+    vm.set_slice_position("axial", 999)
+    assert len(events) == 1
+    events.clear()
+    vm.set_crosshair_position(*vm.get_crosshair_position())
+    assert events == []
+    vm.set_crosshair_position(999, 999, 999)
+    assert events[-1][1]["position"] == vm.get_crosshair_position()

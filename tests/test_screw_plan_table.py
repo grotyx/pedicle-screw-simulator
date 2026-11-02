@@ -250,3 +250,45 @@ def test_warning_tooltip_groups_lines_under_category_headings(qtbot):
     assert "• Estimated breach 1.2 mm — verify on CT." in tip
     assert tip.index("Image") > tip.index("Safety")
     assert "• PCA axis unreliable; used anatomical fallback direction" in tip
+
+
+def test_row_refresh_reuses_items_and_emits_one_batch(qtbot):
+    table = ScrewPlanTable()
+    qtbot.addWidget(table)
+    screw = Screw((0, 0, 0), (0, 0, 40))
+    table.addScrewRow(screw)
+    items = [table.item(0, col) for col in range(table.columnCount())]
+    changes = []
+    table.model().dataChanged.connect(lambda *args: changes.append(args))
+    table.updateScrewRow(0, screw)
+    assert changes == []
+    screw.grade = "C"
+    table.updateScrewRow(0, screw)
+    assert len(changes) == 1
+    assert items == [table.item(0, col) for col in range(table.columnCount())]
+
+
+def test_pending_row_hides_previous_safety_values():
+    from src.ui.screw_plan_table import screw_row_cells, screw_warning_lines
+    screw = Screw((0, 0, 0), (0, 0, 40), grade="C", metrics={"pedicle_width_mm": 3.2})
+    screw.grading_pending = True
+    cells = screw_row_cells(0, screw)
+    assert cells[6] == "grading after release"
+    assert "3.2" not in cells[3]
+    assert screw_warning_lines(screw) == ["grading after release"]
+
+
+def test_geometry_change_with_same_cells_emits_one_logical_change(qtbot):
+    table = ScrewPlanTable()
+    qtbot.addWidget(table)
+    screw = Screw((0, 0, 0), (0, 0, 40))
+    table.addScrewRow(screw)
+    logical, display = [], []
+    table.screwsChanged.connect(lambda: logical.append(1))
+    table.model().dataChanged.connect(lambda *_: display.append(1))
+    screw.entry_point = (1, 0, 0)
+    table.updateScrewRow(0, screw)
+    assert logical == [1]
+    assert not display
+    table.updateScrewRow(0, screw)
+    assert logical == [1]
