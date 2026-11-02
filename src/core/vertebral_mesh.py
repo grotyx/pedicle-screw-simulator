@@ -240,8 +240,25 @@ def create_vertebral_only_volume(
     from scipy.ndimage import gaussian_filter
     from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
+    # Isolation indexes scalars directly, so only canonical aligned grids are safe.
+    identity = np.eye(3)
+    for image in (original_vtk, mask_vtk):
+        direction = np.array([[image.GetDirectionMatrix().GetElement(i, j)
+                               for j in range(3)] for i in range(3)])
+        if not np.allclose(direction, identity, atol=1e-6, rtol=0):
+            raise ValueError("Isolation requires an identity-LPS grid")
+    if (original_vtk.GetExtent() != mask_vtk.GetExtent()
+            or not np.allclose(original_vtk.GetOrigin(), mask_vtk.GetOrigin(), atol=1e-6, rtol=0)
+            or not np.allclose(original_vtk.GetSpacing(), mask_vtk.GetSpacing(), atol=1e-6, rtol=0)):
+        raise ValueError("Isolation mask must match the CT grid; align it first")
     ct_scalars = original_vtk.GetPointData().GetScalars()
     mask_scalars = mask_vtk.GetPointData().GetScalars()
+    if (ct_scalars is None or mask_scalars is None
+            or ct_scalars.GetNumberOfComponents() != 1
+            or mask_scalars.GetNumberOfComponents() != 1
+            or ct_scalars.GetNumberOfTuples() != original_vtk.GetNumberOfPoints()
+            or mask_scalars.GetNumberOfTuples() != original_vtk.GetNumberOfPoints()):
+        raise ValueError("Isolation requires scalar values on every CT grid point")
     ct_arr = vtk_to_numpy(ct_scalars).copy().astype(np.float32)
     mask_arr = vtk_to_numpy(mask_scalars)
 

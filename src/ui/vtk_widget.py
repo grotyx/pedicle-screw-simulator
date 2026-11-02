@@ -23,6 +23,8 @@ import time
 from PyQt6.QtWidgets import QSizePolicy
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 
+from src.core.startup_timing import startup_timing
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,7 @@ class _VTKWidget(QVTKRenderWindowInteractor):
 
     def __init__(self, parent=None, **kw):
         super().__init__(parent, **kw)
+        self.GetRenderWindow().AddObserver("EndEvent", self._on_render_completed)
         self._iren_initialized = False
         self._render_needed = True  # First paint should render
         self._paint_count = 0
@@ -61,11 +64,20 @@ class _VTKWidget(QVTKRenderWindowInteractor):
         if self._iren_initialized:
             return
         self._iren_initialized = True
+        started = time.monotonic()
         self._Iren.Initialize()
+        timing = startup_timing()
+        if timing is not None:
+            timing.add_native_init(time.monotonic() - started)
         logger.info(
             "_Iren.Initialize() called — Enabled=%d",
             self._Iren.GetEnabled(),
         )
+
+    def _on_render_completed(self, _caller, _event):
+        timing = startup_timing()
+        if timing is not None and self.isVisible():
+            timing.render_completed()
 
     def paintEvent(self, ev):
         """Render only when dirty; skip otherwise to break repaint loop."""

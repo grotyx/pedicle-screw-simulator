@@ -88,7 +88,7 @@ The Planning workspace contains:
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
 - **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
-- **Tool palette:** a small vertical column of tool buttons floating over the views, movable by its grip: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Tool palette:** a small vertical column outside the left edge of the views, detachable by its grip: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
 - **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
 ### Step rail
@@ -133,7 +133,7 @@ Turning **Screw MPR** on makes the axial view the main view, because the oblique
 
 ### Tool palette
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a small vertical palette that floats over the views, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. Drag the grip (⠿) at its top to move it anywhere over the views; dropped near an edge it snaps to that edge, and it stays where you left it, in every layout and after a restart. It starts at the left edge. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are grouped in a small vertical palette (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. By default, the palette is attached to a separate strip outside the left edge of the images. Drag its grip (⠿) away from the strip to detach it and float over the views. Drop the grip on the narrow left strip, or double-click the grip, to attach it again. Floating movement is limited to about 30 updates per second. The mode and floating position are remembered across layouts and restarts, including MPR Focus and maximised views. The 3D zoom and fit commands are also in the **View** menu.
 
 ### Study chip and research-use badge
 
@@ -174,11 +174,13 @@ Loaded volumes are reoriented to LPS (identity direction) before display. An obl
 ### 5.2 Run Segmentation
 
 1. On the **Segment** page, select **Run Auto Segmentation**.
-2. The application prioritizes GPU execution and retries on CPU when necessary.
+2. The application automatically probes for a GPU and retries on CPU when necessary. **Device** in Advanced options is a read-only status: **Automatic (not run yet)**, **GPU**, or **CPU fallback**.
 3. Wait for vertebral labels and meshes to appear.
 4. Review segmentation boundaries before planning.
 
 In standalone builds TotalSegmentator is already included. If its first model download or inference fails, the application produces a threshold fallback and reports the reason. Never assume fallback output is clinically accurate. Source installations can add the AI runtime with `--with-totalseg`.
+
+Segmentation labels are aligned to the normalized CT's identity-LPS grid with nearest-neighbour interpolation before overlays, meshes, isolation, grading, and planning use them. A mask whose foreground cannot overlap the CT is rejected. Planning uses the aligned mask file. The unavailable Guided workspace choice is no longer displayed; Planning remains the workspace.
 
 #### Automatic isolation and the 3D toggle
 
@@ -456,7 +458,7 @@ The menu bar's **Edit** menu has **Undo** (`Ctrl+Z`) and **Redo** (`Ctrl+Shift+Z
 
 ## 7. Manual Tools
 
-Add Screw, Distance, and Angle are buttons in the floating tool palette (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
+Add Screw, Distance, and Angle are buttons in the tool palette (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
 
 ### Add Screw
 

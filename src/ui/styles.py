@@ -731,6 +731,10 @@ QToolButton[viewerOverlay="true"]:checked {{
 QWidget[viewerOverlay="true"] QToolButton:disabled {{
     color: {t["text_disabled"]};
 }}
+QWidget#toolStrip {{
+    background: {t["bg_secondary"]};
+    border-right: 1px solid {t["border"]};
+}}
 QFrame#toolDock {{
     border-radius: 10px;
     padding: 2px;

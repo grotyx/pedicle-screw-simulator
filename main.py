@@ -17,15 +17,18 @@ Requirements:
     - numpy, scipy
 """
 
-import importlib
-import logging
-import multiprocessing
-import os
-import sys
 import time
-import traceback
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
+
+_PROCESS_ENTRY = time.monotonic()
+
+import importlib  # noqa: E402 - Capture entry time before startup imports.
+import logging  # noqa: E402 - Capture entry time before startup imports.
+import multiprocessing  # noqa: E402 - Capture entry time before startup imports.
+import os  # noqa: E402 - Capture entry time before startup imports.
+import sys  # noqa: E402 - Capture entry time before startup imports.
+import traceback  # noqa: E402 - Capture entry time before startup imports.
+from logging.handlers import RotatingFileHandler  # noqa: E402 - Capture entry time before startup imports.
+from pathlib import Path  # noqa: E402 - Capture entry time before startup imports.
 
 # Get the directory containing this script
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -132,20 +135,18 @@ def run_self_check_cli() -> int:
 
 def run_application() -> None:
     """Import and launch the GUI after frozen-process setup is complete."""
+    from src.core.startup_timing import StartupTiming, set_startup_timing
+
+    timing = StartupTiming(_PROCESS_ENTRY)
+    set_startup_timing(timing)
     from src.core.totalseg_integration import SegmentationWorkspace
-
-    removed = SegmentationWorkspace.purge_stale(older_than_seconds=3600)
-    logging.getLogger(__name__).info(
-        "Purged %d stale segmentation directories", removed
-    )
-
-    started = time.monotonic()
     from src.ui.main_window import main as launch_main_window
 
-    logging.getLogger(__name__).info(
-        "Startup: GUI modules imported in %.1f s", time.monotonic() - started
+    timing.finish("imports", _PROCESS_ENTRY)
+    launch_main_window(
+        startup=timing,
+        after_show=lambda: timing.start_cleanup(SegmentationWorkspace.purge_stale),
     )
-    launch_main_window()
 
 
 if __name__ == "__main__":

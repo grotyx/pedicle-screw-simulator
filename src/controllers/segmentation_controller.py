@@ -252,6 +252,9 @@ class SegmentationController:
         self._segmentation_thread.start()
 
     def _on_device_selected(self, device: str) -> None:
+        self._window.seg_device_label.setText(
+            "GPU" if device == "gpu" else "CPU fallback"
+        )
         index = self._window.seg_device_combo.findData(device)
         if index >= 0:
             self._window.seg_device_combo.setCurrentIndex(index)
@@ -414,9 +417,10 @@ class SegmentationController:
             import numpy as np
             import SimpleITK as sitk
 
+            from src.core.mask_alignment import load_aligned_mask
             from src.utils.vtk_helpers import sitk_to_vtk
 
-            mask_image = sitk.ReadImage(result.mask_path)
+            mask_image = load_aligned_mask(result.mask_path, self._vm.get_sitk_image())
             mask_arr = sitk.GetArrayFromImage(mask_image)
             unique_labels = np.unique(mask_arr)
             logger.info(
@@ -716,8 +720,6 @@ class SegmentationController:
             return False
 
         try:
-            import SimpleITK as sitk
-
             from src.utils.vtk_helpers import sitk_to_vtk
 
             # Reuse the mask already resident in VTK form when available --
@@ -725,7 +727,11 @@ class SegmentationController:
             # re-reading + re-converting the mask file is unnecessary work.
             vtk_mask = self._last_vtk_mask
             if vtk_mask is None:
-                mask_image = sitk.ReadImage(self._last_segmentation_mask_path)
+                from src.core.mask_alignment import load_aligned_mask
+
+                mask_image = load_aligned_mask(
+                    self._last_segmentation_mask_path, self._vm.get_sitk_image()
+                )
                 vtk_mask = sitk_to_vtk(mask_image)
 
             self._vm.set_vertebral_mask(vtk_mask)
