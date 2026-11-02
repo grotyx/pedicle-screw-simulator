@@ -167,14 +167,16 @@ def test_showing_planning_with_a_new_hero_lays_the_grid_out_once(ui_main_window)
     assert window._maximized_view is None
 
 
-def test_dock_floats_over_the_views_and_the_split_handle_takes_its_row(ui_main_window):
+def test_dock_attaches_outside_the_views_and_the_split_handle_takes_its_row(ui_main_window):
     window = ui_main_window
     dock = window.tool_dock
     handle = window.view_split_handle
 
     view_container = window.axial_viewer.parentWidget()
-    assert dock.parentWidget() is view_container
-    assert window._view_layout.indexOf(dock) == -1  # floating, not in the grid
+    assert dock.parentWidget() is window.tool_strip
+    assert dock.is_attached
+    assert window.tool_strip.parentWidget() is view_container.parentWidget()
+    assert window._view_layout.indexOf(dock) == -1  # independent strip
     assert _position(window, handle) == (1, 0, 1, 3)
     window.set_hero_view("sagittal")
     assert _position(window, handle) == (1, 0, 1, 3)

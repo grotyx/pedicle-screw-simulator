@@ -456,12 +456,11 @@ def test_default_window_size_is_screen_aware_and_compact(ui_main_window):
     assert window._calculate_initial_window_size(1440, 900) == (1353, 900)
 
 
-def test_workspace_and_theme_selectors_are_compact(ui_main_window):
+def test_workspace_selector_is_hidden_and_theme_selector_is_compact(ui_main_window):
     window = ui_main_window
 
-    assert window.workspace_mode_combo.maximumWidth() <= 105
+    assert window.workspace_mode_combo.isHidden()
     assert window.theme_combo.maximumWidth() <= 115
-    assert window.workspace_mode_combo.maximumHeight() <= 26
     assert window.theme_combo.maximumHeight() <= 26
 
 
@@ -937,13 +936,13 @@ def test_entering_screw_mpr_through_the_button_opens_review(ui_main_window):
     assert window._screw_mpr_ctrl.is_active is False
 
 
-def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
+def test_planning_cockpit_retains_planning_without_guided_scaffold(ui_main_window):
     window = ui_main_window
 
     assert window.workspace_mode_combo.currentData() == "planning"
     guided_index = window.workspace_mode_combo.findData("guided")
-    assert guided_index >= 0
-    assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
+    assert guided_index == -1
+    assert window.workspace_mode_combo.isHidden()
     assert list(window.step_section_order) == ["Study", "Segment", "Plan", "Review"]
 
 

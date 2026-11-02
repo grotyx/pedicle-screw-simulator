@@ -28,15 +28,19 @@ current version; every other place the version appears is derived from it.
   the part is, so pressing away from it no longer makes it jump. The grade
   is recalculated on release instead of on every pointer sample, which made
   the screw stutter.
-- The tool buttons sit in a small vertical palette that floats over the
-  views. Drag its grip to put it anywhere; it snaps to an edge and keeps
-  its place across layouts and restarts.
+- The tool palette defaults to a separate strip outside the images. Drag its
+  grip away to detach; drop on the left strip or double-click to attach.
+  Mode and floating position persist across layouts and restarts. Floating
+  movement is throttled to about 30 updates per second.
 - In the Planning layout, drag the bar between the main view and the
   thumbnails to resize them; the size is remembered.
 - In 3D, right-drag (as well as middle-drag) moves the model; right-drag
   used to zoom, which the wheel already does.
-- The log records how long startup takes (module import, main window,
-  first frame).
+- One startup log summary measures from process entry: imports, main-window
+  build, native VTK initialization, stale-workspace purge, and the first visible
+  VTK render completion. Stale-workspace cleanup runs after show in a worker.
+- Segmentation Device is a read-only status reported by automatic probing.
+  The unavailable Guided workspace selector is hidden; Planning is retained.
 - Turning planning levels on or off is quick: each vertebra's 3D surface is
   built once per segmentation and reused, instead of every surface being
   smoothed and meshed again on each click.
@@ -53,6 +57,9 @@ current version; every other place the version appears is derived from it.
 - Screw edits now finish each changed stroke as one undo step, including viewer handoffs, other-pane clicks, selection changes and Esc. Unchanged gestures preserve Reviewed.
 - Moving screws show “grading after release” instead of old safety values, clear Reviewed on the first change, and reconcile the detected vertebra level after grading. Measurements from the previous level are invalidated.
 - Live screw edits reuse 3D/MPR actors and apply the latest pointer sample at display cadence. Table rows and construct chips update in place; unchanged slices and crosshairs produce no notifications, and one wheel step updates its slice once.
+- Segmentation labels are aligned to the CT identity-LPS grid with nearest-neighbour
+  interpolation before display, isolation, meshing, grading, and planning. Isolation
+  rejects mismatched grids instead of applying mask values by flat index.
 
 ## [0.2.7] - 2026-11-02
 

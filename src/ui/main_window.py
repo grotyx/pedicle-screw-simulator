@@ -337,8 +337,17 @@ class MainWindow(QMainWindow):
         )
         main_layout.addWidget(self.workflow_bar)
 
-        view_container = QWidget()
-        left_layout.addWidget(view_container, 1)
+        view_area = QWidget()
+        view_area_layout = QHBoxLayout(view_area)
+        view_area_layout.setContentsMargins(0, 0, 0, 0)
+        view_area_layout.setSpacing(0)
+        self.tool_strip = QWidget(view_area)
+        self.tool_strip.setObjectName("toolStrip")
+        self.tool_strip.setToolTip("Drop the tool palette here to attach")
+        view_area_layout.addWidget(self.tool_strip)
+        view_container = QWidget(view_area)
+        view_area_layout.addWidget(view_container, 1)
+        left_layout.addWidget(view_area, 1)
         self._view_layout = QGridLayout(view_container)
         self._view_layout.setSpacing(6)
         self._view_layout.setContentsMargins(6, 6, 6, 6)
@@ -553,7 +562,15 @@ class MainWindow(QMainWindow):
             x, y = (int(part) for part in saved.split(","))
         except ValueError:
             x, y = ToolDock.MARGIN, 40  # left edge, below the pane header
-        self.tool_dock.place(QPoint(x, y))
+        self.tool_dock.set_attached(
+            self._settings.value("layout/toolDockMode", "attached") != "floating"
+        )
+        position = QPoint(x, y)
+        if self.tool_dock.is_attached or self._view_layout.parentWidget().isVisible():
+            self.tool_dock.place(position)
+        else:
+            # The hidden container has no final geometry yet. Clamp on show.
+            self.tool_dock.move(position)
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -609,8 +626,10 @@ class MainWindow(QMainWindow):
         starting or ending, levels being selected, a threshold mask.
         """
         event_type = event.type()
-        if event_type == QEvent.Type.Resize and obj is self._view_layout.parentWidget():
-            self.tool_dock.place(self.tool_dock.pos())
+        if (event_type in (QEvent.Type.Resize, QEvent.Type.Show)
+                and obj is self._view_layout.parentWidget()):
+            if not self.tool_dock.is_attached and obj.isVisible():
+                self.tool_dock.place(self.tool_dock.pos())
         elif event_type in self._FOCUS_EVENT_TYPES:
             name = self._pane_name_for(obj)
             if name is not None:
@@ -955,10 +974,12 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.seg_task_combo, 0, 1)
 
         advanced_layout.addWidget(QLabel("Device:"), 1, 0)
-        self.seg_device_combo = QComboBox()
+        self.seg_device_combo = QComboBox(self.seg_advanced_panel)
         self.seg_device_combo.addItem("GPU (preferred)", "gpu")
         self.seg_device_combo.addItem("CPU fallback", "cpu")
-        advanced_layout.addWidget(self.seg_device_combo, 1, 1)
+        self.seg_device_combo.hide()  # Retain backing state for existing readers.
+        self.seg_device_label = QLabel("Automatic (not run yet)")
+        advanced_layout.addWidget(self.seg_device_label, 1, 1)
 
         advanced_layout.addWidget(QLabel("Quality:"), 2, 0)
         self.seg_quality_combo = QComboBox()
@@ -1087,23 +1108,10 @@ class MainWindow(QMainWindow):
         auto_layout.addLayout(vertebra_header)
         auto_layout.addWidget(self.vertebra_level_container)
 
-        workspace_mode_row = QHBoxLayout()
-        workspace_mode_row.addWidget(QLabel("Mode:"))
-        self.workspace_mode_combo = QComboBox()
+        self.workspace_mode_combo = QComboBox(self.planning_group)
         self.workspace_mode_combo.setObjectName("workspaceMode")
         self.workspace_mode_combo.addItem("Planning", "planning")
-        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
-        guided_index = self.workspace_mode_combo.findData("guided")
-        guided_item = self.workspace_mode_combo.model().item(guided_index)
-        if guided_item is not None:
-            guided_item.setEnabled(False)
-        self.workspace_mode_combo.setToolTip(
-            "Guided Workflow is reserved for a later release"
-        )
-        self.workspace_mode_combo.setMaximumWidth(100)
-        self.workspace_mode_combo.setMaximumHeight(26)
-        workspace_mode_row.addWidget(self.workspace_mode_combo, 1)
-        auto_layout.addLayout(workspace_mode_row)
+        self.workspace_mode_combo.hide()  # Existing workflow readers retain Planning.
 
         self.auto_screw_review_notice = QLabel(
             "Generated screws are added immediately. Select and adjust them below."
@@ -2575,7 +2583,13 @@ class MainWindow(QMainWindow):
             ],
             self._view_layout.parentWidget(),
         )
+        self.tool_dock.configure_attachment(
+            self.tool_strip, self._view_layout.parentWidget()
+        )
         self.tool_dock.moved.connect(self._save_tool_dock_position)
+        self.tool_dock.mode_changed.connect(
+            lambda mode: self._settings.setValue("layout/toolDockMode", mode)
+        )
         self.view_split_handle = RowSplitHandle(self._view_layout.parentWidget())
         self.view_split_handle.dragged.connect(self._drag_view_split)
         self.view_split_handle.released.connect(self._save_view_split)
@@ -3694,7 +3708,7 @@ def app_icon() -> QIcon:
     return icon
 
 
-def main():
+def main(*, startup=None, after_show=None):
     """Application entry point."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -3711,15 +3725,14 @@ def main():
 
     started = time.monotonic()
     window = MainWindow()
-    built = time.monotonic()
+    if startup is not None:
+        startup.finish("window_build", started)
+        startup.mark_shown()
     window.show()
     window.raise_()
     window.activateWindow()
-    # Runs once the event loop has painted the first frame.
-    QTimer.singleShot(0, lambda: logger.info(
-        "Startup: main window built in %.1f s, first frame after %.1f s more",
-        built - started, time.monotonic() - built,
-    ))
+    if after_show is not None:
+        QTimer.singleShot(0, after_show)
 
     sys.exit(app.exec())
 

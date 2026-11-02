@@ -34,3 +34,34 @@ def test_an_expose_redraws_outside_macos(monkeypatch):
         widget._render_needed = False
         widget.paintEvent(None)
         assert rendered == expected, platform
+
+
+def test_startup_counts_only_visible_render_end_events(monkeypatch):
+    import src.ui.vtk_widget as vtk_widget
+    from src.core.startup_timing import StartupTiming
+
+    timing = StartupTiming(1, clock=lambda: 5)
+    timing.mark_shown()
+    monkeypatch.setattr(vtk_widget, 'startup_timing', lambda: timing)
+    widget = vtk_widget._VTKWidget.__new__(vtk_widget._VTKWidget)
+    visible = [False]
+    monkeypatch.setattr(widget, 'isVisible', lambda: visible[0])
+    widget._on_render_completed(None, 'EndEvent')
+    assert timing.first_render is None
+    visible[0] = True
+    widget._on_render_completed(None, 'EndEvent')
+    assert timing.first_render == 4
+
+
+def test_startup_counts_visible_render_during_interactor_initialization(monkeypatch):
+    import src.ui.vtk_widget as vtk_widget
+    from src.core.startup_timing import StartupTiming
+
+    timing = StartupTiming(1, clock=lambda: 5)
+    timing.mark_shown()
+    monkeypatch.setattr(vtk_widget, 'startup_timing', lambda: timing)
+    widget = vtk_widget._VTKWidget.__new__(vtk_widget._VTKWidget)
+    monkeypatch.setattr(widget, 'isVisible', lambda: True)
+    widget._startup_paint = False  # Native Initialize can render before Qt's paint.
+    widget._on_render_completed(None, 'EndEvent')
+    assert timing.first_render == 4

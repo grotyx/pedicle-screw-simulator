@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint  # noqa: E402
@@ -86,3 +88,52 @@ def test_dock_stays_inside_its_parent_and_snaps_to_edges(qtbot):
     assert dock.place(QPoint(right - 10, 200)).x() == right  # snapped
     assert dock.place(QPoint(300, 200)) == QPoint(300, 200)  # free in the middle
     assert dock.place(QPoint(5000, 5000)) == QPoint(right, host.height() - dock.height() - margin)
+
+
+def test_grip_detaches_throttles_and_drops_back_on_strip(qtbot, monkeypatch):
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+    from PyQt6.QtWidgets import QHBoxLayout
+
+    host = QWidget()
+    host.resize(1000, 800)
+    qtbot.addWidget(host)
+    layout = QHBoxLayout(host)
+    strip, views = QWidget(host), QWidget(host)
+    layout.addWidget(strip)
+    layout.addWidget(views, 1)
+    dock = ToolDock(list(_actions(host)), views)
+    dock.configure_attachment(strip, views)
+    host.show()
+    qtbot.waitUntil(host.isVisible)
+
+    def event(kind, global_pos, button=Qt.MouseButton.NoButton):
+        mouse = QMouseEvent(kind, QPointF(dock._grip.mapFromGlobal(global_pos)),
+                            QPointF(global_pos), button, Qt.MouseButton.LeftButton,
+                            Qt.KeyboardModifier.NoModifier)
+        dock.eventFilter(dock._grip, mouse)
+
+    start = dock._grip.mapToGlobal(dock._grip.rect().center())
+    event(QEvent.Type.MouseButtonPress, start, Qt.MouseButton.LeftButton)
+    event(QEvent.Type.MouseMove, start + QPoint(150, 50))
+    assert not dock.is_attached
+    positions = []
+    place = dock.place
+    monkeypatch.setattr(dock, 'place', lambda pos: (positions.append(pos), place(pos))[1])
+    monkeypatch.setattr(dock, 'adjustSize', lambda: pytest.fail('adjustSize during drag'))
+    for x in range(160, 300):
+        event(QEvent.Type.MouseMove, start + QPoint(x, 50))
+    assert not positions
+    qtbot.waitUntil(lambda: len(positions) == 1)
+    final = start + QPoint(320, 75)
+    event(QEvent.Type.MouseButtonRelease, final, Qt.MouseButton.LeftButton)
+    assert len(positions) == 2
+    assert not dock.is_attached
+    event(QEvent.Type.MouseButtonPress, final, Qt.MouseButton.LeftButton)
+    target = strip.mapToGlobal(strip.rect().center())
+    event(QEvent.Type.MouseButtonRelease, target, Qt.MouseButton.LeftButton)
+    assert dock.is_attached
+    assert dock.parentWidget() is strip
+    dock.set_attached(False)
+    event(QEvent.Type.MouseButtonDblClick, final, Qt.MouseButton.LeftButton)
+    assert dock.is_attached

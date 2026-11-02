@@ -1378,3 +1378,40 @@ def test_hidden_generic_surface_is_not_built(ui_main_window, tmp_path, monkeypat
     monkeypatch.setattr(window.viewer_3d, "set_segmentation_mask", lambda *a, **k: requests.append(k))
     _finish_run(window, window._seg_ctrl, path, "totalsegmentator", monkeypatch)
     assert requests[0]["build_surface"] is False
+
+
+def test_one_aligned_mask_reaches_views_grader_mesh_and_planning_file(
+    ui_main_window, tmp_path, monkeypatch
+):
+    import numpy as np
+    from vtk.util.numpy_support import vtk_to_numpy
+
+    window = ui_main_window
+    ct = _create_test_image()
+    window._on_dicom_loaded(
+        image=ct, metadata={'num_slices': ct.GetSize()[2]}, progress=_ProgressStub(),
+    )
+    mask = sitk.Image([8, 8, 6], sitk.sitkUInt8)
+    mask.SetSpacing(tuple(v * 2 for v in ct.GetSpacing()))
+    mask.SetOrigin(ct.GetOrigin())
+    mask[2, 2, 2] = 28
+    path = tmp_path / 'synthetic-mask.nii.gz'
+    sitk.WriteImage(mask, str(path))
+    received = []
+    for viewer in window._get_mpr_viewers():
+        monkeypatch.setattr(viewer, 'set_segmentation_mask', lambda image, **kw: received.append(image))
+    monkeypatch.setattr(window.viewer_3d, 'set_segmentation_mask', lambda image, **kw: received.append(image))
+    monkeypatch.setattr(window.viewer_3d, 'set_vertebral_mesh', lambda image, **kw: received.append(image))
+    _finish_run(window, window._seg_ctrl, path, 'totalsegmentator', monkeypatch)
+    canonical = window._seg_ctrl._last_vtk_mask
+    assert len(received) == 5
+    assert all(image is canonical for image in received)
+    expected = vtk_to_numpy(canonical.GetPointData().GetScalars()).reshape(tuple(reversed(ct.GetSize())))
+    grader = window._tool_ctrl.screw_tool.grader
+    np.testing.assert_array_equal(sitk.GetArrayFromImage(grader.mask_image()), expected)
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(sitk.ReadImage(window._seg_ctrl._last_segmentation_mask_path)), expected,
+    )
+    assert canonical.GetOrigin() == ct.GetOrigin()
+    assert canonical.GetSpacing() == ct.GetSpacing()
+    assert canonical.GetDimensions() == ct.GetSize()

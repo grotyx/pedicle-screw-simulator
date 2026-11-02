@@ -54,10 +54,12 @@ def prepare_segmentation(result, ct_image):
     """Read and prepare mask and grading inputs on the worker thread."""
     import SimpleITK as sitk
 
+    from src.core.mask_alignment import load_aligned_mask
     from src.core.vertebral_mesh import VERTEBRA_LABELS
     from src.utils.vtk_helpers import sitk_to_vtk
 
-    mask_image = sitk.ReadImage(result.mask_path)
+    # One CT-aligned identity-LPS mask for every consumer (review item C5).
+    mask_image = load_aligned_mask(result.mask_path, ct_image)
     labels = np.unique(sitk.GetArrayViewFromImage(mask_image))
     detected = sorted(int(label) for label in labels if int(label) in VERTEBRA_LABELS)
     return PreparedSegmentation(
@@ -301,6 +303,9 @@ class SegmentationController:
         self._segmentation_thread.start()
 
     def _on_device_selected(self, device: str) -> None:
+        self._window.seg_device_label.setText(
+            "GPU" if device == "gpu" else "CPU fallback"
+        )
         index = self._window.seg_device_combo.findData(device)
         if index >= 0:
             self._window.seg_device_combo.setCurrentIndex(index)
@@ -780,8 +785,6 @@ class SegmentationController:
             return False
 
         try:
-            import SimpleITK as sitk
-
             from src.utils.vtk_helpers import sitk_to_vtk
 
             # Reuse the mask already resident in VTK form when available --
@@ -789,7 +792,11 @@ class SegmentationController:
             # re-reading + re-converting the mask file is unnecessary work.
             vtk_mask = self._last_vtk_mask
             if vtk_mask is None:
-                mask_image = sitk.ReadImage(self._last_segmentation_mask_path)
+                from src.core.mask_alignment import load_aligned_mask
+
+                mask_image = load_aligned_mask(
+                    self._last_segmentation_mask_path, self._vm.get_sitk_image()
+                )
                 vtk_mask = sitk_to_vtk(mask_image)
 
             self._vm.set_vertebral_mask(vtk_mask)
