@@ -10,6 +10,8 @@ import logging
 import os
 import sys
 import traceback
+from dataclasses import dataclass
+from functools import partial
 from typing import Dict, Optional
 
 import numpy as np
@@ -37,6 +39,35 @@ from src.core.totalseg_labels import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class PreparedSegmentation:
+    """CPU outputs owned by one segmentation run; no actors or renderers."""
+
+    mask_image: object
+    vtk_mask: object
+    detected: list[int]
+    pedicle_mask: object
+    grader: object
+
+
+def prepare_segmentation(result, ct_image):
+    """Read and prepare mask and grading inputs on the worker thread."""
+    import SimpleITK as sitk
+
+    from src.core.vertebral_mesh import VERTEBRA_LABELS
+    from src.utils.vtk_helpers import sitk_to_vtk
+
+    mask_image = sitk.ReadImage(result.mask_path)
+    labels = np.unique(sitk.GetArrayViewFromImage(mask_image))
+    detected = sorted(int(label) for label in labels if int(label) in VERTEBRA_LABELS)
+    return PreparedSegmentation(
+        mask_image, sitk_to_vtk(mask_image), detected,
+        SegmentationController._load_pedicle_mask(result, mask_image),
+        SegmentationController._grader_for_ct(mask_image, ct_image)
+        if result.method == "totalsegmentator" else None,
+    )
+
+
 class AutoSegmentationThread(QThread):
     """Thread for running auto-segmentation without blocking UI."""
 
@@ -50,6 +81,8 @@ class AutoSegmentationThread(QThread):
                  roi_subset=None, fast=False, force_split=False,
                  subregion_model=None, refine: bool = True):
         super().__init__()
+        self.source_ct = sitk_image
+        self.prepared = None
         self.sitk_image = sitk_image
         self.task = task
         self.device = device
@@ -72,6 +105,9 @@ class AutoSegmentationThread(QThread):
 
     def run(self):
         try:
+            import SimpleITK as sitk
+
+            self.sitk_image = sitk.Image(self.source_ct)
             if self.device is None:
                 # Probing CUDA imports torch: seconds that must not block the UI.
                 self.device = preferred_segmentation_device()
@@ -90,6 +126,8 @@ class AutoSegmentationThread(QThread):
                 subregion_model=self.subregion_model,
                 refine=self.refine,
             )
+            self.progress.emit("Preparing segmentation overlays…")
+            self.prepared = prepare_segmentation(result, self.sitk_image)
             self.progress.emit("Segmentation completed.")
             self.finished.emit(result)
         except SegmentationCancelled:
@@ -111,6 +149,8 @@ class SegmentationController:
     HEARTBEAT_INTERVAL_MS = 60_000
 
     def __init__(self, volume_manager, main_window):
+        self._revision = 0
+        self._committing = False
         self._vm = volume_manager
         self._window = main_window
         self.workspace = SegmentationWorkspace()
@@ -160,12 +200,14 @@ class SegmentationController:
         )
 
     @property
+    def revision(self) -> int:
+        """Generation of the current mask, including clear/reset transitions."""
+        return self._revision
+
+    @property
     def is_running(self) -> bool:
         """Return True if a segmentation thread is currently active."""
-        return (
-            self._segmentation_thread is not None
-            and self._segmentation_thread.isRunning()
-        )
+        return self._committing or self._segmentation_thread is not None
 
     def run(self):
         """Run TotalSegmentator with fallback in background thread."""
@@ -181,6 +223,11 @@ class SegmentationController:
             self._window.statusbar.showMessage(
                 "Auto segmentation is already running"
             )
+            return
+
+        planner = getattr(self._window, "_auto_placement_ctrl", None)
+        if planner is not None and planner.is_running:
+            self._window.statusbar.showMessage("Wait for screw planning before segmentation")
             return
 
         sitk_image = self._vm.get_sitk_image()
@@ -244,11 +291,13 @@ class SegmentationController:
             subregion_model=self._resolve_subregion_model(),
             refine=self._window.seg_refine_check.isChecked(),
         )
-        self._segmentation_thread.progress.connect(self._on_progress)
-        self._segmentation_thread.device_selected.connect(self._on_device_selected)
-        self._segmentation_thread.finished.connect(self._on_finished)
-        self._segmentation_thread.error.connect(self._on_error)
-        self._segmentation_thread.cancelled.connect(self._on_cancelled)
+        thread = self._segmentation_thread
+        thread.revision = self._revision
+        thread.progress.connect(partial(self._on_job_signal, thread, self._on_progress))
+        thread.device_selected.connect(partial(self._on_job_signal, thread, self._on_device_selected))
+        thread.finished.connect(partial(self._on_job_finished, thread))
+        thread.error.connect(partial(self._on_job_signal, thread, self._on_error, terminal=True))
+        thread.cancelled.connect(partial(self._on_job_signal, thread, self._on_cancelled, terminal=True))
         self._segmentation_thread.start()
 
     def _on_device_selected(self, device: str) -> None:
@@ -390,12 +439,61 @@ class SegmentationController:
             self._segmentation_progress.setLabelText(message)
         self._window.statusbar.showMessage(message)
 
-    def _on_finished(self, result):
-        """Handle completed segmentation run."""
-        self._close_progress_dialog()
-        self._window.seg_run_btn.setEnabled(True)
-        self._release_thread()
+    def _job_is_current(self, thread) -> bool:
+        return (
+            thread is self._segmentation_thread
+            and thread.source_ct is self._vm.get_sitk_image()
+            and thread.revision == self._revision
+        )
 
+    def _retire_stale_job(self, thread):
+        if thread is self._segmentation_thread:
+            self._close_progress_dialog()
+            self._release_thread()
+            self._window.seg_run_btn.setEnabled(True)
+            self.workspace.remove(self._active_work_dir)
+            self._active_work_dir = None
+
+    def _on_job_signal(self, thread, callback, *args, terminal=False):
+        """Keep queued progress and terminal signals bound to their source job."""
+        if self._job_is_current(thread):
+            callback(*args)
+        elif terminal:
+            self._retire_stale_job(thread)
+
+    def _on_job_finished(self, thread, result):
+        """Accept only the active run bound to this CT and mask revision."""
+        if not self._job_is_current(thread):
+            logger.info("Discarding stale segmentation result")
+            self._retire_stale_job(thread)
+            return
+        self._on_finished(result, prepared=thread.prepared)
+
+    def _on_finished(self, result, prepared=None):
+        """Commit prepared outputs with loading, close and rerun guards held."""
+        if self._committing:
+            return
+        self._committing = True
+        self._window.seg_run_btn.setEnabled(False)
+        try:
+            self._install_result(result, prepared)
+        finally:
+            self._close_progress_dialog()
+            self._release_thread()
+            self._committing = False
+            self._window.seg_run_btn.setEnabled(True)
+
+    def _invalidate_grading(self):
+        """Retire measurements from the previous mask without losing geometry."""
+        edit = getattr(self._window, "_screw_edit_ctrl", None)
+        if edit is not None:
+            edit.abort()
+        tool = self._window._tool_ctrl.screw_tool
+        tool.set_grader(None)
+        tool.set_analysis_by_level(None)
+        tool.invalidate_segmentation_metrics()
+
+    def _install_result(self, result, prepared=None):
         logger.info(
             "_on_finished: method=%s, mask=%s, msg=%s",
             result.method, result.mask_path, result.message,
@@ -411,31 +509,15 @@ class SegmentationController:
             self.restore_full_volume()
 
         try:
-            import numpy as np
-            import SimpleITK as sitk
-
-            from src.utils.vtk_helpers import sitk_to_vtk
-
-            mask_image = sitk.ReadImage(result.mask_path)
-            mask_arr = sitk.GetArrayFromImage(mask_image)
-            unique_labels = np.unique(mask_arr)
-            logger.info(
-                "_on_finished: mask size=%s, spacing=%s, dtype=%s, "
-                "unique_labels=%s (count=%d)",
-                mask_image.GetSize(),
-                mask_image.GetSpacing(),
-                mask_arr.dtype,
-                unique_labels[:20].tolist(),
-                len(unique_labels),
-            )
-
-            from src.core.vertebral_mesh import VERTEBRA_LABELS
-            detected = sorted(
-                int(label) for label in unique_labels if int(label) in VERTEBRA_LABELS
-            )
-            del mask_arr, unique_labels
-
-            vtk_mask = sitk_to_vtk(mask_image)
+            # The public compatibility callback also supports synchronous
+            # callers. Normal worker completions always carry prepared data.
+            if prepared is None:
+                prepared = prepare_segmentation(result, self._vm.get_sitk_image())
+            vtk_mask = prepared.vtk_mask
+            detected = prepared.detected
+            self._revision += 1
+            self._invalidate_grading()
+            self._window.viewer_3d.clear_vertebral_surface_cache()
             self._last_vtk_mask = vtk_mask
             self._detected_vertebra_labels = detected
             label_value = int(self._window.seg_label_spin.value())
@@ -443,7 +525,9 @@ class SegmentationController:
             for viewer in self._window._get_mpr_viewers():
                 viewer.set_segmentation_mask(vtk_mask, label_value=label_value)
             self._window.viewer_3d.set_segmentation_mask(
-                vtk_mask, label_value=label_value
+                vtk_mask, label_value=label_value,
+                build_surface=(not bool(detected)
+                               and self._window.seg_show_3d_check.isChecked()),
             )
             self._window.viewer_3d.set_vertebral_mesh(vtk_mask, labels=detected)
             # One fact, committed once: a mask path pointing at a threshold run
@@ -457,34 +541,9 @@ class SegmentationController:
             self._last_refinement_notes = list(
                 getattr(result, "refinement_notes", None) or []
             )
-            self._window.statusbar.showMessage("Resampling pedicle mask…")
-            QApplication.processEvents()
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                self._last_pedicle_mask = self._load_pedicle_mask(result, mask_image)
-            finally:
-                QApplication.restoreOverrideCursor()
-            if result.method == "totalsegmentator":
-                grader = self._build_grader(mask_image)
-            else:
-                # A threshold fallback carries no vertebra labels, so nothing
-                # can be graded against it.
-                grader = None
-            # Re-grade on every path, grader or not: the viewers have just
-            # replaced the mask these screws were measured against, and grades
-            # taken from the previous one would be presented as current.
-            self._window._tool_ctrl.screw_tool.set_grader(grader)
-            # The per-level pedicle analyses were measured on the *old* mask,
-            # and boundary refinement moves exactly the walls their isthmus
-            # width is taken between.  Keeping them would have re-graded each
-            # screw against the new mask while re-deriving its width, narrow
-            # verdict and endplate angle from the old one -- one row, two
-            # masks, nothing on screen saying so.  Dropping them makes those
-            # metrics "not measured" until the next planning run, which the
-            # merge already knows how to carry through.
-            self._window._tool_ctrl.screw_tool.set_analysis_by_level(None)
+            self._last_pedicle_mask = prepared.pedicle_mask
+            self._window._tool_ctrl.screw_tool.set_grader(prepared.grader)
             self._window.statusbar.showMessage("Re-grading screws…")
-            QApplication.processEvents()
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
                 self._window._tool_ctrl.regrade_all()
@@ -581,9 +640,13 @@ class SegmentationController:
         Returns ``None`` only when even the resampled mask cannot be graded;
         the caller then marks the screws N/A rather than showing stale grades.
         """
+        return self._grader_for_ct(mask_image, self._vm.get_sitk_image())
+
+    @staticmethod
+    def _grader_for_ct(mask_image, ct_image):
+        """Construct the grader without accessing mutable GUI state."""
         from src.core.screw_grading import ScrewGrader, resample_mask_to_ct
 
-        ct_image = self._vm.get_sitk_image()
         if ct_image is None:
             return None
         try:
@@ -604,7 +667,8 @@ class SegmentationController:
 
     PEDICLE_FAILURE_PREFIX = "Pedicle model unavailable: "
 
-    def _load_pedicle_mask(self, result, mask_image):
+    @staticmethod
+    def _load_pedicle_mask(result, mask_image):
         """Return the stage-2 pedicle mask as a bool array on the mask grid.
 
         Returns ``None`` when the subregion stage did not run, failed, or its
@@ -912,6 +976,14 @@ class SegmentationController:
 
     def clear_overlay(self):
         """Clear segmentation overlays from 2D and 3D viewers."""
+        if self._committing:
+            return
+        self._revision += 1
+        planner = getattr(self._window, "_auto_placement_ctrl", None)
+        if planner is not None:
+            planner.request_cancel()
+        self._invalidate_grading()
+        self._window._tool_ctrl.regrade_all()
         if self._vertebrae_isolated:
             self.restore_full_volume()
         for viewer in self._window._get_mpr_viewers():
@@ -919,6 +991,7 @@ class SegmentationController:
         if self._window.viewer_3d is None:
             return
         self._window.viewer_3d.clear_vertebral_mesh()
+        self._window.viewer_3d.clear_vertebral_surface_cache()
         self._window.viewer_3d.clear_segmentation_mask()
         self._last_segmentation_mask_path = None
         self._last_pedicle_mask = None
@@ -1017,10 +1090,17 @@ class SegmentationController:
         for viewer in self._window._get_mpr_viewers():
             viewer.set_segmentation_visible(visible_2d)
         if self._window.viewer_3d is not None:
-            self._window.viewer_3d.set_segmentation_visible(visible_3d)
+            self._window.viewer_3d.set_segmentation_visible(
+                visible_3d
+                and not self._vertebrae_isolated
+                and not (self._committing and self._detected_vertebra_labels)
+            )
 
     def reset_state(self):
         """Reset segmentation state for a new DICOM load."""
+        self._revision += 1
+        self._invalidate_grading()
+        self._window.viewer_3d.clear_vertebral_surface_cache()
         if (
             self._segmentation_thread is not None
             and self._segmentation_thread.isRunning()
@@ -1033,6 +1113,8 @@ class SegmentationController:
                     "anyway (run dir: %s)",
                     self._active_work_dir,
                 )
+        self._close_progress_dialog()
+        self._release_thread()
         if self._vertebrae_isolated:
             self.restore_full_volume()
         self._last_segmentation_mask_path = None

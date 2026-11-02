@@ -2350,3 +2350,27 @@ def test_right_drag_pans_the_3d_view():
     assert style.GetState() == 2  # VTKIS_PAN, not the default dolly
     interactor.InvokeEvent("RightButtonReleaseEvent")
     assert style.GetState() == 0
+
+
+def test_generic_surface_can_be_deferred_until_explicitly_shown(monkeypatch):
+    viewer, builds = TestSegmentationLabelDebounceAndCache._viewer(monkeypatch)
+    mask = TestSingleLabelSurfaceExtractor._sphere_mask()
+    viewer.set_segmentation_mask(mask, label_value=27, build_surface=False)
+    viewer.set_segmentation_label(27)
+    viewer._flush_segmentation_label()
+    assert builds == []
+    assert viewer._segmentation_actor is None
+    viewer.set_segmentation_visible(True)
+    assert len(builds) == 1
+    assert viewer._segmentation_actor.GetVisibility() == 1
+
+
+def test_retiring_a_mask_releases_vertebral_surface_cache():
+    from src.ui.viewer_3d import Viewer3D
+
+    viewer = Viewer3D.__new__(Viewer3D)
+    viewer._vertebral_surface_key = (123, 456)
+    viewer._vertebral_surface_cache = {28: object()}
+    viewer.clear_vertebral_surface_cache()
+    assert viewer._vertebral_surface_key is None
+    assert viewer._vertebral_surface_cache == {}

@@ -339,6 +339,9 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
     def set_vertebral_mesh(self, _mask_image, labels=None):
         self.vertebral_mesh_labels = list(labels) if labels is not None else None
 
+    def clear_vertebral_surface_cache(self):
+        return
+
     def clear_vertebral_mesh(self):
         return
 
@@ -1310,6 +1313,8 @@ def test_replacing_a_selected_auto_screw_leaves_a_valid_selection(
 
     class _Thread:
         generation = ctrl._run_generation
+        segmentation_revision = window._seg_ctrl.revision
+        source_ct = window.volume_manager.get_sitk_image()
         cancelled = False
         replace_levels = ("L4",)
 
@@ -1848,6 +1853,7 @@ class _FakeSegThread(QObject):
     def __init__(self, **kwargs):
         super().__init__()
         self.kwargs = kwargs
+        self.source_ct = kwargs["sitk_image"]
         self.started = False
 
     def isRunning(self):
@@ -1889,14 +1895,22 @@ def test_segmentation_run_leaves_the_gpu_probe_to_the_thread(ui_main_window, mon
     ctrl.run()
 
     assert ctrl._segmentation_thread.kwargs["device"] is None
+    ctrl._on_cancelled()  # Finish the fake job before qtbot closes the window.
 
 
 def test_segmentation_thread_picks_the_device(tmp_path, monkeypatch):
     calls = []
+    mask_path = tmp_path / "worker_mask.nii.gz"
+    image = sitk.Image([2, 2, 2], sitk.sitkInt16)
+    _write_mask(image, mask_path)
+
+    def run(**kwargs):
+        calls.append(kwargs)
+        return SegmentationRunResult(True, "totalsegmentator", str(mask_path), "ok")
     monkeypatch.setattr(seg_controller_module, "preferred_segmentation_device", lambda: "cpu")
     monkeypatch.setattr(
         seg_controller_module, "run_segmentation_with_fallback",
-        lambda **kwargs: calls.append(kwargs),
+        run,
     )
     thread = seg_controller_module.AutoSegmentationThread(
         sitk_image=sitk.Image([2, 2, 2], sitk.sitkInt16),
@@ -1904,11 +1918,15 @@ def test_segmentation_thread_picks_the_device(tmp_path, monkeypatch):
         device=None,
         work_dir=str(tmp_path),
     )
+    errors = []
+    thread.error.connect(errors.append)
     selected = []
     thread.device_selected.connect(selected.append)
 
     thread.run()
 
+    assert errors == []
+    assert thread.prepared is not None
     assert selected == ["cpu"]
     assert calls[0]["device"] == "cpu"
     assert calls[0]["force_split"] is True  # CPU at full quality splits the volume
