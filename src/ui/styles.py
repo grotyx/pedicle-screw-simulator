@@ -732,19 +732,31 @@ QWidget[viewerOverlay="true"] QToolButton:disabled {{
     color: {t["text_disabled"]};
 }}
 QFrame#toolDock {{
-    border-radius: 12px;
-    padding: 4px;
+    border-radius: 10px;
+    padding: 2px;
 }}
 QFrame#toolDock QToolButton {{
-    min-width: 34px;
-    min-height: 34px;
-    border-radius: 8px;
+    min-width: 30px;
+    min-height: 30px;
+    border-radius: 7px;
 }}
 QFrame#toolDockSeparator {{
     background: {t["viewer_separator"]};
-    min-width: 1px;
-    max-width: 1px;
-    margin: 6px 3px;
+    min-height: 1px;
+    max-height: 1px;
+    margin: 3px 6px;
+}}
+QLabel#toolDockGrip {{
+    color: {t["text_disabled"]};
+    font-size: 11px;
+    padding: 0px;
+}}
+QFrame#rowSplitHandle {{
+    background: transparent;
+    border-top: 1px solid {t["border"]};
+}}
+QFrame#rowSplitHandle:hover {{
+    border-top: 2px solid {t["accent"]};
 }}
 
 /* ===== Step rail and step headers ===== */

@@ -22,6 +22,7 @@ import logging
 import multiprocessing
 import os
 import sys
+import time
 import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -138,8 +139,12 @@ def run_application() -> None:
         "Purged %d stale segmentation directories", removed
     )
 
+    started = time.monotonic()
     from src.ui.main_window import main as launch_main_window
 
+    logging.getLogger(__name__).info(
+        "Startup: GUI modules imported in %.1f s", time.monotonic() - started
+    )
     launch_main_window()
 
 

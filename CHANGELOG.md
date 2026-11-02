@@ -20,6 +20,23 @@ current version; every other place the version appears is derived from it.
   exe reports RadWright Screw as its product name and description (Task
   Manager, file properties). The `PedicleScrewSimulator.exe` file, settings
   and log folders keep their names so installed copies update in place.
+- Auto Segmentation no longer freezes the window for seconds when clicked:
+  the GPU check that loads PyTorch now runs in the background.
+- Moving a screw: double-click a part to turn movement on, then hold the
+  left button and drag; the screw stops when you release and stays in
+  movement mode until you double-click again. Each drag starts from where
+  the part is, so pressing away from it no longer makes it jump. The grade
+  is recalculated on release instead of on every pointer sample, which made
+  the screw stutter.
+- The tool buttons sit in a small vertical palette that floats over the
+  views. Drag its grip to put it anywhere; it snaps to an edge and keeps
+  its place across layouts and restarts.
+- In the Planning layout, drag the bar between the main view and the
+  thumbnails to resize them; the size is remembered.
+- In 3D, right-drag (as well as middle-drag) moves the model; right-drag
+  used to zoom, which the wheel already does.
+- The log records how long startup takes (module import, main window,
+  first frame).
 
 ## [0.2.7] - 2026-11-02
 

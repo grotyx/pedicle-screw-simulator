@@ -195,6 +195,10 @@ class MPRViewer(QWidget):
         self._screw_drag_begin_callback: Optional[Callable] = None
         self._screw_drag_callback: Optional[Callable] = None
         self._screw_drag_end_callback: Optional[Callable] = None
+        self._screw_grab_callback: Optional[Callable] = None
+        self._screw_release_callback: Optional[Callable] = None
+        #: Left button held during movement mode: only then does the screw move.
+        self._screw_stroke_active = False
         self._screw_select_callback: Optional[Callable] = None
         self._double_click_detector = DoubleClickDetector()
         self._active_screw_part: Optional[Tuple[int, str]] = None
@@ -831,12 +835,16 @@ class MPRViewer(QWidget):
         on_drag: Optional[Callable] = None,
         on_end: Optional[Callable] = None,
         on_select: Optional[Callable] = None,
+        on_grab: Optional[Callable] = None,
+        on_release: Optional[Callable] = None,
     ) -> None:
         """Connect direct screw selection and drag callbacks."""
         self._screw_drag_begin_callback = on_begin
         self._screw_drag_callback = on_drag
         self._screw_drag_end_callback = on_end
         self._screw_select_callback = on_select
+        self._screw_grab_callback = on_grab
+        self._screw_release_callback = on_release
 
     def _begin_screw_drag(
         self,
@@ -854,6 +862,7 @@ class MPRViewer(QWidget):
                 )
             )
         self._screw_drag_active = accepted
+        self._screw_stroke_active = accepted
         self._active_screw_part = (
             (int(screw_id), str(part)) if accepted else None
         )
@@ -861,7 +870,11 @@ class MPRViewer(QWidget):
         return accepted
 
     def _drag_screw_to(self, world_point: Tuple[float, float, float]) -> None:
-        if self._screw_drag_active and self._screw_drag_callback is not None:
+        if (
+            self._screw_drag_active
+            and self.__dict__.get("_screw_stroke_active", False)
+            and self._screw_drag_callback is not None
+        ):
             self._screw_drag_callback(
                 tuple(world_point), f"{self.plane.capitalize()} MPR"
             )
@@ -870,6 +883,7 @@ class MPRViewer(QWidget):
         if not self._screw_drag_active:
             return
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._pending_screw_press = None
         self._refresh_active_screw_style(rebuild=True)
@@ -879,6 +893,7 @@ class MPRViewer(QWidget):
     def cancel_screw_interaction(self) -> None:
         """Clear a pointer-move lock without changing the last valid geometry."""
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._pending_screw_press = None
         self._double_click_detector.reset()
@@ -2092,9 +2107,15 @@ class MPRViewer(QWidget):
             return
 
         if self._screw_drag_active:
-            self._process_screw_press(
+            result = self._process_screw_press(
                 click_pos[0], click_pos[1], None, None
             )
+            if result == "locked":
+                world_pos = self._screw_drag_world_point(*click_pos)
+                if world_pos is not None:
+                    self._screw_stroke_active = True
+                    if self._screw_grab_callback is not None:
+                        self._screw_grab_callback(tuple(world_pos))
             return
 
         screen_screw_part = self._pick_screw_part_at_display(
@@ -2222,12 +2243,7 @@ class MPRViewer(QWidget):
             return
 
         if self._screw_drag_active:
-            world_pos = (
-                self._display_to_world_on_slice(x, y)
-                if self._active_screw_part is not None
-                and self._active_screw_part[1] == "guide"
-                else self._pick_world_on_slice(x, y)
-            )
+            world_pos = self._screw_drag_world_point(x, y)
             if world_pos is not None:
                 self._drag_screw_to(world_pos)
             return
@@ -2239,8 +2255,18 @@ class MPRViewer(QWidget):
             self._window_center += delta * 5
             self.set_window_level(self._window_width, self._window_center)
 
+    def _screw_drag_world_point(self, x: int, y: int):
+        """The pointer on the slice; the guide handle may lie off the image."""
+        if self._active_screw_part is not None and self._active_screw_part[1] == "guide":
+            return self._display_to_world_on_slice(x, y)
+        return self._pick_world_on_slice(x, y)
+
     def _on_left_release(self, obj, event):
-        """Release does not end double-click-locked screw movement."""
+        """Release stops moving the screw; movement mode stays on."""
+        if self.__dict__.get("_screw_stroke_active", False):
+            self._screw_stroke_active = False
+            if self._screw_release_callback is not None:
+                self._screw_release_callback()
         if self.__dict__.get("_rotate_drag_active", False):
             self._rotate_drag_active = False
             self._rotate_drag_last_display = None

@@ -1070,3 +1070,20 @@ def test_guide_press_and_drag_map_the_pointer_onto_the_frozen_plane():
         for i in range(2)
     )
     assert moved == pytest.approx((30.0, 0.0))
+
+
+def test_mpr_screw_moves_only_during_a_held_stroke():
+    viewer = _make_viewer(center=(0.0, 0.0, 0.0), position=0.0)
+    events = []
+    viewer.set_screw_interaction_callbacks(
+        on_begin=lambda screw_id, part, world: True,
+        on_drag=lambda world, source: events.append(("drag", world)),
+        on_release=lambda: events.append(("release",)),
+    )
+    viewer._begin_screw_drag(2, "entry", (1.0, 2.0, 3.0))  # double-click press
+    viewer._drag_screw_to((4.0, 5.0, 6.0))
+    viewer._on_left_release(None, None)
+    viewer._drag_screw_to((7.0, 8.0, 9.0))  # hovering after release
+
+    assert events == [("drag", (4.0, 5.0, 6.0)), ("release",)]
+    assert viewer.is_screw_interaction_active

@@ -1843,6 +1843,7 @@ class _FakeSegThread(QObject):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
     cancelled = pyqtSignal()
+    device_selected = pyqtSignal(str)
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -1874,6 +1875,43 @@ def _prepare_segmentation_run(window, monkeypatch, tmp_path, frozen=False):
         seg_controller_module.sys, "frozen", frozen, raising=False
     )
     return ctrl
+
+
+def test_segmentation_run_leaves_the_gpu_probe_to_the_thread(ui_main_window, monkeypatch, tmp_path):
+    # Probing CUDA imports torch, which froze the window for seconds.
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        seg_controller_module, "preferred_segmentation_device",
+        lambda: pytest.fail("GPU probed on the UI thread"),
+    )
+
+    ctrl.run()
+
+    assert ctrl._segmentation_thread.kwargs["device"] is None
+
+
+def test_segmentation_thread_picks_the_device(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(seg_controller_module, "preferred_segmentation_device", lambda: "cpu")
+    monkeypatch.setattr(
+        seg_controller_module, "run_segmentation_with_fallback",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    thread = seg_controller_module.AutoSegmentationThread(
+        sitk_image=sitk.Image([2, 2, 2], sitk.sitkInt16),
+        task="total",
+        device=None,
+        work_dir=str(tmp_path),
+    )
+    selected = []
+    thread.device_selected.connect(selected.append)
+
+    thread.run()
+
+    assert selected == ["cpu"]
+    assert calls[0]["device"] == "cpu"
+    assert calls[0]["force_split"] is True  # CPU at full quality splits the volume
 
 
 def test_progress_dialog_exposes_cancel_button(ui_main_window, monkeypatch, tmp_path):

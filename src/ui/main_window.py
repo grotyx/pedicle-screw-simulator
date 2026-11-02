@@ -4,11 +4,12 @@ import functools
 import logging
 import math
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, QPoint, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -86,6 +87,7 @@ from .construct_map import ConstructMap
 from .mpr_viewer import MPRViewer
 from .screw_plan_table import ScrewPlanTable
 from .spin_boxes import DiameterSpinBox
+from .split_handle import RowSplitHandle
 from .step_panel import StepPanel, WarningSummary
 from .styles import (
     DEFAULT_THEME,
@@ -406,7 +408,6 @@ class MainWindow(QMainWindow):
             for name, pane in panes.items():
                 pane.setVisible(name == maximized)
             self._view_layout.addWidget(panes[maximized], 0, 0)
-            self._place_dock(1, 1)
             self._view_layout.setRowStretch(0, 1)
             self._view_layout.setColumnStretch(0, 1)
             self._maximized_view = maximized
@@ -418,14 +419,13 @@ class MainWindow(QMainWindow):
                 # One grid throughout: panes only change cells, never parents,
                 # so no native VTK window is ever reparented.
                 self._view_layout.addWidget(panes[self._hero_view], 0, 0, 1, 3)
-                self._place_dock(1, 3)
+                self._view_layout.addWidget(self.view_split_handle, 1, 0, 1, 3)
                 thumbnails = [
                     pane for name, pane in panes.items() if name != self._hero_view
                 ]
                 for column, pane in enumerate(thumbnails):
                     self._view_layout.addWidget(pane, 2, column)
-                self._view_layout.setRowStretch(0, 3)
-                self._view_layout.setRowStretch(2, 1)
+                self._apply_thumbnail_ratio()
                 self._view_layout.setRowMinimumHeight(0, 320)
                 self._view_layout.setRowMinimumHeight(2, 150)
                 for column in range(3):
@@ -435,7 +435,6 @@ class MainWindow(QMainWindow):
                 self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
                 self._view_layout.addWidget(self.coronal_viewer, 1, 0)
                 self._view_layout.addWidget(self.viewer_3d, 1, 1)
-                self._place_dock(2, 2)
                 self._view_layout.setRowStretch(0, 1)
                 self._view_layout.setRowStretch(1, 1)
                 self._view_layout.setColumnStretch(0, 1)
@@ -444,6 +443,8 @@ class MainWindow(QMainWindow):
             self._restore_layout_mode = mode
 
         planning = maximized is None and self._view_layout_mode == "planning"
+        self.view_split_handle.setVisible(planning)
+        self.tool_dock.raise_()
         for name, pane in panes.items():
             pane.set_thumbnail(planning and name != self._hero_view)
 
@@ -522,15 +523,37 @@ class MainWindow(QMainWindow):
         ):
             self.set_view_layout("planning")
 
-    def _place_dock(self, row: int, column_span: int) -> None:
-        """Put the tool dock on its own grid row, centred under the big view.
+    #: Share of the planning area the thumbnail row gets, and its limits.
+    DEFAULT_THUMBNAIL_RATIO = 0.25
+    THUMBNAIL_RATIO_RANGE = (0.12, 0.6)
 
-        Not over the image: floating there it covered the A/P and S/I
-        orientation letters and, on narrow windows, the 3D overlays.
-        """
-        self._view_layout.addWidget(
-            self.tool_dock, row, 0, 1, column_span, Qt.AlignmentFlag.AlignHCenter
-        )
+    def _apply_thumbnail_ratio(self) -> None:
+        ratio = self._thumbnail_ratio
+        self._view_layout.setRowStretch(0, round(1000 * (1 - ratio)))
+        self._view_layout.setRowStretch(2, round(1000 * ratio))
+
+    def _drag_view_split(self, y: int) -> None:
+        """Resize the main view and the thumbnail row from the handle's y."""
+        height = self._view_layout.parentWidget().height()
+        if height <= 0:
+            return
+        low, high = self.THUMBNAIL_RATIO_RANGE
+        self._thumbnail_ratio = min(max(1 - y / height, low), high)
+        self._apply_thumbnail_ratio()
+
+    def _save_view_split(self) -> None:
+        self._settings.setValue("layout/thumbnailRatio", self._thumbnail_ratio)
+
+    def _save_tool_dock_position(self, pos) -> None:
+        self._settings.setValue("layout/toolDockPos", f"{pos.x()},{pos.y()}")
+
+    def _restore_tool_dock_position(self) -> None:
+        saved = str(self._settings.value("layout/toolDockPos", "") or "")
+        try:
+            x, y = (int(part) for part in saved.split(","))
+        except ValueError:
+            x, y = ToolDock.MARGIN, 40  # left edge, below the pane header
+        self.tool_dock.place(QPoint(x, y))
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -586,7 +609,9 @@ class MainWindow(QMainWindow):
         starting or ending, levels being selected, a threshold mask.
         """
         event_type = event.type()
-        if event_type in self._FOCUS_EVENT_TYPES:
+        if event_type == QEvent.Type.Resize and obj is self._view_layout.parentWidget():
+            self.tool_dock.place(self.tool_dock.pos())
+        elif event_type in self._FOCUS_EVENT_TYPES:
             name = self._pane_name_for(obj)
             if name is not None:
                 self._focused_view_name = name
@@ -1991,6 +2016,8 @@ class MainWindow(QMainWindow):
                 on_drag=self._screw_edit_ctrl.update_drag,
                 on_end=self._screw_edit_ctrl.end_drag,
                 on_select=self._select_screw_from_view,
+                on_grab=self._screw_edit_ctrl.grab,
+                on_release=self._screw_edit_ctrl.finish_stroke,
             )
             viewer.set_measurement_interaction_callbacks(
                 on_select=self._tool_ctrl.select_measurement_from_view,
@@ -2010,6 +2037,8 @@ class MainWindow(QMainWindow):
             on_drag=self._screw_edit_ctrl.update_drag,
             on_end=self._screw_edit_ctrl.end_drag,
             on_select=self._select_screw_from_view,
+            on_grab=self._screw_edit_ctrl.grab,
+            on_release=self._screw_edit_ctrl.finish_stroke,
         )
 
         # Initialize segmentation label options after signals are connected
@@ -2543,10 +2572,23 @@ class MainWindow(QMainWindow):
                 None,
                 self._fit_mpr_action,
                 self._fit_3d_action,
-            ]
+            ],
+            self._view_layout.parentWidget(),
         )
-        # First and only startup layout: the dock now exists to be placed.
+        self.tool_dock.moved.connect(self._save_tool_dock_position)
+        self.view_split_handle = RowSplitHandle(self._view_layout.parentWidget())
+        self.view_split_handle.dragged.connect(self._drag_view_split)
+        self.view_split_handle.released.connect(self._save_view_split)
+        low, high = self.THUMBNAIL_RATIO_RANGE
+        saved_ratio = self._settings.value(
+            "layout/thumbnailRatio", self.DEFAULT_THUMBNAIL_RATIO, type=float
+        )
+        self._thumbnail_ratio = min(max(saved_ratio, low), high)
+        # First and only startup layout: the handle now exists to be placed.
         self.set_view_layout(self._view_layout_mode)
+        self._restore_tool_dock_position()
+        # Keep the floating palette inside the views when the window resizes.
+        self._view_layout.parentWidget().installEventFilter(self)
 
         self._refresh_themed_icons()
         self.refresh_mode_indicators()
@@ -3657,10 +3699,17 @@ def main():
     app.setProperty("themeName", theme_name)
     app.setStyleSheet(load_stylesheet(theme_name))
 
+    started = time.monotonic()
     window = MainWindow()
+    built = time.monotonic()
     window.show()
     window.raise_()
     window.activateWindow()
+    # Runs once the event loop has painted the first frame.
+    QTimer.singleShot(0, lambda: logger.info(
+        "Startup: main window built in %.1f s, first frame after %.1f s more",
+        built - started, time.monotonic() - built,
+    ))
 
     sys.exit(app.exec())
 

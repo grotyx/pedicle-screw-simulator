@@ -97,6 +97,8 @@ def _dock_entries(window):
     entries = []
     for index in range(layout.count()):
         widget = layout.itemAt(index).widget()
+        if widget.objectName() == "toolDockGrip":
+            continue
         if widget.objectName() == "toolDockSeparator":
             entries.append("|")
         else:

@@ -231,6 +231,7 @@ def test_running_a_segmentation_starts_a_60s_workspace_heartbeat(
             self.finished = _Signal()
             self.error = _Signal()
             self.cancelled = _Signal()
+            self.device_selected = _Signal()
 
         def start(self):
             return None
@@ -581,6 +582,7 @@ def test_the_checkbox_decides_whether_the_worker_refines(
             self.finished = _Signal()
             self.error = _Signal()
             self.cancelled = _Signal()
+            self.device_selected = _Signal()
 
         def start(self):
             return None

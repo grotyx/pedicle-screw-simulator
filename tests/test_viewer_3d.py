@@ -608,6 +608,40 @@ class TestScrewVisualGeometry:
         assert events[-1] == ("end",)
 
 
+    def test_screw_moves_only_while_the_button_is_held(self):
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._double_click_detector = DoubleClickDetector()
+        viewer._screw_drag_active = True  # movement mode already on
+        viewer._screw_stroke_active = False
+        viewer._active_screw_part = (5, "shaft")
+        viewer._screw_drag_plane_origin = (0.0, 0.0, 0.0)
+        viewer._screw_drag_plane_normal = (0.0, 0.0, 1.0)
+        viewer._screw_actors = []
+        interactor = SimpleNamespace(GetEventPosition=lambda: (50, 50))
+        viewer.vtk_widget = SimpleNamespace(
+            GetRenderWindow=lambda: SimpleNamespace(GetInteractor=lambda: interactor)
+        )
+        viewer._display_to_drag_plane = lambda x, y: (9.0, 9.0, 9.0)
+        events = []
+        viewer.set_screw_interaction_callbacks(
+            on_drag=lambda world, source: events.append(("drag", world)),
+            on_grab=lambda world: events.append(("grab", world)),
+            on_release=lambda: events.append(("release",)),
+        )
+
+        viewer._on_screw_mouse_move(None, None)
+        assert events == []  # hovering does nothing
+
+        viewer._on_screw_left_press(None, None)
+        viewer._on_screw_mouse_move(None, None)
+        viewer._on_screw_left_release(None, None)
+        viewer._on_screw_mouse_move(None, None)
+
+        assert events == [("grab", (9.0, 9.0, 9.0)), ("drag", (9.0, 9.0, 9.0)), ("release",)]
+        assert viewer._screw_drag_active is True
+
 class TestSegmentationSurfaceSmoothing:
     def test_raw_segmentation_pipeline_smooths_image_mesh_and_normals(self):
         import inspect
@@ -2294,3 +2328,25 @@ def test_translucent_vertebra_surfaces_are_depth_sorted(qtbot, monkeypatch):
 
     assert viewer._renderer.GetUseDepthPeeling()
     assert render_window.GetAlphaBitPlanes()
+
+
+def test_right_drag_pans_the_3d_view():
+    import vtk
+
+    from src.ui.viewer_3d import trackball_style
+
+    render_window = vtk.vtkRenderWindow()
+    render_window.SetOffScreenRendering(1)
+    render_window.SetSize(100, 100)
+    render_window.AddRenderer(vtk.vtkRenderer())
+    interactor = vtk.vtkRenderWindowInteractor()
+    interactor.SetRenderWindow(render_window)
+    style = trackball_style()
+    interactor.SetInteractorStyle(style)
+    render_window.Render()
+    interactor.SetEventPosition(50, 50)
+
+    interactor.InvokeEvent("RightButtonPressEvent")
+    assert style.GetState() == 2  # VTKIS_PAN, not the default dolly
+    interactor.InvokeEvent("RightButtonReleaseEvent")
+    assert style.GetState() == 0

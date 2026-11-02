@@ -88,7 +88,7 @@ The Planning workspace contains:
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
 - **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
-- **Tool dock:** a row of tool buttons on its own row between the main view and the thumbnails: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Tool palette:** a small vertical column of tool buttons floating over the views, movable by its grip: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
 - **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
 ### Step rail
@@ -127,13 +127,13 @@ Click a chip to select that screw; the screw list, the views, and the map's high
 
 ### The main view and thumbnails
 
-In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
+In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. Drag the thin bar between them up or down to resize the two; the size is remembered. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
 
 Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
 
-### Tool dock
+### Tool palette
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view (above the thumbnail row), separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a small vertical palette that floats over the views, separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. Drag the grip (⠿) at its top to move it anywhere over the views; dropped near an edge it snaps to that edge, and it stays where you left it, in every layout and after a restart. It starts at the left edge. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
 
 ### Study chip and research-use badge
 
@@ -141,7 +141,7 @@ The right end of the top toolbar shows a chip with the loaded CT's voxel spacing
 
 ### Layouts
 
-Choose a layout from the **View** menu (**Planning Layout** / **MPR Focus Layout**, or the **Layout** selector). Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
+Choose a layout from the **View** menu (**Planning Layout** / **MPR Focus Layout**, or the **Layout** selector). Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there.
 
 ### Orientation markers
 
@@ -155,7 +155,7 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 
 ### Themes
 
-The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool dock and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool palette and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
 
 ## 5. Standard Planning Workflow
 
@@ -422,13 +422,15 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 2. Double-click the pointed tip or distal shaft to move the tip only.
 3. Double-click the middle shaft to move entry and tip together.
 4. Double-click the blue guide handle to rotate the screw about its entry. The handle sits 60 mm behind the head, outside the bone, at the end of a green guide line, and appears on the selected screw only. Entry and length stay fixed, and the status bar shows the convergence and craniocaudal angles while you move (unsigned convergence when the screw has no side). The guide is a control only: it is not graded, saved, or exported.
-5. Move the pointer without holding a button.
+5. Hold the left button and drag: the part moves while the button is down and stops when you release it. Drag again as often as you like; each drag starts from where the part is now, so pressing away from it does not make it jump.
 6. Double-click again to finish.
+
+The grade and the warnings are recalculated when you release the button, not during the drag, so the screw follows the pointer smoothly; the colour and the numbers shown while dragging are those from before the drag.
 7. Press `Esc` to leave movement mode while retaining the last valid position. **Edit → Undo** (6.5) puts the screw back where the drag began.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
 
-In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, move the pointer, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
+In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, drag with the left button held, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
 
 ### 6.3 Diameter
 
@@ -454,7 +456,7 @@ The menu bar's **Edit** menu has **Undo** (`Ctrl+Z`) and **Redo** (`Ctrl+Shift+Z
 
 ## 7. Manual Tools
 
-Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
+Add Screw, Distance, and Angle are buttons in the floating tool palette (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
 
 ### Add Screw
 
@@ -522,7 +524,7 @@ In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; se
 |---|---|
 | Left-drag | Rotate |
 | Mouse wheel | Zoom |
-| `Pan` then drag or Shift-drag | Move model |
+| Right- or middle-drag, Shift-drag, or `Pan` then drag | Move model |
 | Double-click anatomy | Focus on a point |
 | `Reset View` | Restore sagittal startup orientation |
 | `Vertebra Transparency` | Reveal or obscure internal screws |

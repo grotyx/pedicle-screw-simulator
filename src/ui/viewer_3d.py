@@ -466,6 +466,19 @@ def _flush_logs():
         handler.flush()
 
 
+
+def trackball_style():
+    """Trackball camera whose right drag pans like the middle button.
+
+    The default right drag zooms, which the wheel already does, so the model
+    could only be moved with Shift or the Pan toggle.
+    """
+    style = vtk.vtkInteractorStyleTrackballCamera()
+    # An observer on a style event replaces VTK's default handler for it.
+    style.AddObserver("RightButtonPressEvent", lambda obj, _event: obj.OnMiddleButtonDown())
+    style.AddObserver("RightButtonReleaseEvent", lambda obj, _event: obj.OnMiddleButtonUp())
+    return style
+
 class Viewer3D(QWidget):
     """
     3D viewer widget for volume rendering.
@@ -589,6 +602,10 @@ class Viewer3D(QWidget):
         self._screw_drag_begin_callback: Optional[Callable] = None
         self._screw_drag_callback: Optional[Callable] = None
         self._screw_drag_end_callback: Optional[Callable] = None
+        self._screw_grab_callback: Optional[Callable] = None
+        self._screw_release_callback: Optional[Callable] = None
+        #: Left button held during movement mode: only then does the screw move.
+        self._screw_stroke_active = False
         self._screw_select_callback: Optional[Callable] = None
         self._double_click_detector = DoubleClickDetector()
         self._focus_double_click_detector = DoubleClickDetector()
@@ -777,7 +794,7 @@ class Viewer3D(QWidget):
         self.pan_mode_toggle.setObjectName("panModeToggle")
         self.pan_mode_toggle.setText("Pan")
         self.pan_mode_toggle.setToolTip(
-            "Move the whole 3D model: enable Pan and drag, or use Shift+drag. "
+            "Move the whole 3D model: right- or middle-drag, Shift+drag, or enable Pan and drag. "
             "Double-click anatomy to center and zoom."
         )
         self.pan_mode_toggle.setCheckable(True)
@@ -918,8 +935,7 @@ class Viewer3D(QWidget):
 
         # Trackball interactor with LOD update rates
         interactor = render_window.GetInteractor()
-        style = vtk.vtkInteractorStyleTrackballCamera()
-        interactor.SetInteractorStyle(style)
+        interactor.SetInteractorStyle(trackball_style())
         interactor.SetDesiredUpdateRate(15.0)
         interactor.SetStillUpdateRate(2.0)
 
@@ -1685,12 +1701,16 @@ class Viewer3D(QWidget):
         on_drag: Optional[Callable] = None,
         on_end: Optional[Callable] = None,
         on_select: Optional[Callable] = None,
+        on_grab: Optional[Callable] = None,
+        on_release: Optional[Callable] = None,
     ) -> None:
         """Connect 3D direct screw selection and manipulation callbacks."""
         self._screw_drag_begin_callback = on_begin
         self._screw_drag_callback = on_drag
         self._screw_drag_end_callback = on_end
         self._screw_select_callback = on_select
+        self._screw_grab_callback = on_grab
+        self._screw_release_callback = on_release
 
     def set_selected_screw(self, screw_id: Optional[int]) -> None:
         """Highlight one screw without hiding the remaining plan."""
@@ -1796,6 +1816,12 @@ class Viewer3D(QWidget):
             result = self._process_screw_press(x, y, None, None, None)
             if result == "ended":
                 self._restore_trackball_after_event()
+            elif result == "locked":
+                world_point = self._display_to_drag_plane(x, y)
+                if world_point is not None:
+                    self._screw_stroke_active = True
+                    if self._screw_grab_callback is not None:
+                        self._screw_grab_callback(tuple(world_point))
             return
 
         if self._pan_mode_active:
@@ -1832,12 +1858,14 @@ class Viewer3D(QWidget):
             x, y, (screw_id, part), picked_world, camera_normal
         )
         if result == "started":
+            self._screw_stroke_active = True
             self._set_trackball_enabled(False)
 
     def _on_screw_mouse_move(self, obj, event) -> None:
         """Move the active screw part on a camera-facing world plane."""
         if (
             not self._screw_drag_active
+            or not self._screw_stroke_active
             or self._screw_drag_plane_origin is None
             or self._screw_drag_plane_normal is None
         ):
@@ -1849,7 +1877,11 @@ class Viewer3D(QWidget):
             self._emit_screw_pointer_move(world_point)
 
     def _on_screw_left_release(self, obj, event) -> None:
-        """Release does not end double-click-locked screw movement."""
+        """Release stops moving the screw; movement mode stays on."""
+        if self.__dict__.get("_screw_stroke_active", False):
+            self._screw_stroke_active = False
+            if self._screw_release_callback is not None:
+                self._screw_release_callback()
         if self.__dict__.get("_pan_forced_shift", False):
             self._pan_forced_shift = False
             interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
@@ -1909,6 +1941,7 @@ class Viewer3D(QWidget):
 
     def _finish_screw_pointer_move(self, notify: bool) -> None:
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._screw_drag_plane_origin = None
         self._screw_drag_plane_normal = None

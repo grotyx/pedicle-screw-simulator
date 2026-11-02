@@ -85,7 +85,7 @@ Planning 작업화면은 다음 영역으로 구성됩니다.
 - **Axial, Sagittal, Coronal MPR:** crosshair, segmentation, 측정 및 스크류가 표시되는 동기화 CT 단면
 - **3D 화면:** CT volume, 척추 메시, 스크류 및 선택적인 MPR plane — **Screw MPR**이 활성화된 동안에는 표준 axial/sagittal/coronal plane 대신 스크류 정렬 plane이 표시됩니다(5.8절 참고). 머리글에는 **Vertebrae / Full CT** 토글이 있습니다(5.2절 참고)
 - **오른쪽 단계 패널:** 단계 레일의 각 단계에 대응하는 페이지 — Study, Segment, Plan, Review — 각 페이지는 머리글로 시작하며, 아래에서 페이지별로 설명합니다
-- **도구 독(tool dock):** 메인 뷰와 썸네일 사이의 별도 줄에 놓인 도구 버튼 줄. Select, Add Screw, Distance, Angle, Screw MPR과 화면 맞춤 버튼이 들어 있습니다
+- **도구 막대(tool palette):** 화면 위에 떠 있는 작은 세로 도구 버튼 줄. 손잡이로 옮길 수 있고, Select, Add Screw, Distance, Angle, Screw MPR과 화면 맞춤 버튼이 들어 있습니다
 - **상단 도구 모음:** 왼쪽에 **Open DICOM**, 오른쪽에 voxel 간격을 보여주는 study chip과 **RESEARCH USE ONLY** 배지
 
 ### 단계 레일
@@ -124,13 +124,13 @@ chip을 클릭하면 그 스크류가 선택되고, 스크류 목록·화면·�
 
 ### 메인 뷰와 썸네일
 
-**Planning** 배치에서는 한 화면이 크게 표시되고 나머지 세 화면은 그 아래 썸네일 한 줄로 놓입니다. study를 열면 메인 뷰는 3D입니다. 화면을 메인 뷰로 바꾸려면 그 화면 머리글의 확대 버튼(⤢, tooltip "Show in the main view")을 누릅니다. 이전 메인 뷰는 썸네일이 됩니다. 썸네일 안을 클릭하면 원래 의미(crosshair, 선택)가 그대로 유지됩니다. 화면이 썸네일인 동안에는 떠 있는 확대·축소 및 오버레이 조절이 숨겨지며, 메인 뷰가 되면 다시 나타납니다. 머리글을 더블클릭하면 여전히 그 창이 최대화됩니다(아래 참고).
+**Planning** 배치에서는 한 화면이 크게 표시되고 나머지 세 화면은 그 아래 썸네일 한 줄로 놓입니다. 둘 사이의 얇은 막대를 위아래로 끌면 크기를 바꿀 수 있고, 바꾼 크기는 기억됩니다. study를 열면 메인 뷰는 3D입니다. 화면을 메인 뷰로 바꾸려면 그 화면 머리글의 확대 버튼(⤢, tooltip "Show in the main view")을 누릅니다. 이전 메인 뷰는 썸네일이 됩니다. 썸네일 안을 클릭하면 원래 의미(crosshair, 선택)가 그대로 유지됩니다. 화면이 썸네일인 동안에는 떠 있는 확대·축소 및 오버레이 조절이 숨겨지며, 메인 뷰가 되면 다시 나타납니다. 머리글을 더블클릭하면 여전히 그 창이 최대화됩니다(아래 참고).
 
 **Screw MPR**을 켜면 axial 화면이 메인 뷰가 됩니다. 스크류를 수정하는 곳이 oblique axial이기 때문입니다. 끄면 직접 고른 메인 뷰가 그대로 유지됩니다. 새 study를 열면 메인 뷰는 3D로 돌아가고 최대화된 창은 원래대로 돌아옵니다. MPR Focus 배치는 그대로 유지됩니다.
 
-### 도구 독
+### 도구 막대
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 메인 뷰 바로 아래(썸네일 줄 위) 별도 줄의 가운데에 놓인 독의 버튼이며, 그룹별로 구분됩니다(Select·Add Screw | Distance·Angle | Screw MPR | Fit MPR·Fit 3D). 강조된 버튼이 현재 도구입니다. 독은 영상을 가리지 않으므로 방향 글자와 각 화면의 조절 버튼이 늘 보입니다. 최대화된 창에서도 그 아래에, MPR Focus 배치에서는 2×2 격자 아래에 놓입니다. 3D 확대·축소 명령과 화면 맞춤 명령은 **View** 메뉴에도 있습니다.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 화면 위에 떠 있는 작은 세로 도구 막대의 버튼이며, 그룹별로 구분됩니다(Select·Add Screw | Distance·Angle | Screw MPR | Fit MPR·Fit 3D). 강조된 버튼이 현재 도구입니다. 맨 위의 손잡이(⠿)를 끌면 화면 위 아무 곳으로나 옮길 수 있고, 가장자리 가까이 놓으면 그 가장자리에 붙습니다. 놓은 자리는 모든 배치에서, 프로그램을 다시 켜도 유지됩니다. 처음에는 왼쪽 가장자리에 있습니다. 3D 확대·축소 명령과 화면 맞춤 명령은 **View** 메뉴에도 있습니다.
 
 ### Study chip과 연구 전용 배지
 
@@ -138,7 +138,7 @@ Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 메인 뷰 바
 
 ### 배치
 
-배치는 **View** 메뉴(**Planning Layout** / **MPR Focus Layout**, 또는 **Layout** 선택 상자)에서 고릅니다. **Planning**은 큰 메인 뷰 하나와 썸네일 세 개를 사용합니다. **MPR Focus**는 MPR 검토를 위한 큰 2×2 배치를 사용하며, 이 배치에는 메인 뷰와 썸네일이 적용되지 않고 도구 독은 2×2 격자 아래에 놓입니다.
+배치는 **View** 메뉴(**Planning Layout** / **MPR Focus Layout**, 또는 **Layout** 선택 상자)에서 고릅니다. **Planning**은 큰 메인 뷰 하나와 썸네일 세 개를 사용합니다. **MPR Focus**는 MPR 검토를 위한 큰 2×2 배치를 사용하며, 이 배치에는 메인 뷰와 썸네일이 적용되지 않습니다.
 
 ### 방향 표시
 
@@ -152,7 +152,7 @@ Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, Fit 3D는 메인 뷰 바
 
 ### 테마
 
-**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다. 세 테마 모두 평면(flat) 색을 사용하며, 도구 독과 화면 위에 떠 있는 조절(확대·축소 조절, 3D 오버레이)은 테마를 따르는 하나의 불투명 평면 스타일을 공유합니다.
+**View** 메뉴의 **Theme** 선택 상자에서 밝은 테마 하나(Soft Light)와 어두운 테마 둘(기본값인 Graphite Blue, Graphite Mint) 중 고를 수 있습니다. 선택은 다음 실행에도 유지됩니다. 세 테마 모두 평면(flat) 색을 사용하며, 도구 막대와 화면 위에 떠 있는 조절(확대·축소 조절, 3D 오버레이)은 테마를 따르는 하나의 불투명 평면 스타일을 공유합니다.
 
 ## 5. 기본 계획 과정
 
@@ -419,13 +419,15 @@ Review 페이지의 **Edit** 버튼을 누르면 **Move entry point**, **Move ti
 2. 뾰족한 tip 또는 원위부 shaft를 더블클릭하면 tip만 이동합니다.
 3. 중간 shaft를 더블클릭하면 entry와 tip이 함께 이동합니다.
 4. 파란 guide 손잡이를 더블클릭하면 entry를 중심으로 스크류가 회전합니다. 손잡이는 head 뒤 60 mm, 뼈 바깥쪽의 초록 guide 선 끝에 있고, 선택한 스크류에만 보입니다. 회전하는 동안 entry와 길이는 고정되고, 상태 표시줄에 convergence와 craniocaudal 각도가 표시됩니다(side가 없는 스크류는 convergence를 부호 없이 표시). guide는 조작용일 뿐이며 채점·저장·내보내기에 포함되지 않습니다.
-5. 마우스 버튼을 누르지 않은 상태로 포인터를 움직입니다.
+5. 왼쪽 버튼을 누른 채 드래그합니다. 누르고 있는 동안만 움직이고, 놓으면 멈춥니다. 여러 번 다시 드래그할 수 있으며, 매번 지금 위치에서 시작하므로 다른 곳을 눌러도 튀지 않습니다.
 6. 다시 더블클릭하면 이동을 종료합니다.
+
+등급과 경고는 드래그하는 동안이 아니라 버튼을 놓을 때 다시 계산합니다. 그래서 스크류가 포인터를 부드럽게 따라가고, 드래그하는 동안 보이는 색과 숫자는 드래그 전 값입니다.
 7. `Esc`를 누르면 마지막 유효 위치를 유지하고 이동 모드를 종료합니다. **Edit → Undo**(6.5)로 드래그를 시작하기 전 위치로 되돌릴 수 있습니다.
 
 MPR에서 수정할 때 CT는 고정되고 스크류가 움직입니다. 수정 후 Screw MPR은 변경된 궤적에 다시 정렬됩니다.
 
-Screw MPR에서는 Oblique Axial과 Oblique Sagittal 창에도 선택한 스크류의 guide 선과 파란 손잡이가 같은 모양으로 표시됩니다(Cross-section에는 없음). 손잡이를 더블클릭하고 포인터를 움직인 뒤 다시 더블클릭하면, entry와 길이를 고정한 채 그 창의 평면 안에서 entry를 중심으로 스크류가 회전합니다. 손잡이가 CT 영상 바깥에 있어도 포인터를 따라갑니다. 움직이는 동안 창은 고정되고, 끝내면 다시 정렬됩니다.
+Screw MPR에서는 Oblique Axial과 Oblique Sagittal 창에도 선택한 스크류의 guide 선과 파란 손잡이가 같은 모양으로 표시됩니다(Cross-section에는 없음). 손잡이를 더블클릭하고 왼쪽 버튼을 누른 채 드래그한 뒤 다시 더블클릭하면, entry와 길이를 고정한 채 그 창의 평면 안에서 entry를 중심으로 스크류가 회전합니다. 손잡이가 CT 영상 바깥에 있어도 포인터를 따라갑니다. 움직이는 동안 창은 고정되고, 끝내면 다시 정렬됩니다.
 
 ### 6.3 직경 입력
 
@@ -451,7 +453,7 @@ Screw MPR에서는 Oblique Axial과 Oblique Sagittal 창에도 선택한 스크�
 
 ## 7. 수동 도구
 
-Add Screw, Distance, Angle은 메인 뷰 아래 도구 독의 버튼입니다(4절 참고). **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
+Add Screw, Distance, Angle은 화면 위에 떠 있는 도구 막대의 버튼입니다(4절 참고). **Measurements**(모드 콤보, 목록, Show Cut / Edit / Delete 버튼)는 **Review** 페이지 하단에 접이식 섹션으로 있습니다(5.9절 참고).
 
 ### Add Screw
 
@@ -519,7 +521,7 @@ Screw MPR에서는 휠과 가운데 버튼 드래그가 스크류 정렬 단면�
 |---|---|
 | 왼쪽 드래그 | 회전 |
 | 마우스 휠 | 확대·축소 |
-| `Pan` 후 드래그 또는 Shift+드래그 | 모델 이동 |
+| 오른쪽·가운데 버튼 드래그, Shift+드래그, 또는 `Pan` 후 드래그 | 모델 이동 |
 | 해부학 구조 더블클릭 | 해당 위치로 초점 이동 |
 | `Reset View` | 초기 sagittal 방향 복원 |
 | `Vertebra Transparency` | 내부 스크류 표시 정도 조절 |

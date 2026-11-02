@@ -396,3 +396,54 @@ def test_guide_drag_without_movement_does_not_touch_the_screw():
 
     assert window._tool_ctrl.refreshed == []
     assert window._tool_ctrl.screw_tool.get_screws()[0].reviewed is True
+
+
+def test_a_new_grab_moves_the_part_from_where_it_is_now():
+    # Movement mode stays on between strokes; each press re-anchors, so a
+    # press away from the head does not make the head jump to the pointer.
+    controller, window = _make_controller()
+    controller.begin_drag(0, "entry", (0.0, 0.0, 0.0))
+    controller.update_drag((4.0, 0.0, 0.0))
+    controller.finish_stroke()
+
+    controller.grab((20.0, 20.0, 20.0))
+    controller.update_drag((21.0, 22.0, 20.0))
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == pytest.approx((5.0, 2.0, 0.0))
+    assert screw.target_point == (0.0, 0.0, 40.0)
+    assert controller.is_active
+
+
+def test_drag_samples_skip_grading_until_the_stroke_ends(monkeypatch):
+    controller, window = _make_controller()
+    tool = window._tool_ctrl.screw_tool
+    graded = []
+    original = tool._evaluate_screw
+    monkeypatch.setattr(tool, "_evaluate_screw", lambda screw: (graded.append(1), original(screw)))
+
+    controller.begin_drag(0, "shaft", (0.0, 0.0, 20.0))
+    for step in range(5):
+        controller.update_drag((float(step), 0.0, 20.0))
+    assert graded == []
+
+    controller.finish_stroke()
+    assert graded == [1]
+    assert window._tool_ctrl.refreshed[-1][1] is tool.get_screws()[0]
+    controller.finish_stroke()  # nothing moved since: no second grading
+    assert graded == [1]
+
+
+def test_leaving_movement_mode_grades_the_last_position(monkeypatch):
+    controller, window = _make_controller()
+    tool = window._tool_ctrl.screw_tool
+    graded = []
+    original = tool._evaluate_screw
+    monkeypatch.setattr(tool, "_evaluate_screw", lambda screw: (graded.append(1), original(screw)))
+
+    controller.begin_drag(0, "tip", (0.0, 0.0, 40.0))
+    controller.update_drag((1.0, 0.0, 40.0))
+    controller.cancel(show_message=False)  # Esc or a selection change
+
+    assert graded == [1]
+    assert tool.get_screws()[0].target_point == (1.0, 0.0, 40.0)

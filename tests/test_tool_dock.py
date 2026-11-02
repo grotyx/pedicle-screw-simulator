@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint  # noqa: E402
 from PyQt6.QtGui import QAction, QActionGroup  # noqa: E402
 from PyQt6.QtWidgets import QFrame, QWidget  # noqa: E402
 
@@ -68,4 +69,20 @@ def test_separator_is_a_flat_one_pixel_rule(qtbot):
     qtbot.addWidget(dock)
     separator = dock.findChildren(QFrame, "toolDockSeparator")[0]
     assert separator.frameShape() == QFrame.Shape.NoFrame
-    assert separator.maximumWidth() == 1
+    assert separator.maximumHeight() == 1
+
+
+def test_dock_stays_inside_its_parent_and_snaps_to_edges(qtbot):
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    host = QWidget()
+    host.resize(900, 900)
+    qtbot.addWidget(host)
+    dock = ToolDock(list(_actions(owner)), host)
+    margin = ToolDock.MARGIN
+
+    assert dock.place(QPoint(-50, -50)) == QPoint(margin, margin)
+    right = host.width() - dock.width() - margin
+    assert dock.place(QPoint(right - 10, 200)).x() == right  # snapped
+    assert dock.place(QPoint(300, 200)) == QPoint(300, 200)  # free in the middle
+    assert dock.place(QPoint(5000, 5000)) == QPoint(right, host.height() - dock.height() - margin)

@@ -8,6 +8,7 @@ Implements two placement modes:
 Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
+import dataclasses
 import math
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -923,12 +924,26 @@ class ScrewTool:
         index: int,
         entry_point: Tuple[float, float, float],
         target_point: Tuple[float, float, float],
+        grade: bool = True,
     ) -> Screw:
-        """Replace one screw geometry and recalculate derived safety data."""
+        """Replace one screw geometry and recalculate derived safety data.
+
+        ``grade=False`` only moves the screw and keeps its last grade: a drag
+        sends dozens of samples a second and grading each one made the screw
+        stutter. The caller grades once the drag stroke ends.
+        """
         if index < 0 or index >= len(self._screws):
             raise IndexError(f"Screw index out of range: {index}")
 
         original = self._screws[index]
+        if not grade:
+            moved = dataclasses.replace(
+                original,
+                entry_point=tuple(float(value) for value in entry_point),
+                target_point=tuple(float(value) for value in target_point),
+            )
+            self._screws[index] = moved
+            return moved
         updated = Screw(
             entry_point=tuple(float(value) for value in entry_point),
             target_point=tuple(float(value) for value in target_point),

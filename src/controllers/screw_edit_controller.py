@@ -34,6 +34,8 @@ class ScrewEditController:
         self._active_source: Optional[str] = None
         #: Screw list as it was when the current drag began, for undo.
         self._drag_before: Optional[list] = None
+        #: The screw moved since it was last graded (drag samples skip grading).
+        self._ungraded = False
 
     @property
     def mode(self) -> str:
@@ -86,6 +88,7 @@ class ScrewEditController:
     def cancel(self, show_message: bool = True) -> None:
         """Cancel the pending edit without changing screw geometry."""
         was_active = self.is_active
+        self.finish_stroke()
         # Esc, a selection change or an abort ends a drag but keeps its
         # geometry, so it is still one undo step.
         before, self._drag_before = self._drag_before, None
@@ -158,10 +161,13 @@ class ScrewEditController:
 
         point = self._point(world_point)
         self._active_source = str(source)
+        delta = tuple(point[axis] - self._drag_anchor[axis] for axis in range(3))
         if self._mode == "entry":
-            entry_point, target_point = point, self._drag_target
+            entry_point = tuple(self._drag_entry[axis] + delta[axis] for axis in range(3))
+            target_point = self._drag_target
         elif self._mode == "tip":
-            entry_point, target_point = self._drag_entry, point
+            entry_point = self._drag_entry
+            target_point = tuple(self._drag_target[axis] + delta[axis] for axis in range(3))
         elif self._mode == "rotate":
             try:
                 target_point = target_from_guide_drag(
@@ -182,9 +188,6 @@ class ScrewEditController:
             if current is not None and math.dist(current.target_point, target_point) < 1e-6:
                 return True
         else:
-            delta = tuple(
-                point[axis] - self._drag_anchor[axis] for axis in range(3)
-            )
             entry_point = tuple(
                 self._drag_entry[axis] + delta[axis] for axis in range(3)
             )
@@ -192,8 +195,9 @@ class ScrewEditController:
                 self._drag_target[axis] + delta[axis] for axis in range(3)
             )
 
-        if not self._apply_points(entry_point, target_point):
+        if not self._apply_points(entry_point, target_point, grade=False):
             return False
+        self._ungraded = True
         updated = self._screw_at(self._selected_index)
         if str(source).strip().lower() == "3d" and updated is not None:
             self._focus_mpr_on_3d_edit(updated)
@@ -231,6 +235,31 @@ class ScrewEditController:
             *point,
             source_plane="3d_screw_edit",
         )
+
+    def grab(self, world_point: Point3D) -> None:
+        """Start another stroke of the active drag from ``world_point``."""
+        if not self.is_active or self._selected_index is None:
+            return
+        screw = self._screw_at(self._selected_index)
+        if screw is None:
+            return
+        self._drag_anchor = self._point(world_point)
+        self._drag_entry = self._point(screw.entry_point)
+        self._drag_target = self._point(screw.target_point)
+
+    def finish_stroke(self) -> None:
+        """Grade the screw where the last stroke left it."""
+        if not self._ungraded or self._selected_index is None:
+            return
+        self._ungraded = False
+        screw = self._screw_at(self._selected_index)
+        if screw is None:
+            return
+        tool_ctrl = self._window._tool_ctrl
+        updated = tool_ctrl.screw_tool.replace_screw(
+            self._selected_index, screw.entry_point, screw.target_point
+        )
+        tool_ctrl.refresh_screw(self._selected_index, updated)
 
     def end_drag(self) -> None:
         """Finish direct manipulation while preserving the last valid state."""
@@ -358,7 +387,9 @@ class ScrewEditController:
         )
         return moved_entry, moved_target
 
-    def _apply_points(self, entry_point: Point3D, target_point: Point3D) -> bool:
+    def _apply_points(
+        self, entry_point: Point3D, target_point: Point3D, grade: bool = True
+    ) -> bool:
         """Validate, store, and synchronize one proposed screw geometry."""
         if self._selected_index is None:
             return False
@@ -377,6 +408,7 @@ class ScrewEditController:
             self._selected_index,
             entry_point=entry_point,
             target_point=target_point,
+            grade=grade,
         )
         self._window._tool_ctrl.refresh_screw(self._selected_index, updated)
         return True

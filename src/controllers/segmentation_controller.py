@@ -44,8 +44,9 @@ class AutoSegmentationThread(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
     cancelled = pyqtSignal()
+    device_selected = pyqtSignal(str)
 
-    def __init__(self, sitk_image, task: str, device: str, work_dir: str,
+    def __init__(self, sitk_image, task: str, device: Optional[str], work_dir: str,
                  roi_subset=None, fast=False, force_split=False,
                  subregion_model=None, refine: bool = True):
         super().__init__()
@@ -71,6 +72,11 @@ class AutoSegmentationThread(QThread):
 
     def run(self):
         try:
+            if self.device is None:
+                # Probing CUDA imports torch: seconds that must not block the UI.
+                self.device = preferred_segmentation_device()
+                self.force_split = self.device == "cpu" and not self.fast
+                self.device_selected.emit(self.device)
             result = run_segmentation_with_fallback(
                 image=self.sitk_image,
                 work_dir=self.work_dir,
@@ -187,12 +193,7 @@ class SegmentationController:
             return
 
         ui_task = self._window.seg_task_combo.currentData()
-        device = preferred_segmentation_device()
-        device_index = self._window.seg_device_combo.findData(device)
-        if device_index >= 0:
-            self._window.seg_device_combo.setCurrentIndex(device_index)
         fast = self._window.seg_quality_combo.currentData() == "fast"
-        force_split = device == "cpu" and not fast
 
         # "spine_only" uses the 'total' task with roi_subset filter
         if ui_task == "spine_only":
@@ -236,19 +237,24 @@ class SegmentationController:
         self._segmentation_thread = AutoSegmentationThread(
             sitk_image=sitk_image,
             task=task,
-            device=device,
+            device=None,
             work_dir=work_dir,
             roi_subset=roi_subset,
             fast=fast,
-            force_split=force_split,
             subregion_model=self._resolve_subregion_model(),
             refine=self._window.seg_refine_check.isChecked(),
         )
         self._segmentation_thread.progress.connect(self._on_progress)
+        self._segmentation_thread.device_selected.connect(self._on_device_selected)
         self._segmentation_thread.finished.connect(self._on_finished)
         self._segmentation_thread.error.connect(self._on_error)
         self._segmentation_thread.cancelled.connect(self._on_cancelled)
         self._segmentation_thread.start()
+
+    def _on_device_selected(self, device: str) -> None:
+        index = self._window.seg_device_combo.findData(device)
+        if index >= 0:
+            self._window.seg_device_combo.setCurrentIndex(index)
 
     def _resolve_subregion_model(self):
         """Locate the optional pedicle subregion model requested in the UI.
