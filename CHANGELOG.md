@@ -42,6 +42,8 @@ current version; every other place the version appears is derived from it.
   smoothed and meshed again on each click.
 - Dragging the tool palette on Windows no longer leaves copies of it over
   the views.
+- Turning Screw MPR on keeps the 2×2 MPR Focus layout instead of switching
+  back to the Planning layout.
 
 ## [0.2.7] - 2026-11-02
 

@@ -141,8 +141,12 @@ class ScrewMPRController:
 
         self._active = True
         self._set_review_filter(row)
-        # The oblique axial is where the screw is edited, so it goes large.
-        self._window.set_hero_view("axial", show_planning=True)
+        # The oblique axial is where the screw is edited, so it goes large;
+        # a chosen 2x2 MPR Focus layout stays as it is.
+        self._window.set_hero_view(
+            "axial",
+            show_planning=getattr(self._window, "_view_layout_mode", "planning") != "mpr_focus",
+        )
         self._set_slider_value(50)
         self.refresh_selected_screw()
         self.refresh_controls()

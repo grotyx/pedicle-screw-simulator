@@ -129,7 +129,7 @@ Click a chip to select that screw; the screw list, the views, and the map's high
 
 In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. Drag the thin bar between them up or down to resize the two; the size is remembered. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
 
-Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
+Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited (in the MPR Focus layout the 2×2 grid stays as it is); turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
 
 ### Tool palette
 

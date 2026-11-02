@@ -427,6 +427,19 @@ def test_entering_screw_mpr_makes_axial_the_main_view(ui_main_window):
     assert window.hero_view == "axial"
 
 
+def test_screw_mpr_keeps_the_mpr_focus_layout(ui_main_window):
+    window = ui_main_window
+    _load_study(window, "MPR-SERIES-1")
+    _add_levelled_screw(window, "L4", "left")
+    window.screw_list_widget.setCurrentRow(0)
+    window.set_view_layout("mpr_focus")
+
+    assert window._screw_mpr_ctrl.enter() is True
+
+    assert window._view_layout_mode == "mpr_focus"
+    assert window.hero_view == "axial"  # used when Planning is shown again
+
+
 def test_startup_lays_out_the_views_once(monkeypatch, qtbot, isolated_qsettings):
     monkeypatch.setattr(main_window_module, "MPRViewer", DummyMPRViewer)
     monkeypatch.setattr(main_window_module, "Viewer3D", DummyViewer3D)
