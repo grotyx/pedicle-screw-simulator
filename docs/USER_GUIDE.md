@@ -425,7 +425,7 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 5. Hold the left button and drag: the part moves while the button is down and stops when you release it. Drag again as often as you like; each drag starts from where the part is now, so pressing away from it does not make it jump.
 6. Double-click again to finish.
 
-The grade and the warnings are recalculated when you release the button, not during the drag, so the screw follows the pointer smoothly; the colour and the numbers shown while dragging are those from before the drag.
+The grade and warnings are recalculated when you release the button. During movement, the table, construct map and inspector show **grading after release**; previous safety measurements are hidden. The first actual movement clears **✓ Reviewed**. A gesture that does not change geometry keeps the review mark and creates no undo step. Each released stroke creates one undo step. Saving a plan or exporting CSV/HTML first finishes the active edit and grades its final position. Switching viewers, clicking another pane, changing selection or pressing `Esc` finishes the pending stroke before leaving its movement mode. After grading, the row uses the detected vertebra level; measurements from a previous level are discarded when they cannot be measured for the new level.
 7. Press `Esc` to leave movement mode while retaining the last valid position. **Edit → Undo** (6.5) puts the screw back where the drag began.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.

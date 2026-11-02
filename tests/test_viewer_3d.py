@@ -2350,3 +2350,17 @@ def test_right_drag_pans_the_3d_view():
     assert style.GetState() == 2  # VTKIS_PAN, not the default dolly
     interactor.InvokeEvent("RightButtonReleaseEvent")
     assert style.GetState() == 0
+
+
+def test_screw_visual_updates_reuse_all_props_and_mappers():
+    from src.ui.viewer_3d import create_screw_visual, update_screw_visual
+    visual = create_screw_visual(0, (0, 0, 0), (0, 0, 40), 3)
+    props = visual.props
+    mappers = [p.GetMapper() for p in props]
+    update_screw_visual(visual, (5, 4, 3), (25, 4, 3), 2, (1, 0, 0))
+    assert visual.props == props
+    assert [p.GetMapper() for p in props] == mappers
+    assert visual.entry_point == (5, 4, 3)
+    assert visual.target_point == (25, 4, 3)
+    assert visual.entry_actor.GetBounds() == pytest.approx((2, 8, 1, 7, 0, 6), abs=0.03)
+    assert visual.tip_actor.GetBounds()[1] == pytest.approx(25, abs=0.03)

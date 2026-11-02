@@ -440,3 +440,25 @@ def test_diameter_edits_separated_by_a_selection_change_are_two_steps(ui_main_wi
     window._undo_action.trigger()
 
     assert window.screw_tool.get_screws()[0].diameter == 7.0
+
+
+def test_each_released_stroke_and_view_handoff_undo_in_order(ui_main_window):
+    window = _loaded(ui_main_window)
+    screw = Screw((2, 3, 4), (2, 3, 10))
+    window._tool_ctrl.add_existing_screw(screw, select=True)
+    controller = window._screw_edit_ctrl
+    controller.begin_drag(0, "shaft", (2, 3, 7))
+    controller.queue_drag((4, 3, 7), "3D")
+    controller.finish_stroke()
+    controller.begin_drag(0, "shaft", (4, 3, 7))
+    controller.queue_drag((7, 3, 7), "Axial MPR")
+    controller.end_drag()
+    assert window.screw_tool.get_screws()[0].entry_point == (7, 3, 4)
+    window._tool_ctrl.undo()
+    assert window.screw_tool.get_screws()[0].entry_point == (4, 3, 4)
+    window._tool_ctrl.undo()
+    assert window.screw_tool.get_screws()[0].entry_point == (2, 3, 4)
+    window._tool_ctrl.redo()
+    assert window.screw_tool.get_screws()[0].entry_point == (4, 3, 4)
+    window._tool_ctrl.redo()
+    assert window.screw_tool.get_screws()[0].entry_point == (7, 3, 4)

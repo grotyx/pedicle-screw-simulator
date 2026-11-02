@@ -475,3 +475,24 @@ def test_a_screw_view_measurement_cannot_be_dragged(ui_main_window):
     tool.update_measurement_point(entry_id, 1, (9.0, 0.0, 0.0))
     assert tool.measurement_tool.get_measurements()[0].points[1] == (5.0, 0.0, 0.0)
     assert "delete" in window.statusbar.currentMessage().lower()
+
+
+@pytest.mark.parametrize("method", ["save_dialog", "export_csv_dialog", "export_report_dialog"])
+def test_plan_outputs_finalize_pending_drag_before_reading_screws(ui_main_window, monkeypatch, method):
+    from src.models.screw import Screw
+    window = ui_main_window
+    window.volume_manager.set_volume(sitk.Image([16, 16, 16], sitk.sitkInt16))
+    window._tool_ctrl.add_existing_screw(Screw((2, 3, 4), (2, 3, 10)), select=True)
+    edit = window._screw_edit_ctrl
+    edit.begin_drag(0, "shaft", (2, 3, 7))
+    edit.queue_drag((5, 3, 7), "3D")
+    seen = []
+
+    def choose_path(*_args):
+        screw = window.screw_tool.get_screws()[0]
+        seen.append((screw.entry_point, getattr(screw, "grading_pending", False), edit.is_active))
+        return "", ""
+
+    monkeypatch.setattr(plan_controller_module.QFileDialog, "getSaveFileName", choose_path)
+    getattr(window._plan_ctrl, method)()
+    assert seen == [((5, 3, 4), False, False)]

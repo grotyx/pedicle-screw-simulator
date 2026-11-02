@@ -45,6 +45,12 @@ current version; every other place the version appears is derived from it.
 - Turning Screw MPR on keeps the 2×2 MPR Focus layout instead of switching
   back to the Planning layout.
 
+### Fixed
+
+- Screw edits now finish each changed stroke as one undo step, including viewer handoffs, other-pane clicks, selection changes and Esc. Unchanged gestures preserve Reviewed.
+- Moving screws show “grading after release” instead of old safety values, clear Reviewed on the first change, and reconcile the detected vertebra level after grading. Measurements from the previous level are invalidated.
+- Live screw edits reuse 3D/MPR actors and apply the latest pointer sample at display cadence. Table rows and construct chips update in place; unchanged slices and crosshairs produce no notifications, and one wheel step updates its slice once.
+
 ## [0.2.7] - 2026-11-02
 
 ### Changed

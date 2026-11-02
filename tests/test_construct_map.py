@@ -103,3 +103,16 @@ def test_chip_length_is_rounded_to_whole_millimetres(qtbot):
     qtbot.addWidget(m)
     m.set_screws([screw("L3", "left", "A", 6.5, 51.923)])
     assert m.findChildren(QLabel, "constructChip")[0].text() == "A  6.5×52"
+
+
+def test_geometry_and_grade_updates_reuse_chips_and_layout(qtbot, monkeypatch):
+    m = ConstructMap()
+    qtbot.addWidget(m)
+    m.set_screws([screw("L4", "left"), screw("L4", "right")])
+    chips = list(m._chips)
+    rebuilds = []
+    monkeypatch.setattr(m, "_rebuild", lambda *_: rebuilds.append(1))
+    m.set_screws([screw("L4", "left", "C", length=47), screw("L4", "right")])
+    assert not rebuilds
+    assert m._chips == chips
+    assert next(c for c in chips if c.property("screwIndex") == 0).text() == "C  6.5×47"

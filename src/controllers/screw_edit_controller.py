@@ -21,6 +21,7 @@ class ScrewEditController:
 
     MODES = {"entry", "tip", "move"}
     MIN_LENGTH_MM = 1.0
+    GEOMETRY_TOLERANCE_MM = 1e-6
     GUIDE_REACH_MM = GUIDE_REACH_MM
 
     def __init__(self, volume_manager, main_window):
@@ -36,6 +37,8 @@ class ScrewEditController:
         self._drag_before: Optional[list] = None
         #: The screw moved since it was last graded (drag samples skip grading).
         self._ungraded = False
+        self._pending_sample = None
+        self._sample_timer = None
 
     @property
     def mode(self) -> str:
@@ -71,6 +74,7 @@ class ScrewEditController:
             self.refresh_controls()
             return False
 
+        self.cancel(show_message=False)
         self._window._tool_ctrl.set_tool("navigate")
         self._selected_index = row
         self._mode = mode
@@ -89,9 +93,9 @@ class ScrewEditController:
         """Cancel the pending edit without changing screw geometry."""
         was_active = self.is_active
         self.finish_stroke()
+        self._cancel_active_viewer_locks()
         # Esc, a selection change or an abort ends a drag but keeps its
         # geometry, so it is still one undo step.
-        before, self._drag_before = self._drag_before, None
         self._mode = "idle"
         self._selected_index = None
         self._drag_anchor = None
@@ -99,14 +103,11 @@ class ScrewEditController:
         self._drag_target = None
         self._active_source = None
         self.refresh_controls()
-        if before is not None:
-            self._window._tool_ctrl.record_screw_edit("drag screw", before)
         if was_active and show_message:
             self._window.statusbar.showMessage("Screw edit cancelled")
 
     def abort(self) -> None:
         """Release every viewer lock and leave edit mode, keeping the geometry."""
-        self._cancel_active_viewer_locks()
         self.cancel(show_message=False)
 
     def reset(self) -> None:
@@ -127,10 +128,10 @@ class ScrewEditController:
         # The starting viewer sets its own lock only after this returns, so
         # this releases every other viewer's lock even when the selected row
         # does not change (on_screw_selection_changed would not fire).
-        self._cancel_active_viewer_locks()
+        self.cancel(show_message=False)
+        screw = self._screw_at(index)
         self._window._tool_ctrl.set_tool("navigate")
         self._window.screw_list_widget.setCurrentRow(index)
-        self._drag_before = self._window._tool_ctrl.snapshot_screws()
         self._selected_index = int(index)
         self._mode = mode
         self._drag_anchor = self._point(world_point)
@@ -195,6 +196,9 @@ class ScrewEditController:
                 self._drag_target[axis] + delta[axis] for axis in range(3)
             )
 
+        current = self._screw_at(self._selected_index)
+        if current is not None and self._same_geometry(current, entry_point, target_point):
+            return True
         if not self._apply_points(entry_point, target_point, grade=False):
             return False
         self._ungraded = True
@@ -240,6 +244,7 @@ class ScrewEditController:
         """Start another stroke of the active drag from ``world_point``."""
         if not self.is_active or self._selected_index is None:
             return
+        self.finish_stroke()
         screw = self._screw_at(self._selected_index)
         if screw is None:
             return
@@ -247,8 +252,32 @@ class ScrewEditController:
         self._drag_entry = self._point(screw.entry_point)
         self._drag_target = self._point(screw.target_point)
 
+    def queue_drag(self, world_point: Point3D, source: str = "view") -> bool:
+        """Keep the latest pointer sample for the next display frame."""
+        if not self.is_dragging:
+            return False
+        from PyQt6.QtCore import QObject, QTimer
+
+        self._pending_sample = (self._point(world_point), source)
+        if self._sample_timer is None:
+            parent = self._window if isinstance(self._window, QObject) else None
+            self._sample_timer = QTimer(parent)
+            self._sample_timer.setSingleShot(True)
+            self._sample_timer.timeout.connect(self._flush_sample)
+        if not self._sample_timer.isActive():
+            self._sample_timer.start(16)
+        return True
+
+    def _flush_sample(self) -> None:
+        if self._sample_timer is not None:
+            self._sample_timer.stop()
+        sample, self._pending_sample = self._pending_sample, None
+        if sample is not None:
+            self.update_drag(*sample)
+
     def finish_stroke(self) -> None:
-        """Grade the screw where the last stroke left it."""
+        """Flush and grade the last sample, then record this stroke once."""
+        self._flush_sample()
         if not self._ungraded or self._selected_index is None:
             return
         self._ungraded = False
@@ -260,6 +289,9 @@ class ScrewEditController:
             self._selected_index, screw.entry_point, screw.target_point
         )
         tool_ctrl.refresh_screw(self._selected_index, updated)
+        before, self._drag_before = self._drag_before, None
+        if before is not None:
+            tool_ctrl.record_screw_edit("drag screw", before)
 
     def end_drag(self) -> None:
         """Finish direct manipulation while preserving the last valid state."""
@@ -277,6 +309,9 @@ class ScrewEditController:
         z: float,
     ) -> bool:
         """Consume one MPR click when editing and update the selected screw."""
+        if self.is_dragging:
+            self.end_drag()
+            return True
         if not self.is_active or self._selected_index is None or self._mode == "rotate":
             return False
 
@@ -317,7 +352,6 @@ class ScrewEditController:
     def on_screw_selection_changed(self, row: int) -> None:
         """Cancel a pending edit when the selected screw changes."""
         if self.is_active and row != self._selected_index:
-            self._cancel_active_viewer_locks()
             self.cancel(show_message=False)
         self.refresh_controls()
 
@@ -404,14 +438,28 @@ class ScrewEditController:
             )
             return False
 
+        current = self._screw_at(self._selected_index)
+        if current is not None and self._same_geometry(current, entry_point, target_point):
+            return True
+        if not grade and self._drag_before is None:
+            self._drag_before = self._window._tool_ctrl.snapshot_screws()
         updated = self._window._tool_ctrl.screw_tool.replace_screw(
             self._selected_index,
             entry_point=entry_point,
             target_point=target_point,
             grade=grade,
         )
+        if not grade:
+            updated.reviewed = False
+            updated.grading_pending = True
         self._window._tool_ctrl.refresh_screw(self._selected_index, updated)
         return True
+
+    def _same_geometry(self, screw, entry, target) -> bool:
+        return (
+            math.dist(screw.entry_point, entry) <= self.GEOMETRY_TOLERANCE_MM
+            and math.dist(screw.target_point, target) <= self.GEOMETRY_TOLERANCE_MM
+        )
 
     @staticmethod
     def _point(values) -> Point3D:

@@ -689,7 +689,7 @@ class MainWindow(QMainWindow):
         if not 0 <= row < len(screws):
             return
         screws[row].reviewed = bool(checked)
-        # Redraws the table row; dataChanged also refreshes the map, the
+        # Redraws the table row; screwsChanged also refreshes the map, the
         # workflow rail and the counter.
         self.screw_list_widget.updateScrewRow(row, screws[row])
 
@@ -1715,7 +1715,7 @@ class MainWindow(QMainWindow):
         details_layout.addWidget(self.screw_narrow_legend)
 
         self.screw_drag_hint = QLabel(
-            "Double-click head, tip, or shaft; move the pointer; double-click again to finish."
+            "Double-click head, tip, or shaft; hold left button to drag; release to grade; double-click again or Esc to finish."
         )
         self.screw_drag_hint.setWordWrap(True)
         self.screw_drag_hint.setObjectName("screwDragHint")
@@ -2013,7 +2013,7 @@ class MainWindow(QMainWindow):
             viewer.crosshair_moved.connect(self._tool_ctrl.on_viewer_click)
             viewer.set_screw_interaction_callbacks(
                 on_begin=self._screw_edit_ctrl.begin_drag,
-                on_drag=self._screw_edit_ctrl.update_drag,
+                on_drag=self._screw_edit_ctrl.queue_drag,
                 on_end=self._screw_edit_ctrl.end_drag,
                 on_select=self._select_screw_from_view,
                 on_grab=self._screw_edit_ctrl.grab,
@@ -2034,7 +2034,7 @@ class MainWindow(QMainWindow):
         )
         self.viewer_3d.set_screw_interaction_callbacks(
             on_begin=self._screw_edit_ctrl.begin_drag,
-            on_drag=self._screw_edit_ctrl.update_drag,
+            on_drag=self._screw_edit_ctrl.queue_drag,
             on_end=self._screw_edit_ctrl.end_drag,
             on_select=self._select_screw_from_view,
             on_grab=self._screw_edit_ctrl.grab,
@@ -2079,12 +2079,12 @@ class MainWindow(QMainWindow):
             signal.connect(self._on_screw_rows_changed)
         # An in-place row edit can clear a reviewed mark, which Review's rail
         # step and counter depend on.
-        table_model.dataChanged.connect(self._on_screw_rows_changed)
+        self.screw_list_widget.screwsChanged.connect(self._on_screw_rows_changed)
         for signal in (
             table_model.rowsInserted,
             table_model.rowsRemoved,
             table_model.modelReset,
-            table_model.dataChanged,
+            self.screw_list_widget.screwsChanged,
         ):
             signal.connect(self._schedule_construct_map_refresh)
         self.screw_list_widget.currentRowChanged.connect(
@@ -3272,13 +3272,14 @@ class MainWindow(QMainWindow):
         previous = button.blockSignals(True)
         button.setChecked(bool(screw is not None and screw.reviewed))
         button.blockSignals(previous)
-        button.setEnabled(screw is not None)
+        button.setEnabled(screw is not None and not getattr(screw, "grading_pending", False))
 
     def _set_grade_chip(self, grade: str) -> None:
         """Set the Review page's grade chip text and dynamic ``grade`` property."""
+        pending = grade == "grading after release"
         grade = str(grade).strip().upper()
         token = grade if grade in ("A", "B", "C", "D", "E") else "NA"
-        self.selected_screw_grade.setText(f"Grade {grade if grade != 'NA' else '--'}")
+        self.selected_screw_grade.setText("grading after release" if pending else f"Grade {grade if grade != 'NA' else '--'}")
         if self.selected_screw_grade.property("grade") != token:
             self.selected_screw_grade.setProperty("grade", token)
             chip_style = self.selected_screw_grade.style()
@@ -3292,13 +3293,11 @@ class MainWindow(QMainWindow):
         review_active: bool,
     ) -> None:
         """Update the Review step's key numbers and details for one screw."""
-        self.selected_screw_title.setProperty(
-            "reviewActive",
-            bool(review_active),
-        )
-        title_style = self.selected_screw_title.style()
-        title_style.unpolish(self.selected_screw_title)
-        title_style.polish(self.selected_screw_title)
+        if self.selected_screw_title.property("reviewActive") != bool(review_active):
+            self.selected_screw_title.setProperty("reviewActive", bool(review_active))
+            title_style = self.selected_screw_title.style()
+            title_style.unpolish(self.selected_screw_title)
+            title_style.polish(self.selected_screw_title)
         if screw is None:
             self.selected_screw_counter.setText(
                 self._format_screw_counter(
@@ -3325,13 +3324,16 @@ class MainWindow(QMainWindow):
                 self.screw_edit_btn.setEnabled(False)
             return
 
-        screw_count = self.screw_list_widget.count()
-        self.selected_screw_counter.setText(
-            self._format_screw_counter(
-                index, screw_count, self._reviewed_counts()[0]
+        pending = bool(getattr(screw, "grading_pending", False))
+        was_pending = self.selected_screw_grade.text() == "grading after release"
+        if not pending:
+            screw_count = self.screw_list_widget.count()
+            self.selected_screw_counter.setText(
+                self._format_screw_counter(
+                    index, screw_count, self._reviewed_counts()[0]
+                )
             )
-        )
-        self.screw_list_widget.scrollToRow(index)
+            self.screw_list_widget.scrollToRow(index)
 
         level = str(getattr(screw, "vertebra_level", "") or "").strip()
         side = str(getattr(screw, "side", "") or "").strip().capitalize()
@@ -3344,17 +3346,25 @@ class MainWindow(QMainWindow):
         craniocaudal = craniocaudal_angle_deg(screw.entry_point, screw.target_point)
 
         self.selected_screw_title.setText(identity)
-        previous = self.selected_screw_diameter.blockSignals(True)
-        self.selected_screw_diameter.setValue(float(screw.diameter))
-        self.selected_screw_diameter.blockSignals(previous)
-        self.selected_screw_diameter.setEnabled(True)
+        if not pending:
+            previous = self.selected_screw_diameter.blockSignals(True)
+            self.selected_screw_diameter.setValue(float(screw.diameter))
+            self.selected_screw_diameter.blockSignals(previous)
+            self.selected_screw_diameter.setEnabled(True)
         self._sync_reviewed_button(screw)
         self.selected_screw_length.setText(f"{screw.length:.1f} mm")
         self.selected_screw_convergence.setText(f"{convergence:+.1f}°")
         self.selected_screw_craniocaudal.setText(f"{craniocaudal:+.1f}°")
-        self._set_grade_chip(str(screw.grade))
+        self._set_grade_chip("grading after release" if pending else str(screw.grade))
         if hasattr(self, "screw_edit_btn"):
             self.screw_edit_btn.setEnabled(True)
+
+        if pending:
+            self.selected_screw_hu.setText("grading after release")
+            if not was_pending:
+                self._clear_screw_metric_rows()
+                self.screw_warnings_summary.set_placeholder("grading after release")
+            return
 
         mean_hu = getattr(screw, "mean_hu", None)
         min_hu = getattr(screw, "min_hu", None)

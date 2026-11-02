@@ -439,6 +439,59 @@ def create_screw_visual(
     )
 
 
+
+def _update_cylinder_actor(actor, start, end, radius) -> None:
+    """Update a retained cylinder source and its placement transform."""
+    delta = tuple(end[i] - start[i] for i in range(3))
+    length = math.sqrt(sum(value * value for value in delta))
+    direction = tuple(value / length for value in delta)
+    transform_filter = actor.GetMapper().GetInputAlgorithm()
+    cylinder = transform_filter.GetInputAlgorithm()
+    cylinder.SetRadius(radius)
+    cylinder.SetHeight(length)
+    transform = transform_filter.GetTransform()
+    transform.Identity()
+    transform.Translate(tuple((start[i] + end[i]) / 2 for i in range(3)))
+    cross = (direction[2], 0.0, -direction[0])
+    cross_length = math.sqrt(sum(value * value for value in cross))
+    dot = max(-1.0, min(1.0, direction[1]))
+    if cross_length > 1e-6:
+        transform.RotateWXYZ(math.degrees(math.acos(dot)), *cross)
+    elif dot < 0:
+        transform.RotateX(180)
+
+
+def update_screw_visual(visual, entry_point, target_point, radius, color) -> None:
+    """Move the retained head, shaft, tip and guide without replacing props."""
+    entry, target = tuple(entry_point), tuple(target_point)
+    length = math.dist(entry, target)
+    if length <= 1e-6:
+        raise ValueError("Screw length must be greater than zero")
+    radius = max(float(radius), 0.25)
+    direction = tuple((target[i] - entry[i]) / length for i in range(3))
+    tip_length = min(max(radius * 2.2, 3.0), length * 0.35)
+    shaft_end = tuple(target[i] - direction[i] * tip_length for i in range(3))
+    head = visual.entry_actor.GetMapper().GetInputAlgorithm()
+    head.SetCenter(*entry)
+    head.SetRadius(radius * 1.5)
+    _update_cylinder_actor(visual.shaft_actor, entry, shaft_end, radius)
+    cone = visual.tip_actor.GetMapper().GetInputAlgorithm()
+    cone.SetCenter(*(target[i] - direction[i] * tip_length / 2 for i in range(3)))
+    cone.SetDirection(*direction)
+    cone.SetHeight(tip_length)
+    cone.SetRadius(radius)
+    handle_point = guide_handle_point(entry, target, GUIDE_REACH_MM)
+    _update_cylinder_actor(visual.guide_line_actor, entry, handle_point, GUIDE_LINE_RADIUS_MM)
+    visual.guide_handle_actor.GetMapper().GetInputAlgorithm().SetCenter(*handle_point)
+    for actor, part_color in (
+        (visual.entry_actor, tuple(min(1.0, v * 1.12 + 0.05) for v in color)),
+        (visual.shaft_actor, color),
+        (visual.tip_actor, tuple(max(0.0, v * 0.82) for v in color)),
+    ):
+        actor.GetProperty().SetColor(*part_color)
+    visual.entry_point, visual.target_point = entry, target
+
+
 def intersect_ray_plane(
     near_point: Tuple[float, float, float],
     far_point: Tuple[float, float, float],
@@ -1604,6 +1657,12 @@ class Viewer3D(QWidget):
         self._request_render()
 
         return visual
+
+    def update_screw(self, visual, entry_point, target_point, radius, color) -> None:
+        """Refresh one screw in place, preserving picker and renderer ownership."""
+        update_screw_visual(visual, entry_point, target_point, radius, color)
+        self._apply_screw_selection_style(visual)
+        self._request_render()
 
     def remove_screw(self, actor):
         """Remove a complete screw visual or a legacy single actor."""
