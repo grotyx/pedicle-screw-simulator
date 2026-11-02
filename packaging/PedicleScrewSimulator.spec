@@ -118,8 +118,8 @@ if sys.platform == "darwin":
         bundle_identifier="me.sangmin.pedicle-screw-simulator",
         version=version,
         info_plist={
-            "CFBundleName": "Pedicle Screw Simulator",
-            "CFBundleDisplayName": "Pedicle Screw Simulator",
+            "CFBundleName": "RadWright Screw",
+            "CFBundleDisplayName": "RadWright Screw",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
             "NSHighResolutionCapable": True,

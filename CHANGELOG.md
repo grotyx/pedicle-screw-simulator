@@ -13,6 +13,14 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+### Changed
+
+- Downloads are named `RadWright-Screw-<version>-…` (installer, portable
+  ZIP, macOS ZIP), the macOS app is called RadWright Screw, and the Windows
+  exe reports RadWright Screw as its product name and description (Task
+  Manager, file properties). The `PedicleScrewSimulator.exe` file, settings
+  and log folders keep their names so installed copies update in place.
+
 ## [0.2.7] - 2026-11-02
 
 ### Changed

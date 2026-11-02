@@ -28,7 +28,7 @@ DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\PedicleScrewSimulator.exe
 LicenseFile={#SourceDir}\LICENSE
 OutputDir={#OutputDir}
-OutputBaseFilename=PedicleScrewSimulator-{#AppVersion}-Windows-x64-Setup
+OutputBaseFilename=RadWright-Screw-{#AppVersion}-Windows-x64-Setup
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; The CUDA runtime makes the payload several GB; split it into Setup.exe + .bin

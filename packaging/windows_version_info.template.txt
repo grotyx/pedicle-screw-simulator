@@ -15,12 +15,12 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('CompanyName', 'Sang-Min Park, MD, Ph.D.'),
-          StringStruct('FileDescription', 'Pedicle Screw Simulator'),
+          StringStruct('FileDescription', 'RadWright Screw'),
           StringStruct('FileVersion', '{version}'),
           StringStruct('InternalName', 'PedicleScrewSimulator'),
           StringStruct('LegalCopyright', 'Copyright (c) 2026 Sang-Min Park, MD, Ph.D.'),
           StringStruct('OriginalFilename', 'PedicleScrewSimulator.exe'),
-          StringStruct('ProductName', 'Pedicle Screw Simulator'),
+          StringStruct('ProductName', 'RadWright Screw'),
           StringStruct('ProductVersion', '{version}')
         ]
       )

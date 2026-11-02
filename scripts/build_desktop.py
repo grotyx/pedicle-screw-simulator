@@ -26,6 +26,9 @@ DIST = ROOT / "dist"
 RELEASE = ROOT / "release"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 PRODUCT = "PedicleScrewSimulator"
+#: Name of the files people download; the app folder and exe keep PRODUCT so
+#: installed copies update in place.
+PACKAGE = "RadWright-Screw"
 
 
 def _numeric_version_component(part: str) -> str:
@@ -112,10 +115,10 @@ def _archive_macos() -> Path:
     if not app_source.exists():
         raise FileNotFoundError(f"macOS app bundle not found: {app_source}")
 
-    package_name = f"{PRODUCT}-{VERSION}-macOS-{label}"
+    package_name = f"{PACKAGE}-{VERSION}-macOS-{label}"
     staging = RELEASE / package_name
     subprocess.run(
-        ["ditto", str(app_source), str(staging / f"{PRODUCT}.app")],
+        ["ditto", str(app_source), str(staging / "RadWright Screw.app")],
         check=True,
     )
     _copy_metadata(staging)
@@ -160,7 +163,7 @@ def _archive_windows() -> Path:
     if not source.exists():
         raise FileNotFoundError(f"Windows application folder not found: {source}")
 
-    package_name = f"{PRODUCT}-{VERSION}-Windows-x64"
+    package_name = f"{PACKAGE}-{VERSION}-Windows-x64"
     _copy_metadata(source)
     _bundle_spine_weights(source)
     # Before zipping: this also drops components.json into the app folder,
@@ -197,7 +200,7 @@ def _build_windows_installer() -> Path:
         ],
         check=True,
     )
-    return RELEASE / f"{PRODUCT}-{VERSION}-Windows-x64-Setup.exe"
+    return RELEASE / f"{PACKAGE}-{VERSION}-Windows-x64-Setup.exe"
 
 
 def main() -> None:

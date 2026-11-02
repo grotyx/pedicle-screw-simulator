@@ -36,10 +36,10 @@ py -3.12 -m venv venv
 
 `release\` then holds two outputs:
 
-- **Installer**: `PedicleScrewSimulator-<version>-Windows-x64-Setup.exe` with one or
+- **Installer**: `RadWright-Screw-<version>-Windows-x64-Setup.exe` with one or
   more `…-Setup-N.bin` files beside it (the CUDA runtime makes the payload several GB,
   so Inno Setup splits it). Keep them in one folder and run the `.exe`. It installs
-  per user into `%LOCALAPPDATA%\Programs\Pedicle Screw Simulator` without an
+  per user into `%LOCALAPPDATA%\Programs\RadWright Screw` without an
   administrator prompt, adds Start menu entries (desktop shortcut optional) and an
   entry under Settings > Apps for uninstalling. Running a newer installer upgrades
   in place. Silent install: `…-Setup.exe /VERYSILENT`.

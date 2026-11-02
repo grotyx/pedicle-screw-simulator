@@ -13,6 +13,14 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### 변경
+
+- 내려받는 파일 이름이 `RadWright-Screw-<버전>-…`로 바뀌었습니다(설치
+  프로그램, 포터블 ZIP, macOS ZIP). macOS 앱 이름도 RadWright Screw이고,
+  Windows exe의 제품 이름·설명(작업 관리자, 파일 속성)도 RadWright Screw로
+  표시됩니다. 설치된 앱이 그대로 업데이트되도록 `PedicleScrewSimulator.exe`
+  파일과 설정·로그 폴더 이름은 바꾸지 않았습니다.
+
 ## [0.2.7] - 2026-11-02
 
 ### 변경

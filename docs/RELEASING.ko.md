@@ -10,9 +10,9 @@ RadWright Screw(내부 이름 Pedicle Screw Simulator)의 한 버전이 `main`�
 
 | 플랫폼 | 파일 | 설치 방식 | 업데이트 |
 |:--|:--|:--|:--|
-| Windows x64 + NVIDIA GPU | `PedicleScrewSimulator-<버전>-Windows-x64-Setup.exe` + `…-Setup-1.bin` | 사용자별, `%LOCALAPPDATA%\Programs\RadWright Screw`, 관리자 승인 없음 | 자동, 바뀐 레이어만 |
-| Windows x64(포터블) | `PedicleScrewSimulator-<버전>-Windows-x64.zip` | 아무 곳에 압축 해제 | 없음(다시 내려받기) |
-| macOS Apple Silicon | `PedicleScrewSimulator-<버전>-macOS-arm64.zip` | 압축 해제 후 우클릭 > 열기 | 없음 |
+| Windows x64 + NVIDIA GPU | `RadWright-Screw-<버전>-Windows-x64-Setup.exe` + `…-Setup-1.bin` | 사용자별, `%LOCALAPPDATA%\Programs\RadWright Screw`, 관리자 승인 없음 | 자동, 바뀐 레이어만 |
+| Windows x64(포터블) | `RadWright-Screw-<버전>-Windows-x64.zip` | 아무 곳에 압축 해제 | 없음(다시 내려받기) |
+| macOS Apple Silicon | `RadWright-Screw-<버전>-macOS-arm64.zip` | 압축 해제 후 우클릭 > 열기 | 없음 |
 
 사용자에게 알릴 요구 사항: Windows 10/11 64비트, 최신 드라이버의 NVIDIA GPU(분할을 GPU로
 실행), 앱용 약 6.5 GB의 여유 공간(Spine Only 모델 포함), 업데이트를 위한 인터넷 연결.

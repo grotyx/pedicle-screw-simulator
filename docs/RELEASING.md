@@ -10,9 +10,9 @@ Build details are in [Desktop Build Guide](BUILDING_DESKTOP.md).
 
 | Platform | File | How it installs | Updates |
 |:--|:--|:--|:--|
-| Windows x64 + NVIDIA GPU | `PedicleScrewSimulator-<ver>-Windows-x64-Setup.exe` + `…-Setup-1.bin` | Per user, `%LOCALAPPDATA%\Programs\RadWright Screw`, no administrator prompt | Automatic, changed layers only |
-| Windows x64 (portable) | `PedicleScrewSimulator-<ver>-Windows-x64.zip` | Extract anywhere | None (download again) |
-| macOS Apple Silicon | `PedicleScrewSimulator-<ver>-macOS-arm64.zip` | Extract, right-click > Open | None |
+| Windows x64 + NVIDIA GPU | `RadWright-Screw-<ver>-Windows-x64-Setup.exe` + `…-Setup-1.bin` | Per user, `%LOCALAPPDATA%\Programs\RadWright Screw`, no administrator prompt | Automatic, changed layers only |
+| Windows x64 (portable) | `RadWright-Screw-<ver>-Windows-x64.zip` | Extract anywhere | None (download again) |
+| macOS Apple Silicon | `RadWright-Screw-<ver>-macOS-arm64.zip` | Extract, right-click > Open | None |
 
 Requirements to tell users: Windows 10/11 64-bit, an NVIDIA GPU with a current driver
 (segmentation runs on the GPU), about 6.5 GB free disk for the app (the Spine Only models
