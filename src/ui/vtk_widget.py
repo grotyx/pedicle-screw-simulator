@@ -17,6 +17,7 @@ Infinite repaint loop fix:
 """
 
 import logging
+import sys
 import time
 
 from PyQt6.QtWidgets import QSizePolicy
@@ -71,9 +72,11 @@ class _VTKWidget(QVTKRenderWindowInteractor):
         self._ensure_iren_init()
         self._paint_count += 1
 
-        if not self._render_needed:
+        if not self._render_needed and sys.platform == "darwin":
             # No-op: breaks the Cocoa drawRect → paintEvent loop.
             # The last rendered frame remains visible in the Cocoa view.
+            # Elsewhere a paint is an expose (a palette dragged over the
+            # native surface) and must redraw, or the old pixels stay.
             return
 
         self._render_needed = False

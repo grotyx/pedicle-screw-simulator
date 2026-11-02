@@ -334,6 +334,7 @@ def extract_vertebral_mesh(
     target_reduction: float = 0.50,
     labels: Optional[List[int]] = None,
     smoothing_mm: Optional[float] = None,
+    cache: Optional[Dict] = None,
 ) -> Optional[vtk.vtkPolyData]:
     """Extract colored vertebral body mesh from a multilabel segmentation mask.
 
@@ -352,6 +353,9 @@ def extract_vertebral_mesh(
         smoothing_mm: Gaussian standard deviation in physical millimetres.
             ``None`` derives it from the mask spacing via
             ``default_smoothing_mm``.
+        cache: Optional dict owned by the caller for one mask: each label's
+            surface is built once and reused, so showing or hiding levels
+            does not smooth and mesh every vertebra again.
 
     Returns:
         Combined colored vtkPolyData, or None if no vertebral labels found.
@@ -385,16 +389,28 @@ def extract_vertebral_mesh(
         int(math.ceil(sigma * 2.5)) + 2
         for sigma in sigma_voxels
     )
-    label_vois = _find_label_vois(
-        mask_image, requested_labels, padding_xyz
+    settings = (sigma_voxels, iterations, passband, reduction)
+    if cache is not None and cache.get("settings") != settings:
+        cache.clear()
+        cache["settings"] = settings
+    missing = [label for label in requested_labels if cache is None or label not in cache]
+    label_vois = (
+        _find_label_vois(mask_image, missing, padding_xyz) if missing else {}
     )
 
     appender = vtk.vtkAppendPolyData()
     labels_found: List[int] = []
 
     for label in requested_labels:
+        if cache is not None and label in cache:
+            if cache[label] is not None:
+                appender.AddInputData(cache[label])
+                labels_found.append(label)
+            continue
         voi = label_vois.get(label)
         if voi is None:
+            if cache is not None:
+                cache[label] = None
             continue
         logger.debug(
             "extract_vertebral_mesh: processing label %d (%s)",
@@ -444,6 +460,8 @@ def extract_vertebral_mesh(
                 "extract_vertebral_mesh: label %d produced 0 cells, skipping",
                 label,
             )
+            if cache is not None:
+                cache[label] = None
             continue
 
         smoother = vtk.vtkWindowedSincPolyDataFilter()
@@ -500,6 +518,8 @@ def extract_vertebral_mesh(
         label_array.FillComponent(0, label)
         smoothed_with_normals.GetCellData().AddArray(label_array)
 
+        if cache is not None:
+            cache[label] = smoothed_with_normals
         appender.AddInputData(smoothed_with_normals)
         labels_found.append(label)
 

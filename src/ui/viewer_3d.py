@@ -2353,7 +2353,14 @@ class Viewer3D(QWidget):
         if mask_image is None:
             return
 
-        poly_data = extract_vertebral_mesh(mask_image, labels=labels)
+        # One surface cache per mask: a new segmentation starts a new one.
+        key = (id(mask_image), mask_image.GetMTime())
+        if self.__dict__.get("_vertebral_surface_key") != key:
+            self._vertebral_surface_key = key
+            self._vertebral_surface_cache = {}
+        poly_data = extract_vertebral_mesh(
+            mask_image, labels=labels, cache=self._vertebral_surface_cache
+        )
         if poly_data is None or poly_data.GetNumberOfCells() == 0:
             logger.info("set_vertebral_mesh: no vertebral mesh produced")
             return

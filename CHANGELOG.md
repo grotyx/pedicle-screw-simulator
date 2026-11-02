@@ -37,6 +37,11 @@ current version; every other place the version appears is derived from it.
   used to zoom, which the wheel already does.
 - The log records how long startup takes (module import, main window,
   first frame).
+- Turning planning levels on or off is quick: each vertebra's 3D surface is
+  built once per segmentation and reused, instead of every surface being
+  smoothed and meshed again on each click.
+- Dragging the tool palette on Windows no longer leaves copies of it over
+  the views.
 
 ## [0.2.7] - 2026-11-02
 
