@@ -45,6 +45,12 @@ current version; every other place the version appears is derived from it.
 - Turning Screw MPR on keeps the 2×2 MPR Focus layout instead of switching
   back to the Planning layout.
 
+### Fixed
+
+- Clearing or replacing segmentation retires old grades, analysis metrics and related warnings; imported plans also discard measurements without verifiable mask provenance. Optimizer provenance and screw geometry remain.
+- Segmentation and planning reject results from older CT/mask revisions and cannot overlap. Loading, closing and rerunning remain blocked through segmentation installation.
+- Segmentation prepares mask images, labels, optional pedicle masks and graders in the worker, skips the unused generic spine surface, and releases retired vertebral surface caches. Mesh extraction, isolation and screw regrading remain on the GUI thread.
+
 ## [0.2.7] - 2026-11-02
 
 ### Changed

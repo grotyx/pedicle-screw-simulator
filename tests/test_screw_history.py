@@ -311,6 +311,8 @@ def test_auto_plan_batch_is_one_step(ui_main_window):
 
     class _Thread:
         generation = ctrl._run_generation
+        segmentation_revision = window._seg_ctrl.revision
+        source_ct = window.volume_manager.get_sitk_image()
         cancelled = False
         replace_levels = ("L4",)
 

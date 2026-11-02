@@ -401,6 +401,8 @@ class PlanController:
         tool_ctrl._active_measure_plane = None
 
         for screw_index, screw in enumerate(screws):
+            # Saved measurements have no verifiable link to the current mask.
+            tool_ctrl.screw_tool.invalidate_screw_metrics(screw)
             tool_ctrl.screw_tool.add_screw(screw)
             actor = self._window.viewer_3d.add_screw(
                 screw.entry_point,

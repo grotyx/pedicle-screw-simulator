@@ -150,7 +150,7 @@ def test_reset_state_does_not_warn_when_thread_stops_in_time(ui_main_window, cap
 # ---------------------------------------------------------------------------
 
 
-def test_finished_shows_wait_cursor_and_status_during_resample_and_regrade(
+def test_finished_shows_wait_cursor_and_status_during_gui_regrade(
     ui_main_window, tmp_path, monkeypatch
 ):
     window = ui_main_window
@@ -190,12 +190,12 @@ def test_finished_shows_wait_cursor_and_status_during_resample_and_regrade(
         )
     )
 
-    assert "Resampling pedicle mask…" in messages
+    assert "Resampling pedicle mask…" not in messages
     assert "Re-grading screws…" in messages
-    assert cursor_events.count("set") == 2
-    assert cursor_events.count("restore") == 2
-    # Both calls run synchronously on the GUI thread (no worker hand-off);
-    # a "set" is always immediately paired with a "restore" before the next.
+    assert cursor_events.count("set") == 1
+    assert cursor_events.count("restore") == 1
+    # Only regrading still needs the GUI cursor; mask preparation moved
+    # to the segmentation worker. Every cursor override must be restored.
     for index in range(0, len(cursor_events), 2):
         assert cursor_events[index : index + 2] == ["set", "restore"]
 
@@ -1138,3 +1138,243 @@ def test_a_failed_run_removes_its_own_workspace_only(
     assert not Path(failed_dir).exists()
     assert Path(previous_dir).exists()
     assert ctrl._active_work_dir is None
+
+
+def test_clear_detaches_grading_and_invalidates_analysis(ui_main_window):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    tool = window._tool_ctrl.screw_tool
+    screw = Screw((1, 1, 1), (1, 5, 1), metrics={
+        "pedicle_width_mm": 3.2, "narrow_pedicle": True,
+        "body_mean_hu": 99, "endplate_angle_deg": 12,
+        "score": 7, "trajectory_type": "cbt", "rod_misalignment_mm": 2,
+    }, warnings=["Narrow pedicle (3.2 mm)", "Vertebral body HU 99"])
+    tool.add_screw(screw)
+    tool.set_grader(object())
+    tool.set_analysis_by_level({28: object()})
+    window._seg_ctrl.clear_overlay()
+    assert tool.grader is None
+    assert tool._analysis_by_level == {}
+    assert screw.grade == "N/A"
+    assert screw.metrics.get("pedicle_width_mm") is None
+    assert screw.metrics.get("body_mean_hu") is None
+    assert screw.metrics["score"] == 7
+    assert screw.metrics["trajectory_type"] == "cbt"
+    assert screw.metrics["rod_misalignment_mm"] == 2
+    assert not any(w.startswith(("Narrow pedicle", "Vertebral body HU")) for w in screw.warnings)
+
+
+def test_old_undo_measurements_cannot_survive_mask_revision():
+    import copy
+
+    from src.models.screw import Screw
+    from src.tools.screw_tool import ScrewTool
+
+    tool = ScrewTool(None)
+    screw = Screw((0, 0, 0), (0, 4, 0), metrics={"body_mean_hu": 90, "score": 4})
+    tool.add_screw(screw)
+    snapshot = copy.deepcopy(screw)
+    tool.invalidate_segmentation_metrics()
+    tool.evaluate_screw(snapshot)
+    assert snapshot.metrics.get("body_mean_hu") is None
+    assert snapshot.metrics["score"] == 4
+
+
+def test_commit_stays_busy_without_processing_nested_events(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window.volume_manager.set_volume(image)
+    path = tmp_path / "mask.nii.gz"
+    _write_mask(image, path)
+    seen = []
+    original = window.update_vertebra_level_checks
+
+    def update(labels):
+        seen.append(ctrl.is_running)
+        original(labels)
+
+    monkeypatch.setattr(window, "update_vertebra_level_checks", update)
+    with monkeypatch.context() as patch:
+        patch.setattr(QApplication, "processEvents", lambda *a: pytest.fail("nested event processing"))
+        _finish_run(window, ctrl, path, "totalsegmentator", patch)
+    assert seen == [True]
+    assert not ctrl.is_running
+
+
+@pytest.mark.parametrize("changed", ["ct", "revision", "thread"])
+def test_stale_segmentation_completion_is_discarded(ui_main_window, monkeypatch, changed):
+    from types import SimpleNamespace
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    image = _create_test_image()
+    window.volume_manager.set_volume(image)
+    thread = SimpleNamespace(source_ct=image, revision=ctrl.revision, isRunning=lambda: False)
+    ctrl._segmentation_thread = thread
+    if changed == "ct":
+        window.volume_manager.set_volume(_create_test_image())
+    elif changed == "revision":
+        ctrl._revision += 1
+    else:
+        ctrl._segmentation_thread = None
+    commits = []
+    monkeypatch.setattr(ctrl, "_on_finished", lambda *a, **k: commits.append(True))
+    ctrl._on_job_finished(thread, object())
+    assert commits == []
+    ctrl._segmentation_thread = None
+
+
+def test_planning_and_segmentation_exclude_each_other(ui_main_window, monkeypatch):
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    window.volume_manager.set_volume(_create_test_image())
+    monkeypatch.setattr(type(window._auto_placement_ctrl), "is_running", property(lambda self: True))
+    monkeypatch.setattr(seg_controller_module, "AutoSegmentationThread",
+                        lambda **k: pytest.fail("segmentation started during planning"))
+    ctrl.run()
+    assert ctrl._segmentation_thread is None
+    monkeypatch.setattr(type(window._auto_placement_ctrl), "is_running", property(lambda self: False))
+    ctrl._committing = True
+    window._auto_placement_ctrl.run_planning()
+    assert window._auto_placement_ctrl._thread is None
+    ctrl._committing = False
+
+
+def test_planning_rejects_result_from_previous_mask(ui_main_window):
+    from types import SimpleNamespace
+
+    ctrl = ui_main_window._auto_placement_ctrl
+    seg = ui_main_window._seg_ctrl
+    seg._revision = 4
+    thread = SimpleNamespace(generation=ctrl._run_generation, segmentation_revision=4,
+                             source_ct=ctrl._vm.get_sitk_image(), isRunning=lambda: False)
+    ctrl._thread = thread
+    assert not ctrl._is_stale(thread)
+    seg._revision = 5
+    assert ctrl._is_stale(thread)
+    ctrl._thread = None
+
+
+def test_worker_prepares_outputs_while_gui_heartbeat_runs(qtbot, monkeypatch, tmp_path):
+    import threading
+    import time
+
+    from PyQt6.QtCore import QTimer
+
+    image = _create_test_image()
+    path = tmp_path / "mask.nii.gz"
+    _write_mask(image, path)
+    result = SegmentationRunResult(True, "totalsegmentator", str(path), "ok")
+    monkeypatch.setattr(seg_controller_module, "run_segmentation_with_fallback", lambda **k: result)
+    prepare_threads = []
+    original_prepare = seg_controller_module.prepare_segmentation
+
+    def prepare(result, ct):
+        prepare_threads.append(threading.get_ident())
+        time.sleep(0.12)
+        return original_prepare(result, ct)
+
+    monkeypatch.setattr(seg_controller_module, "prepare_segmentation", prepare, raising=False)
+    worker = seg_controller_module.AutoSegmentationThread(image, "total", "cpu", str(tmp_path))
+    beats = []
+    timer = QTimer()
+    timer.timeout.connect(lambda: beats.append(True))
+    timer.start(10)
+    try:
+        with qtbot.waitSignal(worker.finished):
+            worker.start()
+        worker.wait()
+        assert prepare_threads and prepare_threads[0] != threading.get_ident()
+        assert len(beats) >= 3
+        assert worker.prepared.vtk_mask.GetDimensions() == image.GetSize()
+        assert worker.prepared.grader is not None
+    finally:
+        timer.stop()
+        worker.wait()
+
+
+def test_replacement_invalidates_analysis_values(ui_main_window, tmp_path, monkeypatch):
+    from src.models.screw import Screw
+
+    window = ui_main_window
+    window.volume_manager.set_volume(_create_test_image())
+    tool = window._tool_ctrl.screw_tool
+    screw = Screw((1, 1, 1), (1, 4, 1), metrics={"pedicle_width_mm": 3, "body_mean_hu": 99})
+    tool.add_screw(screw)
+    path = tmp_path / "replacement.nii.gz"
+    _write_mask(_create_test_image(), path)
+    _finish_run(window, window._seg_ctrl, path, "threshold_fallback", monkeypatch)
+    assert screw.metrics.get("pedicle_width_mm") is None
+    assert screw.metrics.get("body_mean_hu") is None
+
+
+@pytest.mark.parametrize("signal", ["error", "cancelled", "progress"])
+def test_old_worker_signals_do_not_change_new_state(ui_main_window, monkeypatch, signal):
+    from types import SimpleNamespace
+
+    ctrl = ui_main_window._seg_ctrl
+    old = SimpleNamespace(source_ct=None, revision=-1)
+    calls = []
+    ctrl._on_job_signal(old, lambda *a: calls.append(signal), "old")
+    assert calls == []
+
+
+def test_spine_commit_never_requests_unused_generic_surface(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    image = _create_test_image()
+    window.volume_manager.set_volume(image)
+    mask = sitk.Cast(image > 0, sitk.sitkUInt8) * 28
+    path = tmp_path / "spine.nii.gz"
+    sitk.WriteImage(mask, str(path))
+    requests = []
+    visibility = []
+    viewer = window.viewer_3d
+    monkeypatch.setattr(viewer, "set_segmentation_mask", lambda *a, **k: requests.append(k))
+    monkeypatch.setattr(viewer, "set_segmentation_visible", lambda visible: visibility.append(visible))
+    _finish_run(window, window._seg_ctrl, path, "totalsegmentator", monkeypatch)
+    assert requests[0]["build_surface"] is False
+    assert True not in visibility
+
+
+def test_commit_blocks_load_rerun_planning_and_close(ui_main_window, tmp_path, monkeypatch):
+    from PyQt6.QtGui import QCloseEvent
+
+    window = ui_main_window
+    ctrl = window._seg_ctrl
+    window.volume_manager.set_volume(_create_test_image())
+    path = tmp_path / "commit.nii.gz"
+    _write_mask(_create_test_image(), path)
+    monkeypatch.setattr(seg_controller_module.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr("src.controllers.dicom_controller.QFileDialog.getExistingDirectory",
+                        lambda *a, **k: pytest.fail("loading entered during commit"))
+    checked = []
+
+    def during_install(labels):
+        window._dicom_ctrl.open_folder()
+        ctrl.run()
+        window._auto_placement_ctrl.run_planning()
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert not event.isAccepted()
+        assert ctrl._segmentation_thread is None
+        assert window._auto_placement_ctrl._thread is None
+        checked.append(True)
+
+    monkeypatch.setattr(window, "update_vertebra_level_checks", during_install)
+    _finish_run(window, ctrl, path, "totalsegmentator", monkeypatch)
+    assert checked == [True]
+
+
+def test_hidden_generic_surface_is_not_built(ui_main_window, tmp_path, monkeypatch):
+    window = ui_main_window
+    image = _create_test_image()
+    window.volume_manager.set_volume(image)
+    window.seg_show_3d_check.setChecked(False)
+    path = tmp_path / "hidden.nii.gz"
+    _write_mask(image, path)
+    requests = []
+    monkeypatch.setattr(window.viewer_3d, "set_segmentation_mask", lambda *a, **k: requests.append(k))
+    _finish_run(window, window._seg_ctrl, path, "totalsegmentator", monkeypatch)
+    assert requests[0]["build_surface"] is False

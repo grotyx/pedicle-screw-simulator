@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QApplication
 
 import src.controllers.plan_controller as plan_controller_module
 import src.ui.main_window as main_window_module
-from src.utils.constants import COLOR_SCREW, COLOR_SCREW_BREACH
+from src.utils.constants import COLOR_SCREW
 from tests.test_ui_integration import DummyMPRViewer, DummyViewer3D
 
 
@@ -205,16 +205,13 @@ def test_saved_plans_record_the_mask_refinement_settings(
     }
 
 
-def test_loading_a_narrow_pedicle_screw_colours_the_3d_screw_red_on_first_draw(
+def test_loading_a_screw_discards_stale_narrow_colour_on_first_draw(
     ui_main_window, monkeypatch, tmp_path
 ):
-    """The 3D screw must be red the instant it is drawn, not only after regrade.
+    """Unverified imported width must not colour the first draw as narrow.
 
-    ``_apply_loaded_plan`` used to add the 3D screw with no ``color=`` at all,
-    relying on the later unconditional ``regrade_all()`` call to repaint it.
-    Stubbing out ``regrade_all`` here isolates the first draw: if the initial
-    ``add_screw`` call is still colourless, this catches it even though the
-    final on-screen state would otherwise self-heal.
+    Stubbing regrading isolates the initial actor creation. Later regrading
+    cannot hide a stale imported colour in this assertion.
     """
     window = ui_main_window
     monkeypatch.setattr(window._tool_ctrl, "regrade_all", lambda: None)
@@ -222,7 +219,7 @@ def test_loading_a_narrow_pedicle_screw_colours_the_3d_screw_red_on_first_draw(
     payload = _plan_payload_with_metrics({"narrow_pedicle": True})
     _load_plan(window, monkeypatch, tmp_path, payload)
 
-    expected = tuple(value / 255.0 for value in COLOR_SCREW_BREACH)
+    expected = tuple(value / 255.0 for value in COLOR_SCREW)
     assert window.viewer_3d.screws[0].color == expected
 
 
@@ -475,3 +472,19 @@ def test_a_screw_view_measurement_cannot_be_dragged(ui_main_window):
     tool.update_measurement_point(entry_id, 1, (9.0, 0.0, 0.0))
     assert tool.measurement_tool.get_measurements()[0].points[1] == (5.0, 0.0, 0.0)
     assert "delete" in window.statusbar.currentMessage().lower()
+
+
+def test_imported_analysis_metrics_without_mask_provenance_are_invalidated(
+    ui_main_window, monkeypatch, tmp_path
+):
+    window = ui_main_window
+    payload = _plan_payload_with_metrics({
+        "body_mean_hu": 99, "pedicle_width_mm": 3.2, "narrow_pedicle": True,
+        "endplate_angle_deg": 12, "score": 7, "trajectory_type": "cbt",
+    })
+    _load_plan(window, monkeypatch, tmp_path, payload)
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.metrics.get("body_mean_hu") is None
+    assert screw.metrics.get("pedicle_width_mm") is None
+    assert screw.metrics["score"] == 7
+    assert screw.metrics["trajectory_type"] == "cbt"

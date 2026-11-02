@@ -2086,12 +2086,14 @@ class Viewer3D(QWidget):
         label_value: int = 0,
         color: Tuple[float, float, float] = (0.92, 0.82, 0.70),
         opacity: float = 0.35,
+        build_surface: bool = True,
     ) -> None:
-        """Render segmentation mask as translucent 3D surface."""
+        """Install a mask, optionally deferring its generic 3D surface."""
         if mask_image is None:
             self.clear_segmentation_mask()
             return
 
+        self._segmentation_surface_enabled = build_surface
         self._segmentation_mask_image = mask_image
         self._segmentation_label_value = max(0, int(label_value))
         self._segmentation_color = color
@@ -2157,6 +2159,9 @@ class Viewer3D(QWidget):
         # Remembered even with no actor (an empty label), so the next actor
         # built for a populated label honours the checkbox.
         self._segmentation_visible = bool(visible)
+        if visible and not self.__dict__.get("_segmentation_surface_enabled", True):
+            self._segmentation_surface_enabled = True
+            self._render_segmentation_actor(keep_visibility=True)
         if self._segmentation_actor is None:
             return
         self._segmentation_actor.SetVisibility(visible)
@@ -2172,7 +2177,8 @@ class Viewer3D(QWidget):
             self._segmentation_visible = True
         visible = self.__dict__.get("_segmentation_visible", True)
         self.clear_segmentation_actor_only()
-        if self._segmentation_mask_image is None:
+        if (self._segmentation_mask_image is None
+                or not self.__dict__.get("_segmentation_surface_enabled", True)):
             return
 
         # Surfaces already built for this (mask, label); None = empty label.
@@ -2400,6 +2406,11 @@ class Viewer3D(QWidget):
             "set_vertebral_mesh: added actor with %d cells",
             poly_data.GetNumberOfCells(),
         )
+
+    def clear_vertebral_surface_cache(self) -> None:
+        """Release CPU surfaces when their source segmentation is retired."""
+        self._vertebral_surface_key = None
+        self._vertebral_surface_cache = {}
 
     def clear_vertebral_mesh(self) -> None:
         """Remove vertebral mesh actor from the 3D scene."""
