@@ -1273,7 +1273,11 @@ def test_worker_prepares_outputs_while_gui_heartbeat_runs(qtbot, monkeypatch, tm
 
     def prepare(result, ct):
         prepare_threads.append(threading.get_ident())
-        time.sleep(0.12)
+        # Wait for GUI beats instead of a fixed sleep: slow CI runners
+        # delivered only one 10 ms timer tick in 0.12 s.
+        deadline = time.monotonic() + 10.0
+        while len(beats) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
         return original_prepare(result, ct)
 
     monkeypatch.setattr(seg_controller_module, "prepare_segmentation", prepare, raising=False)

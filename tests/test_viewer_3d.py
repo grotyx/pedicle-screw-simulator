@@ -656,7 +656,8 @@ class TestScrewVisualGeometry:
         interactor = vtk.vtkRenderWindowInteractor()
         interactor.SetRenderWindow(render_window)
         interactor.SetInteractorStyle(trackball_style())
-        interactor.Initialize()
+        # Enable without Initialize: creating a GL window crashes headless Windows CI.
+        interactor.Enable()
 
         viewer = Viewer3D.__new__(Viewer3D)
         viewer._double_click_detector = DoubleClickDetector()
