@@ -2,7 +2,7 @@
 
 [English](USER_GUIDE.md) | [한국어](USER_GUIDE.ko.md)
 
-**Version:** 0.2.7
+**Version:** 0.2.8
 
 ## 1. Purpose and Safety
 
@@ -88,7 +88,7 @@ The Planning workspace contains:
 - **Axial, Sagittal, Coronal MPR:** synchronized CT sections with crosshairs, segmentation, measurements, and screw overlays
 - **3D viewport:** CT volume, vertebral meshes, screws, and optional MPR planes — while **Screw MPR** is active these are the screw-aligned planes instead of the standard axial/sagittal/coronal ones (see 5.8); its header carries a **Vertebrae / Full CT** toggle (see 5.2)
 - **Right-hand step panel:** one page per step-rail step — Study, Segment, Plan, Review — each opening with a header, described page by page below
-- **Tool dock:** a row of tool buttons on its own row between the main view and the thumbnails: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
+- **Tool palette:** a small vertical column outside the left edge of the views, detachable by its grip: Select, Add Screw, Distance, Angle, Screw MPR, and the fit buttons
 - **Top toolbar:** **Open DICOM** on the left; on the right a study chip with the voxel spacing and a **RESEARCH USE ONLY** badge
 
 ### Step rail
@@ -127,13 +127,13 @@ Click a chip to select that screw; the screw list, the views, and the map's high
 
 ### The main view and thumbnails
 
-In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
+In the **Planning** layout one view is large and the other three sit in a row of thumbnails below it. Drag the thin bar between them up or down to resize the two; the size is remembered. The main view is 3D when you open a study. To swap a view into the main view, click the enlarge button (⤢, tooltip "Show in the main view") in its header; the previous main view becomes a thumbnail. Clicking inside a thumbnail keeps its normal meaning (crosshair, picking). While a view is a thumbnail its floating zoom and overlay controls are hidden; they return when it becomes the main view. Double-clicking a header still maximises that pane (see below).
 
-Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited; turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
+Turning **Screw MPR** on makes the axial view the main view, because the oblique axial is where the screw is edited (in the MPR Focus layout the 2×2 grid stays as it is); turning it off keeps whichever main view you have chosen. Opening a new study returns the main view to 3D and un-maximises any maximised pane; an MPR Focus layout stays MPR Focus.
 
-### Tool dock
+### Tool palette
 
-Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are buttons in a dock on its own row, centred directly below the main view (above the thumbnail row), separated into groups (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. The dock never covers the image, so the orientation letters and the view's own controls stay visible; it sits below a maximised pane too, and below the 2×2 grid in the MPR Focus layout. The 3D zoom in and zoom out commands, and the fit commands, are also in the **View** menu.
+Select, Add Screw, Distance, Angle, Screw MPR, Fit MPR, and Fit 3D are grouped in a small vertical palette (Select and Add Screw | Distance and Angle | Screw MPR | Fit MPR and Fit 3D). A highlighted button is the active tool. By default, the palette is attached to a separate strip outside the left edge of the images. Drag its grip (⠿) away from the strip to detach it and float over the views. Drop the grip on the narrow left strip, or double-click the grip, to attach it again. Floating movement is limited to about 30 updates per second. The mode and floating position are remembered across layouts and restarts, including MPR Focus and maximised views. The 3D zoom and fit commands are also in the **View** menu.
 
 ### Study chip and research-use badge
 
@@ -141,7 +141,7 @@ The right end of the top toolbar shows a chip with the loaded CT's voxel spacing
 
 ### Layouts
 
-Choose a layout from the **View** menu (**Planning Layout** / **MPR Focus Layout**, or the **Layout** selector). Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there, and the tool dock sits below the 2×2 grid.
+Choose a layout from the **View** menu (**Planning Layout** / **MPR Focus Layout**, or the **Layout** selector). Use **Planning** for one large main view with three thumbnails. Use **MPR Focus** for a larger 2×2 review layout; the main view and thumbnails do not apply there.
 
 ### Orientation markers
 
@@ -155,7 +155,7 @@ Double-click a pane's header, or press `Ctrl+M`, to expand the pane you are work
 
 ### Themes
 
-The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool dock and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
+The **Theme** selector in the **View** menu offers one light theme (Soft Light) and two dark ones (Graphite Blue, the default, and Graphite Mint). The choice is remembered between sessions. All three use flat colours, and the tool palette and the floating controls over the views (zoom controls, 3D overlays) share one flat, opaque style that follows the theme.
 
 ## 5. Standard Planning Workflow
 
@@ -164,7 +164,7 @@ The step rail's four pages (see section 4) roughly follow this section's order: 
 ### 5.1 Open a CT Study
 
 1. On the **Study** page, select **Open DICOM…** (the top toolbar's **Open DICOM** button and the File menu's **Open DICOM Folder**, `Ctrl+O`, still work too).
-2. Select a directory containing a DICOM series.
+2. Select a directory containing a DICOM series. The dialog opens in the last folder you loaded.
 3. If multiple series are present, choose the intended CT series.
 4. Confirm the anatomy and orientation in all MPR views and 3D.
 5. If the status bar and the **Study** info show a **Warning** (uneven slice spacing, which usually means missing slices, or a gantry tilt), the load still succeeds but lengths along the scan axis may be wrong or the volume sheared; check the series before relying on measurements.
@@ -174,11 +174,13 @@ Loaded volumes are reoriented to LPS (identity direction) before display. An obl
 ### 5.2 Run Segmentation
 
 1. On the **Segment** page, select **Run Auto Segmentation**.
-2. The application prioritizes GPU execution and retries on CPU when necessary.
+2. The application automatically probes for a GPU and retries on CPU when necessary. **Device** in Advanced options is a read-only status: **Automatic (not run yet)**, **GPU**, or **CPU fallback**.
 3. Wait for vertebral labels and meshes to appear.
 4. Review segmentation boundaries before planning.
 
 In standalone builds TotalSegmentator is already included. If its first model download or inference fails, the application produces a threshold fallback and reports the reason. Never assume fallback output is clinically accurate. Source installations can add the AI runtime with `--with-totalseg`.
+
+Segmentation labels are aligned to the normalized CT's identity-LPS grid with nearest-neighbour interpolation before overlays, meshes, isolation, grading, and planning use them. A mask whose foreground cannot overlap the CT is rejected. Planning uses the aligned mask file. The unavailable Guided workspace choice is no longer displayed; Planning remains the workspace.
 
 #### Automatic isolation and the 3D toggle
 
@@ -198,7 +200,9 @@ The status line reports which mask is in use — `Refined (CT-guided)`, `Refined
 
 Turn the option off when you want the model output exactly as produced, for example when comparing against another tool's mask.
 
-**Re-running segmentation discards the pedicle analyses behind the current plan.** Screw grades are recomputed against the new mask immediately; pedicle width, the narrow verdict, and the endplate angle keep the values recorded when the plan was made — they come from an analysis of the mask that was just replaced, so they are no longer re-derived when a screw is edited, until you generate proposals again.
+**Replacing or clearing segmentation invalidates measurements from the previous mask.** A replacement recomputes screw grades against the new mask. Pedicle width, the narrow verdict, body/pedicle HU, endplate angle, HU ratios, and their warnings are cleared until measured again. **Clear Overlay** also detaches grading: existing and newly placed screws show **N/A** until segmentation is available. Screw geometry and optimizer provenance remain. Loading a saved plan clears measurements whose source mask cannot be verified; available grading is recomputed against the current segmentation.
+
+Segmentation and automatic planning run one at a time. Wait for completion before starting the other operation. Loading another study, rerunning segmentation, and closing the window remain blocked through result installation. Results queued for an older study or mask are discarded. Mask loading, label inventory, VTK image conversion, optional pedicle-mask resampling, and grader construction run in the background. Colored mesh extraction, isolation, and screw regrading still run during GUI installation and can briefly pause large studies. The spine workflow skips the unused generic whole-mask 3D surface.
 
 ### 5.3 Select Vertebral Levels
 
@@ -422,13 +426,15 @@ Double-clicking still works exactly as before, alongside the Edit menu:
 2. Double-click the pointed tip or distal shaft to move the tip only.
 3. Double-click the middle shaft to move entry and tip together.
 4. Double-click the blue guide handle to rotate the screw about its entry. The handle sits 60 mm behind the head, outside the bone, at the end of a green guide line, and appears on the selected screw only. Entry and length stay fixed, and the status bar shows the convergence and craniocaudal angles while you move (unsigned convergence when the screw has no side). The guide is a control only: it is not graded, saved, or exported.
-5. Move the pointer without holding a button.
+5. Hold the left button and drag: the part moves while the button is down and stops when you release it. Drag again as often as you like; each drag starts from where the part is now, so pressing away from it does not make it jump.
 6. Double-click again to finish.
+
+The grade and warnings are recalculated when you release the button. During movement, the table, construct map and inspector show **grading after release**; previous safety measurements are hidden. The first actual movement clears **✓ Reviewed**. A gesture that does not change geometry keeps the review mark and creates no undo step. Each released stroke creates one undo step. Saving a plan or exporting CSV/HTML first finishes the active edit and grades its final position. Switching viewers, clicking another pane, changing selection or pressing `Esc` finishes the pending stroke before leaving its movement mode. After grading, the row uses the detected vertebra level; measurements from a previous level are discarded when they cannot be measured for the new level.
 7. Press `Esc` to leave movement mode while retaining the last valid position. **Edit → Undo** (6.5) puts the screw back where the drag began.
 
 During MPR editing the CT image remains fixed and the screw moves. After editing, Screw MPR realigns to the updated trajectory.
 
-In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, move the pointer, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
+In Screw MPR the Oblique Axial and Oblique Sagittal panes show the same guide line and blue handle for the selected screw (the Cross-section does not). Double-click the handle, drag with the left button held, and double-click again: the screw rotates about its entry within that pane's plane, with entry and length fixed. The handle may lie beyond the CT image; it still follows the pointer. The pane holds still while you move and realigns when you finish.
 
 ### 6.3 Diameter
 
@@ -454,7 +460,7 @@ The menu bar's **Edit** menu has **Undo** (`Ctrl+Z`) and **Redo** (`Ctrl+Shift+Z
 
 ## 7. Manual Tools
 
-Add Screw, Distance, and Angle are buttons in the tool dock below the main view (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
+Add Screw, Distance, and Angle are buttons in the tool palette (see 4); **Measurements** (the mode combo, list, and Show Cut / Edit / Delete buttons) live in a collapsed section at the bottom of the **Review** page (5.9).
 
 ### Add Screw
 
@@ -522,7 +528,7 @@ In Screw MPR the wheel and middle-drag move the screw-aligned planes instead; se
 |---|---|
 | Left-drag | Rotate |
 | Mouse wheel | Zoom |
-| `Pan` then drag or Shift-drag | Move model |
+| Right- or middle-drag, Shift-drag, or `Pan` then drag | Move model |
 | Double-click anatomy | Focus on a point |
 | `Reset View` | Restore sagittal startup orientation |
 | `Vertebra Transparency` | Reveal or obscure internal screws |
@@ -571,7 +577,7 @@ The window stays open while you work: it redraws when screws are added, moved, r
 - Export supported bone surfaces as STL.
 - Export a single-file HTML report of the plan (see below).
 
-Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which fills in the schema v3 metrics. A plan saved by an earlier build may show better grades once re-graded this way, because the entry cortex is no longer graded (see 5.9) — nothing in the plan file itself changes. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`, and — as the new last column — `endplate_reference` (`own` / `neighbours` / `none`, or blank when the screw never had an endplate reference recorded — for example a manually placed screw on a level with no pedicle analysis (not planned and not within two levels of a planned level, or placed after segmentation was re-run, which discards the analyses), or a screw from a plan saved by an earlier version), naming which reference the `endplate_angle_deg` column was measured against (see 5.5, "Endplate reference for a rough fit"), followed by the five surface HU columns (`surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`, `surface_hu_samples`, `surface_hu_coverage_pct`, see 5.10). A planned screw keeps its planner-recorded value through later re-grades. Each screw also carries a `reviewed` flag, the **✓ Reviewed** mark (5.9); it is an additive key within schema version 3, so a plan saved without it loads with every screw not reviewed.
+Plan files use schema version 3, which adds a `metrics` field per screw carrying the bone-quality and safety measurements described in section 5.10, Screw Quality Metrics (trajectory/pedicle/body HU, HU ratio, minimum wall distance, Heary breach direction, facet violation grade); schema version 2 added `mean_hu`, `min_hu`, `warnings`, and `source` for each screw. Plan files saved by earlier versions still load; a plan loaded while a segmentation is already available is re-graded immediately, which recomputes available schema v3 metrics; analysis measurements without verifiable mask provenance are cleared. A plan saved by an earlier build may show better grades once re-graded this way, because the entry cortex is no longer graded (see 5.9) — nothing in the plan file itself changes. CSV export includes the renamed `convergence_angle_deg` and `craniocaudal_angle_deg` columns, `mean_hu`, `min_hu`, `source`, `warnings`, the schema v3 metric columns `trajectory_mean_hu`, `pedicle_mean_hu`, `body_mean_hu`, `hu_ratio`, `min_wall_mm`, `heary_direction`, and `facet_grade`, and — as the new last column — `endplate_reference` (`own` / `neighbours` / `none`, or blank when the screw never had an endplate reference recorded — for example a manually placed screw on a level with no pedicle analysis (not planned and not within two levels of a planned level, or placed after segmentation was re-run, which discards the analyses), or a screw from a plan saved by an earlier version), naming which reference the `endplate_angle_deg` column was measured against (see 5.5, "Endplate reference for a rough fit"), followed by the five surface HU columns (`surface_hu_low_pct`, `surface_hu_mid_pct`, `surface_hu_high_pct`, `surface_hu_samples`, `surface_hu_coverage_pct`, see 5.10). Within the same segmentation, regrading preserves planner measurements that cannot be remeasured. Replacing or clearing segmentation, and importing a saved plan, invalidates those measurements (5.2). Imported screws require review again. Each screw also carries a `reviewed` flag, the **✓ Reviewed** mark (5.9); it is an additive key within schema version 3, so a plan saved without it loads with every screw not reviewed.
 
 The Save, Load and Export dialogs open in the folder you last used for a plan (or your Documents folder the first time), never in the application folder. A plan records the DICOM Series Instance UID only as a one-way SHA-256 digest (`series_uid_sha256`), which is enough to warn you when a plan is loaded against a different series but cannot be looked up in PACS. Older plans that hold the raw UID still load and are checked the same way; saving them again writes the digest only.
 

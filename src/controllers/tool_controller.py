@@ -722,20 +722,24 @@ class ToolController:
         if index < 0 or index >= len(self.screw_tool.get_screws()):
             raise IndexError(f"Screw index out of range: {index}")
 
-        if index < len(self._screw_actors):
-            old_actor = self._screw_actors[index]
-            self._window.viewer_3d.remove_screw(old_actor)
-        new_actor = self._window.viewer_3d.add_screw(
-            screw.entry_point,
-            screw.target_point,
-            radius=screw.diameter / 2.0,
-            color=screw_display_color(screw),
-            screw_id=index,
-        )
-        if index < len(self._screw_actors):
-            self._screw_actors[index] = new_actor
+        viewer = self._window.viewer_3d
+        if index < len(self._screw_actors) and callable(getattr(viewer, "update_screw", None)):
+            viewer.update_screw(
+                self._screw_actors[index], screw.entry_point, screw.target_point,
+                screw.diameter / 2.0, screw_display_color(screw),
+            )
         else:
-            self._screw_actors.append(new_actor)
+            if index < len(self._screw_actors):
+                viewer.remove_screw(self._screw_actors[index])
+            new_actor = viewer.add_screw(
+                screw.entry_point, screw.target_point,
+                radius=screw.diameter / 2.0, color=screw_display_color(screw),
+                screw_id=index,
+            )
+            if index < len(self._screw_actors):
+                self._screw_actors[index] = new_actor
+            else:
+                self._screw_actors.append(new_actor)
 
         self._add_screw_to_mpr(index, screw)
         self._window.screw_list_widget.updateScrewRow(index, screw)

@@ -608,6 +608,88 @@ class TestScrewVisualGeometry:
         assert events[-1] == ("end",)
 
 
+    def test_screw_moves_only_while_the_button_is_held(self):
+        from src.ui.viewer_3d import Viewer3D
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._double_click_detector = DoubleClickDetector()
+        viewer._screw_drag_active = True  # movement mode already on
+        viewer._screw_stroke_active = False
+        viewer._active_screw_part = (5, "shaft")
+        viewer._screw_drag_plane_origin = (0.0, 0.0, 0.0)
+        viewer._screw_drag_plane_normal = (0.0, 0.0, 1.0)
+        viewer._screw_actors = []
+        interactor = SimpleNamespace(GetEventPosition=lambda: (50, 50))
+        viewer.vtk_widget = SimpleNamespace(
+            GetRenderWindow=lambda: SimpleNamespace(GetInteractor=lambda: interactor)
+        )
+        viewer._display_to_drag_plane = lambda x, y: (9.0, 9.0, 9.0)
+        events = []
+        viewer.set_screw_interaction_callbacks(
+            on_drag=lambda world, source: events.append(("drag", world)),
+            on_grab=lambda world: events.append(("grab", world)),
+            on_release=lambda: events.append(("release",)),
+        )
+
+        viewer._on_screw_mouse_move(None, None)
+        assert events == []  # hovering does nothing
+
+        viewer._on_screw_left_press(None, None)
+        viewer._on_screw_mouse_move(None, None)
+        viewer._on_screw_left_release(None, None)
+        viewer._on_screw_mouse_move(None, None)
+
+        assert events == [("grab", (9.0, 9.0, 9.0)), ("drag", (9.0, 9.0, 9.0)), ("release",)]
+        assert viewer._screw_drag_active is True
+
+    def test_trackball_does_not_swallow_a_held_screw_stroke(self):
+        # The trackball grabs interactor focus on a press it handles, so the
+        # move and release never reached the screw observers and the screw
+        # kept following the pointer after the button was let go.
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D, trackball_style
+
+        render_window = vtk.vtkRenderWindow()
+        render_window.SetOffScreenRendering(1)
+        render_window.AddRenderer(vtk.vtkRenderer())
+        interactor = vtk.vtkRenderWindowInteractor()
+        interactor.SetRenderWindow(render_window)
+        interactor.SetInteractorStyle(trackball_style())
+        interactor.Initialize()
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._double_click_detector = DoubleClickDetector()
+        viewer._screw_drag_active = True  # movement mode already on
+        viewer._screw_stroke_active = False
+        viewer._pan_mode_active = False
+        viewer._active_screw_part = (5, "shaft")
+        viewer._screw_drag_plane_origin = (0.0, 0.0, 0.0)
+        viewer._screw_drag_plane_normal = (0.0, 0.0, 1.0)
+        viewer._screw_actors = []
+        viewer.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: render_window)
+        viewer._display_to_drag_plane = lambda x, y: (float(x), float(y), 0.0)
+        events = []
+        viewer.set_screw_interaction_callbacks(
+            on_drag=lambda world, source: events.append("drag"),
+            on_grab=lambda world: events.append("grab"),
+            on_release=lambda: events.append("release"),
+        )
+        viewer._install_screw_observers(interactor)
+
+        for x, send in (
+            (10, interactor.LeftButtonPressEvent),
+            (20, interactor.MouseMoveEvent),
+            (20, interactor.LeftButtonReleaseEvent),
+            (40, interactor.MouseMoveEvent),
+        ):
+            interactor.SetEventInformation(x, 10, 0, 0, chr(0), 0, None)
+            send()
+
+        assert events == ["grab", "drag", "release"]
+        assert viewer._screw_stroke_active is False
+
+
 class TestSegmentationSurfaceSmoothing:
     def test_raw_segmentation_pipeline_smooths_image_mesh_and_normals(self):
         import inspect
@@ -2294,3 +2376,63 @@ def test_translucent_vertebra_surfaces_are_depth_sorted(qtbot, monkeypatch):
 
     assert viewer._renderer.GetUseDepthPeeling()
     assert render_window.GetAlphaBitPlanes()
+
+
+def test_right_drag_pans_the_3d_view():
+    import vtk
+
+    from src.ui.viewer_3d import trackball_style
+
+    render_window = vtk.vtkRenderWindow()
+    render_window.SetOffScreenRendering(1)
+    render_window.SetSize(100, 100)
+    render_window.AddRenderer(vtk.vtkRenderer())
+    interactor = vtk.vtkRenderWindowInteractor()
+    interactor.SetRenderWindow(render_window)
+    style = trackball_style()
+    interactor.SetInteractorStyle(style)
+    render_window.Render()
+    interactor.SetEventPosition(50, 50)
+
+    interactor.InvokeEvent("RightButtonPressEvent")
+    assert style.GetState() == 2  # VTKIS_PAN, not the default dolly
+    interactor.InvokeEvent("RightButtonReleaseEvent")
+    assert style.GetState() == 0
+
+
+def test_generic_surface_can_be_deferred_until_explicitly_shown(monkeypatch):
+    viewer, builds = TestSegmentationLabelDebounceAndCache._viewer(monkeypatch)
+    mask = TestSingleLabelSurfaceExtractor._sphere_mask()
+    viewer.set_segmentation_mask(mask, label_value=27, build_surface=False)
+    viewer.set_segmentation_label(27)
+    viewer._flush_segmentation_label()
+    assert builds == []
+    assert viewer._segmentation_actor is None
+    viewer.set_segmentation_visible(True)
+    assert len(builds) == 1
+    assert viewer._segmentation_actor.GetVisibility() == 1
+
+
+def test_retiring_a_mask_releases_vertebral_surface_cache():
+    from src.ui.viewer_3d import Viewer3D
+
+    viewer = Viewer3D.__new__(Viewer3D)
+    viewer._vertebral_surface_key = (123, 456)
+    viewer._vertebral_surface_cache = {28: object()}
+    viewer.clear_vertebral_surface_cache()
+    assert viewer._vertebral_surface_key is None
+    assert viewer._vertebral_surface_cache == {}
+
+
+def test_screw_visual_updates_reuse_all_props_and_mappers():
+    from src.ui.viewer_3d import create_screw_visual, update_screw_visual
+    visual = create_screw_visual(0, (0, 0, 0), (0, 0, 40), 3)
+    props = visual.props
+    mappers = [p.GetMapper() for p in props]
+    update_screw_visual(visual, (5, 4, 3), (25, 4, 3), 2, (1, 0, 0))
+    assert visual.props == props
+    assert [p.GetMapper() for p in props] == mappers
+    assert visual.entry_point == (5, 4, 3)
+    assert visual.target_point == (25, 4, 3)
+    assert visual.entry_actor.GetBounds() == pytest.approx((2, 8, 1, 7, 0, 6), abs=0.03)
+    assert visual.tip_actor.GetBounds()[1] == pytest.approx(25, abs=0.03)

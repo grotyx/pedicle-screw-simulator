@@ -301,3 +301,19 @@ def test_windows_build_bundles_only_the_spine_models(tmp_path, monkeypatch):
     assert args[-len(SPINE_TASK_IDS):] == [str(task_id) for task_id in SPINE_TASK_IDS]
     assert kwargs["env"]["TOTALSEG_WEIGHTS_PATH"] == str(tmp_path / "app" / "_internal" / "totalseg_weights")
     assert kwargs["check"] is True
+
+
+def test_downloads_and_app_metadata_carry_the_radwright_screw_name():
+    # The exe, settings and log folders keep the old name so installed copies
+    # update in place; what users download and see is RadWright Screw.
+    import scripts.build_desktop as build_desktop
+
+    root = Path(__file__).resolve().parents[1]
+    assert build_desktop.PACKAGE == "RadWright-Screw"
+    installer = (root / "packaging" / "PedicleScrewSimulator.iss").read_text(encoding="utf-8")
+    assert "OutputBaseFilename=RadWright-Screw-{#AppVersion}-Windows-x64-Setup" in installer
+    spec = (root / "packaging" / "PedicleScrewSimulator.spec").read_text(encoding="utf-8")
+    assert '"CFBundleDisplayName": "RadWright Screw"' in spec
+    version_info = (root / "packaging" / "windows_version_info.template.txt").read_text(encoding="utf-8")
+    assert "StringStruct('ProductName', 'RadWright Screw')" in version_info
+    assert "StringStruct('FileDescription', 'RadWright Screw')" in version_info

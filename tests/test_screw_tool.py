@@ -520,7 +520,7 @@ def test_regrade_leaves_a_planner_endplate_angle_alone_without_a_registry():
         entry_point=(35.0, 38.0, 30.0),
         target_point=(35.0, 22.0, 30.0),
         diameter=5.0,
-        vertebra_level="L3",
+        vertebra_level="L4",
         side="left",
         metrics={"endplate_angle_deg": 2.4},
     )
@@ -608,7 +608,7 @@ def test_regrade_reports_no_endplate_angle_when_the_reference_is_none():
         entry_point=(35.0, 38.0, 30.0),
         target_point=(35.0, 22.0, 30.0),
         diameter=5.0,
-        vertebra_level="L3",
+        vertebra_level="L4",
         side="left",
         metrics={"endplate_angle_deg": 2.4},
     )
@@ -764,7 +764,7 @@ def _narrow_l2_screw(z):
         entry_point=(30.0, 38.0, z),
         target_point=(30.0, 22.0, z),
         diameter=5.0,
-        vertebra_level="L2",
+        vertebra_level="L4",
         side="left",
         metrics={"narrow_pedicle": True, "pedicle_width_mm": 4.5, "score": 1.25},
     )
@@ -790,8 +790,8 @@ def test_dragging_a_narrow_screw_into_a_wide_level_re_measures_the_width():
     assert moved.metrics["score"] == 1.25
 
 
-def test_without_a_registry_the_planner_width_survives_the_drag():
-    """Never blank a number the tool has no way to re-measure."""
+def test_level_change_without_registry_discards_the_old_width():
+    """A width from another level cannot describe the moved screw."""
     tool = _two_level_tool()
     screw = _narrow_l2_screw(25.0)
     tool.add_screw(screw)
@@ -800,8 +800,8 @@ def test_without_a_registry_the_planner_width_survives_the_drag():
         0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
     )
 
-    assert moved.metrics["narrow_pedicle"] is True
-    assert moved.metrics["pedicle_width_mm"] == pytest.approx(4.5)
+    assert moved.metrics["narrow_pedicle"] is None
+    assert moved.metrics["pedicle_width_mm"] is None
 
 
 def test_the_re_measured_width_uses_the_screws_own_side():
@@ -1029,8 +1029,8 @@ def test_a_narrow_pedicle_note_retracts_once_the_width_is_no_longer_narrow():
     assert _narrow_warnings(screw) == []
 
 
-def test_a_narrow_pedicle_note_survives_a_drag_into_an_unanalysed_level():
-    """Without an analysis there is no verdict to replace the planner's."""
+def test_a_level_change_removes_the_old_narrow_pedicle_note():
+    """Without analysis of the new level, remove the old level verdict."""
     tool = _two_level_tool()
     tool.set_analysis_by_level({28: _WidthAnalysis(4.5, 4.5)})
     screw = _narrow_l2_screw(25.0)
@@ -1042,8 +1042,8 @@ def test_a_narrow_pedicle_note_survives_a_drag_into_an_unanalysed_level():
         0, entry_point=(30.0, 38.0, 35.0), target_point=(30.0, 22.0, 35.0)
     )
 
-    assert moved.metrics["pedicle_width_mm"] == pytest.approx(4.5)
-    assert _narrow_warnings(moved) == [narrow_pedicle_warning(4.5, 5.0)]
+    assert moved.metrics["pedicle_width_mm"] is None
+    assert _narrow_warnings(moved) == []
 
 
 def test_a_still_narrow_screw_keeps_one_note_quoting_the_current_width():
@@ -1285,3 +1285,20 @@ def test_create_screw_grades_with_the_stated_side():
     assert screw.side == "left"
     assert seen and seen[0] == "left"
     assert tool.get_screws() == [screw]
+
+
+def test_regrade_reconciles_level_and_discards_old_level_metrics():
+    from src.core.pedicle_analyzer import VERTEBRA_LABELS
+    tool = _two_level_tool()
+    screw = _narrow_l2_screw(25)
+    screw.metrics.update(body_mean_hu=90, endplate_angle_deg=12)
+    screw.warnings = [narrow_pedicle_warning(4.5, 5), "Vertebral body HU 90"]
+    tool.add_screw(screw)
+    moved = tool.replace_screw(0, (30, 38, 35), (30, 22, 35))
+    assert moved.vertebra_level == VERTEBRA_LABELS[29]
+    assert moved.metrics.get("pedicle_width_mm") is None
+    assert moved.metrics.get("body_mean_hu") is None
+    assert moved.metrics.get("endplate_angle_deg") is None
+    assert moved.metrics["score"] == 1.25
+    assert not _narrow_warnings(moved)
+    assert not any(w.startswith("Vertebral body HU") for w in moved.warnings)

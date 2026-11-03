@@ -97,6 +97,8 @@ def _dock_entries(window):
     entries = []
     for index in range(layout.count()):
         widget = layout.itemAt(index).widget()
+        if widget.objectName() == "toolDockGrip":
+            continue
         if widget.objectName() == "toolDockSeparator":
             entries.append("|")
         else:
@@ -1270,3 +1272,53 @@ def test_view_menu_opens_one_non_modal_virtual_xray_window(ui_main_window):
     assert window._virtual_xray_dialog is dialog
     assert dialog.isVisible() and not dialog.isModal()
     assert "Load a CT" in dialog.status_label.text()
+
+
+def test_device_is_status_and_guided_is_absent(ui_main_window):
+    window = ui_main_window
+    assert window.seg_device_label.text() == 'Automatic (not run yet)'
+    window._seg_ctrl._on_device_selected('gpu')
+    assert window.seg_device_label.text() == 'GPU'
+    window._seg_ctrl._on_device_selected('cpu')
+    assert window.seg_device_label.text() == 'CPU fallback'
+    assert window.seg_device_combo.isHidden()
+    assert window.workspace_mode_combo.findData('guided') == -1
+    assert window.workspace_mode_combo.isHidden()
+
+
+def test_palette_attaches_outside_panes_and_preserves_parents(ui_main_window):
+    window = ui_main_window
+    dock = window.tool_dock
+    panes = window._panes()
+    parents = {name: pane.parentWidget() for name, pane in panes.items()}
+    assert dock.is_attached
+    assert dock.parentWidget() is window.tool_strip
+    for mode in ('planning', 'mpr_focus', 'maximize:axial'):
+        window.set_view_layout(mode)
+        assert dock.parentWidget() is window.tool_strip
+        assert all(pane.parentWidget() is parents[name] for name, pane in panes.items())
+    dock.set_attached(False)
+    assert dock.parentWidget() is window._view_layout.parentWidget()
+    assert window._settings.value('layout/toolDockMode') == 'floating'
+    window._view_layout.parentWidget().resize(900, 900)
+    dock.place(main_window_module.QPoint(110, 120))
+    dock.moved.emit(dock.pos())
+    dock.set_attached(True)
+    assert window._settings.value('layout/toolDockPos') == '110,120'
+    window._restore_tool_dock_position()
+    assert dock.is_attached
+
+
+def test_floating_palette_restores_position_after_initial_layout(
+    ui_main_window, qtbot
+):
+    window = ui_main_window
+    window._settings.setValue('layout/toolDockMode', 'floating')
+    window._settings.setValue('layout/toolDockPos', '160,140')
+    restored = main_window_module.MainWindow()
+    qtbot.addWidget(restored)
+    restored.show()
+    QApplication.processEvents()
+    assert not restored.tool_dock.is_attached
+    assert restored.tool_dock.pos() == main_window_module.QPoint(160, 140)
+    assert restored.tool_dock.parentWidget() is restored._view_layout.parentWidget()

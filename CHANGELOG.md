@@ -13,6 +13,57 @@ current version; every other place the version appears is derived from it.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-03
+
+### Changed
+
+- Open DICOM starts in the folder you last loaded a study from.
+- Downloads are named `RadWright-Screw-<version>-…` (installer, portable
+  ZIP, macOS ZIP), the macOS app is called RadWright Screw, and the Windows
+  exe reports RadWright Screw as its product name and description (Task
+  Manager, file properties). The `PedicleScrewSimulator.exe` file, settings
+  and log folders keep their names so installed copies update in place.
+- Auto Segmentation no longer freezes the window for seconds when clicked:
+  the GPU check that loads PyTorch now runs in the background.
+- Moving a screw: double-click a part to turn movement on, then hold the
+  left button and drag; the screw stops when you release and stays in
+  movement mode until you double-click again. Each drag starts from where
+  the part is, so pressing away from it no longer makes it jump. The grade
+  is recalculated on release instead of on every pointer sample, which made
+  the screw stutter.
+- The tool palette defaults to a separate strip outside the images. Drag its
+  grip away to detach; drop on the left strip or double-click to attach.
+  Mode and floating position persist across layouts and restarts. Floating
+  movement is throttled to about 30 updates per second.
+- In the Planning layout, drag the bar between the main view and the
+  thumbnails to resize them; the size is remembered.
+- In 3D, right-drag (as well as middle-drag) moves the model; right-drag
+  used to zoom, which the wheel already does.
+- One startup log summary measures from process entry: imports, main-window
+  build, native VTK initialization, stale-workspace purge, and the first visible
+  VTK render completion. Stale-workspace cleanup runs after show in a worker.
+- Segmentation Device is a read-only status reported by automatic probing.
+  The unavailable Guided workspace selector is hidden; Planning is retained.
+- Turning planning levels on or off is quick: each vertebra's 3D surface is
+  built once per segmentation and reused, instead of every surface being
+  smoothed and meshed again on each click.
+- Dragging the tool palette on Windows no longer leaves copies of it over
+  the views.
+- Turning Screw MPR on keeps the 2×2 MPR Focus layout instead of switching
+  back to the Planning layout.
+
+### Fixed
+
+- Clearing or replacing segmentation retires old grades, analysis metrics and related warnings; imported plans also discard measurements without verifiable mask provenance. Optimizer provenance and screw geometry remain.
+- Segmentation and planning reject results from older CT/mask revisions and cannot overlap. Loading, closing and rerunning remain blocked through segmentation installation.
+- Segmentation prepares mask images, labels, optional pedicle masks and graders in the worker, skips the unused generic spine surface, and releases retired vertebral surface caches. Mesh extraction, isolation and screw regrading remain on the GUI thread.
+- Screw edits now finish each changed stroke as one undo step, including viewer handoffs, other-pane clicks, selection changes and Esc. Unchanged gestures preserve Reviewed.
+- Moving screws show “grading after release” instead of old safety values, clear Reviewed on the first change, and reconcile the detected vertebra level after grading. Measurements from the previous level are invalidated.
+- Live screw edits reuse 3D/MPR actors and apply the latest pointer sample at display cadence. Table rows and construct chips update in place; unchanged slices and crosshairs produce no notifications, and one wheel step updates its slice once.
+- Segmentation labels are aligned to the CT identity-LPS grid with nearest-neighbour
+  interpolation before display, isolation, meshing, grading, and planning. Isolation
+  rejects mismatched grids instead of applying mask values by flat index.
+
 ## [0.2.7] - 2026-11-02
 
 ### Changed
@@ -662,7 +713,8 @@ Initial public baseline.
 - JSON plan save/load, CSV and STL export.
 - Three UI themes.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5

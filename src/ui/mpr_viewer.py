@@ -195,6 +195,10 @@ class MPRViewer(QWidget):
         self._screw_drag_begin_callback: Optional[Callable] = None
         self._screw_drag_callback: Optional[Callable] = None
         self._screw_drag_end_callback: Optional[Callable] = None
+        self._screw_grab_callback: Optional[Callable] = None
+        self._screw_release_callback: Optional[Callable] = None
+        #: Left button held during movement mode: only then does the screw move.
+        self._screw_stroke_active = False
         self._screw_select_callback: Optional[Callable] = None
         self._double_click_detector = DoubleClickDetector()
         self._active_screw_part: Optional[Tuple[int, str]] = None
@@ -657,9 +661,6 @@ class MPRViewer(QWidget):
             position: World coordinate position for this plane
         """
         self.volume_manager.set_slice_position(self.plane, position)
-        self._update_reslice_position()
-        self._update_slice_info()
-        self._request_render()
 
     def _update_reslice_position(self):
         """Update reslice axes to current position."""
@@ -831,12 +832,16 @@ class MPRViewer(QWidget):
         on_drag: Optional[Callable] = None,
         on_end: Optional[Callable] = None,
         on_select: Optional[Callable] = None,
+        on_grab: Optional[Callable] = None,
+        on_release: Optional[Callable] = None,
     ) -> None:
         """Connect direct screw selection and drag callbacks."""
         self._screw_drag_begin_callback = on_begin
         self._screw_drag_callback = on_drag
         self._screw_drag_end_callback = on_end
         self._screw_select_callback = on_select
+        self._screw_grab_callback = on_grab
+        self._screw_release_callback = on_release
 
     def _begin_screw_drag(
         self,
@@ -854,6 +859,7 @@ class MPRViewer(QWidget):
                 )
             )
         self._screw_drag_active = accepted
+        self._screw_stroke_active = accepted
         self._active_screw_part = (
             (int(screw_id), str(part)) if accepted else None
         )
@@ -861,7 +867,11 @@ class MPRViewer(QWidget):
         return accepted
 
     def _drag_screw_to(self, world_point: Tuple[float, float, float]) -> None:
-        if self._screw_drag_active and self._screw_drag_callback is not None:
+        if (
+            self._screw_drag_active
+            and self.__dict__.get("_screw_stroke_active", False)
+            and self._screw_drag_callback is not None
+        ):
             self._screw_drag_callback(
                 tuple(world_point), f"{self.plane.capitalize()} MPR"
             )
@@ -870,6 +880,7 @@ class MPRViewer(QWidget):
         if not self._screw_drag_active:
             return
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._pending_screw_press = None
         self._refresh_active_screw_style(rebuild=True)
@@ -879,6 +890,7 @@ class MPRViewer(QWidget):
     def cancel_screw_interaction(self) -> None:
         """Clear a pointer-move lock without changing the last valid geometry."""
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._pending_screw_press = None
         self._double_click_detector.reset()
@@ -1458,22 +1470,22 @@ class MPRViewer(QWidget):
             color: RGB color tuple (0-1).
             diameter: Screw diameter in mm (affects line width).
         """
-        if screw_id in self._screw_overlays:
-            self.remove_screw_overlay(screw_id)
-        self._screw_data[screw_id] = {
+        data = self._screw_data.setdefault(screw_id, {})
+        data.update({
             "entry": entry,
             "target": target,
             "color": color,
             "diameter": diameter,
-        }
+        })
         self._draw_screw_projection(screw_id)
         if not self._render_guard_active:
             self._request_render()
 
     def remove_screw_overlay(self, screw_id: int) -> None:
         """Remove one screw projection overlay."""
-        self._screw_data.pop(screw_id, None)
-        props = self._screw_overlays.pop(screw_id, None)
+        data = self._screw_data.pop(screw_id, {})
+        props = list(data.get("props", {}).values()) or self._screw_overlays.get(screw_id)
+        self._screw_overlays.pop(screw_id, None)
         if not props:
             return
         for prop in props:
@@ -1484,10 +1496,8 @@ class MPRViewer(QWidget):
 
     def clear_screw_overlays(self) -> None:
         """Remove all screw projection overlays."""
-        for props in self._screw_overlays.values():
-            for prop in props:
-                self._screw_prop_parts.pop(self._prop_key(prop), None)
-                self._renderer.RemoveViewProp(prop)
+        for screw_id in list(self._screw_data):
+            self.remove_screw_overlay(screw_id)
         self._screw_overlays.clear()
         self._screw_data.clear()
         if not self._render_guard_active:
@@ -1495,13 +1505,6 @@ class MPRViewer(QWidget):
 
     def _update_screw_projections(self) -> None:
         """Recalculate all screw projections for the current slice position."""
-        # Remove existing actors
-        for props in self._screw_overlays.values():
-            for prop in props:
-                self._screw_prop_parts.pop(self._prop_key(prop), None)
-                self._renderer.RemoveViewProp(prop)
-        self._screw_overlays.clear()
-
         for screw_id in list(self._screw_data.keys()):
             self._draw_screw_projection(screw_id)
         if not self._render_guard_active:
@@ -1518,6 +1521,10 @@ class MPRViewer(QWidget):
         color = data["color"]
         diameter = data["diameter"]
         props: List[vtk.vtkProp] = []
+        cache = data.setdefault("props", {})
+        for actor in cache.values():
+            actor.VisibilityOff()
+            actor.GetProperty().EdgeVisibilityOff()
         axes = self._active_reslice_axes()
         if axes is None:
             self._screw_overlays[screw_id] = props
@@ -1548,31 +1555,19 @@ class MPRViewer(QWidget):
 
         if custom_long_axis:
             bar_actor = self._create_screw_bar(
-                p1,
-                p2,
-                diameter,
-                color,
+                p1, p2, diameter, color, actor=cache.get("screw-bar")
             )
-            self._renderer.AddViewProp(bar_actor)
+            if "screw-bar" not in cache:
+                cache["screw-bar"] = bar_actor
+                self._renderer.AddViewProp(bar_actor)
+            bar_actor.VisibilityOn()
             props.append(bar_actor)
             self._register_screw_prop(bar_actor, screw_id, "shaft")
         else:
-            line = vtk.vtkLineSource()
-            line.SetPoint1(*p1)
-            line.SetPoint2(*p2)
-
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(line.GetOutputPort())
-
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            actor.SetObjectName("screw-guide")
+            actor = self._projection_actor(data, "screw-guide", (p1, p2), line=True)
             actor.GetProperty().SetColor(*color)
             actor.GetProperty().SetLineWidth(1.5)
             actor.GetProperty().SetOpacity(0.16)
-            actor.GetProperty().SetLighting(False)
-
-            self._renderer.AddViewProp(actor)
             props.append(actor)
             self._register_screw_prop(actor, screw_id, "shaft")
 
@@ -1599,25 +1594,14 @@ class MPRViewer(QWidget):
         for name, part, sides, point, marker_color, near_slice in endpoint_data:
             if not custom_long_axis and not near_slice:
                 continue
-            marker = vtk.vtkRegularPolygonSource()
-            marker.SetNumberOfSides(sides)
-            marker.SetRadius(
-                marker_radius if part == "entry" else max(1.5, diameter * 0.45)
+            marker_actor = self._projection_actor(
+                data, name, self._projection_circle(
+                    point, marker_radius if part == "entry" else max(1.5, diameter * 0.45), sides
+                )
             )
-            marker.SetCenter(*point)
-            marker.SetNormal(0, 0, 1)
-            marker.GeneratePolygonOn()
-
-            marker_mapper = vtk.vtkPolyDataMapper()
-            marker_mapper.SetInputConnection(marker.GetOutputPort())
-            marker_actor = vtk.vtkActor()
-            marker_actor.SetMapper(marker_mapper)
-            marker_actor.SetObjectName(name)
             marker_actor.GetProperty().SetColor(*marker_color)
             marker_actor.GetProperty().SetLineWidth(2.0)
             marker_actor.GetProperty().SetOpacity(0.95)
-            marker_actor.GetProperty().SetLighting(False)
-            self._renderer.AddViewProp(marker_actor)
             props.append(marker_actor)
             self._register_screw_prop(marker_actor, screw_id, part)
 
@@ -1632,36 +1616,17 @@ class MPRViewer(QWidget):
                 guide_handle_point(entry, target, GUIDE_REACH_MM), axes
             )
             handle_point = (*handle_slice[:2], overlay_z)
-            guide_line = vtk.vtkLineSource()
-            guide_line.SetPoint1(*p1)
-            guide_line.SetPoint2(*handle_point)
-            guide_mapper = vtk.vtkPolyDataMapper()
-            guide_mapper.SetInputConnection(guide_line.GetOutputPort())
-            guide_actor = vtk.vtkActor()
-            guide_actor.SetMapper(guide_mapper)
-            guide_actor.SetObjectName("screw-guide-line")
+            guide_actor = self._projection_actor(data, "screw-guide-line", (p1, handle_point), line=True)
             guide_actor.GetProperty().SetColor(*GUIDE_COLOR)
             guide_actor.GetProperty().SetLineWidth(2.0)
-            guide_actor.GetProperty().SetLighting(False)
             guide_actor.PickableOff()
-            self._renderer.AddViewProp(guide_actor)
             props.append(guide_actor)
 
-            handle = vtk.vtkRegularPolygonSource()
-            handle.SetNumberOfSides(32)
-            handle.SetRadius(max(3.0, marker_radius))
-            handle.SetCenter(*handle_point)
-            handle.SetNormal(0, 0, 1)
-            handle.GeneratePolygonOn()
-            handle_mapper = vtk.vtkPolyDataMapper()
-            handle_mapper.SetInputConnection(handle.GetOutputPort())
-            handle_actor = vtk.vtkActor()
-            handle_actor.SetMapper(handle_mapper)
-            handle_actor.SetObjectName("screw-guide-handle")
+            handle_actor = self._projection_actor(
+                data, "screw-guide-handle", self._projection_circle(handle_point, max(3.0, marker_radius), 32)
+            )
             handle_actor.GetProperty().SetColor(*GUIDE_HANDLE_COLOR)
             handle_actor.GetProperty().SetOpacity(0.95)
-            handle_actor.GetProperty().SetLighting(False)
-            self._renderer.AddViewProp(handle_actor)
             props.append(handle_actor)
             self._register_screw_prop(handle_actor, screw_id, "guide")
 
@@ -1677,10 +1642,10 @@ class MPRViewer(QWidget):
             minor_direction = (-major_direction[1], major_direction[0])
             semi_major = min(radius / max(normal_fraction, 0.2), radius * 4.0)
 
-            ellipse_points = vtk.vtkPoints()
-            ellipse = vtk.vtkPolygon()
+            intersection_actor = self._projection_actor(data, "screw-section", [(0, 0, 0)] * 48)
+            ellipse_data = intersection_actor.GetMapper().GetInput()
+            ellipse_points = ellipse_data.GetPoints()
             sides = 48
-            ellipse.GetPointIds().SetNumberOfIds(sides)
             for index in range(sides):
                 angle = 2.0 * math.pi * index / sides
                 major_offset = semi_major * math.cos(angle)
@@ -1695,31 +1660,65 @@ class MPRViewer(QWidget):
                     + major_offset * major_direction[1]
                     + minor_offset * minor_direction[1]
                 )
-                ellipse_points.InsertNextPoint(point_x, point_y, overlay_z)
-                ellipse.GetPointIds().SetId(index, index)
+                ellipse_points.SetPoint(index, point_x, point_y, overlay_z)
 
-            ellipse_cells = vtk.vtkCellArray()
-            ellipse_cells.InsertNextCell(ellipse)
-            ellipse_data = vtk.vtkPolyData()
-            ellipse_data.SetPoints(ellipse_points)
-            ellipse_data.SetPolys(ellipse_cells)
-
-            intersection_mapper = vtk.vtkPolyDataMapper()
-            intersection_mapper.SetInputData(ellipse_data)
-            intersection_actor = vtk.vtkActor()
-            intersection_actor.SetMapper(intersection_mapper)
-            intersection_actor.SetObjectName("screw-section")
+            ellipse_points.Modified()
+            ellipse_data.Modified()
             intersection_actor.GetProperty().SetColor(*color)
             intersection_actor.GetProperty().SetOpacity(0.82)
             intersection_actor.GetProperty().SetLighting(False)
             intersection_actor.GetProperty().EdgeVisibilityOn()
             intersection_actor.GetProperty().SetEdgeColor(1.0, 1.0, 1.0)
             intersection_actor.GetProperty().SetLineWidth(2.5)
-            self._renderer.AddViewProp(intersection_actor)
             props.append(intersection_actor)
             self._register_screw_prop(intersection_actor, screw_id, "shaft")
 
         self._screw_overlays[screw_id] = props
+
+    @staticmethod
+    def _projection_circle(center, radius, sides):
+        # Match vtkRegularPolygonSource's first vertex and winding (+Z normal).
+        return [
+            (center[0] + radius * math.sin(2 * math.pi * index / sides),
+             center[1] + radius * math.cos(2 * math.pi * index / sides), center[2])
+            for index in range(sides)
+        ]
+
+    def _projection_actor(self, data, name, coordinates, line=False):
+        """Update retained projection actors, mappers and points in place."""
+        cache = data.setdefault("props", {})
+        actor = cache.get(name)
+        if actor is None:
+            points = vtk.vtkPoints()
+            points.SetNumberOfPoints(len(coordinates))
+            cell = vtk.vtkPolyLine() if line else vtk.vtkPolygon()
+            cell.GetPointIds().SetNumberOfIds(len(coordinates))
+            for index in range(len(coordinates)):
+                cell.GetPointIds().SetId(index, index)
+            cells = vtk.vtkCellArray()
+            cells.InsertNextCell(cell)
+            polydata = vtk.vtkPolyData()
+            polydata.SetPoints(points)
+            if line:
+                polydata.SetLines(cells)
+            else:
+                polydata.SetPolys(cells)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(polydata)
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.SetObjectName(name)
+            actor.GetProperty().SetLighting(False)
+            cache[name] = actor
+            self._renderer.AddViewProp(actor)
+        polydata = actor.GetMapper().GetInput()
+        points = polydata.GetPoints()
+        for index, point in enumerate(coordinates):
+            points.SetPoint(index, *point)
+        points.Modified()
+        polydata.Modified()
+        actor.VisibilityOn()
+        return actor
 
     def set_rod_lines(self, lines) -> None:
         """Replace the rod lines (side -> (start, end) in LPS) and redraw."""
@@ -1987,6 +1986,7 @@ class MPRViewer(QWidget):
         target_point: Tuple[float, float, float],
         diameter: float,
         color: Tuple[float, float, float],
+        actor=None,
     ) -> vtk.vtkActor:
         """Create a filled diameter-aware bar in slice-local coordinates."""
         delta_x = target_point[0] - entry_point[0]
@@ -2009,24 +2009,29 @@ class MPRViewer(QWidget):
             (target_point[0] - normal_x, target_point[1] - normal_y, overlay_z),
             (entry_point[0] - normal_x, entry_point[1] - normal_y, overlay_z),
         )
-        points = vtk.vtkPoints()
-        polygon = vtk.vtkPolygon()
-        polygon.GetPointIds().SetNumberOfIds(4)
+        if actor is None:
+            points = vtk.vtkPoints()
+            points.SetNumberOfPoints(4)
+            polygon = vtk.vtkPolygon()
+            polygon.GetPointIds().SetNumberOfIds(4)
+            for index in range(4):
+                polygon.GetPointIds().SetId(index, index)
+            cells = vtk.vtkCellArray()
+            cells.InsertNextCell(polygon)
+            data = vtk.vtkPolyData()
+            data.SetPoints(points)
+            data.SetPolys(cells)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(data)
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.SetObjectName("screw-bar")
+        data = actor.GetMapper().GetInput()
+        points = data.GetPoints()
         for index, coordinate in enumerate(coordinates):
-            points.InsertNextPoint(*coordinate)
-            polygon.GetPointIds().SetId(index, index)
-
-        cells = vtk.vtkCellArray()
-        cells.InsertNextCell(polygon)
-        data = vtk.vtkPolyData()
-        data.SetPoints(points)
-        data.SetPolys(cells)
-
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputData(data)
-        actor = vtk.vtkActor()
-        actor.SetMapper(mapper)
-        actor.SetObjectName("screw-bar")
+            points.SetPoint(index, *coordinate)
+        points.Modified()
+        data.Modified()
         actor.GetProperty().SetColor(*color)
         actor.GetProperty().SetOpacity(0.88)
         actor.GetProperty().SetLighting(False)
@@ -2092,9 +2097,15 @@ class MPRViewer(QWidget):
             return
 
         if self._screw_drag_active:
-            self._process_screw_press(
+            result = self._process_screw_press(
                 click_pos[0], click_pos[1], None, None
             )
+            if result == "locked":
+                world_pos = self._screw_drag_world_point(*click_pos)
+                if world_pos is not None:
+                    self._screw_stroke_active = True
+                    if self._screw_grab_callback is not None:
+                        self._screw_grab_callback(tuple(world_pos))
             return
 
         screen_screw_part = self._pick_screw_part_at_display(
@@ -2222,12 +2233,7 @@ class MPRViewer(QWidget):
             return
 
         if self._screw_drag_active:
-            world_pos = (
-                self._display_to_world_on_slice(x, y)
-                if self._active_screw_part is not None
-                and self._active_screw_part[1] == "guide"
-                else self._pick_world_on_slice(x, y)
-            )
+            world_pos = self._screw_drag_world_point(x, y)
             if world_pos is not None:
                 self._drag_screw_to(world_pos)
             return
@@ -2239,8 +2245,18 @@ class MPRViewer(QWidget):
             self._window_center += delta * 5
             self.set_window_level(self._window_width, self._window_center)
 
+    def _screw_drag_world_point(self, x: int, y: int):
+        """The pointer on the slice; the guide handle may lie off the image."""
+        if self._active_screw_part is not None and self._active_screw_part[1] == "guide":
+            return self._display_to_world_on_slice(x, y)
+        return self._pick_world_on_slice(x, y)
+
     def _on_left_release(self, obj, event):
-        """Release does not end double-click-locked screw movement."""
+        """Release stops moving the screw; movement mode stays on."""
+        if self.__dict__.get("_screw_stroke_active", False):
+            self._screw_stroke_active = False
+            if self._screw_release_callback is not None:
+                self._screw_release_callback()
         if self.__dict__.get("_rotate_drag_active", False):
             self._rotate_drag_active = False
             self._rotate_drag_last_display = None

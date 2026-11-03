@@ -8,6 +8,7 @@ Implements two placement modes:
 Based on 3D Slicer Pedicle Screw Simulator algorithms.
 """
 
+import dataclasses
 import math
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -180,6 +181,7 @@ class ScrewTool:
         # :func:`~src.core.vertebra.aiming_endplate_normal`) from them, so any
         # object modelling that duck-typed surface works.
         self._analysis_by_level: Dict[int, Any] = {}
+        self._segmentation_revision = 0
 
         # Thresholds the active PlannerConfig owns, pushed in by whoever holds
         # it.  Without them a manual edit and an auto screw would be judged
@@ -212,6 +214,29 @@ class ScrewTool:
     @property
     def grader(self) -> Optional["ScrewGrader"]:
         return self._grader
+
+    def invalidate_segmentation_metrics(self) -> None:
+        """Drop old-mask measurements, retaining optimizer and construct provenance."""
+        self._segmentation_revision += 1
+        for screw in self._screws:
+            self.invalidate_screw_metrics(screw)
+
+    def invalidate_screw_metrics(self, screw: Screw) -> None:
+        """Invalidate a restored or imported screw whose mask source is obsolete."""
+        screw.metrics = {
+            key: value for key, value in screw.metrics.items()
+            if key not in _PEDICLE_ANALYSIS_METRIC_KEYS
+            and key not in _GRADER_MEASURED_METRIC_KEYS
+        }
+        screw.warnings = [
+            warning for warning in screw.warnings
+            if not warning.startswith(_DERIVED_WARNING_PREFIXES + (
+                "Vertebral body HU", "Narrow pedicle", "Pedicle width uncertain",
+            ))
+        ]
+        self._clear_grading(screw)
+        screw.reviewed = False
+        screw._segmentation_revision = self._segmentation_revision
 
     def set_analysis_by_level(self, analyses: Optional[Mapping[int, Any]]) -> None:
         """Register the pedicle analyses behind the current plan, by mask label.
@@ -443,6 +468,7 @@ class ScrewTool:
         self._evaluate_screw(screw)
 
         # Add to list
+        screw._segmentation_revision = self._segmentation_revision
         self._screws.append(screw)
         self._restamp_construct_alignment()
 
@@ -504,6 +530,9 @@ class ScrewTool:
         the ``trajectory_type`` that is the only marker of a CBT screw — from
         every screw in the plan at once.
         """
+        if getattr(screw, "_segmentation_revision", self._segmentation_revision) != self._segmentation_revision:
+            self.invalidate_screw_metrics(screw)
+        screw._segmentation_revision = self._segmentation_revision
         screw.warnings = [
             w for w in screw.warnings
             if not w.startswith(_DERIVED_WARNING_PREFIXES)
@@ -531,6 +560,19 @@ class ScrewTool:
                 "Not graded: trajectory does not pass through a segmented vertebra"
             )
             return
+        from ..core.pedicle_analyzer import VERTEBRA_LABELS
+
+        detected_level = VERTEBRA_LABELS.get(result.label, "")
+        if screw.vertebra_level and detected_level != screw.vertebra_level:
+            # Analysis values belong to the previous anatomical level.
+            screw.metrics = dict(screw.metrics or {})
+            for key in _PEDICLE_ANALYSIS_METRIC_KEYS:
+                screw.metrics.pop(key, None)
+            screw.warnings = [
+                warning for warning in screw.warnings
+                if not warning.startswith(("Narrow pedicle", "Vertebral body HU", "Pedicle width"))
+            ]
+        screw.vertebra_level = detected_level
         screw.grade = result.grade
         screw.breach_distance = result.breach_mm
         screw.mean_hu = result.mean_hu
@@ -538,9 +580,6 @@ class ScrewTool:
         measured, derived_warnings = self._compute_metrics(screw, result)
         screw.metrics = self._merge_metrics(screw.metrics, measured)
         self._refresh_narrow_pedicle_warning(screw, measured)
-        if not screw.vertebra_level:
-            from ..core.pedicle_analyzer import VERTEBRA_LABELS
-            screw.vertebra_level = VERTEBRA_LABELS.get(result.label, "")
 
         screw.warnings.extend(derived_warnings)
         screw.warnings.extend(self._ratio_warnings(screw.metrics, measured))
@@ -855,6 +894,7 @@ class ScrewTool:
 
     def add_screw(self, screw: Screw):
         """Append an existing screw (used for plan restore)."""
+        screw._segmentation_revision = self._segmentation_revision
         self._screws.append(screw)
         self._restamp_construct_alignment()
 
@@ -923,12 +963,26 @@ class ScrewTool:
         index: int,
         entry_point: Tuple[float, float, float],
         target_point: Tuple[float, float, float],
+        grade: bool = True,
     ) -> Screw:
-        """Replace one screw geometry and recalculate derived safety data."""
+        """Replace one screw geometry and recalculate derived safety data.
+
+        ``grade=False`` only moves the screw and keeps its last grade: a drag
+        sends dozens of samples a second and grading each one made the screw
+        stutter. The caller grades once the drag stroke ends.
+        """
         if index < 0 or index >= len(self._screws):
             raise IndexError(f"Screw index out of range: {index}")
 
         original = self._screws[index]
+        if not grade:
+            moved = dataclasses.replace(
+                original,
+                entry_point=tuple(float(value) for value in entry_point),
+                target_point=tuple(float(value) for value in target_point),
+            )
+            self._screws[index] = moved
+            return moved
         updated = Screw(
             entry_point=tuple(float(value) for value in entry_point),
             target_point=tuple(float(value) for value in target_point),

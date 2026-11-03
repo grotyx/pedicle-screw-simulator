@@ -64,8 +64,15 @@ class PlanController:
     def _remember_dir(self, path: str) -> None:
         self._window._settings.setValue(_PLAN_DIR_KEY, os.path.dirname(path))
 
+    def _finish_screw_edit(self) -> None:
+        """Finalize live geometry and grading before taking an output snapshot."""
+        controller = getattr(self._window, "_screw_edit_ctrl", None)
+        if controller is not None and controller.is_active:
+            controller.end_drag()
+
     def save_dialog(self):
         """Save current screw/measurement plan to JSON."""
+        self._finish_screw_edit()
         path, _ = QFileDialog.getSaveFileName(
             self._window,
             "Save Plan JSON",
@@ -164,6 +171,7 @@ class PlanController:
 
     def export_csv_dialog(self):
         """Export current screws to CSV file."""
+        self._finish_screw_edit()
         screws = self._window._tool_ctrl.screw_tool.get_screws()
         if not screws:
             self._window.statusbar.showMessage(
@@ -191,6 +199,7 @@ class PlanController:
 
     def export_report_dialog(self):
         """Write a self-contained HTML planning report (no patient identifiers)."""
+        self._finish_screw_edit()
         vtk_image = self._vm.get_vtk_image()
         if vtk_image is None:
             QMessageBox.warning(
@@ -401,6 +410,8 @@ class PlanController:
         tool_ctrl._active_measure_plane = None
 
         for screw_index, screw in enumerate(screws):
+            # Saved measurements have no verifiable link to the current mask.
+            tool_ctrl.screw_tool.invalidate_screw_metrics(screw)
             tool_ctrl.screw_tool.add_screw(screw)
             actor = self._window.viewer_3d.add_screw(
                 screw.entry_point,

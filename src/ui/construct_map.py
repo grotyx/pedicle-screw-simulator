@@ -77,8 +77,13 @@ class ConstructMap(QWidget):
             side = str(getattr(screw, "side", "") or "").lower()
             right, left, unsided = grouped.setdefault(level, ([], [], []))
             {"right": right, "left": left}.get(side, unsided).append(index)
-        self._rows = [(lv, *grouped[lv]) for lv in sorted(grouped, key=level_order_key)]
-        self._rebuild(list(screws))
+        rows = [(lv, *grouped[lv]) for lv in sorted(grouped, key=level_order_key)]
+        if rows == self._rows and (rows or self._grid.count()):
+            for chip in self._chips:
+                self._update_chip(chip, screws[int(chip.property("screwIndex"))])
+        else:
+            self._rows = rows
+            self._rebuild(list(screws))
 
     def set_selected(self, index: int) -> None:
         self._selected = int(index)
@@ -145,15 +150,29 @@ class ConstructMap(QWidget):
             return cell
         for index in indices:
             screw = screws[index]
-            grade = str(getattr(screw, "grade", "") or "").strip().upper()
-            grade = grade if grade in _GRADES else "NA"
-            shown = grade if grade != "NA" else "N/A"
-            text = f"{shown}  {float(screw.diameter):g}×{float(screw.length):.0f}"
-            reviewed = bool(getattr(screw, "reviewed", False))
-            if reviewed:
-                text += " ✓"
-            chip = _Chip(index, text, grade, cell, reviewed)
+            chip = _Chip(index, "", "NA", cell)
+            self._update_chip(chip, screw)
             chip.clicked.connect(self.screw_clicked)
             self._chips.append(chip)
             layout.addWidget(chip, 0, align)
         return cell
+
+    def _update_chip(self, chip, screw) -> None:
+        pending = bool(getattr(screw, "grading_pending", False))
+        grade = str(getattr(screw, "grade", "") or "").strip().upper()
+        grade = grade if grade in _GRADES and not pending else "NA"
+        shown = "grading after release" if pending else (grade if grade != "NA" else "N/A")
+        text = f"{shown}  {float(screw.diameter):g}×{float(screw.length):.0f}"
+        reviewed = bool(getattr(screw, "reviewed", False)) and not pending
+        if reviewed:
+            text += " ✓"
+        if chip.text() != text:
+            chip.setText(text)
+        changed = False
+        for key, value in (("grade", grade), ("reviewed", "true" if reviewed else "false")):
+            if chip.property(key) != value:
+                chip.setProperty(key, value)
+                changed = True
+        if changed:
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)

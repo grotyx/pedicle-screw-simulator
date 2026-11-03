@@ -396,3 +396,130 @@ def test_guide_drag_without_movement_does_not_touch_the_screw():
 
     assert window._tool_ctrl.refreshed == []
     assert window._tool_ctrl.screw_tool.get_screws()[0].reviewed is True
+
+
+def test_a_new_grab_moves_the_part_from_where_it_is_now():
+    # Movement mode stays on between strokes; each press re-anchors, so a
+    # press away from the head does not make the head jump to the pointer.
+    controller, window = _make_controller()
+    controller.begin_drag(0, "entry", (0.0, 0.0, 0.0))
+    controller.update_drag((4.0, 0.0, 0.0))
+    controller.finish_stroke()
+
+    controller.grab((20.0, 20.0, 20.0))
+    controller.update_drag((21.0, 22.0, 20.0))
+
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert screw.entry_point == pytest.approx((5.0, 2.0, 0.0))
+    assert screw.target_point == (0.0, 0.0, 40.0)
+    assert controller.is_active
+
+
+def test_drag_samples_skip_grading_until_the_stroke_ends(monkeypatch):
+    controller, window = _make_controller()
+    tool = window._tool_ctrl.screw_tool
+    graded = []
+    original = tool._evaluate_screw
+    monkeypatch.setattr(tool, "_evaluate_screw", lambda screw: (graded.append(1), original(screw)))
+
+    controller.begin_drag(0, "shaft", (0.0, 0.0, 20.0))
+    for step in range(5):
+        controller.update_drag((float(step), 0.0, 20.0))
+    assert graded == []
+
+    controller.finish_stroke()
+    assert graded == [1]
+    assert window._tool_ctrl.refreshed[-1][1] is tool.get_screws()[0]
+    controller.finish_stroke()  # nothing moved since: no second grading
+    assert graded == [1]
+
+
+def test_leaving_movement_mode_grades_the_last_position(monkeypatch):
+    controller, window = _make_controller()
+    tool = window._tool_ctrl.screw_tool
+    graded = []
+    original = tool._evaluate_screw
+    monkeypatch.setattr(tool, "_evaluate_screw", lambda screw: (graded.append(1), original(screw)))
+
+    controller.begin_drag(0, "tip", (0.0, 0.0, 40.0))
+    controller.update_drag((1.0, 0.0, 40.0))
+    controller.cancel(show_message=False)  # Esc or a selection change
+
+    assert graded == [1]
+    assert tool.get_screws()[0].target_point == (1.0, 0.0, 40.0)
+
+
+def test_drag_release_records_once_and_handoff_keeps_original_snapshot():
+    controller, window = _make_controller()
+    records = []
+    window._tool_ctrl.record_screw_edit = lambda label, before: records.append(before)
+    controller.begin_drag(0, "shaft", (0, 0, 20))
+    controller.update_drag((4, 0, 20))
+    controller.finish_stroke()
+    assert len(records) == 1
+    assert records[0][0].entry_point == (0, 0, 0)
+    controller.begin_drag(0, "shaft", (4, 0, 20))
+    controller.update_drag((7, 0, 20))
+    controller.end_drag()
+    assert len(records) == 2
+    assert records[1][0].entry_point == (4, 0, 0)
+
+
+def test_other_pane_click_finishes_drag_without_one_click_edit():
+    controller, window = _make_controller()
+    controller.begin_drag(0, "shaft", (0, 0, 20))
+    controller.update_drag((4, 0, 20))
+    assert controller.handle_click("coronal", 30, 30, 30)
+    assert window._tool_ctrl.screw_tool.get_screws()[0].entry_point == (4, 0, 0)
+    assert not controller.is_active
+
+
+@pytest.mark.parametrize("part,anchor", [("entry", (0, 0, 0)), ("tip", (0, 0, 40)), ("shaft", (0, 0, 20))])
+def test_no_motion_drag_preserves_review_and_does_no_work(part, anchor):
+    controller, window = _make_controller()
+    screw = window._tool_ctrl.screw_tool.get_screws()[0]
+    screw.reviewed = True
+    records = []
+    window._tool_ctrl.record_screw_edit = lambda *args: records.append(args)
+    controller.begin_drag(0, part, anchor)
+    controller.update_drag(tuple(v + 1e-8 for v in anchor))
+    controller.end_drag()
+    assert window._tool_ctrl.screw_tool.get_screws()[0] is screw
+    assert screw.reviewed
+    assert not records
+    assert not window._tool_ctrl.refreshed
+
+
+def test_live_geometry_clears_review_and_marks_grading_pending():
+    controller, window = _make_controller()
+    window._tool_ctrl.screw_tool.get_screws()[0].reviewed = True
+    controller.begin_drag(0, "shaft", (0, 0, 20))
+    controller.update_drag((4, 0, 20))
+    moved = window._tool_ctrl.screw_tool.get_screws()[0]
+    assert not moved.reviewed
+    assert moved.grading_pending
+    controller.finish_stroke()
+    assert not getattr(window._tool_ctrl.screw_tool.get_screws()[0], "grading_pending", False)
+
+
+def test_queued_drag_keeps_latest_sample_and_flushes_before_release(qtbot):
+    controller, window = _make_controller()
+    controller.begin_drag(0, "shaft", (0, 0, 20))
+    for x in range(1, 20):
+        controller.queue_drag((x, 0, 20), "3D")
+    assert window._tool_ctrl.refreshed == []
+    controller.finish_stroke()
+    assert window._tool_ctrl.screw_tool.get_screws()[0].entry_point == (19, 0, 0)
+    assert len(window._tool_ctrl.refreshed) == 2
+    qtbot.wait(30)
+    assert len(window._tool_ctrl.refreshed) == 2
+
+
+def test_handoff_flushes_old_view_before_reanchoring(qtbot):
+    controller, window = _make_controller()
+    controller.begin_drag(0, "shaft", (0, 0, 20))
+    controller.queue_drag((4, 0, 20), "3D")
+    controller.begin_drag(0, "shaft", (4, 0, 20))
+    controller.update_drag((7, 0, 20))
+    controller.end_drag()
+    assert window._tool_ctrl.screw_tool.get_screws()[0].entry_point == (7, 0, 0)

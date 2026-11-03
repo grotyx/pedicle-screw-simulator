@@ -4,11 +4,12 @@ import functools
 import logging
 import math
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, QPoint, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -86,6 +87,7 @@ from .construct_map import ConstructMap
 from .mpr_viewer import MPRViewer
 from .screw_plan_table import ScrewPlanTable
 from .spin_boxes import DiameterSpinBox
+from .split_handle import RowSplitHandle
 from .step_panel import StepPanel, WarningSummary
 from .styles import (
     DEFAULT_THEME,
@@ -335,8 +337,17 @@ class MainWindow(QMainWindow):
         )
         main_layout.addWidget(self.workflow_bar)
 
-        view_container = QWidget()
-        left_layout.addWidget(view_container, 1)
+        view_area = QWidget()
+        view_area_layout = QHBoxLayout(view_area)
+        view_area_layout.setContentsMargins(0, 0, 0, 0)
+        view_area_layout.setSpacing(0)
+        self.tool_strip = QWidget(view_area)
+        self.tool_strip.setObjectName("toolStrip")
+        self.tool_strip.setToolTip("Drop the tool palette here to attach")
+        view_area_layout.addWidget(self.tool_strip)
+        view_container = QWidget(view_area)
+        view_area_layout.addWidget(view_container, 1)
+        left_layout.addWidget(view_area, 1)
         self._view_layout = QGridLayout(view_container)
         self._view_layout.setSpacing(6)
         self._view_layout.setContentsMargins(6, 6, 6, 6)
@@ -406,7 +417,6 @@ class MainWindow(QMainWindow):
             for name, pane in panes.items():
                 pane.setVisible(name == maximized)
             self._view_layout.addWidget(panes[maximized], 0, 0)
-            self._place_dock(1, 1)
             self._view_layout.setRowStretch(0, 1)
             self._view_layout.setColumnStretch(0, 1)
             self._maximized_view = maximized
@@ -418,14 +428,13 @@ class MainWindow(QMainWindow):
                 # One grid throughout: panes only change cells, never parents,
                 # so no native VTK window is ever reparented.
                 self._view_layout.addWidget(panes[self._hero_view], 0, 0, 1, 3)
-                self._place_dock(1, 3)
+                self._view_layout.addWidget(self.view_split_handle, 1, 0, 1, 3)
                 thumbnails = [
                     pane for name, pane in panes.items() if name != self._hero_view
                 ]
                 for column, pane in enumerate(thumbnails):
                     self._view_layout.addWidget(pane, 2, column)
-                self._view_layout.setRowStretch(0, 3)
-                self._view_layout.setRowStretch(2, 1)
+                self._apply_thumbnail_ratio()
                 self._view_layout.setRowMinimumHeight(0, 320)
                 self._view_layout.setRowMinimumHeight(2, 150)
                 for column in range(3):
@@ -435,7 +444,6 @@ class MainWindow(QMainWindow):
                 self._view_layout.addWidget(self.sagittal_viewer, 0, 1)
                 self._view_layout.addWidget(self.coronal_viewer, 1, 0)
                 self._view_layout.addWidget(self.viewer_3d, 1, 1)
-                self._place_dock(2, 2)
                 self._view_layout.setRowStretch(0, 1)
                 self._view_layout.setRowStretch(1, 1)
                 self._view_layout.setColumnStretch(0, 1)
@@ -444,6 +452,8 @@ class MainWindow(QMainWindow):
             self._restore_layout_mode = mode
 
         planning = maximized is None and self._view_layout_mode == "planning"
+        self.view_split_handle.setVisible(planning)
+        self.tool_dock.raise_()
         for name, pane in panes.items():
             pane.set_thumbnail(planning and name != self._hero_view)
 
@@ -522,15 +532,45 @@ class MainWindow(QMainWindow):
         ):
             self.set_view_layout("planning")
 
-    def _place_dock(self, row: int, column_span: int) -> None:
-        """Put the tool dock on its own grid row, centred under the big view.
+    #: Share of the planning area the thumbnail row gets, and its limits.
+    DEFAULT_THUMBNAIL_RATIO = 0.25
+    THUMBNAIL_RATIO_RANGE = (0.12, 0.6)
 
-        Not over the image: floating there it covered the A/P and S/I
-        orientation letters and, on narrow windows, the 3D overlays.
-        """
-        self._view_layout.addWidget(
-            self.tool_dock, row, 0, 1, column_span, Qt.AlignmentFlag.AlignHCenter
+    def _apply_thumbnail_ratio(self) -> None:
+        ratio = self._thumbnail_ratio
+        self._view_layout.setRowStretch(0, round(1000 * (1 - ratio)))
+        self._view_layout.setRowStretch(2, round(1000 * ratio))
+
+    def _drag_view_split(self, y: int) -> None:
+        """Resize the main view and the thumbnail row from the handle's y."""
+        height = self._view_layout.parentWidget().height()
+        if height <= 0:
+            return
+        low, high = self.THUMBNAIL_RATIO_RANGE
+        self._thumbnail_ratio = min(max(1 - y / height, low), high)
+        self._apply_thumbnail_ratio()
+
+    def _save_view_split(self) -> None:
+        self._settings.setValue("layout/thumbnailRatio", self._thumbnail_ratio)
+
+    def _save_tool_dock_position(self, pos) -> None:
+        self._settings.setValue("layout/toolDockPos", f"{pos.x()},{pos.y()}")
+
+    def _restore_tool_dock_position(self) -> None:
+        saved = str(self._settings.value("layout/toolDockPos", "") or "")
+        try:
+            x, y = (int(part) for part in saved.split(","))
+        except ValueError:
+            x, y = ToolDock.MARGIN, 40  # left edge, below the pane header
+        self.tool_dock.set_attached(
+            self._settings.value("layout/toolDockMode", "attached") != "floating"
         )
+        position = QPoint(x, y)
+        if self.tool_dock.is_attached or self._view_layout.parentWidget().isVisible():
+            self.tool_dock.place(position)
+        else:
+            # The hidden container has no final geometry yet. Clamp on show.
+            self.tool_dock.move(position)
 
     def toggle_maximized_view(self, view_name: str) -> None:
         """Maximise one pane, or restore the previous layout if it already is."""
@@ -586,7 +626,11 @@ class MainWindow(QMainWindow):
         starting or ending, levels being selected, a threshold mask.
         """
         event_type = event.type()
-        if event_type in self._FOCUS_EVENT_TYPES:
+        if (event_type in (QEvent.Type.Resize, QEvent.Type.Show)
+                and obj is self._view_layout.parentWidget()):
+            if not self.tool_dock.is_attached and obj.isVisible():
+                self.tool_dock.place(self.tool_dock.pos())
+        elif event_type in self._FOCUS_EVENT_TYPES:
             name = self._pane_name_for(obj)
             if name is not None:
                 self._focused_view_name = name
@@ -664,7 +708,7 @@ class MainWindow(QMainWindow):
         if not 0 <= row < len(screws):
             return
         screws[row].reviewed = bool(checked)
-        # Redraws the table row; dataChanged also refreshes the map, the
+        # Redraws the table row; screwsChanged also refreshes the map, the
         # workflow rail and the counter.
         self.screw_list_widget.updateScrewRow(row, screws[row])
 
@@ -930,10 +974,12 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.seg_task_combo, 0, 1)
 
         advanced_layout.addWidget(QLabel("Device:"), 1, 0)
-        self.seg_device_combo = QComboBox()
+        self.seg_device_combo = QComboBox(self.seg_advanced_panel)
         self.seg_device_combo.addItem("GPU (preferred)", "gpu")
         self.seg_device_combo.addItem("CPU fallback", "cpu")
-        advanced_layout.addWidget(self.seg_device_combo, 1, 1)
+        self.seg_device_combo.hide()  # Retain backing state for existing readers.
+        self.seg_device_label = QLabel("Automatic (not run yet)")
+        advanced_layout.addWidget(self.seg_device_label, 1, 1)
 
         advanced_layout.addWidget(QLabel("Quality:"), 2, 0)
         self.seg_quality_combo = QComboBox()
@@ -1062,23 +1108,10 @@ class MainWindow(QMainWindow):
         auto_layout.addLayout(vertebra_header)
         auto_layout.addWidget(self.vertebra_level_container)
 
-        workspace_mode_row = QHBoxLayout()
-        workspace_mode_row.addWidget(QLabel("Mode:"))
-        self.workspace_mode_combo = QComboBox()
+        self.workspace_mode_combo = QComboBox(self.planning_group)
         self.workspace_mode_combo.setObjectName("workspaceMode")
         self.workspace_mode_combo.addItem("Planning", "planning")
-        self.workspace_mode_combo.addItem("Guided (Coming Soon)", "guided")
-        guided_index = self.workspace_mode_combo.findData("guided")
-        guided_item = self.workspace_mode_combo.model().item(guided_index)
-        if guided_item is not None:
-            guided_item.setEnabled(False)
-        self.workspace_mode_combo.setToolTip(
-            "Guided Workflow is reserved for a later release"
-        )
-        self.workspace_mode_combo.setMaximumWidth(100)
-        self.workspace_mode_combo.setMaximumHeight(26)
-        workspace_mode_row.addWidget(self.workspace_mode_combo, 1)
-        auto_layout.addLayout(workspace_mode_row)
+        self.workspace_mode_combo.hide()  # Existing workflow readers retain Planning.
 
         self.auto_screw_review_notice = QLabel(
             "Generated screws are added immediately. Select and adjust them below."
@@ -1690,7 +1723,7 @@ class MainWindow(QMainWindow):
         details_layout.addWidget(self.screw_narrow_legend)
 
         self.screw_drag_hint = QLabel(
-            "Double-click head, tip, or shaft; move the pointer; double-click again to finish."
+            "Double-click head, tip, or shaft; hold left button to drag; release to grade; double-click again or Esc to finish."
         )
         self.screw_drag_hint.setWordWrap(True)
         self.screw_drag_hint.setObjectName("screwDragHint")
@@ -1988,9 +2021,11 @@ class MainWindow(QMainWindow):
             viewer.crosshair_moved.connect(self._tool_ctrl.on_viewer_click)
             viewer.set_screw_interaction_callbacks(
                 on_begin=self._screw_edit_ctrl.begin_drag,
-                on_drag=self._screw_edit_ctrl.update_drag,
+                on_drag=self._screw_edit_ctrl.queue_drag,
                 on_end=self._screw_edit_ctrl.end_drag,
                 on_select=self._select_screw_from_view,
+                on_grab=self._screw_edit_ctrl.grab,
+                on_release=self._screw_edit_ctrl.finish_stroke,
             )
             viewer.set_measurement_interaction_callbacks(
                 on_select=self._tool_ctrl.select_measurement_from_view,
@@ -2007,9 +2042,11 @@ class MainWindow(QMainWindow):
         )
         self.viewer_3d.set_screw_interaction_callbacks(
             on_begin=self._screw_edit_ctrl.begin_drag,
-            on_drag=self._screw_edit_ctrl.update_drag,
+            on_drag=self._screw_edit_ctrl.queue_drag,
             on_end=self._screw_edit_ctrl.end_drag,
             on_select=self._select_screw_from_view,
+            on_grab=self._screw_edit_ctrl.grab,
+            on_release=self._screw_edit_ctrl.finish_stroke,
         )
 
         # Initialize segmentation label options after signals are connected
@@ -2050,12 +2087,12 @@ class MainWindow(QMainWindow):
             signal.connect(self._on_screw_rows_changed)
         # An in-place row edit can clear a reviewed mark, which Review's rail
         # step and counter depend on.
-        table_model.dataChanged.connect(self._on_screw_rows_changed)
+        self.screw_list_widget.screwsChanged.connect(self._on_screw_rows_changed)
         for signal in (
             table_model.rowsInserted,
             table_model.rowsRemoved,
             table_model.modelReset,
-            table_model.dataChanged,
+            self.screw_list_widget.screwsChanged,
         ):
             signal.connect(self._schedule_construct_map_refresh)
         self.screw_list_widget.currentRowChanged.connect(
@@ -2543,10 +2580,29 @@ class MainWindow(QMainWindow):
                 None,
                 self._fit_mpr_action,
                 self._fit_3d_action,
-            ]
+            ],
+            self._view_layout.parentWidget(),
         )
-        # First and only startup layout: the dock now exists to be placed.
+        self.tool_dock.configure_attachment(
+            self.tool_strip, self._view_layout.parentWidget()
+        )
+        self.tool_dock.moved.connect(self._save_tool_dock_position)
+        self.tool_dock.mode_changed.connect(
+            lambda mode: self._settings.setValue("layout/toolDockMode", mode)
+        )
+        self.view_split_handle = RowSplitHandle(self._view_layout.parentWidget())
+        self.view_split_handle.dragged.connect(self._drag_view_split)
+        self.view_split_handle.released.connect(self._save_view_split)
+        low, high = self.THUMBNAIL_RATIO_RANGE
+        saved_ratio = self._settings.value(
+            "layout/thumbnailRatio", self.DEFAULT_THUMBNAIL_RATIO, type=float
+        )
+        self._thumbnail_ratio = min(max(saved_ratio, low), high)
+        # First and only startup layout: the handle now exists to be placed.
         self.set_view_layout(self._view_layout_mode)
+        self._restore_tool_dock_position()
+        # Keep the floating palette inside the views when the window resizes.
+        self._view_layout.parentWidget().installEventFilter(self)
 
         self._refresh_themed_icons()
         self.refresh_mode_indicators()
@@ -3230,13 +3286,14 @@ class MainWindow(QMainWindow):
         previous = button.blockSignals(True)
         button.setChecked(bool(screw is not None and screw.reviewed))
         button.blockSignals(previous)
-        button.setEnabled(screw is not None)
+        button.setEnabled(screw is not None and not getattr(screw, "grading_pending", False))
 
     def _set_grade_chip(self, grade: str) -> None:
         """Set the Review page's grade chip text and dynamic ``grade`` property."""
+        pending = grade == "grading after release"
         grade = str(grade).strip().upper()
         token = grade if grade in ("A", "B", "C", "D", "E") else "NA"
-        self.selected_screw_grade.setText(f"Grade {grade if grade != 'NA' else '--'}")
+        self.selected_screw_grade.setText("grading after release" if pending else f"Grade {grade if grade != 'NA' else '--'}")
         if self.selected_screw_grade.property("grade") != token:
             self.selected_screw_grade.setProperty("grade", token)
             chip_style = self.selected_screw_grade.style()
@@ -3250,13 +3307,11 @@ class MainWindow(QMainWindow):
         review_active: bool,
     ) -> None:
         """Update the Review step's key numbers and details for one screw."""
-        self.selected_screw_title.setProperty(
-            "reviewActive",
-            bool(review_active),
-        )
-        title_style = self.selected_screw_title.style()
-        title_style.unpolish(self.selected_screw_title)
-        title_style.polish(self.selected_screw_title)
+        if self.selected_screw_title.property("reviewActive") != bool(review_active):
+            self.selected_screw_title.setProperty("reviewActive", bool(review_active))
+            title_style = self.selected_screw_title.style()
+            title_style.unpolish(self.selected_screw_title)
+            title_style.polish(self.selected_screw_title)
         if screw is None:
             self.selected_screw_counter.setText(
                 self._format_screw_counter(
@@ -3283,13 +3338,16 @@ class MainWindow(QMainWindow):
                 self.screw_edit_btn.setEnabled(False)
             return
 
-        screw_count = self.screw_list_widget.count()
-        self.selected_screw_counter.setText(
-            self._format_screw_counter(
-                index, screw_count, self._reviewed_counts()[0]
+        pending = bool(getattr(screw, "grading_pending", False))
+        was_pending = self.selected_screw_grade.text() == "grading after release"
+        if not pending:
+            screw_count = self.screw_list_widget.count()
+            self.selected_screw_counter.setText(
+                self._format_screw_counter(
+                    index, screw_count, self._reviewed_counts()[0]
+                )
             )
-        )
-        self.screw_list_widget.scrollToRow(index)
+            self.screw_list_widget.scrollToRow(index)
 
         level = str(getattr(screw, "vertebra_level", "") or "").strip()
         side = str(getattr(screw, "side", "") or "").strip().capitalize()
@@ -3302,17 +3360,25 @@ class MainWindow(QMainWindow):
         craniocaudal = craniocaudal_angle_deg(screw.entry_point, screw.target_point)
 
         self.selected_screw_title.setText(identity)
-        previous = self.selected_screw_diameter.blockSignals(True)
-        self.selected_screw_diameter.setValue(float(screw.diameter))
-        self.selected_screw_diameter.blockSignals(previous)
-        self.selected_screw_diameter.setEnabled(True)
+        if not pending:
+            previous = self.selected_screw_diameter.blockSignals(True)
+            self.selected_screw_diameter.setValue(float(screw.diameter))
+            self.selected_screw_diameter.blockSignals(previous)
+            self.selected_screw_diameter.setEnabled(True)
         self._sync_reviewed_button(screw)
         self.selected_screw_length.setText(f"{screw.length:.1f} mm")
         self.selected_screw_convergence.setText(f"{convergence:+.1f}°")
         self.selected_screw_craniocaudal.setText(f"{craniocaudal:+.1f}°")
-        self._set_grade_chip(str(screw.grade))
+        self._set_grade_chip("grading after release" if pending else str(screw.grade))
         if hasattr(self, "screw_edit_btn"):
             self.screw_edit_btn.setEnabled(True)
+
+        if pending:
+            self.selected_screw_hu.setText("grading after release")
+            if not was_pending:
+                self._clear_screw_metric_rows()
+                self.screw_warnings_summary.set_placeholder("grading after release")
+            return
 
         mean_hu = getattr(screw, "mean_hu", None)
         min_hu = getattr(screw, "min_hu", None)
@@ -3642,7 +3708,7 @@ def app_icon() -> QIcon:
     return icon
 
 
-def main():
+def main(*, startup=None, after_show=None):
     """Application entry point."""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -3657,10 +3723,16 @@ def main():
     app.setProperty("themeName", theme_name)
     app.setStyleSheet(load_stylesheet(theme_name))
 
+    started = time.monotonic()
     window = MainWindow()
+    if startup is not None:
+        startup.finish("window_build", started)
+        startup.mark_shown()
     window.show()
     window.raise_()
     window.activateWindow()
+    if after_show is not None:
+        QTimer.singleShot(0, after_show)
 
     sys.exit(app.exec())
 

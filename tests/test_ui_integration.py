@@ -339,6 +339,9 @@ class DummyViewer3D(_ViewerOverlayHooks, QWidget):
     def set_vertebral_mesh(self, _mask_image, labels=None):
         self.vertebral_mesh_labels = list(labels) if labels is not None else None
 
+    def clear_vertebral_surface_cache(self):
+        return
+
     def clear_vertebral_mesh(self):
         return
 
@@ -453,12 +456,11 @@ def test_default_window_size_is_screen_aware_and_compact(ui_main_window):
     assert window._calculate_initial_window_size(1440, 900) == (1353, 900)
 
 
-def test_workspace_and_theme_selectors_are_compact(ui_main_window):
+def test_workspace_selector_is_hidden_and_theme_selector_is_compact(ui_main_window):
     window = ui_main_window
 
-    assert window.workspace_mode_combo.maximumWidth() <= 105
+    assert window.workspace_mode_combo.isHidden()
     assert window.theme_combo.maximumWidth() <= 115
-    assert window.workspace_mode_combo.maximumHeight() <= 26
     assert window.theme_combo.maximumHeight() <= 26
 
 
@@ -934,13 +936,13 @@ def test_entering_screw_mpr_through_the_button_opens_review(ui_main_window):
     assert window._screw_mpr_ctrl.is_active is False
 
 
-def test_planning_cockpit_workspace_and_guided_scaffold(ui_main_window):
+def test_planning_cockpit_retains_planning_without_guided_scaffold(ui_main_window):
     window = ui_main_window
 
     assert window.workspace_mode_combo.currentData() == "planning"
     guided_index = window.workspace_mode_combo.findData("guided")
-    assert guided_index >= 0
-    assert window.workspace_mode_combo.model().item(guided_index).isEnabled() is False
+    assert guided_index == -1
+    assert window.workspace_mode_combo.isHidden()
     assert list(window.step_section_order) == ["Study", "Segment", "Plan", "Review"]
 
 
@@ -1310,6 +1312,8 @@ def test_replacing_a_selected_auto_screw_leaves_a_valid_selection(
 
     class _Thread:
         generation = ctrl._run_generation
+        segmentation_revision = window._seg_ctrl.revision
+        source_ct = window.volume_manager.get_sitk_image()
         cancelled = False
         replace_levels = ("L4",)
 
@@ -1339,7 +1343,7 @@ def _planned_l4():
     )
 
 
-def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
+def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window, qtbot):
     window = ui_main_window
     image = _create_test_image()
     window._on_dicom_loaded(
@@ -1353,6 +1357,7 @@ def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
 
     assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
     assert callbacks["on_drag"]((4.0, 5.0, 6.0), "3D") is True
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
     callbacks["on_end"]()
 
     updated = window.screw_tool.get_screws()[0]
@@ -1362,7 +1367,7 @@ def test_3d_direct_drag_callbacks_update_selected_screw(ui_main_window):
 
 
 def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
-    ui_main_window,
+    ui_main_window, qtbot,
 ):
     window = ui_main_window
     image = _create_test_image()
@@ -1394,6 +1399,7 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     assert callbacks["on_begin"](0, "entry", screw.entry_point) is True
 
     callbacks["on_drag"]((4.0, 5.0, 6.0), "Axial MPR")
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
 
     updated = window.screw_tool.get_screws()[0]
     assert updated.entry_point == (4.0, 5.0, 6.0)
@@ -1411,7 +1417,7 @@ def test_mpr_drag_keeps_ct_fixed_then_realigns_when_edit_finishes(
     assert window.screw_axis_position_slider.value() == 50
 
 
-def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
+def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window, qtbot):
     import math
 
     from src.core.mpr_geometry import world_to_slice
@@ -1436,6 +1442,7 @@ def test_guide_drag_on_a_long_axis_pane_rotates_in_that_plane(ui_main_window):
 
     assert callbacks["on_begin"](0, "guide", handle) is True
     assert callbacks["on_drag"](pointer, "Axial MPR") is True
+    qtbot.wait(30)  # Drag samples are applied at display cadence.
 
     updated = window.screw_tool.get_screws()[0]
     assert updated.entry_point == pytest.approx(screw.entry_point, abs=1e-6)
@@ -1843,10 +1850,12 @@ class _FakeSegThread(QObject):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
     cancelled = pyqtSignal()
+    device_selected = pyqtSignal(str)
 
     def __init__(self, **kwargs):
         super().__init__()
         self.kwargs = kwargs
+        self.source_ct = kwargs["sitk_image"]
         self.started = False
 
     def isRunning(self):
@@ -1874,6 +1883,55 @@ def _prepare_segmentation_run(window, monkeypatch, tmp_path, frozen=False):
         seg_controller_module.sys, "frozen", frozen, raising=False
     )
     return ctrl
+
+
+def test_segmentation_run_leaves_the_gpu_probe_to_the_thread(ui_main_window, monkeypatch, tmp_path):
+    # Probing CUDA imports torch, which froze the window for seconds.
+    window = ui_main_window
+    ctrl = _prepare_segmentation_run(window, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        seg_controller_module, "preferred_segmentation_device",
+        lambda: pytest.fail("GPU probed on the UI thread"),
+    )
+
+    ctrl.run()
+
+    assert ctrl._segmentation_thread.kwargs["device"] is None
+    ctrl._on_cancelled()  # Finish the fake job before qtbot closes the window.
+
+
+def test_segmentation_thread_picks_the_device(tmp_path, monkeypatch):
+    calls = []
+    mask_path = tmp_path / "worker_mask.nii.gz"
+    image = sitk.Image([2, 2, 2], sitk.sitkInt16)
+    _write_mask(image, mask_path)
+
+    def run(**kwargs):
+        calls.append(kwargs)
+        return SegmentationRunResult(True, "totalsegmentator", str(mask_path), "ok")
+    monkeypatch.setattr(seg_controller_module, "preferred_segmentation_device", lambda: "cpu")
+    monkeypatch.setattr(
+        seg_controller_module, "run_segmentation_with_fallback",
+        run,
+    )
+    thread = seg_controller_module.AutoSegmentationThread(
+        sitk_image=sitk.Image([2, 2, 2], sitk.sitkInt16),
+        task="total",
+        device=None,
+        work_dir=str(tmp_path),
+    )
+    errors = []
+    thread.error.connect(errors.append)
+    selected = []
+    thread.device_selected.connect(selected.append)
+
+    thread.run()
+
+    assert errors == []
+    assert thread.prepared is not None
+    assert selected == ["cpu"]
+    assert calls[0]["device"] == "cpu"
+    assert calls[0]["force_split"] is True  # CPU at full quality splits the volume
 
 
 def test_progress_dialog_exposes_cancel_button(ui_main_window, monkeypatch, tmp_path):

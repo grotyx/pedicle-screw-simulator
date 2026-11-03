@@ -926,3 +926,27 @@ class TestViewer3DVertebralAPI:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_cache_builds_each_label_surface_once(monkeypatch):
+    # Toggling levels on the Plan page rebuilt every surface (smoothing,
+    # marching cubes, decimation) on each click; a cache keeps them.
+    import src.core.vertebral_mesh as vertebral_mesh
+    from src.core.vertebral_mesh import extract_vertebral_mesh
+
+    mask = _create_labeled_mask(dims=(12, 12, 24), label_slabs=[(27, 2, 10), (28, 13, 21)])
+    scanned = []
+    original = vertebral_mesh._find_label_vois
+    monkeypatch.setattr(
+        vertebral_mesh, "_find_label_vois",
+        lambda image, labels, padding: (scanned.append(list(labels)), original(image, labels, padding))[1],
+    )
+    cache = {}
+
+    both = extract_vertebral_mesh(mask, labels=[27, 28], cache=cache)
+    one = extract_vertebral_mesh(mask, labels=[28], cache=cache)
+    again = extract_vertebral_mesh(mask, labels=[27, 28], cache=cache)
+
+    assert scanned == [[27, 28]]  # later calls reuse the cached surfaces
+    assert 0 < one.GetNumberOfCells() < both.GetNumberOfCells()
+    assert again.GetNumberOfCells() == both.GetNumberOfCells()

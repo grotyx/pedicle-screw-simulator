@@ -439,6 +439,59 @@ def create_screw_visual(
     )
 
 
+
+def _update_cylinder_actor(actor, start, end, radius) -> None:
+    """Update a retained cylinder source and its placement transform."""
+    delta = tuple(end[i] - start[i] for i in range(3))
+    length = math.sqrt(sum(value * value for value in delta))
+    direction = tuple(value / length for value in delta)
+    transform_filter = actor.GetMapper().GetInputAlgorithm()
+    cylinder = transform_filter.GetInputAlgorithm()
+    cylinder.SetRadius(radius)
+    cylinder.SetHeight(length)
+    transform = transform_filter.GetTransform()
+    transform.Identity()
+    transform.Translate(tuple((start[i] + end[i]) / 2 for i in range(3)))
+    cross = (direction[2], 0.0, -direction[0])
+    cross_length = math.sqrt(sum(value * value for value in cross))
+    dot = max(-1.0, min(1.0, direction[1]))
+    if cross_length > 1e-6:
+        transform.RotateWXYZ(math.degrees(math.acos(dot)), *cross)
+    elif dot < 0:
+        transform.RotateX(180)
+
+
+def update_screw_visual(visual, entry_point, target_point, radius, color) -> None:
+    """Move the retained head, shaft, tip and guide without replacing props."""
+    entry, target = tuple(entry_point), tuple(target_point)
+    length = math.dist(entry, target)
+    if length <= 1e-6:
+        raise ValueError("Screw length must be greater than zero")
+    radius = max(float(radius), 0.25)
+    direction = tuple((target[i] - entry[i]) / length for i in range(3))
+    tip_length = min(max(radius * 2.2, 3.0), length * 0.35)
+    shaft_end = tuple(target[i] - direction[i] * tip_length for i in range(3))
+    head = visual.entry_actor.GetMapper().GetInputAlgorithm()
+    head.SetCenter(*entry)
+    head.SetRadius(radius * 1.5)
+    _update_cylinder_actor(visual.shaft_actor, entry, shaft_end, radius)
+    cone = visual.tip_actor.GetMapper().GetInputAlgorithm()
+    cone.SetCenter(*(target[i] - direction[i] * tip_length / 2 for i in range(3)))
+    cone.SetDirection(*direction)
+    cone.SetHeight(tip_length)
+    cone.SetRadius(radius)
+    handle_point = guide_handle_point(entry, target, GUIDE_REACH_MM)
+    _update_cylinder_actor(visual.guide_line_actor, entry, handle_point, GUIDE_LINE_RADIUS_MM)
+    visual.guide_handle_actor.GetMapper().GetInputAlgorithm().SetCenter(*handle_point)
+    for actor, part_color in (
+        (visual.entry_actor, tuple(min(1.0, v * 1.12 + 0.05) for v in color)),
+        (visual.shaft_actor, color),
+        (visual.tip_actor, tuple(max(0.0, v * 0.82) for v in color)),
+    ):
+        actor.GetProperty().SetColor(*part_color)
+    visual.entry_point, visual.target_point = entry, target
+
+
 def intersect_ray_plane(
     near_point: Tuple[float, float, float],
     far_point: Tuple[float, float, float],
@@ -465,6 +518,19 @@ def _flush_logs():
     for handler in logging.getLogger().handlers:
         handler.flush()
 
+
+
+def trackball_style():
+    """Trackball camera whose right drag pans like the middle button.
+
+    The default right drag zooms, which the wheel already does, so the model
+    could only be moved with Shift or the Pan toggle.
+    """
+    style = vtk.vtkInteractorStyleTrackballCamera()
+    # An observer on a style event replaces VTK's default handler for it.
+    style.AddObserver("RightButtonPressEvent", lambda obj, _event: obj.OnMiddleButtonDown())
+    style.AddObserver("RightButtonReleaseEvent", lambda obj, _event: obj.OnMiddleButtonUp())
+    return style
 
 class Viewer3D(QWidget):
     """
@@ -589,6 +655,10 @@ class Viewer3D(QWidget):
         self._screw_drag_begin_callback: Optional[Callable] = None
         self._screw_drag_callback: Optional[Callable] = None
         self._screw_drag_end_callback: Optional[Callable] = None
+        self._screw_grab_callback: Optional[Callable] = None
+        self._screw_release_callback: Optional[Callable] = None
+        #: Left button held during movement mode: only then does the screw move.
+        self._screw_stroke_active = False
         self._screw_select_callback: Optional[Callable] = None
         self._double_click_detector = DoubleClickDetector()
         self._focus_double_click_detector = DoubleClickDetector()
@@ -777,7 +847,7 @@ class Viewer3D(QWidget):
         self.pan_mode_toggle.setObjectName("panModeToggle")
         self.pan_mode_toggle.setText("Pan")
         self.pan_mode_toggle.setToolTip(
-            "Move the whole 3D model: enable Pan and drag, or use Shift+drag. "
+            "Move the whole 3D model: right- or middle-drag, Shift+drag, or enable Pan and drag. "
             "Double-click anatomy to center and zoom."
         )
         self.pan_mode_toggle.setCheckable(True)
@@ -918,17 +988,14 @@ class Viewer3D(QWidget):
 
         # Trackball interactor with LOD update rates
         interactor = render_window.GetInteractor()
-        style = vtk.vtkInteractorStyleTrackballCamera()
-        interactor.SetInteractorStyle(style)
+        interactor.SetInteractorStyle(trackball_style())
         interactor.SetDesiredUpdateRate(15.0)
         interactor.SetStillUpdateRate(2.0)
 
         # Manual LOD: coarsen during interaction, refine after
         interactor.AddObserver("StartInteractionEvent", self._on_interaction_start)
         interactor.AddObserver("EndInteractionEvent", self._on_interaction_end)
-        interactor.AddObserver("LeftButtonPressEvent", self._on_screw_left_press, 1.0)
-        interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
-        interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
+        self._install_screw_observers(interactor)
 
         self._volume_mapper = self._build_volume_mapper()
 
@@ -1589,6 +1656,12 @@ class Viewer3D(QWidget):
 
         return visual
 
+    def update_screw(self, visual, entry_point, target_point, radius, color) -> None:
+        """Refresh one screw in place, preserving picker and renderer ownership."""
+        update_screw_visual(visual, entry_point, target_point, radius, color)
+        self._apply_screw_selection_style(visual)
+        self._request_render()
+
     def remove_screw(self, actor):
         """Remove a complete screw visual or a legacy single actor."""
         if isinstance(actor, ScrewVisual) and actor in self._screw_actors:
@@ -1685,12 +1758,16 @@ class Viewer3D(QWidget):
         on_drag: Optional[Callable] = None,
         on_end: Optional[Callable] = None,
         on_select: Optional[Callable] = None,
+        on_grab: Optional[Callable] = None,
+        on_release: Optional[Callable] = None,
     ) -> None:
         """Connect 3D direct screw selection and manipulation callbacks."""
         self._screw_drag_begin_callback = on_begin
         self._screw_drag_callback = on_drag
         self._screw_drag_end_callback = on_end
         self._screw_select_callback = on_select
+        self._screw_grab_callback = on_grab
+        self._screw_release_callback = on_release
 
     def set_selected_screw(self, screw_id: Optional[int]) -> None:
         """Highlight one screw without hiding the remaining plan."""
@@ -1793,9 +1870,16 @@ class Viewer3D(QWidget):
         interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
         x, y = interactor.GetEventPosition()
         if self._screw_drag_active:
+            self._consume_left_press(interactor)
             result = self._process_screw_press(x, y, None, None, None)
             if result == "ended":
                 self._restore_trackball_after_event()
+            elif result == "locked":
+                world_point = self._display_to_drag_plane(x, y)
+                if world_point is not None:
+                    self._screw_stroke_active = True
+                    if self._screw_grab_callback is not None:
+                        self._screw_grab_callback(tuple(world_point))
             return
 
         if self._pan_mode_active:
@@ -1832,12 +1916,15 @@ class Viewer3D(QWidget):
             x, y, (screw_id, part), picked_world, camera_normal
         )
         if result == "started":
+            self._consume_left_press(interactor)
+            self._screw_stroke_active = True
             self._set_trackball_enabled(False)
 
     def _on_screw_mouse_move(self, obj, event) -> None:
         """Move the active screw part on a camera-facing world plane."""
         if (
             not self._screw_drag_active
+            or not self._screw_stroke_active
             or self._screw_drag_plane_origin is None
             or self._screw_drag_plane_normal is None
         ):
@@ -1849,7 +1936,11 @@ class Viewer3D(QWidget):
             self._emit_screw_pointer_move(world_point)
 
     def _on_screw_left_release(self, obj, event) -> None:
-        """Release does not end double-click-locked screw movement."""
+        """Release stops moving the screw; movement mode stays on."""
+        if self.__dict__.get("_screw_stroke_active", False):
+            self._screw_stroke_active = False
+            if self._screw_release_callback is not None:
+                self._screw_release_callback()
         if self.__dict__.get("_pan_forced_shift", False):
             self._pan_forced_shift = False
             interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
@@ -1909,6 +2000,7 @@ class Viewer3D(QWidget):
 
     def _finish_screw_pointer_move(self, notify: bool) -> None:
         self._screw_drag_active = False
+        self._screw_stroke_active = False
         self._active_screw_part = None
         self._screw_drag_plane_origin = None
         self._screw_drag_plane_normal = None
@@ -1926,6 +2018,23 @@ class Viewer3D(QWidget):
     def is_screw_interaction_active(self) -> bool:
         """Whether the 3D viewport currently owns a pointer-move lock."""
         return bool(self._screw_drag_active)
+
+    def _install_screw_observers(self, interactor) -> None:
+        self._screw_press_tag = interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_screw_left_press, 1.0
+        )
+        interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
+        interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
+
+    def _consume_left_press(self, interactor) -> None:
+        """Keep a screw press from the trackball.
+
+        A press the trackball handles grabs interactor focus, so the move and
+        release that follow never reach the screw observers.
+        """
+        tag = self.__dict__.get("_screw_press_tag")
+        if tag is not None:
+            interactor.GetCommand(tag).SetAbortFlag(1)
 
     def _set_trackball_enabled(self, enabled: bool) -> None:
         if not hasattr(self, "vtk_widget"):
@@ -2053,12 +2162,14 @@ class Viewer3D(QWidget):
         label_value: int = 0,
         color: Tuple[float, float, float] = (0.92, 0.82, 0.70),
         opacity: float = 0.35,
+        build_surface: bool = True,
     ) -> None:
-        """Render segmentation mask as translucent 3D surface."""
+        """Install a mask, optionally deferring its generic 3D surface."""
         if mask_image is None:
             self.clear_segmentation_mask()
             return
 
+        self._segmentation_surface_enabled = build_surface
         self._segmentation_mask_image = mask_image
         self._segmentation_label_value = max(0, int(label_value))
         self._segmentation_color = color
@@ -2124,6 +2235,9 @@ class Viewer3D(QWidget):
         # Remembered even with no actor (an empty label), so the next actor
         # built for a populated label honours the checkbox.
         self._segmentation_visible = bool(visible)
+        if visible and not self.__dict__.get("_segmentation_surface_enabled", True):
+            self._segmentation_surface_enabled = True
+            self._render_segmentation_actor(keep_visibility=True)
         if self._segmentation_actor is None:
             return
         self._segmentation_actor.SetVisibility(visible)
@@ -2139,7 +2253,8 @@ class Viewer3D(QWidget):
             self._segmentation_visible = True
         visible = self.__dict__.get("_segmentation_visible", True)
         self.clear_segmentation_actor_only()
-        if self._segmentation_mask_image is None:
+        if (self._segmentation_mask_image is None
+                or not self.__dict__.get("_segmentation_surface_enabled", True)):
             return
 
         # Surfaces already built for this (mask, label); None = empty label.
@@ -2320,7 +2435,14 @@ class Viewer3D(QWidget):
         if mask_image is None:
             return
 
-        poly_data = extract_vertebral_mesh(mask_image, labels=labels)
+        # One surface cache per mask: a new segmentation starts a new one.
+        key = (id(mask_image), mask_image.GetMTime())
+        if self.__dict__.get("_vertebral_surface_key") != key:
+            self._vertebral_surface_key = key
+            self._vertebral_surface_cache = {}
+        poly_data = extract_vertebral_mesh(
+            mask_image, labels=labels, cache=self._vertebral_surface_cache
+        )
         if poly_data is None or poly_data.GetNumberOfCells() == 0:
             logger.info("set_vertebral_mesh: no vertebral mesh produced")
             return
@@ -2360,6 +2482,11 @@ class Viewer3D(QWidget):
             "set_vertebral_mesh: added actor with %d cells",
             poly_data.GetNumberOfCells(),
         )
+
+    def clear_vertebral_surface_cache(self) -> None:
+        """Release CPU surfaces when their source segmentation is retired."""
+        self._vertebral_surface_key = None
+        self._vertebral_surface_cache = {}
 
     def clear_vertebral_mesh(self) -> None:
         """Remove vertebral mesh actor from the 3D scene."""

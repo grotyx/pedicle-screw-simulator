@@ -1,5 +1,6 @@
 """Tabular screw plan list with theme-coloured Gertzbein grade chips."""
 
+from copy import deepcopy
 from typing import Optional
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -87,6 +88,8 @@ def screw_warning_lines(screw) -> list[str]:
     text from this one function, so they can never disagree about what a
     screw's warnings are.
     """
+    if getattr(screw, "grading_pending", False):
+        return ["grading after release"]
     breach_distance = float(getattr(screw, "breach_distance", 0.0) or 0.0)
     grade = str(getattr(screw, "grade", "") or "")
     lines = list(getattr(screw, "warnings", []) or [])
@@ -223,10 +226,10 @@ def screw_row_cells(index: int, screw) -> tuple[str, ...]:
         f"{index + 1} ✓" if getattr(screw, "reviewed", False) else str(index + 1),
         str(level),
         side,
-        pedicle_cell_text(screw_metrics(screw)),
+        "--" if getattr(screw, "grading_pending", False) else pedicle_cell_text(screw_metrics(screw)),
         f"{float(screw.diameter):.1f}",
         f"{float(screw.length):.1f}",
-        f"Grade {screw.grade}",
+        "grading after release" if getattr(screw, "grading_pending", False) else f"Grade {screw.grade}",
         str(warning_count) if warning_count > 0 else "",
     )
 
@@ -240,6 +243,7 @@ class ScrewPlanTable(QTableWidget):
     """
 
     currentRowChanged = pyqtSignal(int)
+    screwsChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(0, len(COLUMN_TITLES), parent)
@@ -365,8 +369,43 @@ class ScrewPlanTable(QTableWidget):
         return chip.text().removeprefix("Grade").strip() or "N/A"
 
     def _fill_row(self, row: int, index: int, screw) -> None:
+        """Update retained cells and notify views once for the changed range."""
+        roles = (
+            Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole,
+            Qt.ItemDataRole.BackgroundRole, Qt.ItemDataRole.ForegroundRole,
+            Qt.ItemDataRole.TextAlignmentRole, Qt.ItemDataRole.UserRole,
+        )
+        def values(column):
+            item = self.item(row, column)
+            return tuple(item.data(role) for role in roles) if item else None
+
+        state_role = int(Qt.ItemDataRole.UserRole) + 1
+        first = self.item(row, 0)
+        previous = first.data(state_role) if first is not None else None
+        state = deepcopy(vars(screw))
+        before = [values(column) for column in range(self.columnCount())]
+        model = self.model()
+        blocked = model.blockSignals(True)
+        try:
+            self._update_row_items(row, index, screw)
+            if previous != state:
+                self.item(row, 0).setData(state_role, state)
+        finally:
+            model.blockSignals(blocked)
+        changed = [column for column in range(self.columnCount()) if before[column] != values(column)]
+        if changed and not blocked:
+            model.dataChanged.emit(model.index(row, min(changed)), model.index(row, max(changed)), [])
+        if previous is not None and previous != state:
+            self.screwsChanged.emit()
+
+    def _update_row_items(self, row: int, index: int, screw) -> None:
         for column, text in enumerate(screw_row_cells(index, screw)):
-            item = QTableWidgetItem(text)
+            item = self.item(row, column)
+            if item is None:
+                item = QTableWidgetItem()
+                self.setItem(row, column, item)
+            if item.text() != text:
+                item.setText(text)
             item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             )
@@ -380,9 +419,8 @@ class ScrewPlanTable(QTableWidget):
                     Qt.AlignmentFlag.AlignLeft
                     | Qt.AlignmentFlag.AlignVCenter
                 )
-            self.setItem(row, column, item)
-        self._paint_grade_chip(row, str(screw.grade))
-        self._paint_pedicle_chip(row, is_narrow_pedicle(screw_metrics(screw)))
+        self._paint_grade_chip(row, "NA" if getattr(screw, "grading_pending", False) else str(screw.grade))
+        self._paint_pedicle_chip(row, not getattr(screw, "grading_pending", False) and is_narrow_pedicle(screw_metrics(screw)))
         item = self.item(row, WARNINGS_COLUMN)
         if item is not None:
             # The same lines the Review card shows, so a row counted only for

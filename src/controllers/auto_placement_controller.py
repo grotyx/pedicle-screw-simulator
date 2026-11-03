@@ -149,7 +149,7 @@ class AutoPlacementController:
 
     @property
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.isRunning()
+        return self._thread is not None
 
     @property
     def last_planned(self) -> List[PlannedScrew]:
@@ -163,7 +163,11 @@ class AutoPlacementController:
     def run_planning(self):
         """Execute auto pedicle screw planning for selected vertebrae."""
         seg_ctrl = self._window._seg_ctrl
+        if getattr(seg_ctrl, "is_running", False):
+            self._window.statusbar.showMessage("Wait for segmentation before screw planning")
+            return
         mask_path = seg_ctrl._last_segmentation_mask_path
+        segmentation_revision = getattr(seg_ctrl, "revision", 0)
         if mask_path is None:
             QMessageBox.warning(
                 self._window,
@@ -190,7 +194,7 @@ class AutoPlacementController:
             )
             return
 
-        if self.is_running:
+        if self._thread is not None and self._thread.isRunning():
             self._window.statusbar.showMessage(
                 "Auto screw planning is already running"
             )
@@ -281,6 +285,8 @@ class AutoPlacementController:
             pedicle_mask=getattr(seg_ctrl, "_last_pedicle_mask", None),
         )
         thread.generation = self._run_generation
+        thread.segmentation_revision = segmentation_revision
+        thread.source_ct = ct_image
         thread.replace_levels = replace_levels
         self._thread = thread
         thread.progress.connect(partial(self._on_progress, thread))
@@ -395,12 +401,18 @@ class AutoPlacementController:
         """
         if thread is not self._thread:
             return True
-        return getattr(thread, "generation", None) != self._run_generation
+        seg = self._window._seg_ctrl
+        return (
+            getattr(thread, "generation", None) != self._run_generation
+            or getattr(thread, "segmentation_revision", None) != getattr(seg, "revision", 0)
+            or getattr(thread, "source_ct", None) is not self._vm.get_sitk_image()
+        )
 
     def _discard_stale(self, thread, what: str) -> None:
         """Drop a result from a superseded run, leaving the new study's UI alone."""
         logger.info("Discarding %s from a superseded planning run", what)
         if thread is self._thread:
+            self._close_progress_dialog()
             self._thread = None
         self._refresh_plan_button()
 

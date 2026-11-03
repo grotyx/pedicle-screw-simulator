@@ -19,9 +19,9 @@ jobs:
       matrix:
         include:
           - os: windows-2025
-            artifact: PedicleScrewSimulator-Windows-x64
+            artifact: RadWright-Screw-Windows-x64
           - os: macos-15
-            artifact: PedicleScrewSimulator-macOS-arm64
+            artifact: RadWright-Screw-macOS-arm64
 
     steps:
       - name: Check out source

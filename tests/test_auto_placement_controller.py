@@ -829,6 +829,8 @@ class _FinishedThread:
         # A fresh controller sits at generation 0, so the default matches the
         # run a test that never called ``run_planning`` is standing in for.
         self.generation = generation
+        self.segmentation_revision = 0
+        self.source_ct = None
 
     def request_cancel(self):
         self.cancel_requested = True
@@ -837,6 +839,8 @@ class _FinishedThread:
 def _current_thread(ctrl, **kwargs):
     """Install a stub thread stamped for ``ctrl``'s current run generation."""
     thread = _FinishedThread(generation=ctrl._run_generation, **kwargs)
+    thread.segmentation_revision = getattr(ctrl._window._seg_ctrl, "revision", 0)
+    thread.source_ct = ctrl._vm.get_sitk_image()
     ctrl._thread = thread
     return thread
 
@@ -1976,3 +1980,32 @@ def test_replan_that_does_not_complete_keeps_old_screws(
 
     assert _screw_keys(window) == before
     assert not hasattr(window._tool_ctrl, "removed_rows")
+
+
+def test_planning_revision_belongs_to_mask_selected_before_confirmation(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import src.controllers.auto_placement_controller as module
+    from src.core.volume_manager import VolumeManager
+
+    window = _DummyWindow()
+    ctrl = AutoPlacementController(VolumeManager(), window)
+    _prepare_run(window, ctrl, tmp_path)
+    window._seg_ctrl.revision = 5
+
+    def confirm(labels):
+        window._seg_ctrl.revision = 6
+        return []
+
+    monkeypatch.setattr(ctrl, "_confirm_replace", confirm)
+    signal = SimpleNamespace(connect=lambda callback: None)
+    monkeypatch.setattr(module, "_PlanningThread", lambda *a, **k: SimpleNamespace(
+        progress=signal, finished=signal, error=signal, start=lambda: None,
+    ))
+    try:
+        ctrl.run_planning()
+        assert ctrl._thread.segmentation_revision == 5
+        assert ctrl._is_stale(ctrl._thread)
+    finally:
+        ctrl._close_progress_dialog()
+        ctrl._thread = None

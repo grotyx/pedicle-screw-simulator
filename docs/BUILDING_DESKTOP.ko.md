@@ -36,10 +36,10 @@ py -3.12 -m venv venv
 
 `release\`에 두 가지 결과물이 생깁니다.
 
-- **설치 프로그램**: `PedicleScrewSimulator-<버전>-Windows-x64-Setup.exe`와 그 옆의
+- **설치 프로그램**: `RadWright-Screw-<버전>-Windows-x64-Setup.exe`와 그 옆의
   `…-Setup-N.bin` 파일들입니다(CUDA 런타임 때문에 수 GB라 Inno Setup이 나눕니다).
   한 폴더에 두고 `.exe`를 실행합니다. 관리자 승인 없이 사용자별로
-  `%LOCALAPPDATA%\Programs\Pedicle Screw Simulator`에 설치되고, 시작 메뉴 항목(바탕화면
+  `%LOCALAPPDATA%\Programs\RadWright Screw`에 설치되고, 시작 메뉴 항목(바탕화면
   바로가기는 선택)과 설정 > 앱의 제거 항목이 생깁니다. 새 버전 설치 프로그램을
   실행하면 그 자리에서 업데이트됩니다. 조용히 설치: `…-Setup.exe /VERYSILENT`.
 - **포터블 ZIP**: `PedicleScrewSimulator.exe`와 실행에 필요한 `_internal` 폴더입니다.
@@ -80,7 +80,7 @@ python scripts/render_icons.py
 - `windows-2025`: Windows x64
 - `macos-15`: macOS Apple Silicon
 
-GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.7` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
+GitHub Actions 탭에서 수동으로 실행하거나 `v0.2.8` 같은 버전 tag를 push하면 됩니다. 완료된 workflow의 Artifacts에서 압축파일을 내려받을 수 있습니다.
 
 ## Standalone 기능 범위
 
