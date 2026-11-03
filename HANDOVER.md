@@ -5,7 +5,7 @@
 
 ## 1. 현재 상태
 
-- 최신 릴리스: **v0.2.7** (2026-11-02, 태그 `v0.2.7`): Spine Only 모델 2개를 Windows 빌드에 포함(첫 분할 다운로드 없음). v0.2.6(2026-11-01)은 RadWright Screw 이름·로고, Windows 설치 프로그램, 레이어 자동 업데이트(R2).
+- 최신 릴리스: **v0.2.8** (2026-11-03, 태그 `v0.2.8`): 스크류 드래그(더블클릭 후 누른 채 이동), 붙였다 떼는 도구 막대, 빠른 레벨 토글, 세그멘테이션 안정성, 마지막 DICOM 폴더 기억. v0.2.7(2026-11-02)은 Spine Only 모델 2개를 Windows 빌드에 포함, v0.2.6(2026-11-01)은 RadWright Screw 이름·로고, Windows 설치 프로그램, 레이어 자동 업데이트(R2).
 - `main` = `98f5008` (2026-10-30, `grotyx/reference-compare-surface-hu` 를 `--no-ff` merge, 푸시됨).
   - 들어간 기능: 기준 계획 비교, surface HU, undo/redo, Virtual X-ray, Screw MPR 가이드 핸들,
     post-op CT 스크류 추출(Tools > Extract Screws from Post-op CT). 내용은 `CHANGELOG*.md` `[Unreleased]`.

@@ -13,6 +13,8 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-03
+
 ### 변경
 
 - Open DICOM 대화 상자가 마지막으로 연구를 불러온 폴더에서 열립니다.
@@ -658,7 +660,8 @@ anterior margin까지 늘리며, 등급은 head가 아니라 축이 뼈에 들�
 - JSON 계획 저장·불러오기, CSV·STL 내보내기.
 - 세 가지 UI 테마.
 
-[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/grotyx/pedicle-screw-simulator/compare/v0.2.4...v0.2.5
