@@ -15,6 +15,7 @@ current version; every other place the version appears is derived from it.
 
 ### Changed
 
+- Open DICOM starts in the folder you last loaded a study from.
 - Downloads are named `RadWright-Screw-<version>-…` (installer, portable
   ZIP, macOS ZIP), the macOS app is called RadWright Screw, and the Windows
   exe reports RadWright Screw as its product name and description (Task

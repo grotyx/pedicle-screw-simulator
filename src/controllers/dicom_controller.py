@@ -115,10 +115,13 @@ class DicomController:
             )
             return
 
+        from src.ui.main_window import app_settings
+
+        settings = app_settings()
         folder = QFileDialog.getExistingDirectory(
             self._window,
             "Select DICOM Folder",
-            "",
+            settings.value("dicom/lastFolder", "", type=str),
             QFileDialog.Option.ShowDirsOnly,
         )
 
@@ -153,6 +156,7 @@ class DicomController:
             self._window.statusbar.showMessage("No DICOM series found")
             return
 
+        settings.setValue("dicom/lastFolder", folder)
         selected_series_id = series_ids[0]
         if len(series_ids) > 1:
             try:

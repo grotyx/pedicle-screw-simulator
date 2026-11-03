@@ -2,6 +2,8 @@
 
 import logging
 
+import pytest
+
 from src.controllers.dicom_controller import DicomController, DicomLoadThread
 from src.core.dicom_loader import DicomLoader
 from src.ui.main_window import MainWindow
@@ -34,6 +36,24 @@ class _Event:
 
     def ignore(self):
         self.ignored = True
+
+
+class _Settings(dict):
+    def value(self, key, default=None, type=None):  # noqa: A002 - QSettings signature
+        return self.get(key, default)
+
+    def setValue(self, key, value):  # noqa: N802 - QSettings signature
+        self[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _memory_settings(monkeypatch):
+    """Keep the remembered DICOM folder out of the developer's real settings."""
+    import src.ui.main_window as main_window_module
+
+    settings = _Settings()
+    monkeypatch.setattr(main_window_module, "app_settings", lambda: settings)
+    return settings
 
 
 def test_is_running_reflects_load_thread_state():
@@ -341,3 +361,26 @@ def test_geometry_warnings_are_shown_without_blocking_the_load(monkeypatch):
     assert "Loaded 3 slices" in window.statusbar.message
     assert "Gantry tilt" in window.statusbar.message
     assert "Gantry tilt" in window.info_label.text
+
+
+def test_open_folder_starts_in_the_last_opened_folder(monkeypatch):
+    starts = []
+
+    def _dialog(_parent, _title, start, _options):
+        starts.append(start)
+        return "/studies/case-b"
+
+    monkeypatch.setattr(
+        "src.controllers.dicom_controller.QFileDialog.getExistingDirectory", _dialog
+    )
+    monkeypatch.setattr(DicomLoader, "scan_directory", lambda _s, d: ["A", "B"])
+    monkeypatch.setattr(DicomLoader, "get_series_summaries", lambda _s, d: [])
+    monkeypatch.setattr(DicomController, "_select_series_id", lambda *a: None)
+
+    class _Win(_Window):
+        _seg_ctrl = None
+
+    DicomController(object(), _Win()).open_folder()
+    DicomController(object(), _Win()).open_folder()
+
+    assert starts == ["", "/studies/case-b"]

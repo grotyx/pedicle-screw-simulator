@@ -164,7 +164,7 @@ The step rail's four pages (see section 4) roughly follow this section's order: 
 ### 5.1 Open a CT Study
 
 1. On the **Study** page, select **Open DICOM…** (the top toolbar's **Open DICOM** button and the File menu's **Open DICOM Folder**, `Ctrl+O`, still work too).
-2. Select a directory containing a DICOM series.
+2. Select a directory containing a DICOM series. The dialog opens in the last folder you loaded.
 3. If multiple series are present, choose the intended CT series.
 4. Confirm the anatomy and orientation in all MPR views and 3D.
 5. If the status bar and the **Study** info show a **Warning** (uneven slice spacing, which usually means missing slices, or a gantry tilt), the load still succeeds but lengths along the scan axis may be wrong or the volume sheared; check the series before relying on measurements.

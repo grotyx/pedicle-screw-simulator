@@ -15,6 +15,7 @@ Pedicle Screw Simulator의 주요 변경 사항을 기록합니다.
 
 ### 변경
 
+- Open DICOM 대화 상자가 마지막으로 연구를 불러온 폴더에서 열립니다.
 - 내려받는 파일 이름이 `RadWright-Screw-<버전>-…`로 바뀌었습니다(설치
   프로그램, 포터블 ZIP, macOS ZIP). macOS 앱 이름도 RadWright Screw이고,
   Windows exe의 제품 이름·설명(작업 관리자, 파일 속성)도 RadWright Screw로
