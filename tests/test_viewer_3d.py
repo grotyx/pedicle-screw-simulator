@@ -642,6 +642,54 @@ class TestScrewVisualGeometry:
         assert events == [("grab", (9.0, 9.0, 9.0)), ("drag", (9.0, 9.0, 9.0)), ("release",)]
         assert viewer._screw_drag_active is True
 
+    def test_trackball_does_not_swallow_a_held_screw_stroke(self):
+        # The trackball grabs interactor focus on a press it handles, so the
+        # move and release never reached the screw observers and the screw
+        # kept following the pointer after the button was let go.
+        import vtk
+
+        from src.ui.viewer_3d import Viewer3D, trackball_style
+
+        render_window = vtk.vtkRenderWindow()
+        render_window.SetOffScreenRendering(1)
+        render_window.AddRenderer(vtk.vtkRenderer())
+        interactor = vtk.vtkRenderWindowInteractor()
+        interactor.SetRenderWindow(render_window)
+        interactor.SetInteractorStyle(trackball_style())
+        interactor.Initialize()
+
+        viewer = Viewer3D.__new__(Viewer3D)
+        viewer._double_click_detector = DoubleClickDetector()
+        viewer._screw_drag_active = True  # movement mode already on
+        viewer._screw_stroke_active = False
+        viewer._pan_mode_active = False
+        viewer._active_screw_part = (5, "shaft")
+        viewer._screw_drag_plane_origin = (0.0, 0.0, 0.0)
+        viewer._screw_drag_plane_normal = (0.0, 0.0, 1.0)
+        viewer._screw_actors = []
+        viewer.vtk_widget = SimpleNamespace(GetRenderWindow=lambda: render_window)
+        viewer._display_to_drag_plane = lambda x, y: (float(x), float(y), 0.0)
+        events = []
+        viewer.set_screw_interaction_callbacks(
+            on_drag=lambda world, source: events.append("drag"),
+            on_grab=lambda world: events.append("grab"),
+            on_release=lambda: events.append("release"),
+        )
+        viewer._install_screw_observers(interactor)
+
+        for x, send in (
+            (10, interactor.LeftButtonPressEvent),
+            (20, interactor.MouseMoveEvent),
+            (20, interactor.LeftButtonReleaseEvent),
+            (40, interactor.MouseMoveEvent),
+        ):
+            interactor.SetEventInformation(x, 10, 0, 0, chr(0), 0, None)
+            send()
+
+        assert events == ["grab", "drag", "release"]
+        assert viewer._screw_stroke_active is False
+
+
 class TestSegmentationSurfaceSmoothing:
     def test_raw_segmentation_pipeline_smooths_image_mesh_and_normals(self):
         import inspect

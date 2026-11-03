@@ -995,9 +995,7 @@ class Viewer3D(QWidget):
         # Manual LOD: coarsen during interaction, refine after
         interactor.AddObserver("StartInteractionEvent", self._on_interaction_start)
         interactor.AddObserver("EndInteractionEvent", self._on_interaction_end)
-        interactor.AddObserver("LeftButtonPressEvent", self._on_screw_left_press, 1.0)
-        interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
-        interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
+        self._install_screw_observers(interactor)
 
         self._volume_mapper = self._build_volume_mapper()
 
@@ -1872,6 +1870,7 @@ class Viewer3D(QWidget):
         interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
         x, y = interactor.GetEventPosition()
         if self._screw_drag_active:
+            self._consume_left_press(interactor)
             result = self._process_screw_press(x, y, None, None, None)
             if result == "ended":
                 self._restore_trackball_after_event()
@@ -1917,6 +1916,7 @@ class Viewer3D(QWidget):
             x, y, (screw_id, part), picked_world, camera_normal
         )
         if result == "started":
+            self._consume_left_press(interactor)
             self._screw_stroke_active = True
             self._set_trackball_enabled(False)
 
@@ -2018,6 +2018,23 @@ class Viewer3D(QWidget):
     def is_screw_interaction_active(self) -> bool:
         """Whether the 3D viewport currently owns a pointer-move lock."""
         return bool(self._screw_drag_active)
+
+    def _install_screw_observers(self, interactor) -> None:
+        self._screw_press_tag = interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_screw_left_press, 1.0
+        )
+        interactor.AddObserver("MouseMoveEvent", self._on_screw_mouse_move, 1.0)
+        interactor.AddObserver("LeftButtonReleaseEvent", self._on_screw_left_release, 1.0)
+
+    def _consume_left_press(self, interactor) -> None:
+        """Keep a screw press from the trackball.
+
+        A press the trackball handles grabs interactor focus, so the move and
+        release that follow never reach the screw observers.
+        """
+        tag = self.__dict__.get("_screw_press_tag")
+        if tag is not None:
+            interactor.GetCommand(tag).SetAbortFlag(1)
 
     def _set_trackball_enabled(self, enabled: bool) -> None:
         if not hasattr(self, "vtk_widget"):
