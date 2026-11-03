@@ -2392,7 +2392,7 @@ def test_right_drag_pans_the_3d_view():
     interactor.SetRenderWindow(render_window)
     style = trackball_style()
     interactor.SetInteractorStyle(style)
-    render_window.Render()
+    # No Render(): creating a GL context crashes headless Windows CI.
     interactor.SetEventPosition(50, 50)
 
     interactor.InvokeEvent("RightButtonPressEvent")
